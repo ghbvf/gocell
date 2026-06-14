@@ -155,16 +155,48 @@ curl http://127.0.0.1:9093/readyz
 
 The `/readyz` probe includes `orderfulfillmentcell_repo_ready` (coordinator journal liveness) registered via the `WithCoordinator` option.
 
-## Durable Wiring Checklist
+## Running in Postgres Mode
 
-To move from demo mode to a durable L3 saga path, wire all of the following in the composition root (`run.go`):
+> **Scope: single-pod, loopback, single-tenant test/demo of durable replay — NOT production.**
+> Postgres mode exists to *demonstrate* that the saga-journal CQRS projection survives a
+> process restart (the `TestDurableReplay_PGProjectionSurvivesRestart` integration test
+> below drives exactly this). It is a single-pod demo wired for loopback only; it is not a
+> production deployment shape. **Multi-pod postgres is fail-closed**: `run.go` passes no
+> `RedisClient`, so a `RequiresDistributedReplay` topology errors at startup in
+> `sagaprojectiondeps.Resolve` rather than silently granting every pod the projection
+> leader lock (which would double-apply the projection). The startup log emits a `Warn`
+> stating this boundary explicitly.
 
-1. Replace `journal.NewMemJournal` with a persistent PG-backed journal (durable saga state survives restarts).
-2. Replace `outbox.DemoTxRunner{}` with a real `persistence.TxRunner` (e.g. `postgres.TxManager`) — compose via `persistence.WrapForCell`.
-3. Replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (e.g. relay-backed broker publisher) — compose via `outbox.WrapEmitterForCell`.
-4. Replace the `kernelmetrics.NopProvider{}` passed to `obmetrics.NewSagaCollector` with a real Prometheus provider (e.g. from `bootstrap.MetricsProvider()`); in demo mode, saga metrics are discarded.
-5. Replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — see `auth.public` comments in `contracts/http/orderfulfillment/*/v1/contract.yaml`.
-6. Remove the `paymentShouldFail` field from the request schema: it is a demo-only failure-injection hook and must not be exposed on the business API wire in production — drive payment failures from real downstream payment service responses instead.
+The PG path is fully wired via `run.go` (`buildPostgresInfra` + `sagaprojectiondeps.Resolve`).
+To start the single-pod durable-replay demo with a durable journal and projection checkpoint store:
+
+```bash
+GOCELL_CELL_ADAPTER_MODE=postgres GOCELL_ADAPTER_MODE=real DATABASE_URL=<dsn> go run ./examples/orderfulfillment
+```
+
+**What is auto-wired in postgres mode (single-pod demo):**
+
+- `PGJournal` — durable saga journal backed by the `saga_events` PG table; state survives restarts.
+- `PG ProjectionCheckpointStore` — fenced-CAS checkpoint store for the `order_saga_status` projection.
+- `PG TxManager` — transactional write path for projection upserts.
+- `PG OrderStatusReadModel` — order-status read model backed by the `order_saga_status` PG table.
+- In-process projection leader locker (single-pod) — multi-pod would require a Redis distlock (fail-closed here).
+- Platform migrations (saga_journal, projection_checkpoints, projection_events, …) applied automatically on startup.
+- Example migration (`order_saga_status` table) applied automatically on startup.
+
+**Intentional demo simplifications (do not "fix" them in this example):**
+
+- `outbox.NewNoopEmitter()` is intentional — there are **no outbox consumers** in this example. The saga journal *is* the durable read source the projection Tailer scans, so step events do not need a broker. The NoopEmitter discards step events in both demo and postgres modes by design.
+- A single **unrestricted** PG pool serves both migrations and request serving, on one pod, over a loopback listener, single-tenant.
+
+**What production (a real multi-pod service) would require — NOT wired here:**
+
+- **Durable broker emitter**: replace `outbox.NewNoopEmitter()` with a real `outbox.Emitter` (relay-backed broker publisher) *only if* downstream cells consume the events — this example has none.
+- **Split admin/serving DSN + restricted RLS role**: a separate non-owner, no-bypass-RLS serving role for request handling, distinct from the migration/admin DSN (this demo uses one unrestricted pool).
+- **Redis distlock + leader-election**: required for multi-pod so exactly one replica drives the projection; without it multi-pod is fail-closed (see scope note above).
+- **JWT/PDP auth**: replace `auth.AuthNone{}` + `auth.public: true` with a JWT plan (`auth.NewAuthJWTFromAssembly`) and set `auth.public: false` in both contract YAMLs — the primary listener is unauthenticated in all current modes.
+- **Real metrics provider**: replace `kernelmetrics.NopProvider{}` in `obmetrics.NewSagaCollector` with a real Prometheus provider (e.g. `bootstrap.MetricsProvider()`) — saga metrics are discarded in both modes until this is wired.
+- Remove the `paymentShouldFail` field from the request schema: it is a demo-only failure-injection hook and must not be exposed on the business API wire.
 
 ## Security
 
@@ -177,7 +209,11 @@ The health listener (`:9093`) is already bound to `127.0.0.1` (loopback only). D
 
 ## Running the Integration Tests
 
-The integration test file exercises the coordinator end-to-end with real wiring (shared `MemJournal`, real `clock.Real()`, real coordinator poll loop) and asserts terminal states:
+The integration test files exercise the coordinator and projection end-to-end with real wiring.
+
+### In-memory saga tests (no Docker needed)
+
+Exercises the Coordinator with a shared `MemJournal`, `clock.Real()`, and real poll loop:
 
 ```bash
 go test -tags=integration \
@@ -193,7 +229,21 @@ Expected output:
 --- PASS: TestPlaceOrder_CompensateOnChargeFail (< 1s)
 ```
 
-To run all tests (unit + integration) for the example:
+### Durable-replay test (requires PostgreSQL via Docker)
+
+`TestDurableReplay_PGProjectionSurvivesRestart` verifies that the saga-journal CQRS
+projection writes to PG and that a fresh Tailer (simulated restart) resumes from the
+persisted checkpoint without regressing the read model. It uses `pgtest` to spin up a
+Docker container automatically:
+
+```bash
+go test -tags=integration \
+  ./examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder/... \
+  -run TestDurableReplay_PGProjectionSurvivesRestart \
+  -count=1 -timeout 300s -v
+```
+
+### All tests (unit + integration)
 
 ```bash
 go test -tags=integration ./examples/orderfulfillment/...
@@ -212,7 +262,7 @@ These specs document acceptance criteria. The `run-journey` CLI execution path i
 
 - `main.go` — generated assembly entry point (DO NOT EDIT)
 - `modules_gen.go` — generated cell module factory (DO NOT EDIT)
-- `run.go` — hand-written composition root: cell wiring, `MemJournal`, `Coordinator` start/stop
+- `run.go` — hand-written composition root: topology-gated demo (MemJournal + in-memory read model) and postgres (PGJournal + PG checkpoint store + PG order-status read model) wiring via `sagaprojectiondeps.Resolve`; `Coordinator` lifecycle; `buildPostgresInfra` for PG infrastructure
 - `cells/orderfulfillmentcell/`
   - `internal/domain/` — `Order` struct
   - `internal/ports/` — `OrderRepository`, `InventoryStore`, `PaymentStore`, `ShipmentStore` interfaces

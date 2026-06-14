@@ -18,6 +18,7 @@ var sliceMeta = &metadata.SliceMeta{
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.orderfulfillment.orderstatus.v1", Role: "serve"},
+		{Contract: "saga.orderfulfillment.v1", Role: "subscribe", Handler: "HandleOrderEvent", Projection: "order_saga_status", ProjectionSource: "saga-journal"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
@@ -25,10 +26,12 @@ var sliceMeta = &metadata.SliceMeta{
 		},
 		Contract: []string{
 			"contract.http.orderfulfillment.orderstatus.v1.serve",
+			"contract.saga.orderfulfillment.v1.subscribe",
 		},
 	},
 	AllowedFiles: []string{
 		"examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus/**",
+		"examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection/**",
 	},
 }
 

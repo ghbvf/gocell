@@ -108,6 +108,49 @@ func (k EventKind) String() string {
 	}
 }
 
+// ParseEventKind is the inverse of [EventKind.String]: it maps a snake_case
+// label back to its EventKind, returning ok=false for any unknown label
+// (including the empty string and the "eventkind(N)" fallback form).
+//
+// It exists so a consumer that only receives the string label — notably the
+// saga-journal projection carrier, which serializes Kind.String() into its
+// payload envelope (kernel/saga/sagaprojection) — can recover the typed kind
+// without a magic-string switch. ParseEventKind and String() share the same
+// 1:1 label set; the round-trip is asserted exhaustively over every Valid()
+// kind by TestParseEventKind_RoundTripAllKinds, so a kind added to one without
+// the other goes red.
+//
+// ok=false is a fail-closed signal: a caller MUST treat an unparseable label as
+// unrecoverable, never as a silent default.
+func ParseEventKind(s string) (EventKind, bool) {
+	switch s {
+	case "step_started":
+		return KindStepStarted, true
+	case "step_completed":
+		return KindStepCompleted, true
+	case "step_failed":
+		return KindStepFailed, true
+	case "step_compensated":
+		return KindStepCompensated, true
+	case "compensation_started":
+		return KindCompensationStarted, true
+	case "saga_succeeded":
+		return KindSagaSucceeded, true
+	case "saga_failed":
+		return KindSagaFailed, true
+	case "saga_compensated":
+		return KindSagaCompensated, true
+	case "saga_expired":
+		return KindSagaExpired, true
+	case "step_compensation_failed":
+		return KindStepCompensationFailed, true
+	case "saga_compensation_failed":
+		return KindSagaCompensationFailed, true
+	default:
+		return 0, false
+	}
+}
+
 // isStepKind reports whether k is a per-step event (requires a StepName).
 // KindCompensationStarted and the terminal kinds are saga-scoped, not
 // step-scoped.

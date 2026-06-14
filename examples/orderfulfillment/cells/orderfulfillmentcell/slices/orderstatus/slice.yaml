@@ -5,10 +5,17 @@ lifecycle: experimental
 contractUsages:
   - contract: http.orderfulfillment.orderstatus.v1
     role: serve
+  - contract: saga.orderfulfillment.v1
+    role: subscribe
+    handler: HandleOrderEvent
+    projection: order_saga_status
+    projectionSource: saga-journal
 verify:
   unit:
     - unit.orderstatus.service
   contract:
     - contract.http.orderfulfillment.orderstatus.v1.serve
+    - contract.saga.orderfulfillment.v1.subscribe
 allowedFiles:
   - examples/orderfulfillment/cells/orderfulfillmentcell/slices/orderstatus/**
+  - examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection/**

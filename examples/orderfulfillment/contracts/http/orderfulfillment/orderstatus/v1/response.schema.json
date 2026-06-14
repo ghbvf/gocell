@@ -10,7 +10,7 @@
         "status": {
           "type": "string",
           "enum": ["accepted", "running", "succeeded", "compensated", "failed"],
-          "description": "Saga state derived from the journal: accepted (enrolled, not yet terminal), running (in-progress), succeeded, compensated, failed."
+          "description": "Saga state derived from the journal. 'accepted' is the eventual-consistency gap: the order has been enrolled in the saga journal but the projection Tailer has not yet applied any saga event for it (no read-model row exists yet); clients should poll until the status transitions to a non-accepted value. 'running' means at least one forward or compensation step event has been applied. 'succeeded', 'compensated', and 'failed' are terminal absorbing states."
         }
       },
       "required": ["orderId", "status"]

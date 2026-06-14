@@ -33,7 +33,10 @@ package sagaprojection
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cellvocab"
@@ -43,6 +46,35 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// SagaEventEnvelope is the JSON shape a saga-journal ProjectionEvent.Payload()
+// carries. It is the single source for the saga-journal projection payload
+// contract: the carrier (toCarrier) marshals it and a consumer unmarshals into
+// the SAME struct — a field rename breaks both sides at unmarshal, so the
+// contract is enforced by the shared type, not by convention.
+//
+// Why an envelope: the journal records the event's discriminant in
+// journal.Event.Kind, NOT in its opaque Payload. Terminal events written via
+// MarkTerminal carry Payload: nil — their final state (succeeded / compensated /
+// failed) lives ONLY in Kind. A projection consumer that received just the raw
+// payload could not tell terminal outcomes apart (the gap #1391/PR-06 exposed).
+// The envelope surfaces Kind (and StepName) alongside the original payload so a
+// consumer can fold status, mirroring the journal's own deriveStatus fold (ADR
+// #1609 §D6). Consumers recover the typed kind via journal.ParseEventKind(Kind).
+type SagaEventEnvelope struct {
+	// Kind is the journal.EventKind.String() label (snake_case, e.g.
+	// "saga_succeeded"); reverse with journal.ParseEventKind. This is the same
+	// label persisted in the PG saga_events.kind text column.
+	Kind string `json:"kind"`
+	// StepName is the originating step for step-scoped kinds; empty for
+	// compensation_started and terminal kinds.
+	StepName string `json:"stepName,omitempty"`
+	// Payload is the original opaque step payload (journal.Event.Payload), or
+	// null for events that carry none (e.g. terminal events). The journal
+	// contract guarantees it is "opaque JSON object-or-null", so embedding it as
+	// RawMessage keeps the envelope valid JSON.
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
 
 // batchSize is the number of events fetched per LoadSince call in Replay.
 // 256 is the same budget used by the outbox relay page size — large enough to
@@ -56,6 +88,14 @@ const batchSize = 256
 // pre-v1.0 GA: this stream name may evolve directly; ".v1" is a naming
 // convention, not a wire-contract lock. Post-GA evolution requires a version bump.
 const SagaJournalStream = "saga.journal.v1"
+
+// SagaJournalEventIDPrefix is the prefix of every EventID produced by
+// sagaProjectionEvent.EventID(). Consumers that parse the instanceID suffix
+// (after the "@" separator) may match against this prefix to detect saga-journal
+// events without hard-coding the full format string.
+//
+// Full format: "saga-journal:<globalSeq>@<instanceID>" — STABLE pre-v1.0.
+const SagaJournalEventIDPrefix = "saga-journal:"
 
 // sagaProjectionEvent is the unexported carrier that adapts one journal.GlobalEvent
 // to the cellvocab.ProjectionEvent interface.
@@ -74,17 +114,66 @@ type sagaProjectionEvent struct {
 // events with the same GlobalSeq on different journals (impossible in practice but
 // asserted by the conformance suite) are distinct.
 //
-// Format: "saga-journal:<globalSeq>@<instanceID>".
+// Format: SagaJournalEventIDPrefix + "<globalSeq>@<instanceID>", i.e.
+// "saga-journal:<globalSeq>@<instanceID>" — STABLE pre-v1.0. Consumers that
+// parse the "@<instanceID>" suffix (e.g. to recover the saga instanceID) must
+// use strings.LastIndex(eventID, "@") so that a future opaque instanceID
+// containing "@" is still handled correctly.
 func (e *sagaProjectionEvent) EventID() string {
-	return fmt.Sprintf("saga-journal:%d@%s", e.globalSeq, e.instanceID)
+	return fmt.Sprintf(SagaJournalEventIDPrefix+"%d@%s", e.globalSeq, e.instanceID)
 }
 
-// Payload returns the raw opaque bytes appended by the saga step. May be empty or
-// nil for events that carry no step output.
+// ParseSagaJournalEventID parses an EventID produced by sagaProjectionEvent.EventID()
+// ("saga-journal:<globalSeq>@<instanceID>") into its parts, validating the prefix,
+// a positive globalSeq, the '@' separator, and a non-empty instanceID. Returns a
+// non-nil error (NOT wrapped permanent — caller decides) on any malformation.
 //
-// The returned slice MUST NOT be mutated by the caller. MemJournal.LoadSince
-// already deep-copies payload on read, so the carrier holds an independent
-// copy with no alias to the journal's internal storage.
+// It splits on the LAST '@' (after stripping the prefix), mirroring the
+// strings.LastIndex contract documented on EventID: the instanceID is the entire
+// suffix after the final separator, so a future opaque instanceID that itself
+// embeds '@' keeps its suffix intact. The portion before that last '@' is the
+// globalSeq and MUST be a clean base-10 int64; a string that pushes a '@' into
+// the seq portion is rejected as malformed (EventID never emits such a string,
+// since globalSeq is always numeric). It is the round-trip inverse of EventID():
+// EventID() output always parses back to the same (globalSeq, instanceID).
+func ParseSagaJournalEventID(eventID string) (globalSeq int64, instanceID string, err error) {
+	if !strings.HasPrefix(eventID, SagaJournalEventIDPrefix) {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: missing saga-journal EventID prefix")
+	}
+	rest := eventID[len(SagaJournalEventIDPrefix):]
+	atIdx := strings.LastIndex(rest, "@")
+	if atIdx < 0 {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: missing @ separator")
+	}
+	instanceID = rest[atIdx+1:]
+	if instanceID == "" {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: empty instanceID suffix")
+	}
+	globalSeq, perr := strconv.ParseInt(rest[:atIdx], 10, 64)
+	if perr != nil {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: globalSeq is not a base-10 int64")
+	}
+	if globalSeq <= 0 {
+		return 0, "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sagaprojection.ParseSagaJournalEventID: globalSeq must be positive")
+	}
+	return globalSeq, instanceID, nil
+}
+
+// Payload returns the marshaled [SagaEventEnvelope] for this event: a JSON object
+// {kind, stepName, payload} where kind is the journal.EventKind label, stepName
+// the originating step (if any), and payload the original opaque step bytes (or
+// null). It is NOT the raw step payload — the envelope wraps it so a consumer can
+// recover the event Kind, which the terminal events (Payload: nil) carry only in
+// Kind. Unmarshal into SagaEventEnvelope; recover the typed kind via
+// journal.ParseEventKind.
+//
+// The returned slice is freshly marshaled per carrier (built by toCarrier) and is
+// not aliased to any journal-internal storage, so it is safe to retain.
 func (e *sagaProjectionEvent) Payload() []byte {
 	return e.payload
 }
@@ -180,7 +269,10 @@ func (s *SagaJournalSource) Replay(ctx context.Context, fromOffset int64, fn fun
 			return fmt.Errorf("sagaprojection: LoadSince(after=%d, limit=%d): %w", cursor, batchSize, err)
 		}
 		for _, ge := range batch {
-			e := toCarrier(ge)
+			e, err := toCarrier(ge)
+			if err != nil {
+				return err
+			}
 			if err := fn(e); err != nil {
 				return err
 			}
@@ -253,15 +345,32 @@ var (
 	_ projection.LiveCursor   = (*SagaJournalSource)(nil)
 )
 
-// toCarrier converts a journal.GlobalEvent to the *sagaProjectionEvent carrier.
-// The GlobalSeq is read from the outer GlobalEvent envelope (not the inner
-// Event.GlobalSeq, which carries the same value but the outer field is the
-// authoritative cross-instance sequence from the store layer).
-func toCarrier(ge journal.GlobalEvent) *sagaProjectionEvent {
+// toCarrier converts a journal.GlobalEvent to the *sagaProjectionEvent carrier,
+// marshaling a [SagaEventEnvelope] into the carrier payload so the consumer can
+// recover the event Kind (which terminal events carry only in Kind, with a nil
+// raw payload). The GlobalSeq is read from the outer GlobalEvent envelope (not
+// the inner Event.GlobalSeq, which carries the same value but the outer field is
+// the authoritative cross-instance sequence from the store layer).
+//
+// A marshal failure is wrapped as an outbox.PermanentError: the journal contract
+// guarantees Event.Payload is "opaque JSON object-or-null", so this is
+// unreachable in practice, but a malformed payload is a producer-side defect that
+// must fail-closed (route to DLX), never silently drop the event's kind.
+func toCarrier(ge journal.GlobalEvent) (*sagaProjectionEvent, error) {
+	raw, err := json.Marshal(SagaEventEnvelope{
+		Kind:     ge.Event.Kind.String(),
+		StepName: ge.Event.StepName.String(),
+		Payload:  json.RawMessage(ge.Event.Payload),
+	})
+	if err != nil {
+		return nil, outbox.NewPermanentError(fmt.Errorf(
+			"sagaprojection: marshal envelope for globalSeq=%d kind=%s: %w",
+			ge.GlobalSeq, ge.Event.Kind, err))
+	}
 	return &sagaProjectionEvent{
 		globalSeq:  ge.GlobalSeq,
 		instanceID: ge.InstanceID.String(),
-		payload:    ge.Event.Payload,
+		payload:    raw,
 		occurredAt: ge.Event.CreatedAt,
-	}
+	}, nil
 }

@@ -30,3 +30,12 @@ const StatusSucceededForTest = saga.StatusSucceeded
 // the real constant keeps the test correct if batchSize ever changes (no magic
 // number). Compiled ONLY in test binaries.
 const BatchSizeForTest = batchSize
+
+// EventIDForTest builds a carrier with the given globalSeq + instanceID and
+// returns its EventID() — the exact wire string the production carrier emits.
+// The external test package uses it to assert the round-trip:
+// ParseSagaJournalEventID(EventIDForTest(seq, id)) == (seq, id). Compiled ONLY
+// in test binaries.
+func EventIDForTest(globalSeq int64, instanceID string) string {
+	return (&sagaProjectionEvent{globalSeq: globalSeq, instanceID: instanceID}).EventID()
+}
