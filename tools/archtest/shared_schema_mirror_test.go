@@ -178,7 +178,10 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 func TestSharedSchemaMirrorByteCurrent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	// Anti-vacuity: an empty mirror set would make Verify vacuously pass.
+	// Anti-vacuity: an empty mirror set would make Verify vacuously pass; the
+	// drift-DETECTION logic of sharedschema.Verify (a tampered/missing mirror
+	// reds) is unit-tested in the sharedschema package's TestVerify, so this
+	// archtest is a thin real-repo assertion over that proven behavior.
 	require.NotEmpty(t, sharedschema.Mirrors,
 		"sharedschema.Mirrors must declare at least one mirror, else this guard is vacuous")
 

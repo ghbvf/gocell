@@ -26,7 +26,7 @@ PR #396 引入了 `TestSharedErrorSchema_CopiesInSync`（`bytes.Equal` 比对 3 
 - **canonical 源**：`contracts/shared/errors/error-response-v1.schema.json`（唯一允许手工编辑的副本）
 - **mirror 清单**：`tools/codegen/sharedschema` 包的 `Mirrors` 变量（`map[canonicalRel][]destRoot`）声明 3 个派生目标：`examples/iotdevice`、`examples/todoorder`、`tests/contracttest/testdata`
 - **生成命令**：`gocell generate shared-schema` → 调用 `sharedschema.Generate(root, dryRun)`，把 canonical 字节恒等写到 3 个目标路径
-- **verify gate**：`gocell verify codegen-shared-schema` → 调用 `sharedschema.Verify(root)`，in-process 字节 diff，任一 mirror 漂移或缺失均返回非零退出码，由 CI `verify-codegen` job 守护
+- **verify gate**：`gocell verify codegen-shared-schema` → 调用 `sharedschema.Verify(root)`，in-process 字节 diff，任一 mirror 漂移或缺失均返回非零退出码；该 gate 经 `# verify-bucket: codegen` 路由进 `make verify` 的 codegen bucket（#1817 删除独立 `verify-codegen` job 后单 owner），并由 nightly archtest `TestSharedSchemaMirrorByteCurrent`（`SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01`，#2113）在进程内直跑 `sharedschema.Verify` 兜底（见 §Threat Model blind-spot ③）
 - **删除旧测试**：`TestSharedErrorSchema_CopiesInSync` 删除，verify gate 取代其功能且强制物理同步
 - **reverse-enum archtest**（`SHARED-SCHEMA-MIRROR-FUNNEL-01` A1）：在 CI 全量扫描 repo，发现任何不在 `sharedschema.Mirrors` 声明集内的 `error-response-v1.schema.json` 副本即报错——新增 mirror 必须先进 `Mirrors` 清单
 - **caller-allowlist archtest**（`SHARED-SCHEMA-MIRROR-FUNNEL-01` A2）：`codegen.WriteOptions{Headerless: true}` 复合字面量只允许出现在 `tools/codegen/sharedschema` 包，其他包使用即 CI 红

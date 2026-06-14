@@ -29,7 +29,7 @@ import (
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 	root := findModuleRoot(t)
-	// Since #1565/#2125 golangci-lint runs via the shared funnel — the
+	// Since #1565 (PR #2125) golangci-lint runs via the shared funnel — the
 	// golangci-lint-action `version:` input in _build-lint.yml was removed and
 	// the pin now lives solely in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION
 	// (resolved by gocell::golangci_lint::ensure). That constant is the single
