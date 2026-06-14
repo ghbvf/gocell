@@ -1,7 +1,7 @@
 //go:build archtest
 
 // INVARIANT: CI-INTEGRATION-DISCOVERY-01: integration-test discovers via go list over the go.work module funnel, not hardcoded globs
-// INVARIANT: CI-INTEGRATION-SHARD-PARTITION-01: every discovered integration package routes to exactly one run_main_integration shard filter (exhaustive + disjoint)
+// INVARIANT: CI-INTEGRATION-SHARD-PARTITION-01: every discovered integration package routes to exactly one shard filter
 package archtest
 
 import (
@@ -505,9 +505,10 @@ func TestArchtest_CIIntegrationShardPartition_01(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, pkgs, "no integration packages discovered — walker likely broken")
 
-	const modPrefix = "github.com/ghbvf/gocell/"
+	// Derive the import-path prefix from the sanctioned PlatformModulePath const
+	// (never a bare "github.com/ghbvf/gocell" literal) per ARCHTEST-MODULE-PATH-FUNNEL-01.
 	for _, pkg := range pkgs {
-		importPath := modPrefix + filepath.ToSlash(pkg)
+		importPath := PlatformModulePath + "/" + filepath.ToSlash(pkg)
 		var hits []string
 		for _, sf := range compiled {
 			if sf.re.MatchString(importPath) {

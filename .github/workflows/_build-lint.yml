@@ -555,7 +555,7 @@ jobs:
             run_adapters_extras: false
             run_adapters_race: false
           - shard: tests
-            filter: '^github.com/ghbvf/gocell/(tests|framework/|tools)/'
+            filter: '^github.com/ghbvf/gocell/(tests|framework|tools)/'
             run_main_integration: true
             run_adapters_extras: false
             run_adapters_race: false
