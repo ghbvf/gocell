@@ -44,6 +44,7 @@ import (
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/migration"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
@@ -112,7 +113,7 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		require.Eventually(t, func() bool {
 			pub, perr := outboxCount(context.Background(), pool, "published")
 			return perr == nil && pub == 2
-		}, 60*time.Second, 200*time.Millisecond,
+		}, testtime.D60s, testtime.D200ms,
 			"both command entries must settle to published (one dispatched, one deduped)")
 
 		// Stop the relay (wait for its goroutine to exit) before reading h.calls:
@@ -189,7 +190,7 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		require.Eventually(t, func() bool {
 			dead, derr := outboxCount(context.Background(), pool, "dead")
 			return derr == nil && dead == 1
-		}, 30*time.Second, 200*time.Millisecond,
+		}, testtime.D30s, testtime.D200ms,
 			"identity-less command entry must be fail-closed dead-lettered on PG")
 		// Stop the relay before reading h.calls (happens-before; see ①).
 		stop()

@@ -28,6 +28,14 @@ const certRenewalTestThreshold = 7 * 24 * time.Hour
 // certRenewalTestAttemptTTL is the AttemptTTL used in unit tests.
 const certRenewalTestAttemptTTL = 36 * time.Hour
 
+// Cert window constants used across reconciler unit tests.
+const (
+	certWindow12h = 12 * time.Hour
+	certWindow18h = 18 * time.Hour
+	certWindow24h = 24 * time.Hour
+	certWindow30d = 30 * 24 * time.Hour
+)
+
 // certRenewalTestPolicy is the standard test policy. The stateless producer
 // sweeps ALL near-expiry certs per tick — no BatchSize or BatchRequeue needed.
 var certRenewalTestPolicy = Policy{
@@ -68,8 +76,8 @@ func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 	// dev-near expires within the threshold; dev-far is well outside it.
-	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
-	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(30*24*time.Hour))
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(certWindow24h))
+	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(certWindow30d))
 
 	rec := outboxtest.NewRecorder()
 	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
@@ -93,7 +101,7 @@ func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
 	var p rotateCertPayload
 	require.NoError(t, json.Unmarshal([]byte(req.Payload), &p))
 	assert.Equal(t, int64(1), p.Epoch)
-	assert.Equal(t, certTestBase.Add(24*time.Hour).UTC().Format(time.RFC3339), p.NotAfter)
+	assert.Equal(t, certTestBase.Add(certWindow24h).UTC().Format(time.RFC3339), p.NotAfter)
 }
 
 // TestReconciler_EmitsWithActiveUniqueness verifies that each emitted rotate-cert
@@ -105,7 +113,7 @@ func TestReconciler_EmitsWithActiveUniqueness(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
-	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(certWindow24h))
 
 	rec := outboxtest.NewRecorder()
 	fc := clockmock.New(certTestBase)
@@ -132,7 +140,7 @@ func TestReconciler_NoEmitWhenNoneNearExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
-	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(30*24*time.Hour))
+	seedCert(t, ctx, repo, "dev-far", certTestBase.Add(certWindow30d))
 
 	rec := outboxtest.NewRecorder()
 	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
@@ -154,7 +162,7 @@ func TestReconciler_ReemitsForNewEpoch(t *testing.T) {
 	// epoch 2, near expiry.
 	require.NoError(t, repo.Create(ctx, &domain.Device{
 		ID: "dev-near", Name: "dev-near", Status: "online", LastSeen: certTestBase,
-		CertEpoch: 2, CertExpiresAt: certTestBase.Add(12 * time.Hour),
+		CertEpoch: 2, CertExpiresAt: certTestBase.Add(certWindow12h),
 	}))
 
 	rec := outboxtest.NewRecorder()
@@ -177,7 +185,7 @@ func TestReconciler_StatelessEmitsOnEachTick(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
-	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(certWindow24h))
 
 	rec := outboxtest.NewRecorder()
 	fc := clockmock.New(certTestBase)
@@ -262,8 +270,8 @@ func TestReconciler_PartialBatchFailureRetriesOnlyFailed(t *testing.T) {
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
 
-	seedCert(t, ctx, repo, "dev-a", certTestBase.Add(12*time.Hour))
-	seedCert(t, ctx, repo, "dev-b", certTestBase.Add(18*time.Hour))
+	seedCert(t, ctx, repo, "dev-a", certTestBase.Add(certWindow12h))
+	seedCert(t, ctx, repo, "dev-b", certTestBase.Add(certWindow18h))
 
 	wantErr := errors.New("emit failed for dev-b")
 	rec := outboxtest.NewRecorder()
@@ -309,7 +317,7 @@ func TestReconciler_EmitFailureBubbles(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
-	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(certWindow24h))
 
 	wantErr := errors.New("emit failed")
 	r, err := NewReconciler(clockmock.New(certTestBase), repo,

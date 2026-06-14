@@ -868,6 +868,78 @@ func TestOBS01ProductionPatternsCoverProjectPackages(t *testing.T) {
 	assert.Empty(t, missing, "new production Go top-level directories must be added to OBS-01 production scan SoR")
 }
 
+// TestOBS01CoverageRequiresFramework is the NON-CIRCULAR anti-vacuity witness for
+// #2128. TestOBS01ProductionPatternsCoverProjectPackages only requires the
+// top-levels productionGoTopLevels yields, and that filesystem walk SkipDir's the
+// framework module root (rel == top && prodscan.IsModuleRoot) — so post-#1565
+// "framework" silently drops out of the required set and the symmetric coverage
+// guard passes VACUOUSLY for the framework dimension. (Folding framework back into
+// productionGoTopLevels would be CIRCULAR: it would require what `covered` already
+// grants — derived from the same Patterns set — so dropping framework from Patterns
+// would also drop the requirement, and the hole reappears.)
+//
+// This guard instead asserts the independent, hardcoded fact that framework's core
+// layers MUST be OBS-01-covered, via two checks that do NOT depend on each other:
+//
+//  1. the OBS-01 production pattern set's top-levels include "framework"; and
+//  2. those framework layer patterns actually LOAD non-empty project packages
+//     through the exact loadPackages path OBS-01 uses — a load-witness, strictly
+//     stronger than string presence: it catches a pattern that is present but
+//     matches zero packages (e.g. a renamed/moved framework path).
+//
+// "framework production must be OBS-01-covered" lives here as a hardcoded fact (not
+// derived from Patterns → non-circular), the anti-tautology witness — mirroring the
+// hardcoded want-set pattern in TestBuild_CorebundleCapturesReachableTypedMetrics.
+func TestOBS01CoverageRequiresFramework(t *testing.T) {
+	root := repoRoot(t)
+
+	// (1) coverage: the OBS-01 SoR patterns map back to the "framework" top-level.
+	covered := prodscan.PatternTopLevels(obs01ProductionPatterns(root))
+	assert.True(t, covered["framework"],
+		"OBS-01 production scan must cover the framework module (post-#1565 core: kernel/runtime/pkg)")
+
+	// (2) load-witness: framework layers load non-empty through OBS-01's loader.
+	// loadPackages is the SAME entry CheckOBS01 → checkOBS01WithPatterns uses; with
+	// >1 pattern it routes through loadPatternScopedPackages, where patternLoadMode
+	// auto-selects ModeWorkspace for the framework module root. So this exercises the
+	// real OBS-01 load path, not a weaker stand-in. (Non-project packages are dropped
+	// by packageHasProjectFile, so pkgs are framework project packages.)
+	frameworkPatterns := []string{
+		"./framework/kernel/...",
+		"./framework/runtime/...",
+		"./framework/pkg/...",
+	}
+	pkgs, err := loadPackages(t.Context(), root, frameworkPatterns...)
+	require.NoError(t, err)
+	require.NotEmpty(t, pkgs,
+		"framework layer patterns loaded zero project packages — OBS-01 silently stopped scanning framework")
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		switch {
+		case strings.Contains(p.PkgPath, "/framework/kernel"):
+			seen["kernel"] = true
+		case strings.Contains(p.PkgPath, "/framework/runtime"):
+			seen["runtime"] = true
+		case strings.Contains(p.PkgPath, "/framework/pkg"):
+			seen["pkg"] = true
+		}
+	}
+	for _, layer := range []string{"kernel", "runtime", "pkg"} {
+		assert.Truef(t, seen[layer],
+			"framework/%s loaded no project package under the OBS-01 scan", layer)
+	}
+}
+
+// TestOBS01CoverageRequiresFramework_AntiVacuity proves check (1) of
+// TestOBS01CoverageRequiresFramework is not恒真: a synthetic production pattern set
+// with no framework pattern must NOT report framework as covered — otherwise the
+// real guard's coverage assertion would be vacuous.
+func TestOBS01CoverageRequiresFramework_AntiVacuity(t *testing.T) {
+	covered := prodscan.PatternTopLevels([]string{".", "./cells/...", "./adapters/..."})
+	assert.False(t, covered["framework"],
+		"PatternTopLevels must not report framework covered when no framework pattern is present")
+}
+
 func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "reachable/obs.go", `package reachable

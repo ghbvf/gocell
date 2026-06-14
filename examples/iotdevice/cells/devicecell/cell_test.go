@@ -34,6 +34,14 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
 )
 
+// cert duration constants for TestCertValidityExceedsThreshold.
+const (
+	certValidity90d  = 90 * 24 * time.Hour
+	certThreshold30d = 30 * 24 * time.Hour
+	certValidity10d  = 10 * 24 * time.Hour
+	certValidity20d  = 20 * 24 * time.Hour
+)
+
 func newTestCell() *DeviceCell {
 	c := NewDeviceCell(
 		clock.Real(),
@@ -83,9 +91,9 @@ func newTestRec() *cell.RegistryRecorder {
 // guard logic and that the LIVE consts satisfy it (a const change that breaks the
 // invariant turns this red rather than shipping a silent busy-loop).
 func TestCertValidityExceedsThreshold(t *testing.T) {
-	assert.True(t, certValidityExceedsThreshold(90*24*time.Hour, 30*24*time.Hour), "90d validity > 30d threshold")
-	assert.False(t, certValidityExceedsThreshold(30*24*time.Hour, 30*24*time.Hour), "equal must fail (cert would be near-expiry at issue)")
-	assert.False(t, certValidityExceedsThreshold(10*24*time.Hour, 20*24*time.Hour), "shorter validity must fail")
+	assert.True(t, certValidityExceedsThreshold(certValidity90d, certThreshold30d), "90d validity > 30d threshold")
+	assert.False(t, certValidityExceedsThreshold(certThreshold30d, certThreshold30d), "equal must fail (cert would be near-expiry at issue)")
+	assert.False(t, certValidityExceedsThreshold(certValidity10d, certValidity20d), "shorter validity must fail")
 
 	// The live consts MUST satisfy the invariant — this is the drift guard.
 	assert.True(t, certValidityExceedsThreshold(domain.CertValidity, certRenewalThreshold),

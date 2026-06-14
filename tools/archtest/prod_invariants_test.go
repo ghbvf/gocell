@@ -55,7 +55,12 @@ func TestProdDurationConst(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
+	// PatternsWithSatellites adds the cmd/adapters satellite parents the typed
+	// loader expands to real members — #2136. (examples/ production files are
+	// filtered out below by fileroles.IsProductionCode, so its production duration
+	// literals stay demo-exempt; the satellite increment is shared, the filter
+	// handles the examples/ asymmetry.)
+	patterns := prodscan.PatternsWithSatellites(root)
 
 	var violations []string
 	Run(t, Typed(TypedOpts{Tests: false, Tags: []string{"e2e", "integration", "pg"}}, patterns),

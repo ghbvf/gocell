@@ -55,6 +55,9 @@ var sweepTestBase = time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
 const (
 	sweepWaitTimeout = 2 * time.Second
 	sweepWaitTick    = 5 * time.Millisecond
+	// sweepOverdueOffset is the age of the seeded overdue command relative to
+	// sweepTestBase (2h before "now"), making it past its 1h OverallDeadline.
+	sweepOverdueOffset = -2 * time.Hour
 )
 
 // newSweepTestCell builds a DeviceCell on the supplied fake clock + queue, with
@@ -109,7 +112,7 @@ func TestDeviceCell_CommandSweep_ExpiresOverdueCommand(t *testing.T) {
 		CommandType: "reboot",
 		Status:      kcommand.StatusPending,
 		// OverallDeadline = 1h, created 2h before "now" → already overdue.
-		CreatedAt: sweepTestBase.Add(-2 * time.Hour),
+		CreatedAt: sweepTestBase.Add(sweepOverdueOffset),
 		Timeouts:  kcommand.Timeouts{OverallDeadline: time.Hour},
 	}))
 
