@@ -51,9 +51,11 @@ func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Ge
 	}
 }
 
-// entrypointContext is the template context for main.go.tpl.
+// entrypointContext is the template context for main.go.tpl. The gocell framework
+// runtime imports are hardcoded in the template (the framework lives at the fixed
+// module path github.com/ghbvf/gocell/framework, orthogonal to the consumer module),
+// so no Module field is threaded here (issue #2126).
 type entrypointContext struct {
-	Module     string
 	AssemblyID string
 	HelperName string
 	Cells      []string
@@ -96,7 +98,6 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	}
 
 	ctx := entrypointContext{
-		Module:     g.module,
 		AssemblyID: assemblyID,
 		HelperName: helperName,
 		Cells:      metadata.CellIDs(asm.Cells),
