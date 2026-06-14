@@ -92,8 +92,8 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   但对 Allow 携带的非零 obligation **fail-closed**（拒绝而非静默丢弃）——baseline obligation
   为零，正常路径不受影响。
 - 业务 handler 无 role-literal 授权分支由 `PERMISSION-BASED-AUTHZ-01`（Medium）守卫，扫描范围
-  `corecells/` + `examples/`（allowlist 已于 PR-10c 删空、PR-10d 扩 examples 锁定迁移）；Hard 化
-  （contract.yaml → cellgen + golden）+ 删除 `AnyRole`/`SelfOr` helper 归 PR-13。
+  `corecells/` + `examples/`，allowlist 为空（zero-exception）。Hard 化路径与盲区见对应 archtest godoc
+  与 PR-10a ADR。
 
 相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
 （`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。
