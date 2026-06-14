@@ -9,11 +9,11 @@ import (
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/mem"
 	placeorder "github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/slices/placeorder"
-	"github.com/ghbvf/gocell/kernel/clock"
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	ksaga "github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 )
 
 // testServiceBundle holds a placeorder.Service together with its backing

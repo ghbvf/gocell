@@ -3,8 +3,8 @@ package devicecommand
 import (
 	"context"
 
+	"github.com/ghbvf/gocell/framework/kernel/command"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/command"
 )
 
 // EnqueueCommandAdapter bridges the generated synchronous command-bus Handler

@@ -5,8 +5,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // assertAmbientTx returns an error when ctx does not carry an ambient pgx.Tx.

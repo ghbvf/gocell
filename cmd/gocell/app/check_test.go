@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // goModVersion returns the major.minor version string of the running Go toolchain
@@ -147,16 +147,20 @@ func TestCheckUnconditionalSkip_UnknownFormat(t *testing.T) {
 // "./..." against the caller's CWD and a sub-tree scan can silently mask
 // violations elsewhere in the repo.
 func TestRunUnconditionalSkipAnalyzer_BoundedToRoot(t *testing.T) {
-	// repoRoot (workspace root) not findRoot(): post-#1557 split findRoot() from
-	// the cmd/gocell module dir resolves cmd/gocell/, not the real repo root.
-	root := repoRoot(t)
+	// Since #1565 the repo root is a pure go.work workspace with no module, so the
+	// analyzer (ModeModule / GOWORK=off) is invoked per-module — mirroring
+	// hack/verify-unconditional-skip.sh's GOWORK=off per-module loop. Use the
+	// framework module (the former root module: kernel/runtime/pkg) as the
+	// representative scan root; the contract under test is that Config.Dir bounds
+	// the scan to `root` regardless of the caller's CWD.
+	root := filepath.Join(repoRoot(t), "framework")
 
-	// Switch CWD to a sub-directory and confirm the analyzer still scans
-	// the whole repo — i.e. the Config.Dir override is in effect.
+	// Switch CWD to a different module and confirm the analyzer still scans
+	// `root` — i.e. the Config.Dir override is in effect.
 	wd, err := os.Getwd()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Chdir(wd) })
-	require.NoError(t, os.Chdir(filepath.Join(root, "cmd", "gocell")))
+	require.NoError(t, os.Chdir(filepath.Join(repoRoot(t), "cmd", "gocell")))
 
 	results, err := runUnconditionalSkipAnalyzer([]string{"./..."}, root)
 	require.NoError(t, err)

@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/ghbvf/gocell/runtime/observability/logging"
-	"github.com/ghbvf/gocell/runtime/shutdown"
+	"github.com/ghbvf/gocell/framework/runtime/observability/logging"
+	"github.com/ghbvf/gocell/framework/runtime/shutdown"
 )
 
 func main() {

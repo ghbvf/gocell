@@ -11,9 +11,9 @@ import (
 	"google.golang.org/grpc"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
 // withReg injects a minimal interceptor bundle into cfg so adapter unit tests can

@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // someBareSlice is a pre-built []string var with a bare literal cell-id.
 // Used below to test the Ident-typed slice blind spot.

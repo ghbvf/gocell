@@ -8,8 +8,8 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // TestExampleBuildIdentityManageService demonstrates the recommended way to

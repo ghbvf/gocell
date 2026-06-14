@@ -4,8 +4,8 @@
 package appended
 
 import (
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // Subscription is a mount-ready subscription for event.audit.appended.v1.

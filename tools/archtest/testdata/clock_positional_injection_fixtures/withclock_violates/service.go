@@ -3,7 +3,7 @@
 // option type is present — sub-check B flags it.
 package withclock_violates
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // Option configures Service.
 type Option func(*Service)

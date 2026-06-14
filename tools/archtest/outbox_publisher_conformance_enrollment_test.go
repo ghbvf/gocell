@@ -59,9 +59,9 @@ import (
 // INVARIANT: OUTBOX-PUBLISHER-CONFORMANCE-ENROLLMENT-01
 
 const (
-	outboxPublisherIfacePkg  = PlatformModulePath + "/kernel/outbox"
+	outboxPublisherIfacePkg  = PlatformFrameworkModulePath + "/kernel/outbox"
 	outboxPublisherIfaceName = "Publisher"
-	outboxtestPkg            = PlatformModulePath + "/kernel/outbox/outboxtest"
+	outboxtestPkg            = PlatformFrameworkModulePath + "/kernel/outbox/outboxtest"
 )
 
 // outboxPublisherEnrollmentWaivers maps a production package path → the reason
@@ -69,7 +69,7 @@ const (
 // Each entry is auditable and principled; a flagged impl whose package is NOT
 // here fails CI, forcing a conscious decision (no silent additions).
 var outboxPublisherEnrollmentWaivers = map[string]string{
-	PlatformModulePath + "/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
+	PlatformFrameworkModulePath + "/kernel/outbox": "kernel noop sink outbox.DiscardPublisher (Noop()==true, rejected by cell.CheckNotNoop " +
 		"in durable mode) — it discards rather than delivers, so a pub→sub roundtrip " +
 		"(outboxtest.TestPubSub) is N/A by design.",
 	PlatformCellsModulePath + "/configcore/internal/testutil": "test-double publishers " +
@@ -96,7 +96,7 @@ func TestOutboxPublisherConformanceEnrollment(t *testing.T) {
 	// invocation so types.Implements uses pointer-identical *types.Named
 	// descriptors (cross-load comparisons are always false).
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/outbox/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/outbox/..."}, prodPatterns...)
 
 	var pubIface *types.Interface
 	var implPkgs []*types.Package
@@ -217,7 +217,7 @@ func TestOutboxPublisherEnrollment_REDFixture(t *testing.T) {
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/outbox/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/outbox/..."}, prodPatterns...)
 
 	var pubIface *types.Interface
 	var implPkgs []*types.Package

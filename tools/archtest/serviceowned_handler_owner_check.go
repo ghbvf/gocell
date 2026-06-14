@@ -54,20 +54,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 const (
 	// serviceOwnedErrcodePkg is the canonical import path of the errcode package.
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01).
-	serviceOwnedErrcodePkg = PlatformModulePath + "/pkg/errcode"
+	serviceOwnedErrcodePkg = PlatformFrameworkModulePath + "/pkg/errcode"
 	// serviceOwnedKindNotFoundSym is the symbol name within errcodePkg that
 	// constitutes the IDOR-safe 404-collapse error kind.
 	serviceOwnedKindNotFoundSym = "KindNotFound"
 	// serviceOwnedAuthPkg is the canonical import path of the runtime/auth
 	// package where the CheckOwner funnel lives.
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01).
-	serviceOwnedAuthPkg = PlatformModulePath + "/runtime/auth"
+	serviceOwnedAuthPkg = PlatformFrameworkModulePath + "/runtime/auth"
 	// serviceOwnedCheckOwnerSym is the function name that constitutes the
 	// sole sanctioned ownership-check funnel.
 	serviceOwnedCheckOwnerSym = "CheckOwner"
@@ -134,7 +134,7 @@ func CheckServiceownedHandlerOwnerCheck01(t *testing.T, _ ConfigForExternalCell)
 	// ./corecells/... covers the platform cells' serviceOwned slices; example
 	// cells' serviceOwned contracts are intentionally out of scope for this rule.
 	scanDiags := Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()},
-		[]string{"./corecells/...", "./runtime/auth/..."}),
+		[]string{"./corecells/...", "./framework/runtime/auth/..."}),
 		func(pass *Pass) []Diagnostic {
 			return serviceOwnedScanPass(pass, targets, seenRels)
 		})

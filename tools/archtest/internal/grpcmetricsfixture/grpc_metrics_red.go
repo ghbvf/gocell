@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // UnaryMetrics deliberately mimics the shape of

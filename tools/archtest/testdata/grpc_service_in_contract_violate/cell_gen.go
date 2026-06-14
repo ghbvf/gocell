@@ -2,7 +2,7 @@
 
 package grpc_service_in_contract_violate
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // generatedCellRegister models the SANCTIONED cellgen gRPC wiring: a
 // reg.GRPCService call inside cell_gen.go bearing the cellgen DO-NOT-EDIT

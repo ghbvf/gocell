@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
 )
 
 const (

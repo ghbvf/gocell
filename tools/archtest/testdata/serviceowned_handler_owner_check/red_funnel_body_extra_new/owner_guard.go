@@ -5,7 +5,7 @@
 // fires because notFoundCalls != 1.
 package red_funnel_body_extra_new
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {
 	return callerID == "" || ownerID(resource) != callerID

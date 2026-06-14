@@ -3,8 +3,8 @@
 package fixturecellidnegfixture
 
 import (
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
 
 // badDynamicArgVar is a string variable (not a compile-time literal) used as

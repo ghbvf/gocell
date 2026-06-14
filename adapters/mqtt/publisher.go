@@ -10,9 +10,9 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Compile-time interface assertion.

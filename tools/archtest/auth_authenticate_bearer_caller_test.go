@@ -116,7 +116,7 @@ import (
 
 // authPkgPath is the import path of the package owning AuthenticateBearer.
 // Anchored to [PlatformModulePath] so a module rename updates exactly one place.
-const authPkgPath = PlatformModulePath + "/runtime/auth"
+const authPkgPath = PlatformFrameworkModulePath + "/runtime/auth"
 
 // authenticateBearerCallerAllowlist is the set of production files allowed to
 // reference runtime/auth.AuthenticateBearer — sanctioned transport request-boundary

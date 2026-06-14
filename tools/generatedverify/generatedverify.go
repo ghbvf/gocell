@@ -13,10 +13,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/fspath"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/fspath"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/codegen/requireddepsgen"
@@ -409,11 +409,11 @@ func expectedContractgenArtifacts(root, modulePath string, project *metadata.Pro
 // sagaCoveragePkgDirRel is the package directory that owns the generated
 // terminal_coverage_gen.go; its presence in the project tree is the predicate
 // that gates the saga-coverage manifest entry.
-const sagaCoveragePkgDirRel = "kernel/saga/sagajournaltest"
+const sagaCoveragePkgDirRel = "framework/kernel/saga/sagajournaltest"
 
 // sagaCoverageGenRel is the committed generated file governed by
 // SAGA-STATUS-FANOUT-COVERAGE-01.
-const sagaCoverageGenRel = "kernel/saga/sagajournaltest/terminal_coverage_gen.go"
+const sagaCoverageGenRel = "framework/kernel/saga/sagajournaltest/terminal_coverage_gen.go"
 
 // expectedSagaCoverageArtifacts derives the manifest entry for the
 // SAGA-STATUS-FANOUT-COVERAGE-01 generated file (terminal_coverage_gen.go).

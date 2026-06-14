@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/fspath"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/fspath"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 	"github.com/ghbvf/gocell/tools/wiresummary"
 )
 

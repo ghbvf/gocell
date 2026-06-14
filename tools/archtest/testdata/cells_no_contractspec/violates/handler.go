@@ -3,7 +3,7 @@
 // to trigger the archtest scanner violation.
 package violates
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 
 // RegisterRoutes is a stub that uses contractspec.ContractSpec directly —
 // the pattern forbidden in non-generated cells/ files post W3.

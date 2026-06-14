@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // NonceStore implements kauth.NonceStore using Redis SET NX EX semantics.

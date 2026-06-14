@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/fspath"
+	"github.com/ghbvf/gocell/framework/pkg/fspath"
 )
 
 // bundleSchemaRefs resolves all external $ref entries in raw (a JSON Schema file

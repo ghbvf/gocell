@@ -10,14 +10,14 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	kcommand "github.com/ghbvf/gocell/framework/kernel/command"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	rotationresolved "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	kcommand "github.com/ghbvf/gocell/kernel/command"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 var testBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)

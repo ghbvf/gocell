@@ -17,10 +17,10 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/redaction"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 

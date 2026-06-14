@@ -38,7 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/depgraph"
@@ -568,7 +568,7 @@ func TestLayeringRules(t *testing.T) {
 	// Cells must go through cell.RouteMux / cell.RouteGroup — the concrete router
 	// implementation is an internal detail of runtime/http/router.
 	t.Run("LAYER-07_no_direct_router_import_in_cells", func(t *testing.T) {
-		routerPkg := module + "/runtime/http/router"
+		routerPkg := module + "/framework/runtime/http/router"
 		var layer07violations []string
 		for _, pkg := range g.Packages {
 			if layerOf(cls, pkg.ID) != "cells" {
@@ -826,21 +826,37 @@ func checkTransitiveCrossCellEvents(cls kerneldepgraph.Classifier, g *kerneldepg
 
 // --- unit tests for helper functions ---
 
+// layerCellModuleSet is the post-#1565 realistic workspace module set for the
+// Classifier unit tests: the framework module is now distinct from the org prefix
+// (kernel/runtime/pkg live under github.com/ghbvf/gocell/framework), and each
+// sibling layer is its own go.work module. A single-module {org-prefix} set no
+// longer reflects the topology — framework packages would mis-classify as
+// LayerUnknown because "framework" is not a layer dir.
+func layerCellModuleSet() []string {
+	return []string{
+		PlatformFrameworkModulePath, // kernel/runtime/pkg owner
+		PlatformModulePath + "/adapters/postgres",
+		PlatformCellsModulePath, // corecells
+		PlatformModulePath + "/cmd/gocell",
+		PlatformModulePath + "/examples/ssobff",
+		PlatformModulePath + "/tools",
+	}
+}
+
 func TestLayerOf(t *testing.T) {
-	const module = PlatformModulePath
-	cls := kerneldepgraph.NewClassifier([]string{module})
+	cls := kerneldepgraph.NewClassifier(layerCellModuleSet())
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{PlatformModulePath + "/kernel/cell", "kernel"},
-		{PlatformModulePath + "/kernel/outbox", "kernel"},
-		{PlatformModulePath + "/runtime/auth", "runtime"},
-		{PlatformModulePath + "/runtime/http/middleware", "runtime"},
+		{PlatformFrameworkModulePath + "/kernel/cell", "kernel"},
+		{PlatformFrameworkModulePath + "/kernel/outbox", "kernel"},
+		{PlatformFrameworkModulePath + "/runtime/auth", "runtime"},
+		{PlatformFrameworkModulePath + "/runtime/http/middleware", "runtime"},
 		{PlatformModulePath + "/adapters/postgres", "adapters"},
 		{PlatformCellsModulePath + "/accesscore", "cells"},
 		{PlatformCellsModulePath + "/accesscore/internal/domain", "cells"},
-		{PlatformModulePath + "/pkg/errcode", "pkg"},
+		{PlatformFrameworkModulePath + "/pkg/errcode", "pkg"},
 		{PlatformModulePath + "/cmd/gocell", "cmd"},
 		{PlatformModulePath + "/examples/ssobff", "examples"},
 		{PlatformModulePath + "/tools/archtest", "tools"},
@@ -859,8 +875,7 @@ func TestLayerOf(t *testing.T) {
 }
 
 func TestCellOf(t *testing.T) {
-	const module = PlatformModulePath
-	cls := kerneldepgraph.NewClassifier([]string{module})
+	cls := kerneldepgraph.NewClassifier(layerCellModuleSet())
 	tests := []struct {
 		input string
 		want  string
@@ -870,8 +885,8 @@ func TestCellOf(t *testing.T) {
 		{PlatformCellsModulePath + "/auditcore/slices/auditappend", "auditcore"},
 		{PlatformCellsModulePath + "/configcore", "configcore"},
 		// Non-cell paths return "".
-		{PlatformModulePath + "/kernel/cell", ""},
-		{PlatformModulePath + "/runtime/auth", ""},
+		{PlatformFrameworkModulePath + "/kernel/cell", ""},
+		{PlatformFrameworkModulePath + "/runtime/auth", ""},
 		{"fmt", ""},
 	}
 	for _, tt := range tests {
@@ -892,7 +907,7 @@ func TestIsRootCellPackage(t *testing.T) {
 		{PlatformCellsModulePath + "/accesscore", true},
 		{PlatformCellsModulePath + "/configcore/postgres", false},
 		{PlatformCellsModulePath + "/configcore/internal/ports", false},
-		{PlatformModulePath + "/runtime/auth", false},
+		{PlatformFrameworkModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -914,7 +929,7 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 		{"github.com/rabbitmq/amqp091-go", true},
 		{"github.com/coder/websocket", true},
 		{"github.com/prometheus/client_golang/prometheus", true},
-		{PlatformModulePath + "/kernel/outbox", false},
+		{PlatformFrameworkModulePath + "/kernel/outbox", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pkgPath, func(t *testing.T) {
@@ -1049,8 +1064,8 @@ func TestIsInternal(t *testing.T) {
 		{PlatformCellsModulePath + "/accesscore/internal/domain", true},
 		{PlatformCellsModulePath + "/auditcore/internal", true},
 		{PlatformCellsModulePath + "/accesscore/slices/sessionlogin", false},
-		{PlatformModulePath + "/kernel/cell", false},
-		{PlatformModulePath + "/runtime/auth", false},
+		{PlatformFrameworkModulePath + "/kernel/cell", false},
+		{PlatformFrameworkModulePath + "/runtime/auth", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -1152,8 +1167,8 @@ func TestCheckLayering(t *testing.T) {
 			name: "clean: cmd imports all layers (no rule restricts cmd)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/cmd/gocell",
-					module+"/kernel/cell",
-					module+"/runtime/auth",
+					module+"/framework/kernel/cell",
+					module+"/framework/runtime/auth",
 					module+"/adapters/postgres",
 					module+"/corecells/accesscore"),
 			},
@@ -1162,8 +1177,8 @@ func TestCheckLayering(t *testing.T) {
 			name: "clean: examples imports all layers (unrestricted)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/examples/ssobff",
-					module+"/kernel/cell",
-					module+"/runtime/auth",
+					module+"/framework/kernel/cell",
+					module+"/framework/runtime/auth",
 					module+"/adapters/postgres",
 					module+"/corecells/accesscore"),
 			},
@@ -1171,7 +1186,7 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "clean: pkg imports nothing forbidden (no rule restricts pkg)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/pkg/errcode", "fmt", "net/http"),
+				synthPkg(module+"/framework/pkg/errcode", "fmt", "net/http"),
 			},
 		},
 		{
@@ -1180,7 +1195,7 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "only external imports (no violations)",
 			pkgs: []*packages.Package{
-				synthPkg(module+"/kernel/cell",
+				synthPkg(module+"/framework/kernel/cell",
 					"fmt", "context", "github.com/google/uuid"),
 			},
 		},
@@ -1193,7 +1208,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-07 semantic: cells importing runtime/http/router (checkLayering clean)",
 			pkgs: []*packages.Package{
 				synthPkg(module+"/corecells/accesscore",
-					module+"/runtime/http/router"),
+					module+"/framework/runtime/http/router"),
 			},
 		},
 		// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
@@ -1268,7 +1283,7 @@ func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
 	const module = PlatformModulePath
-	routerPkg := module + "/runtime/http/router"
+	routerPkg := module + "/framework/runtime/http/router"
 	cellSlice := module + "/corecells/accesscore/slices/some_route_slice"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1417,7 +1432,7 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 
 	const module = PlatformModulePath
 	cellA := module + "/cells/cellA"
-	util := module + "/pkg/util"
+	util := module + "/framework/pkg/util"
 	cellBInt := module + "/cells/cellB/internal/domain"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1451,7 +1466,7 @@ func TestLayeringRules_LAYER05T_NegativeProbe_Corecells(t *testing.T) {
 
 	const module = PlatformModulePath
 	auditcore := module + "/corecells/auditcore"
-	util := module + "/pkg/util"
+	util := module + "/framework/pkg/util"
 	accesscoreInternal := module + "/corecells/accesscore/internal/domain"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1490,7 +1505,7 @@ func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 
 	const module = PlatformModulePath
 	auditcore := module + "/corecells/auditcore"
-	util := module + "/pkg/util"
+	util := module + "/framework/pkg/util"
 	initialadmin := module + "/corecells/accesscore/initialadmin"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1530,7 +1545,7 @@ func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 
 	const module = PlatformModulePath
 	cellA := module + "/cells/cellA"
-	util := module + "/pkg/util"
+	util := module + "/framework/pkg/util"
 	cellBEvents := module + "/cells/cellB/events"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1560,7 +1575,7 @@ func TestLayeringRules_LAYER09T_NegativeProbe_Corecells(t *testing.T) {
 
 	const module = PlatformModulePath
 	auditcore := module + "/corecells/auditcore"
-	util := module + "/pkg/util"
+	util := module + "/framework/pkg/util"
 	configcoreEvents := module + "/corecells/configcore/events"
 
 	g := depgraph.FromPackages([]string{module}, []*packages.Package{
@@ -1667,7 +1682,7 @@ func TestKernelDepgraphIsolation(t *testing.T) {
 	g, _ := loadModule(t, root)
 	module := readModulePath(t, root)
 
-	kernelDepgraphPkg := module + "/kernel/depgraph"
+	kernelDepgraphPkg := module + "/framework/kernel/depgraph"
 	toolsDepgraphPkg := module + "/tools/depgraph"
 
 	kernelNode := g.ByID(kernelDepgraphPkg)

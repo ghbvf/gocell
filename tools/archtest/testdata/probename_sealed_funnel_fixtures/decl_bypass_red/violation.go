@@ -8,7 +8,7 @@
 // DO NOT use this package in production code.
 package decl_bypass_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // VIOLATION A1: ProbeName const declared in a non-sanctioned package.
 // Only adapter/framework/cellgen packages may declare ProbeName consts.

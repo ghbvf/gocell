@@ -7,8 +7,8 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Package sessionlogout consumes role.assigned and role.revoked events for

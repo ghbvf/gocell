@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // ResourceAttributeProvider is the ABAC PIP (Policy Information Point) source

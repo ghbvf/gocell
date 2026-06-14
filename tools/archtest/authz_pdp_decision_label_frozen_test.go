@@ -67,7 +67,7 @@ import (
 
 // runtimeAuthPkg is the import path of the package that owns the pdpDecisionLabel
 // type and the recordDecision funnel.
-const runtimeAuthPkg = PlatformModulePath + "/runtime/auth"
+const runtimeAuthPkg = PlatformFrameworkModulePath + "/runtime/auth"
 
 // wantPDPDecisionLabelValues is the frozen membership of the auth_pdp_decision_*
 // `decision` label value set. Updating this list requires reviewer attention and

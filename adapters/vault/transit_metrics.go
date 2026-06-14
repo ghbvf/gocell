@@ -5,7 +5,7 @@ package vault
 // transit_provider.go or other adapter files.
 //
 // All instruments are built through the kernel-neutral
-// github.com/ghbvf/gocell/kernel/observability/metrics.Provider — the vault
+// github.com/ghbvf/gocell/framework/kernel/observability/metrics.Provider — the vault
 // adapter no longer imports github.com/prometheus/client_golang directly (#885).
 // The bare (dimensionless) counters/gauge are modeled as zero-label vecs whose
 // single child is pre-bound once here via With(empty Labels); call sites then use
@@ -40,9 +40,9 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // errMsgRegisterTransitMetric is the errcode.Wrap message used by every

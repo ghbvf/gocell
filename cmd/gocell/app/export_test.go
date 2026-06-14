@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
 // exportFixturePath points to the checked-in minimal GoCell fixture used for

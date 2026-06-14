@@ -167,6 +167,7 @@ func TestIsPublishable(t *testing.T) {
 		{"corecells", true},
 		{"cellmodules", true},
 		{"tools", true},
+		{"tests", true}, // tests root is a shared-helper library (depended on by adapters/postgres/pgtest)
 		{"examples/demo", false},
 		{"examples/ssobff", false},
 		{"tests/integration", false},
@@ -259,8 +260,14 @@ func TestTagPaths(t *testing.T) {
 	if len(tags) < 2 {
 		t.Fatalf("want >=2 tags, got %d", len(tags))
 	}
-	if tags[0] != testVersion {
-		t.Errorf("root tag = %q, want bare %q", tags[0], testVersion)
+	// Post-#1565 there is no root module (the core lives in the framework
+	// submodule), so NO tag is bare — framework tags as "framework/<version>"
+	// like every other satellite.
+	if containsString(tags, testVersion) {
+		t.Errorf("no module sits at the repo root post-#1565, so no bare %q tag should exist; got %v", testVersion, tags)
+	}
+	if !containsString(tags, "framework/"+testVersion) {
+		t.Errorf("core module tag framework/%s missing from %v", testVersion, tags)
 	}
 	if !containsString(tags, "adapters/postgres/"+testVersion) {
 		t.Errorf("satellite tag adapters/postgres/%s missing from %v", testVersion, tags)

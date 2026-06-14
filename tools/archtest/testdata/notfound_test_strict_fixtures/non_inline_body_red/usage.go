@@ -9,8 +9,8 @@ package non_inline_body_red
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 )
 
 func TestRepo_Errors(t *testing.T) {

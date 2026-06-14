@@ -1,0 +1,194 @@
+package metrics
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"time"
+
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+)
+
+// Metric names for shutdown observability. Names are bare semantic identifiers
+// (no namespace prefix). The final fully-qualified Prometheus name is assembled
+// by the Provider's Namespace field (e.g. "gocell") via
+// prom.BuildFQName(Namespace, Subsystem, Name), matching the canonical pattern
+// used by kernel/outbox relay_collector.go and runtime/observability metrics.
+// Provider configuration lives in cmd/corebundle/metrics.go (Namespace: "gocell").
+const (
+	// ShutdownPhaseCounterName counts entries into each named shutdown phase.
+	// Labels: phase = readiness_flip | http_drain | lifo_teardown | closed.
+	// SRE use: detect stuck shutdowns by comparing phase entry counts across
+	// instances; a missing "closed" entry pinpoints where the hang occurred.
+	//
+	// Note: This is a Counter (not a Gauge). To check which phase a pod is stuck
+	// in, operators must compare the delta between successive phase counters; a
+	// phase counter that fails to increment while earlier phases have incremented
+	// indicates the pod is stuck in the previous phase.
+	ShutdownPhaseCounterName = "bootstrap_shutdown_phase_entries_total"
+
+	// ShutdownPhaseDurationName records per-phase wall-clock latency.
+	// Labels: phase = readiness_flip | http_drain | lifo_teardown | total.
+	// SRE use: P99 histogram in Grafana reveals which phase dominates
+	// shutdown latency.
+	ShutdownPhaseDurationName = "bootstrap_shutdown_phase_duration_seconds"
+
+	// ShutdownTotalCounterName counts completed shutdowns by outcome.
+	// Labels: outcome ∈ {success, timeout, teardown_error, signal_error}.
+	//   - success       : clean, user-initiated shutdown
+	//   - timeout       : shutCtx expired during readiness flip or LIFO teardown
+	//   - teardown_error: at least one teardown returned non-nil (no timeout)
+	//   - signal_error  : shutdown triggered by HTTP/worker/router failure,
+	//                     teardown itself was clean
+	// SRE use: alert on timeout / teardown_error; signal_error rate reveals
+	// how often shutdown is triggered by component failures vs. human action.
+	// ref: Kubernetes pod termination (success/failure/timeout tri-state).
+	ShutdownTotalCounterName = "bootstrap_shutdown_total"
+)
+
+// Phase label values for ShutdownPhaseCounterName.
+const (
+	ShutdownPhaseReadinessFlip = "readiness_flip"
+	// ShutdownPhaseHTTPDrain covers shutdown stage 2 — the explicit transport
+	// intake drain that runs before LIFO teardown. As of #1148 this stage drains
+	// BOTH the HTTP and gRPC listeners (they share one budget), so this single
+	// label aggregates both transports' drain duration. Splitting gRPC into its
+	// own phase label is deferred to PR-9 (#1152, observability parity); until
+	// then a `phase="http_drain"` spike may be HTTP or gRPC. Per-transport error
+	// attribution is preserved in the joined error (teardown_http_drain /
+	// teardown_grpc_drain), just not in this metric label.
+	ShutdownPhaseHTTPDrain    = "http_drain"
+	ShutdownPhaseLIFOTeardown = "lifo_teardown"
+	ShutdownPhaseClosed       = "closed"
+	ShutdownPhaseTotal        = "total"
+)
+
+// shutdownRegisterErrFmt is the error-wrap format shared by every metric
+// registration failure in NewShutdownCollector — keeping a single literal
+// simplifies log parsing and avoids drift between the three call sites.
+const shutdownRegisterErrFmt = "bootstrap: register %s: %w"
+
+// defaultShutdownBuckets are histogram upper bounds in seconds for per-phase
+// shutdown duration. Range covers 10ms (fast path) to 60s (termination grace
+// period). ref: kernel/outbox DefaultRelayPollBuckets — same bucketing philosophy.
+var defaultShutdownBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60}
+
+// ShutdownCollector groups the three observability signals emitted during
+// phase10OrchestrateShutdown. A nil *ShutdownCollector is safe to call —
+// all methods are nil-receiver guards. This enables the "disabled without
+// provider" contract without nil checks at every call site.
+//
+// Design decision (plan option B): ShutdownCollector is created once in New()
+// and stored on Bootstrap so metric instruments are registered against the
+// Provider at construction time, matching the "register at start-up" pattern
+// used by relay_collector.go and the kernel hook dispatcher.
+type ShutdownCollector struct {
+	disabled bool
+
+	// phaseEntries counts each phase transition. Counter is the correct
+	// instrument here: each shutdown phase transition is a discrete event that
+	// happens exactly once per shutdown (monotonically increasing), not a
+	// snapshot of "how many phases are currently in flight". Counter semantics
+	// let SREs detect missing phase entries (stuck shutdown) and build timeline
+	// views by comparing phase entry counts across instances or rate-of-change
+	// over time. A Gauge would collapse multiple restarts into a single current
+	// value, losing the event-stream semantics. Provider.GaugeVec is now
+	// available (D3a-1), but Counter remains the right choice for this metric.
+	phaseEntries kernelmetrics.CounterVec
+
+	// phaseDuration records wall-clock seconds for readiness_flip,
+	// lifo_teardown, and the overall total.
+	phaseDuration kernelmetrics.HistogramVec
+
+	// shutdownTotal counts completed shutdowns by outcome (success | timeout |
+	// teardown_error | signal_error).
+	shutdownTotal kernelmetrics.CounterVec
+}
+
+// NewShutdownCollector registers shutdown metrics on p and returns a
+// *ShutdownCollector. A nil Provider returns a disabled metrics object, which
+// leaves phase10 behavior unchanged without encoding success as nil data.
+//
+// An error is returned only when the Provider itself fails to register a
+// metric family (typically a duplicate name in the same registry). Callers
+// treat this as fatal (consistent with relay_collector.go registration pattern).
+//
+// ref: kernel/outbox.NewProviderRelayCollector — rollback-on-partial-failure
+// pattern for metric registration.
+func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) {
+	if p == nil {
+		return &ShutdownCollector{disabled: true}, nil
+	}
+
+	// Track registered collectors for rollback on partial failure.
+	var registered []kernelmetrics.Collector
+	rollback := func(origErr error) (*ShutdownCollector, error) {
+		for _, v := range slices.Backward(registered) {
+			_ = p.Unregister(v) // best-effort; ignore unregister errors
+		}
+		return nil, origErr
+	}
+
+	phaseEntries, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       ShutdownPhaseCounterName,
+		Help:       "Total entries into each shutdown phase.",
+		LabelNames: []string{"phase"},
+	})
+	if err != nil {
+		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseCounterName, err))
+	}
+	registered = append(registered, phaseEntries)
+
+	phaseDuration, err := p.HistogramVec(kernelmetrics.HistogramOpts{
+		Name:       ShutdownPhaseDurationName,
+		Help:       "Wall-clock duration of each shutdown phase in seconds.",
+		LabelNames: []string{"phase"},
+		Buckets:    defaultShutdownBuckets,
+	})
+	if err != nil {
+		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseDurationName, err))
+	}
+	registered = append(registered, phaseDuration)
+
+	shutdownTotal, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       ShutdownTotalCounterName,
+		Help:       "Total completed shutdowns by outcome (success|timeout|teardown_error|signal_error).",
+		LabelNames: []string{"outcome"},
+	})
+	if err != nil {
+		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownTotalCounterName, err))
+	}
+
+	return &ShutdownCollector{
+		phaseEntries:  phaseEntries,
+		phaseDuration: phaseDuration,
+		shutdownTotal: shutdownTotal,
+	}, nil
+}
+
+// RecordPhaseEntry increments the phase-entry counter for the given phase
+// label. No-op on nil receiver.
+func (m *ShutdownCollector) RecordPhaseEntry(ctx context.Context, phase string) {
+	if m == nil || m.disabled {
+		return
+	}
+	m.phaseEntries.With(kernelmetrics.Labels{"phase": phase}).Inc(ctx)
+}
+
+// ObservePhaseDuration records the duration of a shutdown phase. No-op on
+// nil receiver.
+func (m *ShutdownCollector) ObservePhaseDuration(ctx context.Context, phase string, d time.Duration) {
+	if m == nil || m.disabled {
+		return
+	}
+	m.phaseDuration.With(kernelmetrics.Labels{"phase": phase}).Observe(ctx, d.Seconds())
+}
+
+// CountOutcome increments the shutdown outcome counter. outcome must be one of
+// "success", "timeout", "teardown_error", or "signal_error". No-op on nil receiver.
+func (m *ShutdownCollector) CountOutcome(ctx context.Context, outcome string) {
+	if m == nil || m.disabled {
+		return
+	}
+	m.shutdownTotal.With(kernelmetrics.Labels{"outcome": outcome}).Inc(ctx)
+}

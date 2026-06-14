@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/audit"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/audit"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
 // buildTestAuditProtocol creates a ledger.Protocol for integration tests.

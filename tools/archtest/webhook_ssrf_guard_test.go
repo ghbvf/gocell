@@ -120,7 +120,7 @@ const (
 	// method can move files freely. A rename of the method flips every
 	// DialContext callsite to a violation (fail-closed), forcing the author to
 	// update this const in the same change.
-	ssrfSanctionedDialFunc = "(*" + PlatformModulePath + "/kernel/webhook.SafePolicy).DialContext"
+	ssrfSanctionedDialFunc = "(*" + PlatformFrameworkModulePath + "/kernel/webhook.SafePolicy).DialContext"
 )
 
 // ssrfBannedNetDialFuncs is the A1 banned set: net package functions that open
@@ -304,15 +304,15 @@ func scanSSRFTransportDialContext(fset *token.FileSet, file *ast.File, rel strin
 //   - runtime/webhook/dispatch: wires kernel types only (no raw dials today;
 //     extended so future additions cannot silently bypass the funnel)
 var ssrfScannedPkgPaths = map[string]bool{
-	PlatformModulePath + "/kernel/webhook":           true,
-	PlatformModulePath + "/runtime/webhook/dispatch": true,
+	PlatformFrameworkModulePath + "/kernel/webhook":           true,
+	PlatformFrameworkModulePath + "/runtime/webhook/dispatch": true,
 }
 
 // ssrfPkgPatterns is the packages.Load pattern list for TestWebhookSSRFGuard.
 // It covers kernel/webhook and runtime/webhook/dispatch (PR-5 extension).
 var ssrfPkgPatterns = []string{
-	"./kernel/webhook/...",
-	"./runtime/webhook/dispatch",
+	"./framework/kernel/webhook/...",
+	"./framework/runtime/webhook/dispatch",
 }
 
 func TestWebhookSSRFGuard(t *testing.T) {

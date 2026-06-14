@@ -1,8 +1,8 @@
 package abac
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // Policy is the top-level ABAC authorization artifact owned by a tenant.

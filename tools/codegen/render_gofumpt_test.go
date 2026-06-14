@@ -29,7 +29,7 @@ func TestRender_GroupsLocalImports(t *testing.T) {
 import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 func F(t assert.TestingT) {
@@ -55,7 +55,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 `
 	if !bytes.Contains(out, []byte(want)) {

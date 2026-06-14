@@ -9,7 +9,7 @@ package indirect_struct_field_red
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // wrapper holds a function value matching External's signature.

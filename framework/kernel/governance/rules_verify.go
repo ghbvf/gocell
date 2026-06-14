@@ -1,0 +1,451 @@
+package governance
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/verify"
+)
+
+const (
+	fieldCritCheckRefTmpl    = "passCriteria[%d].checkRef"
+	fieldWaiversExpiresAtFmt = "verify.waivers[%d].expiresAt"
+
+	// defaultWaiverExpiryTruncation is the granularity used when comparing a
+	// waiver's expiresAt date against the current time. Day-level truncation
+	// matches the YYYY-MM-DD format required by the metadata schema.
+	defaultWaiverExpiryTruncation = 24 * time.Hour
+)
+
+// validateVERIFY01 checks that every contractUsage has a matching
+// verify.contract entry or a valid waiver.
+//
+// verify.contract format: "contract.{contractID}.{role}"
+// waiver match: waiver.Contract == contractUsage.Contract.
+func (v *Validator) validateVERIFY01() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		results = append(results, v.validateSliceVERIFY01(s)...)
+	}
+	return results
+}
+
+// validateSliceVERIFY01 checks a single slice's contractUsages against its
+// verify.contract entries and active waivers.
+func (v *Validator) validateSliceVERIFY01(s *metadata.SliceMeta) []ValidationResult {
+	verifySet := make(map[string]bool, len(s.Verify.Contract))
+	for _, vc := range s.Verify.Contract {
+		verifySet[vc] = true
+	}
+	waiverSet := v.buildActiveWaiverSet(s)
+
+	var results []ValidationResult
+	for i, cu := range s.ContractUsages {
+		verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
+		if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
+			results = append(results, v.newError(
+				codeVERIFY01, IssueRequired,
+				sliceFile(s),
+				fmt.Sprintf("contractUsages[%d]", i),
+				fmt.Sprintf(
+					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
+					cu.Contract, cu.Role, s.ID,
+				),
+				"add verify.contract entry or create a waiver in the slice",
+			))
+		}
+	}
+	return results
+}
+
+// buildActiveWaiverSet returns the set of contract IDs covered by a
+// non-expired, parseable waiver in the slice.
+func (v *Validator) buildActiveWaiverSet(s *metadata.SliceMeta) map[string]bool {
+	waiverSet := make(map[string]bool, len(s.Verify.Waivers))
+	for _, w := range s.Verify.Waivers {
+		if w.ExpiresAt == "" {
+			continue // missing expiresAt, invalid waiver
+		}
+		t, err := time.Parse("2006-01-02", w.ExpiresAt)
+		if err != nil {
+			continue // unparseable expiresAt, invalid waiver
+		}
+		if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
+			continue // expired waiver, not valid
+		}
+		waiverSet[w.Contract] = true
+	}
+	return waiverSet
+}
+
+// validateVERIFY02 checks waiver required fields and expiry.
+// Required: contract, owner, reason, expiresAt (valid date, not expired).
+func (v *Validator) validateVERIFY02() []ValidationResult {
+	var results []ValidationResult
+	for _, s := range v.project.Slices {
+		for i, w := range s.Verify.Waivers {
+			results = append(results, v.validateWaiverVERIFY02(sliceFile(s), i, w)...)
+		}
+	}
+	return results
+}
+
+// validateWaiverVERIFY02 validates a single waiver's required fields and expiry.
+func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.WaiverMeta) []ValidationResult {
+	var results []ValidationResult
+	if w.Contract == "" {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].contract", i),
+			"waiver.contract is required",
+			"add a contract field to this waiver entry",
+		))
+	}
+	if w.Owner == "" {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].owner", i),
+			fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+			"add an owner field to this waiver entry",
+		))
+	}
+	if w.Reason == "" {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].reason", i),
+			fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+			"add a reason field to this waiver entry",
+		))
+	}
+	if w.ExpiresAt == "" {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueRequired,
+			file,
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
+			fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+			"add an expiresAt field (YYYY-MM-DD) to this waiver entry",
+		))
+		return results
+	}
+	t, err := time.Parse("2006-01-02", w.ExpiresAt)
+	if err != nil {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueInvalid,
+			file,
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
+			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
+			"use a YYYY-MM-DD formatted date",
+		))
+		return results
+	}
+	if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
+		results = append(results, v.newError(
+			codeVERIFY02, IssueInvalid,
+			file,
+			fmt.Sprintf(fieldWaiversExpiresAtFmt, i),
+			fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
+			"extend the waiver expiresAt or add a proper verify.contract entry",
+		))
+	}
+	return results
+}
+
+// validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
+func (v *Validator) validateVERIFY03() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		for i, dep := range c.L0Dependencies {
+			target, ok := v.project.Cells[dep.Cell]
+			if !ok {
+				continue // REF-09 covers missing cells
+			}
+			targetLevel, parseErr := cellvocab.ParseLevel(target.ConsistencyLevel)
+			if parseErr != nil {
+				continue // FMT-03 covers invalid levels
+			}
+			if targetLevel != cellvocab.L0 {
+				results = append(results, v.newError(
+					codeVERIFY03, IssueMismatch,
+					cellFile(c),
+					fmt.Sprintf("l0Dependencies[%d].cell", i),
+					fmt.Sprintf(
+						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
+						c.ID, dep.Cell, target.ConsistencyLevel,
+					),
+					"only L0 cells may be listed in l0Dependencies",
+				))
+			}
+		}
+	}
+	return results
+}
+
+// validateVERIFY04 checks that every active contract whose provider is a
+// Cell has at least one provider-role slice. Without this, a contract is
+// "published but nobody provides it" — a ghost capability.
+// Contracts served by external actors are skipped (actors have no slices).
+func (v *Validator) validateVERIFY04() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Lifecycle != lifecycleActive {
+			continue
+		}
+		providerID := contractProvider(c)
+		if providerID == "" {
+			continue // REF rules cover missing provider
+		}
+		// Only check cell-backed contracts; external actors have no slices.
+		if _, isCell := v.project.Cells[providerID]; !isCell {
+			continue
+		}
+		if !v.hasImplementingSlice(c, providerID) {
+			results = append(results, v.newError(
+				codeVERIFY04, IssueRequired,
+				contractFile(c),
+				"lifecycle",
+				fmt.Sprintf(
+					"active contract %q has no implementing slice in cell %q",
+					c.ID, providerID,
+				),
+				"create a slice in that cell with a contractUsage that implements this "+
+					"contract (a provider role such as serve/publish/handle/provide; "+
+					"webhook-receive for an inbound webhook, webhook-dispatch for an outbound one)",
+			))
+		}
+	}
+	return results
+}
+
+// hasImplementingSlice returns true if any slice belonging to providerCell
+// declares a contractUsage that IMPLEMENTS contract c. For most kinds the
+// implementing role is a provider role (serve/publish/handle/provide, and
+// webhook-dispatch for outbound webhooks). An INBOUND webhook is the exception:
+// its provider (ProviderEndpoint) is the owner cell, but the owner implements it
+// via a webhook-receive slice — which cellvocab classifies as a consumer role
+// (the cell consumes the inbound delivery). Without this carve-out an inbound
+// webhook contract could never satisfy VERIFY-04, because no provider-role slice
+// is expressible for it (webhook-receive is consumer-side; the real "provider"
+// is the external sender).
+func (v *Validator) hasImplementingSlice(c *metadata.ContractMeta, providerCell string) bool {
+	for _, s := range v.project.Slices {
+		if s.BelongsToCell != providerCell {
+			continue
+		}
+		for _, cu := range s.ContractUsages {
+			if cu.Contract == c.ID && implementsContract(c, cu.Role) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// implementsContract reports whether role is the owner cell's implementing role
+// for contract c. An inbound webhook is the carve-out: its on-paper provider is
+// the ownerCell, but the actual data provider is the external sender — the owner
+// cell implements the contract by RECEIVING, so a webhook-receive slice (a
+// consumer role per cellvocab) is what implements it. Every other kind (incl.
+// outbound webhooks via webhook-dispatch) is implemented by a provider role.
+func implementsContract(c *metadata.ContractMeta, role string) bool {
+	if cellvocab.ContractKind(c.Kind) == cellvocab.ContractWebhook &&
+		c.Direction == string(cellvocab.DirectionInbound) {
+		return cellvocab.ContractRole(role) == cellvocab.RoleWebhookReceive
+	}
+	return cellvocab.IsProviderRole(cellvocab.ContractRole(role))
+}
+
+// validRefPrefixes is the set of allowed first segments in a verify ref.
+var validRefPrefixes = map[string]bool{
+	"journey":  true,
+	"smoke":    true,
+	"unit":     true,
+	"contract": true,
+}
+
+// validateVerifyRef checks a single ref string for format compliance.
+// Rules: at least 3 dot-separated segments; first segment must be a known prefix.
+// For smoke refs, second segment must be a cellID present in the project.
+func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResult {
+	var results []ValidationResult
+	parts := strings.SplitN(ref, ".", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		results = append(results, v.newError(
+			codeVERIFY05, IssueInvalid,
+			file,
+			field,
+			fmt.Sprintf(
+				"ref %q must have at least 3 non-empty dot-separated segments", ref,
+			),
+			"use format {prefix}.{scope}.{suffix}",
+		))
+		return results
+	}
+
+	prefix := parts[0]
+	if !validRefPrefixes[prefix] {
+		results = append(results, v.newError(
+			codeVERIFY05, IssueInvalid,
+			file,
+			field,
+			fmt.Sprintf(
+				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
+			),
+			"use one of the allowed prefixes",
+		))
+		return results
+	}
+
+	// For smoke refs, the second segment must be an existing cellID.
+	if prefix == "smoke" {
+		cellID := parts[1]
+		if _, ok := v.project.Cells[cellID]; !ok {
+			results = append(results, v.newError(
+				codeVERIFY05, IssueRefNotFound,
+				file,
+				field,
+				fmt.Sprintf(
+					"smoke ref %q references non-existent cell %q", ref, cellID,
+				),
+				"use an existing cell id as the second segment",
+			))
+		}
+	}
+
+	return results
+}
+
+// validateVERIFY05 checks that all verify refs (cell.verify.smoke,
+// slice.verify.unit, slice.verify.contract, journey.passCriteria[].checkRef)
+// use the structured ref format: {prefix}.{scope}.{suffix}, where prefix is
+// one of journey/smoke/unit/contract. For smoke refs the scope must be an
+// existing cellID.
+func (v *Validator) validateVERIFY05() []ValidationResult {
+	var results []ValidationResult
+
+	// cell.yaml verify.smoke refs
+	for _, c := range v.project.Cells {
+		file := cellFile(c)
+		for i, ref := range c.Verify.Smoke {
+			field := fmt.Sprintf("verify.smoke[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// slice.yaml verify.unit + verify.contract refs
+	for _, s := range v.project.Slices {
+		file := sliceFile(s)
+		for i, ref := range s.Verify.Unit {
+			field := fmt.Sprintf("verify.unit[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+		for i, ref := range s.Verify.Contract {
+			field := fmt.Sprintf("verify.contract[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// journey passCriteria[].checkRef
+	for _, j := range v.project.Journeys {
+		file := journeyFile(j)
+		for i, pc := range j.PassCriteria {
+			if pc.CheckRef == "" {
+				continue
+			}
+			field := fmt.Sprintf(fieldCritCheckRefTmpl, i)
+			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
+		}
+	}
+
+	return results
+}
+
+// validateVERIFY06 checks that strict-mode active journeys have executable
+// automated acceptance checks. A non-empty checkRef is only a declaration; the
+// gate is the actual test target resolving and running without zero-match or
+// skip-only results.
+//
+// ctx flows through to verifyJourneyRef so a CI worker aborting `gocell
+// validate --strict` cancels the underlying `go test` subprocess; without
+// it the rule blocks indefinitely on slow filesystems (NFS / FUSE).
+func (v *Validator) validateVERIFY06(ctx context.Context) []ValidationResult {
+	var results []ValidationResult
+	for _, j := range v.project.Journeys {
+		results = append(results, v.validateVERIFY06Journey(ctx, j)...)
+	}
+	return results
+}
+
+func (v *Validator) validateVERIFY06Journey(ctx context.Context, j *metadata.JourneyMeta) []ValidationResult {
+	if j.Lifecycle != "active" {
+		return nil
+	}
+	var results []ValidationResult
+	autoCount := 0
+	for i, pc := range j.PassCriteria {
+		if ctx.Err() != nil {
+			// Mirrors the rule pipeline's between-step cancellation check
+			// (validate.go) — once ctx is canceled, skip remaining passCriteria
+			// rather than dispatching futile verifyJourneyRef calls that will
+			// each immediately bail.
+			break
+		}
+		if pc.Mode != "auto" || strings.TrimSpace(pc.CheckRef) == "" {
+			continue
+		}
+		autoCount++
+		results = append(results, v.validateVERIFY06CheckRef(ctx, j, i, pc)...)
+	}
+	if autoCount == 0 {
+		results = append(results, v.newError(
+			codeVERIFY06, IssueRequired,
+			journeyFile(j),
+			"passCriteria",
+			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
+			"add a passCriteria entry with mode: auto and a checkRef pointing to a test target",
+		))
+	}
+	return results
+}
+
+func (v *Validator) validateVERIFY06CheckRef(
+	ctx context.Context,
+	j *metadata.JourneyMeta,
+	i int,
+	pc metadata.PassCriterion,
+) []ValidationResult {
+	scope, err := verify.JourneyRefScope(pc.CheckRef)
+	if err != nil || scope != j.ID {
+		return []ValidationResult{v.newError(
+			codeVERIFY06, IssueMismatch,
+			journeyFile(j),
+			fmt.Sprintf(fieldCritCheckRefTmpl, i),
+			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
+			"use a checkRef in the format journey.{journeyID}.{suffix}",
+		)}
+	}
+	if v.verifyJourneyRef == nil {
+		return nil
+	}
+	tr, errs := v.verifyJourneyRef(ctx, j, pc.CheckRef)
+	if ctx.Err() != nil {
+		// ctx canceled (e.g. go test subprocess SIGKILL) — not a governance finding.
+		return nil
+	}
+	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
+		return nil
+	}
+	return []ValidationResult{v.newError(
+		codeVERIFY06, IssueRefNotFound,
+		journeyFile(j),
+		fmt.Sprintf(fieldCritCheckRefTmpl, i),
+		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
+		"ensure the referenced test package exists and has non-skipped matching tests",
+	)}
+}

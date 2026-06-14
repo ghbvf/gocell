@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
 )
@@ -44,7 +44,7 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	assert.Equal(t, []string{"result", "reason"}, authVerify.Labels)
 	assert.Equal(t, "gocell_auth_token_verify_total", authVerify.FQName)
 	assert.Equal(t, "gocell", authVerify.Namespace)
-	assert.Equal(t, "runtime/auth/metrics.go", authVerify.File)
+	assert.Equal(t, "framework/runtime/auth/metrics.go", authVerify.File)
 
 	outboxRelayed := requireMetric(t, schema, "outbox_relayed_total")
 	assert.Equal(t, []string{"cell", "kind", "outcome"}, outboxRelayed.Labels)
@@ -79,7 +79,7 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	httpDuration := requireMetric(t, schema, "http_request_duration_seconds")
 	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, httpDuration.Buckets)
 	assert.Empty(t, httpDuration.BucketSource)
-	assert.Equal(t, "runtime/bootstrap/phases_http.go", httpDuration.File)
+	assert.Equal(t, "framework/runtime/bootstrap/phases_http.go", httpDuration.File)
 
 	httpBodyLimitRejections := requireMetric(t, schema, "http_request_body_limit_rejections_total")
 	assert.Equal(t, []string{"cell", "route"}, httpBodyLimitRejections.Labels)
@@ -230,7 +230,7 @@ func TestBuild_FailsClosedOnUnresolvedMetricIdentity(t *testing.T) {
 import (
 	"os"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 )
 
 var _ = metrics.CounterOpts{
@@ -396,8 +396,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	ec "github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	ec "github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func direct(v metrics.CounterVec, err error) {
@@ -442,8 +442,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -477,8 +477,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -529,8 +529,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -575,8 +575,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -611,8 +611,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -642,8 +642,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -675,8 +675,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -712,8 +712,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -744,8 +744,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -776,7 +776,7 @@ func TestCheckOBS01DetectsGlobalTransitiveHelperSinkParams(t *testing.T) {
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 )
 
 var provider = metrics.NopProvider{}
@@ -799,7 +799,7 @@ import (
 	"fmt"
 
 	"example.com/metricsfixture/shared"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func viaShared(err error) {
@@ -821,7 +821,7 @@ func TestCheckOBS01ProductionScopeCoversPkgHelpers(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func Reason(err error) string {
@@ -834,7 +834,7 @@ import (
 	"context"
 
 	"example.com/metricsfixture/pkg/obsreason"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 )
 
 var obsProvider = metrics.NopProvider{}
@@ -876,8 +876,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -908,8 +908,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -939,8 +939,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -973,8 +973,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1005,8 +1005,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1035,8 +1035,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1066,7 +1066,7 @@ func TestCheckOBS01DetectsVariadicWithLabelValues(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1103,7 +1103,7 @@ func TestCheckOBS01KeyedSpreadSliceUsesElementIndex(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1131,8 +1131,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1167,8 +1167,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1201,8 +1201,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1237,7 +1237,7 @@ func TestCheckOBS01SpreadSliceVariableUsesGenericLabel(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1266,8 +1266,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1299,8 +1299,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1338,8 +1338,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1370,7 +1370,7 @@ func TestCheckOBS01DetectsVariadicIIFEArgs(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1399,7 +1399,7 @@ func TestCheckOBS01SpreadWrapperUsesGenericLabelOnce(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1432,8 +1432,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1463,8 +1463,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1494,8 +1494,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1611,8 +1611,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1644,7 +1644,7 @@ func TestCheckOBS01ResolvesPrometheusWithLabelValuesLabelNames(t *testing.T) {
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -1672,8 +1672,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func direct(v metrics.CounterVec, err error) {
@@ -1699,8 +1699,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1751,8 +1751,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1797,8 +1797,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -1865,8 +1865,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var provider = metrics.NopProvider{}
@@ -2177,10 +2177,15 @@ func writeMetricsFixture(t *testing.T) string {
 func writeMetricsFixtureFiles(t *testing.T, root string) {
 	t.Helper()
 	moduleRoot := filepath.ToSlash(repoRoot(t))
-	mod, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	// Post-#1565 the core module's go.mod/go.sum live at ./framework, not the repo
+	// root (which holds only go.work). Clone the framework module's go.mod and pin
+	// the platform require/replace at github.com/ghbvf/gocell/framework => root/framework.
+	mod, err := os.ReadFile(filepath.Join(repoRoot(t), "framework", "go.mod"))
 	require.NoError(t, err)
-	modText := strings.Replace(string(mod), "module github.com/ghbvf/gocell", "module example.com/metricsfixture", 1)
-	modText += fmt.Sprintf("\nrequire github.com/ghbvf/gocell v0.0.0\nreplace github.com/ghbvf/gocell => %s\n", moduleRoot)
+	modText := strings.Replace(string(mod), "module github.com/ghbvf/gocell/framework", "module example.com/metricsfixture", 1)
+	modText += fmt.Sprintf(
+		"\nrequire github.com/ghbvf/gocell/framework v0.0.0\nreplace github.com/ghbvf/gocell/framework => %s/framework\n",
+		moduleRoot)
 	// The fixture entrypoint (cmd/app/main.go) imports the prometheus adapter.
 	// Since #1558 split each adapter into its own go.work module, adapters/
 	// prometheus left the core module and its client_golang subtree left the
@@ -2190,7 +2195,7 @@ func writeMetricsFixtureFiles(t *testing.T, root string) {
 	modText += "require github.com/ghbvf/gocell/adapters/prometheus v0.0.0\n"
 	modText += fmt.Sprintf("replace github.com/ghbvf/gocell/adapters/prometheus => %s/adapters/prometheus\n", moduleRoot)
 	writeFile(t, root, "go.mod", modText)
-	sum, err := os.ReadFile(filepath.Join(repoRoot(t), "go.sum"))
+	sum, err := os.ReadFile(filepath.Join(repoRoot(t), "framework", "go.sum"))
 	require.NoError(t, err)
 	writeFile(t, root, "go.sum", string(sum))
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", "acknowledgements: []\n")
@@ -2213,7 +2218,7 @@ func main() {
 	writeFile(t, root, "reachable/reachable.go", `package reachable
 
 import (
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -2239,7 +2244,7 @@ var HistMetric = prom.NewHistogramVec(prom.HistogramOpts{
 `)
 	writeFile(t, root, "unreachable/unreachable.go", `package unreachable
 
-import "github.com/ghbvf/gocell/kernel/observability/metrics"
+import "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 
 var UnreachableMetric = metrics.CounterOpts{
 	Name: "unreachable_total",
@@ -2337,14 +2342,15 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 				return nil
 			}
 			top := strings.Split(rel, "/")[0]
-			// A top-level dir that is its own go.work satellite module root (carries
-			// go.mod, e.g. cellmodules/ #1559) is unaddressable by the ModeModule
-			// (GOWORK=off) production scan that prodscan.Patterns drives, so it must
-			// not be required by this coverage guard either — symmetric with
-			// prodscan.Patterns skipping it (shared prodscan.IsModuleRoot is the
-			// single source). Full coverage of satellites is the ModeWorkspace
-			// migration tracked by gh #1590.
-			if rel == top && prodscan.IsModuleRoot(path) {
+			// A top-level dir that prodscan.Patterns prunes is not required by this
+			// coverage guard either — symmetric with the scan, sharing the same
+			// prodscan single source. Two cases, both deferred to the ModeWorkspace
+			// migration gh #2136: a go.work satellite MODULE ROOT (own go.mod, e.g.
+			// cellmodules/ #1559 — IsModuleRoot), and a MULTI-MEMBER PARENT
+			// (cmd/adapters/examples holding member modules one level deeper —
+			// HasNestedModuleRoot), unaddressable by a root-relative ModeModule
+			// "./<dir>/..." post-#1565.
+			if rel == top && (prodscan.IsModuleRoot(path) || prodscan.HasNestedModuleRoot(path)) {
 				return filepath.SkipDir
 			}
 			if strings.HasPrefix(d.Name(), ".") || obs01CoverageExcludedTop(top) || d.Name() == "testdata" {

@@ -5,7 +5,7 @@ package redfakesaferun
 import (
 	"context"
 
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
+	ksaga "github.com/ghbvf/gocell/framework/kernel/saga"
 )
 
 // safeRun is a FAKE same-named helper that is NOT runtime/saga/executor.safeRun.

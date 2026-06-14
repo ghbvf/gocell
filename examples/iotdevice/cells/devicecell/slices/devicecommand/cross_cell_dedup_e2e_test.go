@@ -30,15 +30,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	runtimecommand "github.com/ghbvf/gocell/framework/runtime/command"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
-	runtimecommand "github.com/ghbvf/gocell/runtime/command"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
-	"github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // countingEnqueueHandler counts enqueue-command dispatches so the test can assert

@@ -10,10 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // TestMQTT_Conformance runs the kernel/outbox/outboxtest.TestPubSub conformance

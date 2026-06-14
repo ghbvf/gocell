@@ -3,12 +3,12 @@ package rbacassign
 import (
 	"context"
 
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	assign "github.com/ghbvf/gocell/generated/contracts/http/auth/role/assign/v1"
 	revoke "github.com/ghbvf/gocell/generated/contracts/http/auth/role/revoke/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // AssignAdapter implements assign.Service for http.auth.role.assign.v1.

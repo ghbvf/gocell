@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,9 +18,9 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // --- stubs ---

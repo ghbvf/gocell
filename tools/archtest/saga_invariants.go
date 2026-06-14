@@ -79,49 +79,49 @@ import (
 const (
 	// sagaPkgPath is the kernel/saga package path. Merges the formerly
 	// separate consts sagaPkgPath and ksagaPkgPath.
-	sagaPkgPath = PlatformModulePath + "/kernel/saga"
+	sagaPkgPath = PlatformFrameworkModulePath + "/kernel/saga"
 
 	// sagaJournalPkg is the kernel/saga/journal package path. Consolidates
 	// the formerly separate journalInterfacePkgPath const.
-	sagaJournalPkg = PlatformModulePath + "/kernel/saga/journal"
+	sagaJournalPkg = PlatformFrameworkModulePath + "/kernel/saga/journal"
 
 	// sagaConformancePkg is the sagajournaltest package path.
-	sagaConformancePkg = PlatformModulePath + "/kernel/saga/sagajournaltest"
+	sagaConformancePkg = PlatformFrameworkModulePath + "/kernel/saga/sagajournaltest"
 
 	// sagalogPkgPath is the runtime/saga/internal/sagalog package path.
-	sagalogPkgPath = PlatformModulePath + "/runtime/saga/internal/sagalog"
+	sagalogPkgPath = PlatformFrameworkModulePath + "/runtime/saga/internal/sagalog"
 
 	// sagaRuntimePkg is the runtime/saga package path.
-	sagaRuntimePkg = PlatformModulePath + "/runtime/saga"
+	sagaRuntimePkg = PlatformFrameworkModulePath + "/runtime/saga"
 
 	// sagaRuntimeExecutorPkg is the runtime/saga/executor package path.
 	// Note: sagaExecutorPkg (already used for SAGA-METRIC-LABEL-VALUES-FROZEN-01)
 	// and sagaRuntimeExecutorPkg are the same path; they are unified here.
-	sagaRuntimeExecutorPkg = PlatformModulePath + "/runtime/saga/executor"
+	sagaRuntimeExecutorPkg = PlatformFrameworkModulePath + "/runtime/saga/executor"
 
 	// sagaTailerPkg is the runtime/saga/tailer package path (EPIC #1609 PR-04).
-	sagaTailerPkg = PlatformModulePath + "/runtime/saga/tailer"
+	sagaTailerPkg = PlatformFrameworkModulePath + "/runtime/saga/tailer"
 
 	// sagaKernelProjectionPkg is the kernel/projection package path (OwnerCheckpointStore).
 	// Named sagaKernelProjectionPkg (not sagaKernelProjectionPkg) to avoid clashing with
 	// the same-named const in projection_system_principal_install_caller_test.go
 	// which refers to kernel/saga/sagaprojection.
-	sagaKernelProjectionPkg = PlatformModulePath + "/kernel/projection"
+	sagaKernelProjectionPkg = PlatformFrameworkModulePath + "/kernel/projection"
 
 	// sagaKernelProjectionTestPkg is the kernel/projection/projectiontest package path.
-	sagaKernelProjectionTestPkg = PlatformModulePath + "/kernel/projection/projectiontest"
+	sagaKernelProjectionTestPkg = PlatformFrameworkModulePath + "/kernel/projection/projectiontest"
 
 	// sagaOutboxPkg is the kernel/outbox package path.
-	sagaOutboxPkg = PlatformModulePath + "/kernel/outbox"
+	sagaOutboxPkg = PlatformFrameworkModulePath + "/kernel/outbox"
 
 	// sagaPersistencePkg is the kernel/persistence package path.
-	sagaPersistencePkg = PlatformModulePath + "/kernel/persistence"
+	sagaPersistencePkg = PlatformFrameworkModulePath + "/kernel/persistence"
 
 	// sagaValidationPkg is the pkg/validation package path.
-	sagaValidationPkg = PlatformModulePath + "/pkg/validation"
+	sagaValidationPkg = PlatformFrameworkModulePath + "/pkg/validation"
 
 	// sagaClockPkg is the kernel/clock package path.
-	sagaClockPkg = PlatformModulePath + "/kernel/clock"
+	sagaClockPkg = PlatformFrameworkModulePath + "/kernel/clock"
 )
 
 // ─── Rule IDs and string constants (moved from saga_invariants_test.go) ──────
@@ -809,7 +809,7 @@ func CheckSagaCoordinatorNoHeartbeatLoop(t *testing.T, cfg ConfigForExternalCell
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -917,7 +917,7 @@ func CheckSagaExecutorRandInjected(t *testing.T, cfg ConfigForExternalCell) []Di
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1146,7 +1146,7 @@ func CheckSagaJournalConformanceEnrollment(t *testing.T, cfg ConfigForExternalCe
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
 
 	var iface *types.Interface
 	var implPkgs []*types.Package
@@ -1237,7 +1237,7 @@ func CheckSagaGlobalReaderConformanceEnrollment(t *testing.T, cfg ConfigForExter
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
 
 	var iface *types.Interface
 	var implPkgs []*types.Package
@@ -1503,7 +1503,7 @@ func CheckSagaJournalHolderSeal(t *testing.T, cfg ConfigForExternalCell) []Diagn
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -1695,7 +1695,7 @@ func CheckSagaDriveBehindLeaderGate(t *testing.T, cfg ConfigForExternalCell) []D
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
 			if strings.HasSuffix(rel, "_test.go") || !strings.HasPrefix(rel, "runtime/saga/") {
@@ -2243,7 +2243,7 @@ func CheckSagaStepRunOutsideTx(t *testing.T, cfg ConfigForExternalCell) []Diagno
 	_ = cfg
 	var out []Diagnostic
 	var units []sagaA2Unit
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -2422,7 +2422,7 @@ func CheckSagaConstructorNilGuard(t *testing.T, cfg ConfigForExternalCell) []Dia
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil || p.Pkg == nil {
 			return nil
 		}
@@ -2596,7 +2596,7 @@ func CheckSagaSlogInstanceFieldsCaller(t *testing.T, cfg ConfigForExternalCell) 
 	t.Helper()
 	_ = cfg
 	var out []Diagnostic
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -3091,7 +3091,7 @@ func CheckSagaOwnerCheckpointConformanceEnrollment(t *testing.T, cfg ConfigForEx
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/projection/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/projection/..."}, prodPatterns...)
 
 	var iface *types.Interface
 	var implPkgs []*types.Package

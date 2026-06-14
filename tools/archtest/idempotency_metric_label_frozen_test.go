@@ -91,8 +91,8 @@ import (
 )
 
 const (
-	idemStateProducerPkg = PlatformModulePath + "/runtime/http/idempotency"
-	idemStateMetricsPkg  = PlatformModulePath + "/runtime/observability/metrics"
+	idemStateProducerPkg = PlatformFrameworkModulePath + "/runtime/http/idempotency"
+	idemStateMetricsPkg  = PlatformFrameworkModulePath + "/runtime/observability/metrics"
 )
 
 // idemStateScanPkgs is the set of packages whose production code the A2 callsite

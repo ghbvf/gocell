@@ -17,10 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
-	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // TestServeAddr_LogsBoundAddr drives the Worker self-bind path with Addr ":0"

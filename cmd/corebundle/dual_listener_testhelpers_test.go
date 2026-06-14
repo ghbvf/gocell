@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // newCorebundleLocalListener returns an ephemeral TCP listener bound to

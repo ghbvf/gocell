@@ -94,7 +94,7 @@ import (
 const ruleL2AtomicityCoverage = "L2-OUTBOX-ATOMICITY-COVERAGE-01"
 
 // outboxPkgImportPath is the canonical import path of kernel/outbox.
-const outboxPkgImportPath = PlatformModulePath + "/kernel/outbox"
+const outboxPkgImportPath = PlatformFrameworkModulePath + "/kernel/outbox"
 
 // l2MinUnits is the floor assertion: scan must find at least this many L2
 // units. Fail-closed against a broken YAML scan silently zeroing coverage.

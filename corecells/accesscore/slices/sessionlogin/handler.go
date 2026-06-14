@@ -8,11 +8,11 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/httpcookie"
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/http/cellmw"
 	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
 
 // errMsgTenantIDRequired is the error message for a missing (empty) X-Tenant-ID

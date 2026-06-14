@@ -44,16 +44,39 @@ import (
 // source): each per-rule Test in this package calls the shared Check* func, and
 // RunStandardCellRules calls the same func — there is no parallel rule body.
 
-// PlatformModulePath is the Go module path of the GoCell platform itself. It is
-// the ONE sanctioned site for the "github.com/ghbvf/gocell" string literal in
-// this package: every rule that resolves a GoCell platform symbol path must
-// derive it as PlatformModulePath+"/pkg/…" rather than hardcoding the literal,
-// so a module rename / /v2 bump updates exactly one place and the ratchet
-// meta-archtest ARCHTEST-MODULE-PATH-FUNNEL-01 can prove no rule reintroduces a
-// bare literal. It is NOT the scan target: the module being analyzed is
-// supplied by the driver (the Run typed scopes Typed/Production → findModuleRoot),
-// which resolves the consumer's own go.mod for external repos.
+// PlatformModulePath is the GoCell org/repo path prefix shared by EVERY GoCell
+// module: the framework module ([PlatformFrameworkModulePath]) plus all siblings
+// — adapters/*, cmd/*, examples/*, tools, generated, corecells, tests. Since the
+// framework split (#1565) the framework's own go.mod is github.com/ghbvf/gocell/
+// framework, so this value is no longer any single module's path; it is the
+// common ancestor used to (a) classify a path as "inside GoCell" and (b) compose
+// SIBLING-module symbol paths (PlatformModulePath+"/adapters/…", "/tools/…",
+// "/corecells", …). Framework-internal symbol paths (kernel/runtime/pkg) are
+// composed from [PlatformFrameworkModulePath] instead.
+//
+// It is the ONE sanctioned site for the "github.com/ghbvf/gocell" string literal
+// in this package: every rule that resolves a GoCell symbol path must derive it
+// from PlatformModulePath (or PlatformFrameworkModulePath, itself derived) rather
+// than hardcoding the literal, so a module rename / /v2 bump updates exactly one
+// place and the ratchet meta-archtest ARCHTEST-MODULE-PATH-FUNNEL-01 can prove no
+// rule reintroduces a bare literal. It is NOT the scan target: the module being
+// analyzed is supplied by the driver (the Run typed scopes Typed/Production →
+// findModuleRoot), which resolves the consumer's own go.mod for external repos.
 const PlatformModulePath = "github.com/ghbvf/gocell"
+
+// PlatformFrameworkModulePath is the Go module path of the GoCell FRAMEWORK module
+// (kernel/runtime/pkg), separated out of the repo root by the #1565 split. It is
+// the ONE sanctioned base for framework-internal symbol paths: every rule that
+// resolves a kernel/runtime/pkg package derives it as
+// PlatformFrameworkModulePath+"/kernel/…" (etc.), so the funnel stays single-source.
+//
+// Derived from [PlatformModulePath] (never a bare literal): the "+/framework"
+// fragment is not itself a platform value, and ARCHTEST-MODULE-PATH-FUNNEL-01's
+// reconstruction detector exempts a "+" chain whose provenance reaches the
+// sanctioned PlatformModulePath const — directly here, and transitively through
+// every PlatformFrameworkModulePath+"/x" derivation. So this const, and all paths
+// built on it, are funnel-clean.
+const PlatformFrameworkModulePath = PlatformModulePath + "/framework"
 
 // PlatformCellsDir is the repo-relative top-level directory and on-disk scan root
 // that holds GoCell's own platform cells (accesscore / auditcore / configcore).

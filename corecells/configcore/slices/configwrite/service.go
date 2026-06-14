@@ -12,13 +12,13 @@ import (
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/corecells/configcore/internal/events"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // Option configures a config-write Service.

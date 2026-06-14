@@ -43,7 +43,7 @@ func eachFile(s Scope, mode parser.Mode, fn func(FileContext) error) error {
 			// absolute paths do not appear in CI logs unexpectedly.
 			return fmt.Errorf("rel-failed: %w", relErr)
 		}
-		relSlash := filepath.ToSlash(rel)
+		relSlash := StripFrameworkPrefix(filepath.ToSlash(rel))
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, absPath, nil, mode)
 		if err != nil {

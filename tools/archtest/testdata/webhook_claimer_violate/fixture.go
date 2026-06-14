@@ -9,7 +9,7 @@ package webhookclaimerviolate
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 )
 
 // claimed mirrors runtime/webhook.claimed: an unforgeable token carrying the

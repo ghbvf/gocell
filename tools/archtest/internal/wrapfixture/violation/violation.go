@@ -17,8 +17,8 @@
 package violation
 
 import (
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // CallWrapForCell deliberately calls persistence.WrapForCell from a

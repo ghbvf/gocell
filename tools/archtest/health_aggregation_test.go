@@ -117,7 +117,7 @@ func exposesHealthProbeMethod(s *typeMethodSet, qualified string) bool {
 // pins the type isolation.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 	s := newTypeMethodSet()
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/...", "./adapters/..."}),
 		func(p *Pass) []Diagnostic {
 			accumulateMethodSet(p, s)
 			return nil
@@ -158,7 +158,7 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 // direction without forcing the main HEALTH-AGG-01 assertion to re-scan.
 func TestHealthCheckersImpliesManagedResource_CarveOutsProbesOnly(t *testing.T) {
 	s := newTypeMethodSet()
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/...", "./adapters/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/...", "./adapters/..."}),
 		func(p *Pass) []Diagnostic {
 			accumulateMethodSet(p, s)
 			return nil

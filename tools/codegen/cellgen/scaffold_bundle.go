@@ -29,8 +29,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 

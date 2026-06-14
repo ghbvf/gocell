@@ -24,7 +24,7 @@ package commandregistercallerfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/command"
 )
 
 // foreignHandler is a dummy handler type for wiring into the registry.

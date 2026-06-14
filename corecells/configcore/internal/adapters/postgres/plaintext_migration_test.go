@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	configcrypto "github.com/ghbvf/gocell/corecells/configcore/internal/crypto"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // ---------------------------------------------------------------------------

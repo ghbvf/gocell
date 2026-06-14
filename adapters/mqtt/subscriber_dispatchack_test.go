@@ -8,8 +8,8 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // This file is unit-only (//go:build !integration). The dispatchAck white-box

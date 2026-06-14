@@ -7,12 +7,12 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/state/cas"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 var _ ports.UserRepository = (*UserRepository)(nil)

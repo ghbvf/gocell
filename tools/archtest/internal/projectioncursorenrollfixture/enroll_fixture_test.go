@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
 )
 
 // TestEnrolledCursorConformance enrolls enrolledCursor in the shared Cursor

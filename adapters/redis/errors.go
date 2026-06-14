@@ -16,7 +16,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // classifyRedisError routes a Redis command failure to the correct errcode shape.

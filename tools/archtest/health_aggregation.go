@@ -22,5 +22,5 @@ var healthAggSanctionedAdapterCarveOuts = map[string]string{
 	// holder) which owns Close → relay.Stop. Re-adding Close to *Relay
 	// would regress the type isolation guarded by
 	// RELAY-NOT-MANAGEDRESOURCE-01.
-	PlatformModulePath + "/runtime/outbox.Relay": "docs/architecture/202605201400-adr-relay-managedresource-isolation.md",
+	PlatformFrameworkModulePath + "/runtime/outbox.Relay": "docs/architecture/202605201400-adr-relay-managedresource-isolation.md",
 }

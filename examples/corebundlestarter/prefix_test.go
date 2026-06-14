@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // TestStarterPrefixRegistered verifies that the package init() in prefix.go

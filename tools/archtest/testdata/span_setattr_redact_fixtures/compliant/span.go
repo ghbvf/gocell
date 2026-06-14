@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 const attrValueMaxLen = 2048

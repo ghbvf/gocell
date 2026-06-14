@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
 // Service implements audit query business logic against a ledger.QueryStore.

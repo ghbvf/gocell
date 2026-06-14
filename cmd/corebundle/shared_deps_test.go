@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // TestCompositionSharedDeps_NewSharedDeps_PostgresWithoutKeyProvider verifies that

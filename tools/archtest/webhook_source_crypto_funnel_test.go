@@ -101,8 +101,8 @@ const (
 	// Source.Encrypt is a value-receiver method → "(pkg.Source).Encrypt";
 	// NewSourceFromCiphertext is a free func → "pkg.NewSourceFromCiphertext".
 	// Anchored to PlatformModulePath so a module rename updates one place.
-	webhookSourceEncryptFunc           = "(" + PlatformModulePath + "/kernel/webhook.Source).Encrypt"
-	webhookNewSourceFromCiphertextFunc = PlatformModulePath + "/kernel/webhook.NewSourceFromCiphertext"
+	webhookSourceEncryptFunc           = "(" + PlatformFrameworkModulePath + "/kernel/webhook.Source).Encrypt"
+	webhookNewSourceFromCiphertextFunc = PlatformFrameworkModulePath + "/kernel/webhook.NewSourceFromCiphertext"
 
 	// webhookSourceRepoUpsertFunc / webhookSourceRepoLoadAllFunc are the go/types
 	// FullNames of the ONLY two functions permitted to call the sealed entry

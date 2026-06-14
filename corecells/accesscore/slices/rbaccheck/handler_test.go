@@ -14,14 +14,14 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // rbacTestAuthorizer is a local test double for auth.Authorizer. It cannot

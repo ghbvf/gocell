@@ -71,7 +71,7 @@ import (
 	"testing"
 )
 
-const idempotencyClaimerPkgPath = PlatformModulePath + "/kernel/idempotency"
+const idempotencyClaimerPkgPath = PlatformFrameworkModulePath + "/kernel/idempotency"
 
 // namedName unwraps pointers and returns the named type's name, or "".
 func namedName(t types.Type) string {
@@ -194,7 +194,7 @@ func scanClaimerProvenance(p *Pass) []Diagnostic {
 func TestWebhookIdempotencyClaimer01(t *testing.T) {
 	t.Parallel()
 
-	const runtimeWebhookPkg = PlatformModulePath + "/runtime/webhook"
+	const runtimeWebhookPkg = PlatformFrameworkModulePath + "/runtime/webhook"
 	var allDiags []Diagnostic
 	sawClaimed := false
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {

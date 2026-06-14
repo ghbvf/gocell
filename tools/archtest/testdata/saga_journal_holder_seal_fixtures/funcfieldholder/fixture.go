@@ -12,7 +12,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 )
 
 // HeartbeatFuncHolder persists a heartbeat-shaped func — the func-value path the

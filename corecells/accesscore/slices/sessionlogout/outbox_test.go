@@ -11,8 +11,8 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/corecells/internal/testoutbox"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // --- stubs ---

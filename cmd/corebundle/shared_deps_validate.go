@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // validateCorebundleDeps runs the residual cmd-deployment-contract validation

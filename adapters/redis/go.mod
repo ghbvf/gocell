@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/adapters/redis
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0
 	github.com/redis/go-redis/v9 v9.20.1
 	github.com/stretchr/testify v1.11.1
@@ -27,6 +26,8 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -66,6 +67,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ghbvf/gocell => ../../
-
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapterutil
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

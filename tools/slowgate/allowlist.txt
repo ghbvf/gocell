@@ -66,11 +66,11 @@ github.com/ghbvf/gocell/tools/archtest	TestTestTimeLiteralFixtures
 # ----------------------------------------------------------------------
 
 # subprocess-go-toolchain: kernel/verify subprocess go with caller-selected GOROOT/PATH
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH
+github.com/ghbvf/gocell/framework/kernel/verify	TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH
 # subprocess-go-toolchain: kernel/verify subprocess go test against temp module
-github.com/ghbvf/gocell/kernel/verify	TestRunGoTest_WithTempModule
+github.com/ghbvf/gocell/framework/kernel/verify	TestRunGoTest_WithTempModule
 # subprocess-go-toolchain: kernel/verify integration test runs slice with metadata refs
-github.com/ghbvf/gocell/kernel/verify	TestVerifySlice_WithMetadataRefs
+github.com/ghbvf/gocell/framework/kernel/verify	TestVerifySlice_WithMetadataRefs
 
 # ----------------------------------------------------------------------
 # verify-large-fixture: cmd/gocell verify-* commands replay full

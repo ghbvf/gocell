@@ -20,12 +20,12 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 var fixedTime = time.Date(2026, 6, 7, 12, 0, 0, 0, time.UTC)

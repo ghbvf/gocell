@@ -6,9 +6,9 @@ package auditappendbootstrap
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // sliceMeta is the canonical metadata literal projected from slice.yaml.

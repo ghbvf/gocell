@@ -11,9 +11,9 @@ const (
 	// package whose verboseDependencyEntry wire shape and redactedErrorMsg funnel
 	// are locked by HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01 and
 	// HEALTH-REDACTED-ERROR-MSG-FUNNEL-01.
-	healthPackageImportPath = PlatformModulePath + "/runtime/http/health"
+	healthPackageImportPath = PlatformFrameworkModulePath + "/runtime/http/health"
 
 	// redactionPkgPath is the import path of the pkg/redaction package whose
 	// RedactString function the newRedactedErrorMsg funnel must call.
-	redactionPkgPath = PlatformModulePath + "/pkg/redaction"
+	redactionPkgPath = PlatformFrameworkModulePath + "/pkg/redaction"
 )

@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BlindSpotAssign uses an assignment statement (c.ID = "rawassign")
 // rather than a CompositeLit to set a cell-id field. A1 scans

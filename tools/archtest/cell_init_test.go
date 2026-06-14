@@ -67,7 +67,7 @@ func TestKernelCell_DoesNotImportRuntime(t *testing.T) {
 // diagnostic, proving the detector is not vacuously green.
 //
 // The fixture drives scanPassForForbiddenImports directly (bypassing the
-// "./kernel/cell" hard-coded scope of the production Check* wrapper) so it
+// "./framework/kernel/cell" hard-coded scope of the production Check* wrapper) so it
 // compiles and loads only the small fixture package, not the full GoCell tree.
 func TestKernelCell_DoesNotImportRuntime_RedFixture(t *testing.T) {
 	t.Parallel()

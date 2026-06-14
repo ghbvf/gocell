@@ -80,8 +80,8 @@ import (
 const (
 	grpcMetricsRuleCtxSource = "GRPC-METRICS-LABEL-CELLID-CTXSOURCE-01"
 	// grpcInterceptorPkgPath is declared in grpc_interceptor_chain_invariants_test.go.
-	grpcCtxkeysPkgPath           = PlatformModulePath + "/kernel/ctxkeys"
-	grpcMetricsPkgPath           = PlatformModulePath + "/runtime/observability/metrics"
+	grpcCtxkeysPkgPath           = PlatformFrameworkModulePath + "/kernel/ctxkeys"
+	grpcMetricsPkgPath           = PlatformFrameworkModulePath + "/runtime/observability/metrics"
 	grpcMetricsCellIDFromName    = "CellIDFrom"
 	grpcMetricsResolveLabelName  = "ResolveCellLabel"
 	grpcMetricsRecordRPCName     = "RecordRPC"

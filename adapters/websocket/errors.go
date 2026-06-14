@@ -1,6 +1,6 @@
 package websocket
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // Adapter-level error codes for the github.com/coder/websocket binding.
 const (

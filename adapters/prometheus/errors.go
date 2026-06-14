@@ -1,6 +1,6 @@
 package prometheus
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // Prometheus adapter error codes.
 const (

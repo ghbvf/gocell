@@ -16,8 +16,8 @@
 package unresolvable_fix_red
 
 import (
-	gov "github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	gov "github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 func newErrorAt(code gov.RuleCode, typ gov.IssueType, file string, pos metadata.Position, field, msg, fix string) gov.ValidationResult {

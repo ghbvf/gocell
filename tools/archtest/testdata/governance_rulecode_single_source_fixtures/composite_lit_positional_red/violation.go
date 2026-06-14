@@ -10,7 +10,7 @@
 // Expected: 1 violation from the CompositeLit scan path.
 package composite_lit_positional_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // violatePositional constructs a ValidationResult with positional fields.
 // The Code value is a bare RuleCode conversion that bypasses the

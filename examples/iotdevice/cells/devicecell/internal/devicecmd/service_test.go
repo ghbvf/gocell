@@ -14,13 +14,13 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	rtcommand "github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
 )
 
 func testCodec() *query.CursorCodec {

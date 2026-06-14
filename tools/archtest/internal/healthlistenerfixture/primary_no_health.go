@@ -26,7 +26,7 @@
 // test's "exactly one SEC-FAIL-CLOSED-10 violation" contract.
 package main
 
-import kcell "github.com/ghbvf/gocell/kernel/cell"
+import kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // primaryRef references PrimaryListener through a non-default import alias. The
 // value is never used at runtime — the fixture exists for AST/type-info

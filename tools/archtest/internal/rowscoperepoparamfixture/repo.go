@@ -26,7 +26,7 @@ package rowscoperepoparamfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // FakeRowScopedRepo mirrors the shape of a tenant-scoped list/get repo interface.

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // noopStop is an idempotent stand-in for signal.NotifyContext's CancelFunc.

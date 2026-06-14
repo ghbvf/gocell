@@ -15,16 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/corecells/auditcore/slices/auditquery"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
-	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger/storetest"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // allowAllAuthorizer grants every audit:read request, mirroring production where

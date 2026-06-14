@@ -19,7 +19,7 @@
 
 package main
 
-import kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+import kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 
 // generatedPackageGraph is the stub form: an empty graph rooted at this
 // module. The Layer/CellID/Imports fields stay zero; the catalog endpoint

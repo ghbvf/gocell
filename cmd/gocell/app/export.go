@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/csvparam"
-	"github.com/ghbvf/gocell/runtime/devtools/catalog"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/csvparam"
+	"github.com/ghbvf/gocell/framework/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/tools/wiresummary"
 )
 

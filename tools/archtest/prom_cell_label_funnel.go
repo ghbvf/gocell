@@ -18,5 +18,5 @@ const (
 	promAdapterPkgPath = PlatformModulePath + "/adapters/prometheus"
 
 	// cellPkgPath is the canonical import path for kernel/cell.
-	cellPkgPath = PlatformModulePath + "/kernel/cell"
+	cellPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 )

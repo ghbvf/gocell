@@ -80,8 +80,8 @@ func TestBASESLICE_CTOR_FUNNEL_01(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
+	cellPkgPath := modPath + "/framework/kernel/cell"
+	metaPkgPath := modPath + "/framework/kernel/metadata"
 
 	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)
@@ -226,8 +226,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_BaseSliceLiteral(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
+	cellPkgPath := modPath + "/framework/kernel/cell"
+	metaPkgPath := modPath + "/framework/kernel/metadata"
 
 	diags := Run(
 		t, Fixture(
@@ -284,8 +284,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_RedFixture_SliceMetaLiteral(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
+	cellPkgPath := modPath + "/framework/kernel/cell"
+	metaPkgPath := modPath + "/framework/kernel/metadata"
 
 	diags := Run(
 		t, Fixture(
@@ -331,8 +331,8 @@ func TestBASESLICE_CTOR_FUNNEL_01_GreenProduction(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	cellPkgPath := modPath + "/kernel/cell"
-	metaPkgPath := modPath + "/kernel/metadata"
+	cellPkgPath := modPath + "/framework/kernel/cell"
+	metaPkgPath := modPath + "/framework/kernel/metadata"
 
 	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanBaseSliceFunnel(p, cellPkgPath, metaPkgPath)

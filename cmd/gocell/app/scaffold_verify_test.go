@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
-	"github.com/ghbvf/gocell/kernel/verify"
+	"github.com/ghbvf/gocell/framework/kernel/verify"
 )
 
 // These happy-path tests now go through runScaffoldWithRoot so they can run

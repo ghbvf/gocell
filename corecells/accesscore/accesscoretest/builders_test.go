@@ -18,13 +18,13 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // fixtureTestTenant is a package-level alias for the canonical test tenant used

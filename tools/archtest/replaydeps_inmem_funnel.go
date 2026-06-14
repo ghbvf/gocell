@@ -69,8 +69,8 @@ import (
 const (
 	// idempotencyInMemModule / runtimeAuthModule are the import paths whose
 	// in-memory replay constructors the funnel bans in the hardened roots.
-	idempotencyInMemModule = PlatformModulePath + "/kernel/idempotency"
-	runtimeAuthModule      = PlatformModulePath + "/runtime/auth"
+	idempotencyInMemModule = PlatformFrameworkModulePath + "/kernel/idempotency"
+	runtimeAuthModule      = PlatformFrameworkModulePath + "/runtime/auth"
 )
 
 // replaydepsHardenedRoots are the module-relative composition-root directories

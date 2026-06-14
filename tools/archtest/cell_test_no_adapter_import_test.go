@@ -306,7 +306,7 @@ func TestCellTestNoAdapterImport_FixtureMetaTest(t *testing.T) {
 			// in-mem fakes / kernel / stdlib must NOT be flagged (no false positive).
 			name:    "clean_cell_unit_test",
 			rel:     "corecells/k/k_test.go",
-			content: "package k\nimport (\n\t\"testing\"\n\t_ \"github.com/ghbvf/gocell/kernel/outbox\"\n)\nfunc TestK(t *testing.T) {}\n",
+			content: "package k\nimport (\n\t\"testing\"\n\t_ \"github.com/ghbvf/gocell/framework/kernel/outbox\"\n)\nfunc TestK(t *testing.T) {}\n",
 			wantHit: false,
 		},
 	}

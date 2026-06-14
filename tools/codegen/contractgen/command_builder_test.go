@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // requireSchemaRefError asserts err is a non-nil COMMAND-CONTRACT-SCHEMA-REF-01

@@ -111,7 +111,7 @@ import (
 	"testing"
 )
 
-const sessionPkgPath = PlatformModulePath + "/runtime/auth/session"
+const sessionPkgPath = PlatformFrameworkModulePath + "/runtime/auth/session"
 
 const sessionRevokeMethodValueCtx = "<method-value>"
 

@@ -1,0 +1,28 @@
+package eventbus_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+)
+
+// TestInMemoryEventBus_Conformance runs the full outboxtest conformance suite
+// against InMemoryEventBus, proving the test helpers work.
+func TestInMemoryEventBus_Conformance(t *testing.T) {
+	outboxtest.TestPubSub(t, outboxtest.Features{
+		GuaranteedOrder:    true,
+		SupportsRequeue:    true,
+		SupportsReject:     true,
+		SupportsReceipt:    true,
+		BlockingSubscribe:  true,
+		BroadcastSubscribe: true,
+	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
+		bus := eventbus.New(clock.Real(), eventbus.WithBufferSize(256))
+		t.Cleanup(func() { _ = bus.Close(context.Background()) })
+		return bus, bus
+	})
+}

@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/examples/corebundlestarter
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/stretchr/testify v1.11.1
 )
@@ -22,6 +21,7 @@ require (
 	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
@@ -62,12 +62,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Local monorepo replace: under GOWORK=on the go.work workspace overrides this
-// and resolves the core module to the repo root; under GOWORK=off (the
-// release-consistency build in hack/verify-workspace.sh) this replace makes the
-// unpublished core module resolve to the repo root instead of being fetched.
-replace github.com/ghbvf/gocell => ../../
-
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
@@ -87,3 +81,7 @@ replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
 replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
 
 replace github.com/ghbvf/gocell/generated => ../../generated
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

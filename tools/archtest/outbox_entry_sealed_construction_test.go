@@ -70,7 +70,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // TestOutboxEntrySealedConstruction01_AllFieldsUnexported reflectively asserts
@@ -174,7 +174,7 @@ func TestOutboxEntrySealedConstruction01_SoleReconstructionSurface(t *testing.T)
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."}),
+		[]string{"./framework/kernel/outbox/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil

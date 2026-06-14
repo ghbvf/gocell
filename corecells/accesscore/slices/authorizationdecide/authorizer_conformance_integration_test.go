@@ -12,8 +12,8 @@ import (
 	"github.com/ghbvf/gocell/adapters/postgres/pgtest"
 	accesspgrepo "github.com/ghbvf/gocell/corecells/accesscore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // Package-shared PostgreSQL lifecycle: one pre-migrated template container per

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // Compile-time assertion mirrors the production assertion — ensures the

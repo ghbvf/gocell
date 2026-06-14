@@ -555,8 +555,30 @@ func newPackageRel(root string, fset *token.FileSet) func(*ast.File) string {
 		if err != nil {
 			return abs
 		}
-		return filepath.ToSlash(rel)
+		return stripFrameworkPrefix(filepath.ToSlash(rel))
 	}
+}
+
+// frameworkRelPrefix is the physical path segment under which the core framework
+// module's kernel/runtime/pkg live since the #1565 split.
+const frameworkRelPrefix = frameworkSubdir + "/"
+
+// stripFrameworkPrefix maps a workspace-root-relative path to its LOGICAL layer
+// path by dropping the physical "framework/" module wrapper, so a framework file
+// reports as "kernel/outbox/result.go" rather than "framework/kernel/outbox/result.go".
+//
+// WHY: archtest rules identify sanctioned sites by their position in GoCell's
+// LOGICAL layer layout (kernel/ runtime/ pkg/ adapters/ corecells/ …), which the
+// #1565 move did NOT change — only the physical module nesting did. Reporting the
+// logical path keeps every rule's path-identity (file allowlists, layer-prefix
+// checks) stable across the reorganization with zero per-rule churn. Only files
+// physically under <root>/framework/ carry this prefix (kernel/runtime/pkg exist
+// nowhere else at the workspace root), so the strip is unambiguous and collision-free.
+// DISK-scanning callers (DirsScope, filepath.Join(root, …)) keep using the PHYSICAL
+// "framework/…" path to locate files on disk; this normalization applies only to the
+// reported Pass.Rel identity.
+func stripFrameworkPrefix(rel string) string {
+	return strings.TrimPrefix(rel, frameworkRelPrefix)
 }
 
 // newPackageAbs returns a Pass.Abs closure that returns the module-absolute

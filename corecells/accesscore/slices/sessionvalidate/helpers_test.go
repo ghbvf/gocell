@@ -4,11 +4,11 @@ import (
 	"crypto/rsa"
 	"time"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // IssueTestToken creates a signed JWT for testing purposes with intent=access

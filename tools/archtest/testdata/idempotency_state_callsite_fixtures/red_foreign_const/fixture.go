@@ -11,7 +11,7 @@ package idemstateredforeignconst
 import (
 	"context"
 
-	idem "github.com/ghbvf/gocell/runtime/http/idempotency"
+	idem "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 // rogueState is a const declared in the fixture package (NOT in

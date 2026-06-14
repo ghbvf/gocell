@@ -1,0 +1,250 @@
+package config
+
+import (
+	"os"
+	"strings"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+)
+
+// Registry is the single source of truth for JWT configuration.
+// All JWT consumers (JWTIssuer, JWTVerifier, middleware) obtain their
+// configuration from Registry instead of carrying per-instance copies.
+//
+// Registry is safe for concurrent read access after construction.
+type Registry struct {
+	issuer    string
+	audiences []string
+	keyProv   auth.SigningKeyProvider
+	keyStore  auth.VerificationKeyStore
+	clk       clock.Clock
+	realMode  bool
+}
+
+// Config carries the inputs for constructing a Registry.
+type Config struct {
+	// Issuer is the JWT issuer claim (iss). Required when RealMode is true.
+	// Corresponds to GOCELL_JWT_ISSUER.
+	Issuer string
+
+	// Audiences is the list of accepted JWT audience values. Required when
+	// RealMode is true. Corresponds to GOCELL_JWT_AUDIENCE (single value
+	// stored as []string{"value"}). Future: GOCELL_JWT_AUDIENCES comma-separated.
+	Audiences []string
+
+	// KeyProv supplies the active RSA signing key. May be nil in non-real mode.
+	KeyProv auth.SigningKeyProvider
+
+	// KeyStore provides public keys for JWT verification. May be nil in non-real mode.
+	KeyStore auth.VerificationKeyStore
+
+	// RealMode enforces non-empty Issuer and Audiences at construction time.
+	// Set to true in production; leave false for dev/test.
+	RealMode bool
+}
+
+// New constructs a Registry from the given Config. Returns an error when
+// RealMode is true and Issuer or Audiences are missing.
+//
+// Configuration errors use errcode.ErrAuthVerifierConfig so operators can
+// distinguish startup misconfigurations from runtime key errors.
+func New(clk clock.Clock, cfg Config) (*Registry, error) {
+	issuer := strings.TrimSpace(cfg.Issuer)
+
+	// Trim and filter whitespace-only audience elements before validation so
+	// that "   " is treated identically to "" (avoids RealMode bypass).
+	var auds []string
+	for _, a := range cfg.Audiences {
+		if t := strings.TrimSpace(a); t != "" {
+			auds = append(auds, t)
+		}
+	}
+
+	if cfg.RealMode {
+		if issuer == "" {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
+				"JWT registry: Issuer is required in real mode (set GOCELL_JWT_ISSUER)")
+		}
+		if len(auds) == 0 {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
+				"JWT registry: Audiences must not be empty in real mode (set GOCELL_JWT_AUDIENCE)")
+		}
+	}
+
+	clock.MustHaveClock(clk, "auth/config.NewRegistry")
+
+	return &Registry{
+		issuer:    issuer,
+		audiences: auds,
+		keyProv:   cfg.KeyProv,
+		keyStore:  cfg.KeyStore,
+		clk:       clk,
+		realMode:  cfg.RealMode,
+	}, nil
+}
+
+// Issuer returns the JWT issuer string (iss claim).
+func (r *Registry) Issuer() string { return r.issuer }
+
+// Audiences returns a defensive copy of the configured audience allowlist.
+// Mutating the returned slice does not affect the Registry.
+func (r *Registry) Audiences() []string {
+	if len(r.audiences) == 0 {
+		return nil
+	}
+	out := make([]string, len(r.audiences))
+	copy(out, r.audiences)
+	return out
+}
+
+// SigningKeyProvider returns the configured key provider for JWT signing.
+// May be nil when the Registry was constructed in non-real mode without keys.
+func (r *Registry) SigningKeyProvider() auth.SigningKeyProvider { return r.keyProv }
+
+// VerificationKeyStore returns the configured key store for JWT verification.
+// May be nil when the Registry was constructed in non-real mode without keys.
+func (r *Registry) VerificationKeyStore() auth.VerificationKeyStore { return r.keyStore }
+
+// Clock returns the clock used for token timestamps.
+// Always non-nil — required as a positional parameter to New and FromEnv.
+func (r *Registry) Clock() clock.Clock { return r.clk }
+
+// ---- FromEnv ----
+
+// EnvOption configures FromEnv behavior.
+type EnvOption func(*envConfig)
+
+type envConfig struct {
+	realMode bool
+	keyProv  auth.SigningKeyProvider
+	keyStore auth.VerificationKeyStore
+}
+
+// WithRealMode enables real-mode validation (fail-fast on missing env vars).
+func WithRealMode(v bool) EnvOption {
+	return func(c *envConfig) { c.realMode = v }
+}
+
+// WithKeys sets the key provider and key store for the registry built by FromEnv.
+// Typed-nil inputs are rejected (not stored); the subsequent factory call will
+// fail with a clear "SigningKeyProvider is nil" error rather than panicking at
+// first method dispatch.
+func WithKeys(prov auth.SigningKeyProvider) EnvOption {
+	return func(c *envConfig) {
+		if validation.IsNilInterface(prov) {
+			return
+		}
+		c.keyProv = prov
+		if ks, ok := prov.(auth.VerificationKeyStore); ok && !validation.IsNilInterface(ks) {
+			c.keyStore = ks
+		}
+	}
+}
+
+// WithKeySeparate sets key provider and key store independently.
+// Typed-nil inputs are filtered out per WithKeys' rationale.
+func WithKeySeparate(prov auth.SigningKeyProvider, store auth.VerificationKeyStore) EnvOption {
+	return func(c *envConfig) {
+		if !validation.IsNilInterface(prov) {
+			c.keyProv = prov
+		}
+		if !validation.IsNilInterface(store) {
+			c.keyStore = store
+		}
+	}
+}
+
+// envVarIssuer is the environment variable for the JWT issuer.
+// Defined as constant to satisfy ≥3-use string rule.
+const envVarIssuer = "GOCELL_JWT_ISSUER"
+
+// envVarAudience is the environment variable for the JWT audience.
+// Future: GOCELL_JWT_AUDIENCES (comma-separated multi-value) — not yet
+// implemented; priority and migration path will be defined when introduced.
+const envVarAudience = "GOCELL_JWT_AUDIENCE"
+
+// FromEnv constructs a Registry by reading GOCELL_JWT_ISSUER and
+// GOCELL_JWT_AUDIENCE from the environment.
+//
+// The audience env var stores a single value stored as []string{value}.
+// When the value is empty and RealMode is false, Audiences will be nil.
+//
+// Returns an error in real mode when required env vars are missing or empty.
+func FromEnv(clk clock.Clock, opts ...EnvOption) (*Registry, error) {
+	ec := &envConfig{}
+	for _, o := range opts {
+		o(ec)
+	}
+
+	issuer := strings.TrimSpace(os.Getenv(envVarIssuer))
+	audience := strings.TrimSpace(os.Getenv(envVarAudience))
+
+	var audiences []string
+	if audience != "" {
+		audiences = []string{audience}
+	}
+
+	return New(clk, Config{
+		Issuer:    issuer,
+		Audiences: audiences,
+		KeyProv:   ec.keyProv,
+		KeyStore:  ec.keyStore,
+		RealMode:  ec.realMode,
+	})
+}
+
+// ---- Factory functions ----
+
+// NewJWTIssuerFromRegistry constructs a *auth.JWTIssuer whose issuer string,
+// default audiences, signing key, and clock are all sourced from reg.
+//
+// This is the single authorized entry point for creating a JWTIssuer in
+// production code; the raw NewJWTIssuer constructor is retained only for
+// test helpers that build issuers independently of Registry.
+//
+// ref: Hydra internal/driver/config.DefaultProvider — configuration through registry
+func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWTIssuerOption) (*auth.JWTIssuer, error) {
+	if reg == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
+	}
+	if validation.IsNilInterface(reg.keyProv) {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
+	}
+
+	// Merge registry-derived settings first, then apply caller opts so tests
+	// can override default-audience behavior.
+	baseOpts := []auth.JWTIssuerOption{
+		auth.WithIssuerAudiencesFromSlice(reg.Audiences()),
+	}
+	return auth.NewJWTIssuer(reg.keyProv, reg.issuer, ttl, reg.Clock(), append(baseOpts, opts...)...)
+}
+
+// NewJWTVerifierFromRegistry constructs a *auth.JWTVerifier whose expected
+// audiences, expected issuer, verification key store, and clock are all
+// sourced from reg.
+//
+// ref: Hydra internal/driver/config.DefaultProvider — configuration through registry
+func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (*auth.JWTVerifier, error) {
+	if reg == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
+	}
+	if validation.IsNilInterface(reg.keyStore) {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: VerificationKeyStore is nil")
+	}
+	auds := reg.Audiences()
+	if len(auds) == 0 {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
+			"JWT registry: Audiences must not be empty for verifier construction")
+	}
+
+	baseOpts := []auth.JWTVerifierOption{
+		// auds is guaranteed non-empty by the check above; auds[1:] is the zero-length slice when len==1.
+		auth.WithExpectedAudiences(auds[0], auds[1:]...),
+		auth.WithExpectedIssuer(reg.issuer),
+	}
+	return auth.NewJWTVerifier(reg.keyStore, reg.Clock(), append(baseOpts, opts...)...)
+}

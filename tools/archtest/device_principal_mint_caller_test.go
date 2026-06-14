@@ -95,7 +95,7 @@ import (
 
 // authRuntimePkgPath is the import path of runtime/auth (home of Principal and
 // the PrincipalDevice kind constant).
-const authRuntimePkgPath = PlatformModulePath + "/runtime/auth"
+const authRuntimePkgPath = PlatformFrameworkModulePath + "/runtime/auth"
 
 // devicePrincipalMintAllowlist is the set of module-relative production files
 // allowed to construct an auth.Principal with Kind == PrincipalDevice. See the

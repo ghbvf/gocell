@@ -31,7 +31,7 @@ const rulePanicRegistered01 = "PANIC-REGISTERED-01"
 // panicregisterPkgPath is the canonical import path of the panicregister
 // package — a GoCell platform symbol path, anchored to PlatformModulePath so a
 // module rename updates exactly one place and no bare literal appears here.
-const panicregisterPkgPath = PlatformModulePath + "/pkg/panicregister"
+const panicregisterPkgPath = PlatformFrameworkModulePath + "/pkg/panicregister"
 
 // panicregisterApprovedFunc is the name of the only approved funnel function.
 const panicregisterApprovedFunc = "Approved"
@@ -51,7 +51,7 @@ var panicRegisteredReasonPlaceholder = regexp.MustCompile(`^(todo|fixme|tbd|xxx|
 // errcodePkgPath is the canonical import path of the errcode package, used by
 // payloadTypeAllowed to verify the payload is *errcode.Error — a GoCell
 // platform symbol path, anchored to PlatformModulePath.
-const errcodePkgPath = PlatformModulePath + "/pkg/errcode"
+const errcodePkgPath = PlatformFrameworkModulePath + "/pkg/errcode"
 
 // payloadTypeAllowed returns true when the static type of arg satisfies the
 // PANIC-REGISTERED-01 payload constraint:

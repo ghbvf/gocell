@@ -16,7 +16,7 @@ package redfunclitonly
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // RedFuncLitCell is the fake L2+ cell type. The archtest matches it via

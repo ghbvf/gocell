@@ -1,7 +1,7 @@
 # GoCell
 
 [![CI](https://github.com/ghbvf/gocell/actions/workflows/ci.yml/badge.svg)](https://github.com/ghbvf/gocell/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/ghbvf/gocell.svg)](https://pkg.go.dev/github.com/ghbvf/gocell)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ghbvf/gocell/framework.svg)](https://pkg.go.dev/github.com/ghbvf/gocell/framework)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ghbvf/gocell)](https://github.com/ghbvf/gocell/releases/latest)
 
@@ -191,7 +191,7 @@ import (
     "context"
 
     hellog "github.com/ghbvf/gocell/generated/contracts/http/mycell/hello/v1"
-    kcell "github.com/ghbvf/gocell/kernel/cell"
+    kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 // HelloAdapter implements hellog.Service for http.mycell.hello.v1.
@@ -227,8 +227,8 @@ import (
     "net/http"
 
     "github.com/ghbvf/gocell/cells/mycell/slices/myhello"
-    "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/runtime/auth"
+    "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
@@ -277,12 +277,12 @@ import (
     "syscall"
 
     mycell "github.com/ghbvf/gocell/cells/mycell"
-    "github.com/ghbvf/gocell/kernel/auth"
-    "github.com/ghbvf/gocell/kernel/assembly"
-    "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/kernel/clock"
-    "github.com/ghbvf/gocell/kernel/outbox"
-    "github.com/ghbvf/gocell/runtime/bootstrap"
+    "github.com/ghbvf/gocell/framework/kernel/auth"
+    "github.com/ghbvf/gocell/framework/kernel/assembly"
+    "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/kernel/clock"
+    "github.com/ghbvf/gocell/framework/kernel/outbox"
+    "github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 func main() {

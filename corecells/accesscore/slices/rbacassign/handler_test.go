@@ -16,9 +16,9 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 func setupHandler(t *testing.T) (http.Handler, *mem.Store) {

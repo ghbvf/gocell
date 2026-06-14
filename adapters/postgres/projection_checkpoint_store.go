@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // selectCheckpointSQL reads a projection's committed offset. A missing row

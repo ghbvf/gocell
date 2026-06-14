@@ -39,11 +39,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 const (

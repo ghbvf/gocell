@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
 // TestNew_RequiresRegistrar asserts New rejects a Config without a Registrar:

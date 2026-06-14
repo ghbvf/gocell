@@ -5,8 +5,8 @@ package projection_apply_hook_violate
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // generatedHealthzSubscribe models the F6 VIOLATION: a sibling generated file

@@ -8,6 +8,6 @@
 // Expect one diagnostic.
 package reddotimport
 
-import . "github.com/ghbvf/gocell/kernel/outbox"
+import . "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 var _ Writer = NoopWriter{}

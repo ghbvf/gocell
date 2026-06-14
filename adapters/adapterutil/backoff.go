@@ -5,7 +5,7 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // ExponentialBackoffWithJitter returns the reconnect delay for attempt N using

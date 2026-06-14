@@ -21,8 +21,8 @@ func TestContracttestBoundary(t *testing.T) {
 	modPath := readModulePath(t, root)
 	testContracttestImport := modPath + "/tests/contracttest"
 	legacyImports := []string{
-		modPath + "/pkg/contracts",
-		modPath + "/pkg/contracttest",
+		modPath + "/framework/pkg/contracts",
+		modPath + "/framework/pkg/contracttest",
 	}
 
 	allGoFiles, err := collectGoFiles(root)

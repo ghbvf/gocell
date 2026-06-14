@@ -70,14 +70,14 @@ import (
 
 // systemPrincipalInstallPkg is the canonical import path of kernel/projection,
 // where InstallSystemPrincipal is declared.
-const systemPrincipalInstallPkg = PlatformModulePath + "/kernel/projection"
+const systemPrincipalInstallPkg = PlatformFrameworkModulePath + "/kernel/projection"
 
 // systemPrincipalInstallFunc is the name of the function being locked.
 const systemPrincipalInstallFunc = "InstallSystemPrincipal"
 
 // sagaProjectionPkg is the canonical import path of kernel/saga/sagaprojection,
 // the package owning the sole sanctioned caller.
-const sagaProjectionPkg = PlatformModulePath + "/kernel/saga/sagaprojection"
+const sagaProjectionPkg = PlatformFrameworkModulePath + "/kernel/saga/sagaprojection"
 
 // systemPrincipalInstallCallerAllowlist is the set of caller identities
 // (types.Func.FullName) permitted to reference projection.InstallSystemPrincipal.

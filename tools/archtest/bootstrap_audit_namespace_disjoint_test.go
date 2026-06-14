@@ -54,8 +54,8 @@ const (
 	parseNamespaceIDFnName   = "ParseNamespaceID"
 	// auditPkgSuffix is the package path suffix for runtime/audit.
 	// Formerly defined in bootstrap_audit_observer_funnel_test.go (retired Wave-1 #1423).
-	auditPkgSuffix  = "/runtime/audit"
-	ledgerPkgSuffix = "/runtime/audit/ledger"
+	auditPkgSuffix  = "/framework/runtime/audit"
+	ledgerPkgSuffix = "/framework/runtime/audit/ledger"
 
 	// cellmodulesAuditcorePkgSuffix is where AuditCoreModule.Provide lives after
 	// the #1085 cell-wiring relocation out of cmd/corebundle.

@@ -64,7 +64,6 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/workspace"
 )
 
@@ -83,19 +82,29 @@ type Result struct {
 // directory, filepath.Clean'd, "." for the root module) belongs to the
 // externally-published LIBRARY set.
 //
-// Deny predicate: examples/* and tests/* are leaf consumers; cmd/* are
-// `go install` binaries / deployment artifacts whose go-install-at-version path
-// conflicts with the kept replace directives (#1088). Everything else publishes
-// by default — a new adapters/foo is publishable (fail-toward-publish), a new
-// cmd/foo binary is excluded (fail-toward-exclude-binary). This predicate is the
-// single source of the allow/deny rule; the set itself is DERIVED from go.work
-// (see [PublishableModules]), never a hand-maintained list.
+// Deny predicate: examples/* are leaf apps; cmd/* are `go install` binaries /
+// deployment artifacts whose go-install-at-version path conflicts with the kept
+// replace directives (#1088); the tests/ SUB-modules (tests/integration suites,
+// tests/testutil/pgshare) are leaf consumers. The `tests` module itself is NOT a
+// leaf: it ships shared test helpers (tests/testutil/pgclone) that a publishable
+// adapter depends on in non-test code (adapters/postgres/pgtest), so it must
+// publish for the adapter to stay externally consumable (#1565 — pre-split these
+// helpers lived in the published root module). Everything else publishes by
+// default — a new adapters/foo is publishable (fail-toward-publish), a new cmd/foo
+// binary is excluded (fail-toward-exclude-binary). This predicate is the single
+// source of the allow/deny rule; the set itself is DERIVED from go.work (see
+// [PublishableModules]), never a hand-maintained list.
 func IsPublishable(reldir string) bool {
 	slash := filepath.ToSlash(filepath.Clean(reldir))
-	for _, deny := range [...]string{"examples", "tests", "cmd"} {
+	for _, deny := range [...]string{"examples", "cmd"} {
 		if slash == deny || strings.HasPrefix(slash, deny+"/") {
 			return false
 		}
+	}
+	// Deny the tests/ SUB-modules (leaves) but publish the `tests` module itself
+	// (a required shared-helper library — see godoc above).
+	if strings.HasPrefix(slash, "tests/") {
+		return false
 	}
 	return true
 }
@@ -258,7 +267,7 @@ func BumpTree(root, version string) ([]Result, error) {
 	if err := validReleaseVersion(version); err != nil {
 		return nil, err
 	}
-	prefix, err := gomodutil.ReadModulePath(root)
+	prefix, err := workspace.CorePrefix(root)
 	if err != nil {
 		return nil, fmt.Errorf("modrelease: read root module path: %w", err)
 	}
@@ -291,8 +300,11 @@ func tagPathFor(reldir, version string) string {
 }
 
 // TagPaths returns the git tag for every publishable module at version, in
-// go.work order: root → "vX.Y.Z", satellites → "<reldir>/vX.Y.Z". The release
-// workflow tags exactly these refs at the bump commit.
+// go.work order: a module at the repo root → "vX.Y.Z", subdir modules →
+// "<reldir>/vX.Y.Z". Post-#1565 there is no root module (the core lives in the
+// framework/ submodule), so every tag is the "<reldir>/vX.Y.Z" shape; tagPathFor
+// keeps the bare-root case for the general Go multi-module convention. The
+// release workflow tags exactly these refs at the bump commit.
 func TagPaths(root, version string) ([]string, error) {
 	if err := validReleaseVersion(version); err != nil {
 		return nil, err

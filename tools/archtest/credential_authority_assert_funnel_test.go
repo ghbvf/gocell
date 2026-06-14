@@ -629,7 +629,7 @@ func TestCredentialAuthorityAssertFunnel_UpstreamCalleeReference_04(t *testing.T
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./corecells/...",
 		"./cmd/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {

@@ -11,8 +11,8 @@ package reflect_bypass_red
 import (
 	"reflect"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // bypassViaReflect demonstrates the B1 violation: using reflect.MethodByName

@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // Contract-declared inbound path + signature header names

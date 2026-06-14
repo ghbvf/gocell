@@ -3,18 +3,19 @@ module github.com/ghbvf/gocell/adapters/grpc
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.81.1
 )
+
+require go.opentelemetry.io/otel/sdk v1.44.0 // indirect
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	go.opentelemetry.io/contrib/propagators/b3 v1.44.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -28,4 +29,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ghbvf/gocell => ../../
+replace github.com/ghbvf/gocell/framework => ../../framework

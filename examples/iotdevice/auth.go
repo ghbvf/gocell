@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 const (

@@ -5,7 +5,7 @@
 // the qualified + alias shapes and the rule overview.
 package sessionprotocolfixture
 
-import . "github.com/ghbvf/gocell/runtime/auth/session"
+import . "github.com/ghbvf/gocell/framework/runtime/auth/session"
 
 func dotImportCalls() {
 	_, _ = NewProtocol()

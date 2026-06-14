@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/fspath"
+	"github.com/ghbvf/gocell/framework/pkg/fspath"
 )
 
 // Schema represents the minimal subset of JSON Schema draft 2020-12 used by contractgen.

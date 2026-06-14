@@ -58,11 +58,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 const (
-	httpIdempotencyPkgPath = PlatformModulePath + "/runtime/http/idempotency"
+	httpIdempotencyPkgPath = PlatformFrameworkModulePath + "/runtime/http/idempotency"
 )
 
 // TestRecordedResponseSealedConstruction01_AllFieldsUnexported reflectively
@@ -200,7 +200,7 @@ func TestRecordedResponseSealedConstruction01_SoleReconstructionSurface(t *testi
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/http/idempotency/..."}),
+		[]string{"./framework/runtime/http/idempotency/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != httpIdempotencyPkgPath {
 				return nil
@@ -269,7 +269,7 @@ func TestRecordedResponseSealedConstruction01_NoNewPkgLevelConstructor(t *testin
 	// either a new constructor appeared or SoleReconstructionSurface diverged.
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/http/idempotency/..."}),
+		[]string{"./framework/runtime/http/idempotency/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != httpIdempotencyPkgPath {
 				return nil

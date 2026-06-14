@@ -4,7 +4,7 @@
 package devicelist
 
 import (
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // sliceMeta is the canonical metadata literal projected from slice.yaml.

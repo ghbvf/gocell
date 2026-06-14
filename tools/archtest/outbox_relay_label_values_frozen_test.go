@@ -74,7 +74,7 @@ import (
 	"testing"
 )
 
-const outboxRelayLabelValuesPkg = PlatformModulePath + "/kernel/outbox"
+const outboxRelayLabelValuesPkg = PlatformFrameworkModulePath + "/kernel/outbox"
 
 // scanRecordOutcomeCallsites flags any (providerRelayCollector).recordOutcome call
 // whose kind argument (index 1) or outcome argument (index 2) is a compile-time

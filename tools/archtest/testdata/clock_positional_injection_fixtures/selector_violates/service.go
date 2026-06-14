@@ -3,7 +3,7 @@
 // not a direct parameter — violation.
 package selector_violates
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // Config bundles dependencies in the old struct-injection pattern.
 type Config struct {

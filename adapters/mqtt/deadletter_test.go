@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // deadLetterSubscriber builds a Subscriber around the given Connection with a

@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*ConfigCore)(nil)

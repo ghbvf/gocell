@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/keystest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth/keystest"
 )
 
 func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {

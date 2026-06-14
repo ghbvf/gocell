@@ -15,11 +15,11 @@ package archtest
 const (
 	// repoProberIfacePkgPath is the Go package path of kernel/healthz,
 	// where the RepoProber interface is declared.
-	repoProberIfacePkgPath = PlatformModulePath + "/kernel/healthz"
+	repoProberIfacePkgPath = PlatformFrameworkModulePath + "/kernel/healthz"
 
 	// repoReadinessConformancePkgPath is the Go package path of
 	// kernel/cell/celltest, where RunRepoReadinessConformance is declared.
-	repoReadinessConformancePkgPath = PlatformModulePath + "/kernel/cell/celltest"
+	repoReadinessConformancePkgPath = PlatformFrameworkModulePath + "/kernel/cell/celltest"
 
 	// repoProberAdapterPostgresPkgPath is the Go package path of the
 	// adapters/postgres package, used in RED fixture tests to reference
@@ -29,5 +29,5 @@ const (
 	// repoProberRuntimeSagaPkgPath is the Go package path of the
 	// runtime/saga package, used in RED fixture tests to reference
 	// the Coordinator concrete RepoProber implementation.
-	repoProberRuntimeSagaPkgPath = PlatformModulePath + "/runtime/saga"
+	repoProberRuntimeSagaPkgPath = PlatformFrameworkModulePath + "/runtime/saga"
 )

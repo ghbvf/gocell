@@ -12,13 +12,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session/storetest"
 )
 
 // ---------------------------------------------------------------------------

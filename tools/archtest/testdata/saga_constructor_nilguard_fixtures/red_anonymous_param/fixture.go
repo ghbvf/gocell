@@ -8,7 +8,7 @@
 // Loaded only via Run(t, Fixture(...)).
 package redanonymousparam
 
-import "github.com/ghbvf/gocell/pkg/validation"
+import "github.com/ghbvf/gocell/framework/pkg/validation"
 
 // MyInterface is a minimal interface for fixture purposes.
 type MyInterface interface {

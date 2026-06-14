@@ -8,14 +8,14 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/schemavalidate"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/schemavalidate"
 )
 
 var contractSpec = contractspec.ContractSpec{

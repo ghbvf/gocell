@@ -8,8 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/verify"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/verify"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 var verifyGoldenCases = []struct {

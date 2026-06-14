@@ -14,16 +14,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/ctxcancel"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	pgquery "github.com/ghbvf/gocell/pkg/pgquery"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/ctxcancel"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/framework/pkg/pgquery"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
 // Compile-time assertions.

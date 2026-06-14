@@ -19,8 +19,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // enrolledReplaySource is a correct in-memory ReplaySource that the fixture

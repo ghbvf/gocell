@@ -19,7 +19,7 @@ import (
 const (
 	ruleConfigNoopTransformerFunnel01 = "CONFIG-NOOP-TRANSFORMER-FUNNEL-01"
 	// cryptoPkgPath derived from PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01.
-	cryptoPkgPath           = PlatformModulePath + "/runtime/crypto"
+	cryptoPkgPath           = PlatformFrameworkModulePath + "/runtime/crypto"
 	noopTransformerTypeName = "NoopTransformer"
 	noopAllowedFile         = "cellmodules/configcore/module.go"
 	noopAllowedFunc         = "resolveValueTransformer"
@@ -116,7 +116,7 @@ func TestConfigNoopTransformerFunnel01_DetectsViolation(t *testing.T) {
 	const src = `package foo
 
 import (
-	crypto "github.com/ghbvf/gocell/runtime/crypto"
+	crypto "github.com/ghbvf/gocell/framework/runtime/crypto"
 	other "example.com/other"
 )
 

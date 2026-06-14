@@ -128,7 +128,7 @@ func TestProjectionReplayPerSpecFilter_01(t *testing.T) {
 	t.Parallel()
 
 	var sawTarget, sawApply, sawGate, sawForeignAdvance bool
-	diags := Run(t, Typed(TypedOpts{}, []string{"./kernel/projection/..."}),
+	diags := Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/projection/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Fset == nil {
 				return nil

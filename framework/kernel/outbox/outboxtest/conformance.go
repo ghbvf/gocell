@@ -1,0 +1,1012 @@
+package outboxtest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+)
+
+// defaultTimeout is the base timeout for subscribe/collect operations.
+const defaultTimeout = 10 * time.Second
+
+// Skip message constants to avoid SonarCloud string duplication warnings.
+const (
+	skipNoReject  = "implementation does not support reject"
+	skipNoReceipt = "implementation does not support receipt"
+)
+
+// Broadcast conformance fixture consumer-group IDs. Each subscriber in the
+// broadcast fan-out sub-test uses a distinct group so the bus Ready() channel
+// (keyed on consumerGroup+topic) tracks each independently.
+const (
+	broadcastCG1 = "broadcast-1"
+	broadcastCG2 = "broadcast-2"
+)
+
+// conformanceCG is the consumer group used in idempotency and consumer-base
+// conformance sub-tests. A stable name keeps the RabbitMQ queue name
+// (derived from topic+consumerGroup) deterministic across test runs.
+const conformanceCG = "conformance-cg"
+
+// subscribeReadyTimeout caps how long waitForSubscription waits on the
+// subscriber's Ready() channel before falling through. It is a select-arm
+// timeout (not a sleep), used for adapters whose Setup is fire-and-forget
+// and never closes Ready (e.g., persistent brokers where pre-creation is
+// async). For in-memory bus this timeout is never reached because Ready
+// closes synchronously on Subscribe registration. Tests that need to coordinate
+// multiple subscriber registrations should use distinct ConsumerGroups so each
+// gets its own Ready channel — see testMultipleSubscribers for the pattern.
+const subscribeReadyTimeout = 50 * time.Millisecond
+
+// negativeAssertionWindow bounds how long "no further delivery" assertions
+// wait before returning a pass. 200ms is empirically adequate for the
+// in-memory bus and RabbitMQ adapter (observed ack RTT single-digit ms);
+// select-based fail-fast returns in ms on actual violations, so the window
+// only extends the success path.
+//
+// CI flake guidance: if this window produces false negatives on a busy
+// runner, raise it here (propagates to all negative-assertion call sites)
+// rather than tweaking individual tests.
+const negativeAssertionWindow = 200 * time.Millisecond
+
+// delayedTier is the per-attempt wait used by testDelayedRedeliveryHonorsSchedule
+// (#1458). Short enough for a fast test, long enough that the cumulative span
+// across attempts is an unambiguous signal that the per-attempt schedule delays
+// were applied — on both the in-memory bus (clock-timed) and rabbitmq (real
+// per-tier queue TTL).
+const delayedTier = 60 * time.Millisecond
+
+// delayedMinSpan is the lower bound on the cumulative span across the delayed
+// attempts in testDelayedRedeliveryHonorsSchedule (#1458) — at least two tiers'
+// worth of real wait. A no-delay implementation would deliver all attempts
+// near-instantly and fall below this floor. (Package-level const per
+// TEST-TIME-LITERAL-01: no inline duration arithmetic in the test body.)
+const delayedMinSpan = 2 * delayedTier
+
+// asDelivery converts a slim HandleResult from Ack/Requeue/Reject factory
+// functions to a DeliveryOutcome for use in SubscriberHandler closures.
+// Only for use in conformance test helpers where the test author knows the
+// result comes from a factory (no ProcessReason or SettlementObservers needed).
+func asDelivery(r outbox.HandleResult) outbox.DeliveryOutcome {
+	return outbox.DeliveryOutcome{Disposition: r.Disposition, Err: r.Err}
+}
+
+// TestPubSub runs the full conformance test suite against the given
+// Publisher/Subscriber implementation. Features control which tests are
+// executed; unsupported features are skipped with t.Skip(). Each batch is
+// nested under a t.Run subtest so CI failures localize to the failing
+// batch (rather than reporting "TestPubSub fail" with no batch context).
+//
+// External adapters (RabbitMQ, NATS, Kafka) can call individual exported
+// RunBatch* functions to validate a subset of conformance — useful when
+// gating a partial-feature broker behind a smoke test.
+//
+// ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go
+func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) {
+	features.setDefaults()
+	t.Run("Batch1_Subscribe", func(t *testing.T) { RunBatch1Subscribe(t, features, constructor) })
+	t.Run("Batch2_Disposition", func(t *testing.T) { RunBatch2Disposition(t, features, constructor) })
+	t.Run("Batch3_PermanentError", func(t *testing.T) { RunBatch3PermanentError(t, features, constructor) })
+	t.Run("Batch4_Receipt", func(t *testing.T) { RunBatch4Receipt(t, features, constructor) })
+	t.Run("Batch5_Lifecycle", func(t *testing.T) { RunBatch5Lifecycle(t, features, constructor) })
+	t.Run("Batch6_Concurrency", func(t *testing.T) { RunBatch6Concurrency(t, features, constructor) })
+}
+
+// RunBatch1Subscribe runs core pub/sub tests. Exported so external adapter
+// integration suites can call individual batches without forcing the full
+// TestPubSub matrix.
+func RunBatch1Subscribe(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("PublishSubscribe", func(t *testing.T) {
+		testPublishSubscribe(t, features, constructor)
+	})
+	t.Run("PublishSubscribeMultiple", func(t *testing.T) {
+		testPublishSubscribeMultiple(t, features, constructor)
+	})
+	t.Run("PublishSubscribeInOrder", func(t *testing.T) {
+		testPublishSubscribeInOrder(t, features, constructor)
+	})
+	t.Run("TopicIsolation", func(t *testing.T) {
+		testTopicIsolation(t, features, constructor)
+	})
+	t.Run("MultipleSubscribers", func(t *testing.T) {
+		if !features.BroadcastSubscribe {
+			t.Skip("implementation uses competing consumers, not broadcast fan-out")
+		}
+		testMultipleSubscribers(t, features, constructor)
+	})
+	t.Run("CompetingConsumers", func(t *testing.T) {
+		if features.BroadcastSubscribe {
+			t.Skip("implementation uses broadcast fan-out, not competing consumers")
+		}
+		testCompetingConsumers(t, features, constructor)
+	})
+}
+
+// RunBatch2Disposition runs disposition lifecycle tests. Exported for
+// external adapter conformance gating.
+func RunBatch2Disposition(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("DispositionAck", func(t *testing.T) {
+		testDispositionAck(t, features, constructor)
+	})
+	t.Run("DispositionRequeue", func(t *testing.T) {
+		testDispositionRequeue(t, features, constructor)
+	})
+	t.Run("DispositionReject", func(t *testing.T) {
+		testDispositionReject(t, features, constructor)
+	})
+	t.Run("ZeroValueDisposition", func(t *testing.T) {
+		testZeroValueDisposition(t, features, constructor)
+	})
+	t.Run("DelayedRedeliveryHonorsSchedule", func(t *testing.T) {
+		testDelayedRedeliveryHonorsSchedule(t, features, constructor)
+	})
+}
+
+// RunBatch3PermanentError runs PermanentError disposition tests.
+// Exported for external adapter conformance gating.
+func RunBatch3PermanentError(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("PermanentErrorCausesReject", func(t *testing.T) {
+		testPermanentErrorCausesReject(t, features, constructor)
+	})
+}
+
+// RunBatch4Receipt runs receipt lifecycle tests. Exported for external
+// adapter conformance gating.
+func RunBatch4Receipt(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("ReceiptCommittedOnAck", func(t *testing.T) {
+		testReceiptCommittedOnAck(t, features, constructor)
+	})
+	t.Run("ReceiptReleasedOnReject", func(t *testing.T) {
+		testReceiptReleasedOnReject(t, features, constructor)
+	})
+	t.Run("ReceiptReleasedOnRequeue", func(t *testing.T) {
+		testReceiptReleasedOnRequeue(t, features, constructor)
+	})
+	t.Run("ReceiptCommitFailureDoesNotAck", func(t *testing.T) {
+		testReceiptCommitFailureDoesNotAck(t, features, constructor)
+	})
+}
+
+// RunBatch5Lifecycle runs subscriber lifecycle tests. Exported for
+// external adapter conformance gating.
+func RunBatch5Lifecycle(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("SubscribeBlocksUntilCancel", func(t *testing.T) {
+		testSubscribeBlocksUntilCancel(t, features, constructor)
+	})
+	t.Run("CloseTerminatesSubscribers", func(t *testing.T) {
+		testCloseTerminatesSubscribers(t, features, constructor)
+	})
+	t.Run("CloseIsIdempotent", func(t *testing.T) {
+		testCloseIsIdempotent(t, constructor)
+	})
+	t.Run("PublishAfterClose", func(t *testing.T) {
+		testPublishAfterClose(t, constructor)
+	})
+}
+
+// RunBatch6Concurrency runs concurrency and middleware tests. Exported
+// for external adapter conformance gating.
+func RunBatch6Concurrency(t *testing.T, features Features, constructor PubSubConstructor) {
+	t.Run("ConcurrentPublish", func(t *testing.T) {
+		testConcurrentPublish(t, features, constructor)
+	})
+	t.Run("SubscriberWithMiddleware", func(t *testing.T) {
+		testSubscriberWithMiddleware(t, features, constructor)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Batch 1: Core pub/sub
+// ---------------------------------------------------------------------------
+
+func testPublishSubscribe(t *testing.T, _ Features, constructor PubSubConstructor) {
+	h := newHarness(t, constructor)
+	payload := []byte(`{"test":"publish_subscribe"}`)
+
+	var received outbox.Entry
+	h.subscribe(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		received = entry
+		h.signalDone()
+		return outbox.Ack()
+	})
+
+	h.publishAndWait(payload)
+	assertBytesEqual(t, payload, received.Payload())
+	assertTrue(t, received.ID() != "", "entry ID must not be empty")
+	h.teardown()
+}
+
+func testPublishSubscribeMultiple(t *testing.T, features Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	n := features.MessageCount
+	c := startCollecting(t, ctx, sub, topic, n)
+
+	entries := PublishN(t, ctx, pub, topic, n)
+	collected := c.waitAndGet(defaultTimeout)
+
+	assertLen(t, len(collected), n, fmt.Sprintf("expected %d messages", n))
+
+	publishedPayloads := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		publishedPayloads[string(e.Payload())] = true
+	}
+	for _, entry := range collected {
+		assertTrue(t, publishedPayloads[string(entry.Payload())],
+			fmt.Sprintf("unexpected payload: %s", string(entry.Payload())))
+	}
+}
+
+func testPublishSubscribeInOrder(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.GuaranteedOrder {
+		t.Skip("implementation does not guarantee order")
+	}
+
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	n := 20
+	if testing.Short() {
+		n = 5
+	}
+
+	c := startCollecting(t, ctx, sub, topic, n)
+
+	for i := range n {
+		assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, testPayload(i))))
+	}
+
+	collected := c.waitAndGet(defaultTimeout)
+	assertLen(t, len(collected), n)
+
+	for i, entry := range collected {
+		assertBytesEqual(t, testPayload(i), entry.Payload(),
+			fmt.Sprintf("message %d: expected seq %d payload", i, i))
+	}
+}
+
+func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topicA := TestTopic(t) + "-A"
+	topicB := TestTopic(t) + "-B"
+
+	var (
+		receivedA  []outbox.Entry
+		mu         sync.Mutex
+		doneA      = make(chan struct{})
+		closeOnceA sync.Once
+		// deliveryA tracks every delivery to topic A for fail-fast
+		// negative-assertion: any leak from topic B shows up as an extra event.
+		deliveryA = make(chan struct{}, deliveryEventsBuffer)
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	// Subscribe only to topic A.
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA, CellID: "_outboxtest"},
+			func(_ context.Context, entry outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				select {
+				case deliveryA <- struct{}{}:
+				default:
+				}
+				mu.Lock()
+				receivedA = append(receivedA, entry)
+				if len(receivedA) >= 1 {
+					closeOnceA.Do(func() { close(doneA) })
+				}
+				mu.Unlock()
+				return asDelivery(outbox.Ack()), nil
+			})
+	}()
+	waitForSubscription(t, ctx, sub, topicA, "")
+
+	// Publish to both topics.
+	assertNoError(t, pub.Publish(ctx, topicB, wrapV1Envelope(t, topicB, []byte(`{"topic":"B"}`))))
+	assertNoError(t, pub.Publish(ctx, topicA, wrapV1Envelope(t, topicA, []byte(`{"topic":"A"}`))))
+
+	select {
+	case <-doneA:
+	case <-time.After(defaultTimeout):
+		t.Fatal("timed out waiting for message on topic A")
+	}
+
+	// Drain the expected topicA delivery. This receive is unbounded-safe: the
+	// handler sends to deliveryA *before* closing doneA, and <-doneA above was
+	// already bounded by defaultTimeout, so deliveryA has a buffered event by
+	// this point. Do NOT reorder the handler logic without re-evaluating.
+	<-deliveryA
+	// Fail-fast if another arrives (i.e. a topicB message leaked to topicA).
+	select {
+	case <-deliveryA:
+		t.Fatal("topic A received an unexpected message (topic B leak)")
+	case <-time.After(negativeAssertionWindow):
+	}
+
+	cancel()
+	if err := awaitWithBudget(fmt.Sprintf("topicIsolation-join(topic=%q)", topicA), subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assertLen(t, len(receivedA), 1, "subscriber on topic A should only receive topic A messages")
+	assertBytesEqual(t, []byte(`{"topic":"A"}`), receivedA[0].Payload())
+}
+
+func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	var (
+		sub1Received atomic.Int32
+		sub2Received atomic.Int32
+		wg           sync.WaitGroup
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	// Each broadcast subscriber gets a distinct ConsumerGroup so the bus's
+	// Ready() channel (keyed on consumerGroup+topic) tracks each subscription
+	// independently. waitForSubscription per group is then deterministic — no
+	// time.Sleep tail-window race. For broadcast bus semantics (inmem),
+	// distinct groups still receive every published message; competing-group
+	// brokers (RabbitMQ) skip this entire test path via BroadcastSubscribe=false.
+	sub1Spec := outbox.Subscription{Topic: topic, ConsumerGroup: broadcastCG1, CellID: broadcastCG1}
+	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: broadcastCG2, CellID: broadcastCG2}
+
+	wg.Go(func() {
+		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			sub1Received.Add(1)
+			return asDelivery(outbox.Ack()), nil
+		})
+	})
+
+	wg.Go(func() {
+		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			sub2Received.Add(1)
+			return asDelivery(outbox.Ack()), nil
+		})
+	})
+
+	waitForSubscription(t, ctx, sub, topic, broadcastCG1)
+	waitForSubscription(t, ctx, sub, topic, broadcastCG2)
+
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"fan-out"}`))))
+
+	// Wait for both subscribers to receive.
+	assertEventually(t, func() bool {
+		return sub1Received.Load() >= 1 && sub2Received.Load() >= 1
+	}, defaultTimeout, testtime.D10ms, "both subscribers should receive the message")
+
+	cancel()
+	if err := awaitWithBudget(fmt.Sprintf("multipleSubscribers-join(topic=%q)", topic), chanFromWaitGroup(&wg), defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+// testCompetingConsumers verifies that when BroadcastSubscribe=false (e.g.,
+// RabbitMQ with a shared queue), a single message is delivered to exactly one
+// of multiple subscribers — not duplicated to all.
+// Features is unused here; the signature matches the test-registration interface.
+func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	var (
+		totalReceived atomic.Int32
+		wg            sync.WaitGroup
+		// delivery channels emit one non-blocking event per delivery; drained
+		// after the expected single delivery, any further event is a duplicate.
+		delivery = make(chan struct{}, deliveryEventsBuffer)
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	// Start two competing subscribers on the same topic.
+	for range 2 {
+		wg.Go(func() {
+			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
+				func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+					select {
+					case delivery <- struct{}{}:
+					default:
+					}
+					totalReceived.Add(1)
+					return asDelivery(outbox.Ack()), nil
+				})
+		})
+	}
+
+	// One waitForSubscription is sufficient for shared-queue brokers: both
+	// competing subscribers consume from the same queue, and topology is
+	// created once. The sleep fallback covers in-memory subscribers where
+	// both goroutines need time to register.
+	waitForSubscription(t, ctx, sub, topic, "")
+
+	// Publish one message.
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"competing"}`))))
+
+	// Wait for exactly one delivery (bounded — if nothing arrives within
+	// defaultTimeout the test fails fast rather than hanging until the global
+	// go-test deadline), then fail-fast if any duplicate arrives within the
+	// negative-assertion window.
+	select {
+	case <-delivery:
+	case <-time.After(defaultTimeout):
+		t.Fatalf("competing consumers: no delivery within %s (subscriber registration or publish failed)", defaultTimeout)
+	}
+	select {
+	case <-delivery:
+		t.Fatalf("competing consumers: duplicate delivery detected within %s window", negativeAssertionWindow)
+	case <-time.After(negativeAssertionWindow):
+	}
+
+	got := totalReceived.Load()
+	assertEqual(t, int32(1), got,
+		fmt.Sprintf("competing consumers: message should be delivered to exactly 1 subscriber, got %d", got))
+
+	cancel()
+	if err := awaitWithBudget(fmt.Sprintf("competingConsumers-join(topic=%q)", topic), chanFromWaitGroup(&wg), defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Batch 2: Disposition lifecycle
+// ---------------------------------------------------------------------------
+
+func testDispositionAck(t *testing.T, _ Features, constructor PubSubConstructor) {
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		h.signalDone()
+		return outbox.Ack()
+	})
+
+	h.publishAndWait([]byte(`{"test":"ack"}`))
+	// fail-fast: 1 prior delivery expected; no redelivery within the window.
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow, "Ack should not cause redelivery")
+	assertEqual(t, int32(1), callCount.Load(), "Ack should not cause redelivery")
+	h.teardown()
+}
+
+func testDispositionRequeue(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsRequeue {
+		t.Skip("implementation does not support requeue")
+	}
+
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := callCount.Add(1)
+		if n == 1 {
+			return outbox.Requeue(fmt.Errorf("transient failure"))
+		}
+		h.signalDone()
+		return outbox.Ack()
+	})
+
+	h.publishAndWait([]byte(`{"test":"requeue"}`))
+	assertTrue(t, callCount.Load() >= 2,
+		"handler should be called at least twice (initial + redelivery)")
+	h.teardown()
+}
+
+func testDispositionReject(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReject {
+		t.Skip(skipNoReject)
+	}
+
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		h.signalDone()
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad payload")))
+	})
+
+	h.publishAndWait([]byte(`{"test":"reject"}`))
+	// fail-fast: 1 prior delivery; Reject should route to DLQ, not retry.
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow, "Reject should route to DLQ, not retry")
+	assertEqual(t, int32(1), callCount.Load(), "Reject should route to DLQ, not retry")
+	h.teardown()
+}
+
+func testZeroValueDisposition(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsRequeue {
+		t.Skip("implementation does not support requeue (needed to verify safe degradation)")
+	}
+
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := callCount.Add(1)
+		if n == 1 {
+			return outbox.HandleResult{} // zero-value = invalid Disposition
+		}
+		h.signalDone()
+		return outbox.Ack()
+	})
+
+	h.publishAndWait([]byte(`{"test":"zero-disposition"}`))
+	assertTrue(t, callCount.Load() >= 2,
+		"zero-value Disposition should be treated as requeue (safe degradation)")
+	h.teardown()
+}
+
+// deadLetterInspector is an optional capability a Subscriber may implement to let
+// conformance assert that a retry-exhausted entry actually reached the
+// dead-letter store. The in-memory bus implements it (DeadLetterLen); transports
+// whose DLQ is only observable by consuming it (rabbitmq) leave it unimplemented
+// and verify the same property in a dedicated broker integration test.
+type deadLetterInspector interface {
+	DeadLetterLen() int
+}
+
+// testDelayedRedeliveryHonorsSchedule verifies that a subscription carrying a
+// BrokerDelaySchedule (#1458) redelivers a transient failure on the per-attempt
+// schedule and stops after the schedule is exhausted (routing to DLX /
+// dead-letter), instead of using the transport's built-in backoff + retry
+// budget. It is the cross-transport guard that keeps rabbitmq (TTL+DLX
+// delay-tier queues) and the in-memory bus (clock-timed schedule) honoring the
+// same Svix timeline: a transport that ignored BrokerDelaySchedule would deliver
+// a different number of times (its own budget — or, for a bare broker requeue,
+// unbounded) and fail the exact-count assertion. Mandatory for every
+// requeue-supporting transport (no opt-out flag).
+func testDelayedRedeliveryHonorsSchedule(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsRequeue {
+		t.Skip("implementation does not support requeue")
+	}
+
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	// 3 tiers → 4 deliveries (the immediate attempt + one retry per tier); then
+	// the budget is exhausted and the entry routes to DLX/dead-letter (no further
+	// delivery). 4 differs from the transports' built-in retry budgets, so a
+	// transport that ignored BrokerDelaySchedule fails the exact-count assertion.
+	tiers := []time.Duration{delayedTier, delayedTier, delayedTier}
+	wantDeliveries := len(tiers) + 1
+
+	var (
+		mu        sync.Mutex
+		stamps    []time.Time
+		delivered = make(chan struct{}, deliveryEventsBuffer)
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{
+			Topic:               topic,
+			ConsumerGroup:       conformanceCG,
+			CellID:              conformanceCG,
+			BrokerDelaySchedule: tiers,
+		}, func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+			mu.Lock()
+			stamps = append(stamps, time.Now())
+			mu.Unlock()
+			select {
+			case delivered <- struct{}{}:
+			default:
+			}
+			return asDelivery(outbox.Requeue(fmt.Errorf("always transient"))), nil
+		})
+	}()
+	waitForSubscription(t, ctx, sub, topic, conformanceCG)
+
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"broker-delay"}`))))
+
+	for i := range wantDeliveries {
+		select {
+		case <-delivered:
+		case <-time.After(defaultTimeout):
+			t.Fatalf("broker-delay: delivery %d of %d did not arrive within %s", i+1, wantDeliveries, defaultTimeout)
+		}
+	}
+	// Budget is bounded by the schedule: no delivery beyond wantDeliveries.
+	select {
+	case <-delivered:
+		t.Fatalf("broker-delay: received more than %d deliveries — retry budget not bounded by the schedule", wantDeliveries)
+	case <-time.After(negativeAssertionWindow):
+	}
+
+	// The exhausted entry must land in dead-letter, not silently vanish. A
+	// delivery-count assertion alone would pass even if the final
+	// Nack(requeue=false) dropped the message because of a DLX binding/routing
+	// fault. Transports that expose their dead-letter store (the in-memory bus
+	// via DeadLetterLen) are checked here; transports whose DLQ is only observable
+	// by consuming it (rabbitmq) verify this in a dedicated broker integration test.
+	if dli, ok := sub.(deadLetterInspector); ok {
+		assertEventually(t, func() bool { return dli.DeadLetterLen() >= 1 },
+			defaultTimeout, subscribeReadyTimeout,
+			"broker-delay: exhausted entry must be routed to dead-letter, not dropped")
+	}
+
+	cancel()
+	if err := awaitWithBudget(fmt.Sprintf("delayedRedelivery-join(topic=%q)", topic), subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assertLen(t, len(stamps), wantDeliveries,
+		"broker-delay: handler must be invoked exactly once per scheduled attempt")
+	// Delays were actually applied: the span across attempts clears the
+	// delayedMinSpan floor (a no-delay impl delivers near-instantly).
+	span := stamps[len(stamps)-1].Sub(stamps[0])
+	assertTrue(t, span >= delayedMinSpan,
+		fmt.Sprintf("broker-delay: attempts spanned %s, expected >= %s (schedule delays not applied)", span, delayedMinSpan))
+}
+
+// ---------------------------------------------------------------------------
+// Batch 3: PermanentError disposition tests
+// ---------------------------------------------------------------------------
+
+func testPermanentErrorCausesReject(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReject {
+		t.Skip(skipNoReject)
+	}
+
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+
+	h.subscribe(func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		h.signalDone()
+		return outbox.Reject(outbox.NewPermanentError(fmt.Errorf("unmarshal failed")))
+	})
+
+	h.publishAndWait([]byte(`{"test":"permanent-error"}`))
+	// fail-fast: 1 prior delivery; DispositionReject should route to DLX, not retry.
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow,
+		"DispositionReject should cause reject, not retry")
+	assertEqual(t, int32(1), callCount.Load(),
+		"DispositionReject should cause reject, not retry")
+	h.teardown()
+}
+
+// ---------------------------------------------------------------------------
+// Batch 4: Receipt lifecycle
+// ---------------------------------------------------------------------------
+
+func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReceipt {
+		t.Skip(skipNoReceipt)
+	}
+
+	h := newHarness(t, constructor)
+	receipt := NewMockReceipt()
+
+	// Settlement is now returned as the second value from SubscriberHandler,
+	// not embedded in HandleResult. subscribeWithHandler accepts SubscriberHandler
+	// directly so the conformance test can inject a mock Settlement.
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		h.signalDone()
+		return asDelivery(outbox.Ack()), receipt
+	})
+
+	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
+	assertEventually(t, func() bool { return receipt.Committed() },
+		testtime.D5s, testtime.D10ms, "Settlement.Commit should be called on Ack")
+	assertFalse(t, receipt.Released(), "Settlement.Release should NOT be called on Ack")
+	h.teardown()
+}
+
+func testReceiptReleasedOnReject(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReceipt {
+		t.Skip(skipNoReceipt)
+	}
+	if !features.SupportsReject {
+		t.Skip(skipNoReject)
+	}
+
+	h := newHarness(t, constructor)
+	receipt := NewMockReceipt()
+
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		h.signalDone()
+		return asDelivery(outbox.Reject(outbox.NewPermanentError(fmt.Errorf("bad")))), receipt
+	})
+
+	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
+	assertEventually(t, func() bool { return receipt.Released() },
+		testtime.D5s, testtime.D10ms, "Settlement.Release should be called on Reject")
+	assertFalse(t, receipt.Committed(), "Settlement.Commit should NOT be called on Reject")
+	h.teardown()
+}
+
+func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReceipt {
+		t.Skip(skipNoReceipt)
+	}
+	if !features.SupportsRequeue {
+		t.Skip("implementation does not support requeue")
+	}
+
+	h := newHarness(t, constructor)
+	receipt := NewMockReceipt()
+	var callCount atomic.Int32
+
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		n := callCount.Add(1)
+		if n == 1 {
+			h.signalDone()
+			return asDelivery(outbox.Requeue(fmt.Errorf("transient"))), receipt
+		}
+		return asDelivery(outbox.Ack()), nil
+	})
+
+	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
+	assertEventually(t, func() bool { return receipt.Released() },
+		testtime.D5s, testtime.D10ms, "Settlement.Release should be called on Requeue")
+	h.teardown()
+}
+
+// testReceiptCommitFailureDoesNotAck guards the cross-transport invariant
+// added in the F2 fix (PR #184): when handler returns DispositionAck but
+// Settlement.Commit fails (lease lost / token mismatch / backend error), the
+// adapter must NOT treat the message as successfully acknowledged. RabbitMQ
+// translates this to Nack(requeue=true); InMemoryEventBus retries via its
+// internal retry loop. Either way the handler must be re-invoked, evidenced
+// by an additional Settlement.Commit attempt or a redelivery.
+//
+// Without this guard, regression to the pre-F2 semantics (eventbus silently
+// promoting Commit failure to success) would cause stale lease holders to
+// "succeed" — see PR #184 review F2 / commit 87475b9.
+func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReceipt {
+		t.Skip(skipNoReceipt)
+	}
+
+	h := newHarness(t, constructor)
+	// Settlement whose Commit always returns an error — emulates lease-lost /
+	// token-mismatch backend response.
+	receipt := NewMockReceiptWithErrors(errors.New("commit fails (test)"), nil)
+
+	var deliveries atomic.Int32
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+		n := deliveries.Add(1)
+		if n == 1 {
+			h.signalDone() // wake publisher after first delivery
+		}
+		return asDelivery(outbox.Ack()), receipt
+	})
+
+	h.publishAndWait([]byte(`{"test":"commit-fail"}`))
+	// Adapter must retry / redeliver after Commit failure. We assert at least
+	// one extra Commit attempt OR an extra delivery within a generous window.
+	// Both rabbitmq (Nack→requeue→re-consume) and eventbus (handleWithRetry
+	// loop) satisfy "Commit was tried more than once" within retry budget.
+	assertEventually(t, func() bool {
+		return receipt.CommitCount() >= 2 || deliveries.Load() >= 2
+	}, testtime.D5s, testtime.D20ms,
+		"adapter must NOT promote Commit failure to success — expected retry/redelivery")
+	assertEventually(t, func() bool { return receipt.Released() },
+		testtime.D5s, testtime.D20ms,
+		"adapter must Release the failed settlement before retry/redelivery")
+	h.teardown()
+}
+
+// ---------------------------------------------------------------------------
+// Batch 5: Metadata + lifecycle
+// ---------------------------------------------------------------------------
+
+func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.BlockingSubscribe {
+		t.Skip("implementation does not block on Subscribe")
+	}
+
+	_, sub := constructor(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	subscribeReturned := make(chan error, 1)
+	go func() {
+		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t), CellID: "_outboxtest"},
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return asDelivery(outbox.Ack()), nil
+			})
+		subscribeReturned <- err
+	}()
+
+	// Subscribe should be blocking.
+	select {
+	case <-subscribeReturned:
+		t.Fatal("Subscribe returned before context was canceled")
+	case <-time.After(testtime.D100ms):
+		// Good — still blocking.
+	}
+
+	cancel()
+
+	select {
+	case <-subscribeReturned:
+		// Good — returned after cancel.
+	case <-time.After(defaultTimeout):
+		t.Fatal("Subscribe did not return after context cancel")
+	}
+}
+
+func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSubConstructor) {
+	_, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	subscribeReturned := make(chan struct{})
+	go func() {
+		defer close(subscribeReturned)
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic, CellID: "_outboxtest"},
+			func(_ context.Context, _ outbox.Entry) (outbox.DeliveryOutcome, outbox.Settlement) {
+				return asDelivery(outbox.Ack()), nil
+			})
+	}()
+	waitForSubscription(t, ctx, sub, topic, "")
+
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
+
+	select {
+	case <-subscribeReturned:
+		// Good — subscriber terminated after Close.
+	case <-time.After(defaultTimeout):
+		t.Fatal("Subscribe did not return after Close()")
+	}
+}
+
+func testCloseIsIdempotent(t *testing.T, constructor PubSubConstructor) {
+	_, sub := constructor(t)
+	topic := TestTopic(t)
+
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
+
+	// Second close should not panic.
+	assertNotPanics(t, func() {
+		assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
+	})
+}
+
+func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	topic := TestTopic(t)
+
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
+
+	// Publishing after close should not panic.
+	assertNotPanics(t, func() {
+		_ = pub.Publish(t.Context(), "any-topic", wrapV1Envelope(t, "any-topic", []byte(`{}`)))
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Batch 6: Concurrency + middleware
+// ---------------------------------------------------------------------------
+
+func testConcurrentPublish(t *testing.T, features Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := t.Context()
+	topic := TestTopic(t)
+
+	n := min(features.MessageCount, 50)
+
+	c := startCollecting(t, ctx, sub, topic, n)
+
+	// Publish concurrently — collect errors safely (t.Fatal from goroutine is illegal).
+	var (
+		pubErrs []error
+		pubMu   sync.Mutex
+		wg      sync.WaitGroup
+	)
+	for i := range n {
+		wg.Add(1)
+		go func(seq int) {
+			defer wg.Done()
+			if err := pub.Publish(ctx, topic, wrapV1Envelope(t, topic, testPayload(seq))); err != nil {
+				pubMu.Lock()
+				pubErrs = append(pubErrs, err)
+				pubMu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range pubErrs {
+		t.Errorf("concurrent publish error: %v", err)
+	}
+	if len(pubErrs) > 0 {
+		t.FailNow()
+	}
+
+	collected := c.waitAndGet(defaultTimeout)
+	assertLen(t, len(collected), n, "all concurrently published messages should arrive")
+}
+
+func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubConstructor) {
+	h := newHarness(t, constructor)
+
+	var middlewareCalled atomic.Bool
+	middleware := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
+		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+			middlewareCalled.Store(true)
+			return next(ctx, entry)
+		}
+	}
+
+	// SubscriberWithMiddleware.SubscribeEntry is the entry point for the business
+	// middleware pipeline. Use subscribeWithHandler to drive the inner subscriber
+	// directly; subscribe via SubscribeEntry in a goroutine, then signal the
+	// harness done channel so publishAndWait can proceed.
+	cb, err := outbox.NewConsumerBase(
+		idempotency.NewInMemClaimer(clock.Real()),
+		outbox.ConsumerBaseConfig{},
+		clock.Real(),
+	)
+	assertNoError(t, err)
+	wrappedSub, err := outbox.NewSubscriberWithMiddleware(h.Sub, cb, middleware)
+	assertNoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	h.cancel = cancel
+	t.Cleanup(cancel)
+
+	ready := make(chan struct{})
+	go func() {
+		defer close(h.subDone)
+		close(ready)
+		err := wrappedSub.SubscribeEntry(ctx,
+			outbox.Subscription{
+				Topic:             h.Topic,
+				ConsumerGroup:     conformanceCG,
+				CellID:            conformanceCG,
+				ContractID:        "event." + h.Topic + ".v1",
+				ContractKind:      "event",
+				ContractTransport: "memory",
+			},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				h.signalDone()
+				return outbox.Ack()
+			},
+		)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf(errSubscribeUnexpectedFmt, err)
+		}
+	}()
+	<-ready
+	// Consumer group must match the Subscription above: RabbitMQ derives the
+	// queue name from (topic, consumerGroup), so a mismatch declares two
+	// queues bound to the same exchange and the consumer reads from the
+	// wrong one — flaky timeout under broker scheduling jitter.
+	waitForSubscription(t, ctx, h.Sub, h.Topic, conformanceCG)
+
+	h.publishAndWait([]byte(`{"test":"middleware"}`))
+	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")
+	h.teardown()
+}

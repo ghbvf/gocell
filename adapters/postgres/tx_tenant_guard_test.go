@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 const guardTestTenant tenant.TenantID = "11111111-1111-1111-1111-111111111111"

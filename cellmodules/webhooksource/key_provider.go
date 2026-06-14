@@ -7,11 +7,11 @@ import (
 
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // Key-provider enum values for GOCELL_WEBHOOK_KEY_PROVIDER. Single source of truth

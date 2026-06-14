@@ -457,7 +457,7 @@ func scanCellsForInitCheckNotNoop(p *Pass, targets []l2TargetCell) []Diagnostic 
 //
 // ref: tools/archtest/baseslice_ctor_funnel_01_test.go:82,109
 //
-//	(repo convention: cellPkgPath built as modPath + "/kernel/cell",
+//	(repo convention: cellPkgPath built as modPath + "/framework/kernel/cell",
 //	compared with == against p.Pkg.Path()).
 //
 // ref: tools/archtest/adapter_error_classification_test.go:87,140

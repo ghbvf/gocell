@@ -9,8 +9,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )

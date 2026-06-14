@@ -12,7 +12,7 @@
 package session_revoked_field_red
 
 import (
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // badRevokedAtReaderView reads session.ValidateView.RevokedAt from a

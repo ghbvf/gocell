@@ -10,11 +10,11 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/state/cas"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 // Compile-time check.

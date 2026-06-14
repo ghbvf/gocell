@@ -38,7 +38,7 @@ func TestCellLifecycleRankCompleteness(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	diags := Run(t, AST(DirsScope(root, []string{"kernel/cellvocab"})), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"framework/kernel/cellvocab"})), func(p *Pass) []Diagnostic {
 		declared := map[string]token.Pos{}
 		covered := map[string]struct{}{}
 		var declFile *ast.File
@@ -76,7 +76,7 @@ func TestCellLifecycleRankCompleteness(t *testing.T) {
 func TestCellLifecycleRankCompleteness_BlindSpotShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	_ = Run(t, AST(DirsScope(root, []string{"kernel/cellvocab"})), func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(DirsScope(root, []string{"framework/kernel/cellvocab"})), func(p *Pass) []Diagnostic {
 		var sawTypedConst, sawCompositeCellLifecycles bool
 		for _, f := range p.Files {
 			if len(collectConstNamesOfType(f, lifecycleConstTypeName)) > 0 {

@@ -33,7 +33,7 @@ const (
 	mqttReasonDetailFunnelFunc = "reasonDetailOptions"
 	// mqttErrcodePkgPath is the canonical import path of the errcode package —
 	// derived from PlatformModulePath so no bare literal appears here.
-	mqttErrcodePkgPath          = PlatformModulePath + "/pkg/errcode"
+	mqttErrcodePkgPath          = PlatformFrameworkModulePath + "/pkg/errcode"
 	mqttErrcodePublicStringName = "PublicString"
 )
 

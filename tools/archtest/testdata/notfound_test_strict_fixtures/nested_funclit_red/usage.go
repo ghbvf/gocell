@@ -9,8 +9,8 @@
 package nested_funclit_red
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 	"testing"
 )
 

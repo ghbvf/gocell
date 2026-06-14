@@ -109,7 +109,7 @@ const ruleProjectionApplyHookFunnel01 = "PROJECTION-APPLY-HOOK-FUNNEL-01"
 const (
 	// projectionCoordPkgPath is the import path of kernel/projection, derived from
 	// PlatformModulePath so a module rename / /v2 bump updates one place.
-	projectionCoordPkgPath    = PlatformModulePath + "/kernel/projection"
+	projectionCoordPkgPath    = PlatformFrameworkModulePath + "/kernel/projection"
 	projectionCoordTypeName   = "Coordinator"
 	projectionSubscribeMethod = "Subscribe"
 )
@@ -118,7 +118,7 @@ const (
 // callsite (PR-04a, Option A): the bootstrap projection drain. It constructs the
 // Coordinator from framework-owned deps and drives Subscribe via a capture
 // Registrar. No generated file calls Subscribe under Option A.
-const projectionDrainFile = "runtime/bootstrap/phases_projection.go"
+const projectionDrainFile = "framework/runtime/bootstrap/phases_projection.go"
 
 // isProjectionSubscribeCall reports whether call is a method call to
 // (*kernel/projection.Coordinator).Subscribe resolved via *types.Info.Selections.
@@ -187,7 +187,10 @@ func isProjectionApplyHookAllowed(pkgPath, rel string) bool {
 	if strings.HasPrefix(rel, "kernel/projection/") {
 		return true
 	}
-	return filepath.ToSlash(rel) == projectionDrainFile
+	// projectionDrainFile is the physical disk path (with "framework/" prefix for
+	// os.Stat); p.Rel strips that prefix, so compare against the logical rel.
+	logicalDrainFile := strings.TrimPrefix(projectionDrainFile, frameworkSubdir+"/")
+	return filepath.ToSlash(rel) == logicalDrainFile
 }
 
 // collectProjectionApplyHookViolations is the single per-Pass scanner shared by

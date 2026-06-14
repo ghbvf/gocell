@@ -39,7 +39,7 @@ import (
 // governancePkgPath is the import path of the kernel/governance package.
 // Derived from PlatformModulePath so a module rename updates exactly one place
 // (ARCHTEST-MODULE-PATH-FUNNEL-01).
-const governancePkgPath = PlatformModulePath + "/kernel/governance"
+const governancePkgPath = PlatformFrameworkModulePath + "/kernel/governance"
 
 // governanceRelDir is the module-relative directory of kernel/governance,
 // derived from governancePkgPath so a module rename updates exactly one place
@@ -284,7 +284,7 @@ func (gp *governancePackage) fileRel(f *ast.File) string {
 func loadGovernancePackage(t *testing.T, root string) *governancePackage {
 	t.Helper()
 	var gp *governancePackage
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/governance"}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/kernel/governance"}),
 		func(p *Pass) []Diagnostic {
 			gp = &governancePackage{
 				scope:     p.Pkg.Scope(),

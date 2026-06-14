@@ -48,7 +48,7 @@ func TestYAMLQuoteFunnel_DetectsViolation(t *testing.T) {
 	var diags []Diagnostic
 	found := false
 
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/yamlsafe/"}),
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/pkg/yamlsafe/"}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != yamlsafePkgPath {
 				return nil

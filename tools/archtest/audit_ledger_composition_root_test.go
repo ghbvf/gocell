@@ -40,7 +40,7 @@ import (
 // ledgerImportSuffix is the module-relative path of the ledger package.
 // Combined with modulePath (read from go.mod) it forms the canonical import
 // path matched by ResolvePackageRef.
-const ledgerImportSuffix = "/runtime/audit/ledger"
+const ledgerImportSuffix = "/framework/runtime/audit/ledger"
 
 var ledgerForbidden = map[string]bool{
 	"NewProtocol": true,
@@ -52,8 +52,8 @@ var ledgerForbidden = map[string]bool{
 // (module-relative paths starting with "/") so the test does not depend on
 // a hardcoded module name.
 var ledgerCompositionRootAllowlist = map[string]bool{
-	"/runtime/audit/ledger":           true,
-	"/runtime/audit/ledger/storetest": true,
+	"/framework/runtime/audit/ledger":           true,
+	"/framework/runtime/audit/ledger/storetest": true,
 }
 
 type ledgerHit struct {

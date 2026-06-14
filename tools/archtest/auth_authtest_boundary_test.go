@@ -33,8 +33,8 @@ func TestAuthAuthtestBoundary_NegativeProbes(t *testing.T) {
 	t.Parallel()
 
 	modPath := PlatformModulePath
-	runtimeAuthtestImport := modPath + "/runtime/internal/authtest"
-	kernelAuthtestImport := modPath + "/kernel/auth/authtest"
+	runtimeAuthtestImport := modPath + "/framework/runtime/internal/authtest"
+	kernelAuthtestImport := modPath + "/framework/kernel/auth/authtest"
 
 	// Probe A1: findCallExpr must detect a real auth.Authenticated() call site.
 	t.Run("A1_findCallExpr_detects_real_call", func(t *testing.T) {

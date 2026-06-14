@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // watchTestTimeout bounds the WatchCommands snapshot/tail waits (TEST-TIME-LITERAL-01).

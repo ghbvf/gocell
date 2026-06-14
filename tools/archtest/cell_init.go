@@ -31,7 +31,7 @@ import (
 
 // cellInitKernelCellPkgPath is the canonical import path of the kernel/cell package.
 // Anchored to PlatformModulePath — not a bare string literal.
-const cellInitKernelCellPkgPath = PlatformModulePath + "/kernel/cell"
+const cellInitKernelCellPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 
 // CheckKernelCellDoesNotImportRuntime scans the kernel/cell package to confirm
 // it imports neither runtime/* nor adapters/*. Returns diagnostics for each
@@ -40,7 +40,7 @@ const cellInitKernelCellPkgPath = PlatformModulePath + "/kernel/cell"
 func CheckKernelCellDoesNotImportRuntime(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/kernel/cell"}), func(p *Pass) []Diagnostic {
 		diags = append(diags, scanPassForForbiddenImports(p, "kernel/cell")...)
 		return nil
 	})
@@ -51,7 +51,7 @@ func CheckKernelCellDoesNotImportRuntime(t *testing.T, _ ConfigForExternalCell) 
 // contains "runtime/" or "adapters/". The rel parameter is used as the Rel
 // field of each diagnostic. Extracted so the detector logic can be exercised
 // directly by RED fixture tests without wiring through the full
-// Run(t, Typed(..., []string{"./kernel/cell"})) scope.
+// Run(t, Typed(..., []string{"./framework/kernel/cell"})) scope.
 func scanPassForForbiddenImports(p *Pass, rel string) []Diagnostic {
 	if p == nil || p.Pkg == nil {
 		return nil
@@ -76,7 +76,7 @@ func scanPassForForbiddenImports(p *Pass, rel string) []Diagnostic {
 func CheckKernelCellRegistrarDefinedHere(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/cell"}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/kernel/cell"}), func(p *Pass) []Diagnostic {
 		diags = append(diags, scanPassForRegistrarLocality(p, "kernel/cell", cellInitKernelCellPkgPath)...)
 		return nil
 	})
@@ -87,7 +87,7 @@ func CheckKernelCellRegistrarDefinedHere(t *testing.T, _ ConfigForExternalCell) 
 // is a locally-declared interface type (not an alias or a type from another
 // package). rel is used as the Rel field; wantPkgPath is the expected package
 // import path of the Registrar declaration. Extracted so RED fixture tests can
-// call the detector directly without going through the "./kernel/cell" scope.
+// call the detector directly without going through the "./framework/kernel/cell" scope.
 func scanPassForRegistrarLocality(p *Pass, rel, wantPkgPath string) []Diagnostic {
 	if p == nil || p.Pkg == nil {
 		return nil

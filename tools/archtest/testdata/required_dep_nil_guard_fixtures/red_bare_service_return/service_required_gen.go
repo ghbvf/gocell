@@ -5,8 +5,8 @@
 package redbareservicereturn
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // validateRequired verifies every required dependency on the Service struct

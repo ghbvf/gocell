@@ -26,21 +26,21 @@ import (
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 const (
-	kernelMetricsPkg  = "github.com/ghbvf/gocell/kernel/observability/metrics"
-	kernelOutboxPkg   = "github.com/ghbvf/gocell/kernel/outbox"
-	runtimeMetricsPkg = "github.com/ghbvf/gocell/runtime/observability/metrics"
+	kernelMetricsPkg  = "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	kernelOutboxPkg   = "github.com/ghbvf/gocell/framework/kernel/outbox"
+	runtimeMetricsPkg = "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	adapterPromPkg    = "github.com/ghbvf/gocell/adapters/prometheus"
 	prometheusPkg     = "github.com/prometheus/client_golang/prometheus"
 	promwrapPkg       = "github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
-	errcodePkg        = "github.com/ghbvf/gocell/pkg/errcode"
+	errcodePkg        = "github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Schema describes concrete metric registrations reachable from an assembly
@@ -273,11 +273,36 @@ func loadPackagesWithMode(
 	return out, nil
 }
 
+// patternLoadMode returns the Mode to use for a single go-packages pattern
+// rooted at root. Post-#1565 the repo root has no go.mod; patterns that address
+// a sub-module with its own go.mod (e.g. "./framework/kernel/...") must use
+// ModeWorkspace so the framework workspace member is visible. Patterns that do
+// NOT live under a sub-module root (e.g. "./cmd/...", "./adapters/...") still
+// use ModeModule: under ModeWorkspace they would fail because "cmd" is not a
+// workspace member, whereas ModeModule silently skips them (match-zero).
+func patternLoadMode(root, pattern string) packagesload.Mode {
+	// Strip the leading "./" and trailing "/..." to get the directory segment.
+	rel := strings.TrimPrefix(pattern, "./")
+	rel = strings.TrimSuffix(rel, "/...")
+	// Use only the top-level directory component to find the module root.
+	if idx := strings.IndexByte(rel, '/'); idx >= 0 {
+		rel = rel[:idx]
+	}
+	if rel == "" || rel == "." {
+		return packagesload.ModeModule
+	}
+	if prodscan.IsModuleRoot(filepath.Join(root, rel)) {
+		return packagesload.ModeWorkspace
+	}
+	return packagesload.ModeModule
+}
+
 func loadPatternScopedPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
 	byPath := map[string]*packages.Package{}
 	var paths []string
 	for _, pattern := range patterns {
-		pkgs, err := loadPackagesWithMode(ctx, root, false, packagesload.ModeModule, pattern)
+		mode := patternLoadMode(root, pattern)
+		pkgs, err := loadPackagesWithMode(ctx, root, false, mode, pattern)
 		if err != nil {
 			return nil, err
 		}
@@ -614,13 +639,15 @@ func (sp *scanPackage) directPrometheusCallEntries(
 }
 
 func skipMetricImplementationFile(rel string) bool {
+	// rel is workspace-root-relative; since #1565 kernel/runtime/pkg live under
+	// framework/ (adapters/* did not move).
 	switch rel {
 	case "adapters/prometheus/metric_provider.go",
 		"adapters/prometheus/hook_observer.go",
-		"runtime/observability/metrics/provider_collector.go",
-		"runtime/observability/metrics/grpc_collector.go",
-		"runtime/observability/metrics/config_event_collector.go",
-		"kernel/outbox/relay_collector.go":
+		"framework/runtime/observability/metrics/provider_collector.go",
+		"framework/runtime/observability/metrics/grpc_collector.go",
+		"framework/runtime/observability/metrics/config_event_collector.go",
+		"framework/kernel/outbox/relay_collector.go":
 		return true
 	}
 	return false

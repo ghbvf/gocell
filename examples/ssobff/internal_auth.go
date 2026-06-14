@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 const ssobffServiceKeyEnv = "GOCELL_SSOBFF_SERVICE_SECRET"

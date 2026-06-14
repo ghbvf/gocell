@@ -3,7 +3,7 @@ package redis
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // testNamespace is the canonical namespace for unit tests that don't

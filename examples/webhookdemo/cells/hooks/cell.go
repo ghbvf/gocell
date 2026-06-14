@@ -17,7 +17,7 @@ import (
 	"log/slog"
 
 	eventreceive "github.com/ghbvf/gocell/examples/webhookdemo/cells/hooks/slices/eventreceive"
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).

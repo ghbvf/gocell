@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 )
 
 // TestFlagRepo_CtxCanceled covers the ctx-cancel branch added in PR-A50+A51 +

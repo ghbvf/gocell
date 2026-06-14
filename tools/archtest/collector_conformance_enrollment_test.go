@@ -72,9 +72,9 @@ import (
 )
 
 const (
-	collectorIfacePkg            = PlatformModulePath + "/runtime/observability/metrics"
+	collectorIfacePkg            = PlatformFrameworkModulePath + "/runtime/observability/metrics"
 	collectorIfaceName           = "Collector"
-	collectorConformancePkg      = PlatformModulePath + "/runtime/observability/metrics/metricstest"
+	collectorConformancePkg      = PlatformFrameworkModulePath + "/runtime/observability/metrics/metricstest"
 	collectorConformanceFuncName = "RunCollectorConformance"
 )
 

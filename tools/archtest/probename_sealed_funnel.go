@@ -20,11 +20,11 @@ const probenameModPrefix = PlatformModulePath + "/"
 // healthzPkgPath is the import path of the kernel/healthz package.
 // Named without a "probename" prefix because it is the single authoritative
 // package for all healthz concepts (ProbeName, Probe, Aggregator).
-const healthzPkgPath = PlatformModulePath + "/kernel/healthz"
+const healthzPkgPath = PlatformFrameworkModulePath + "/kernel/healthz"
 
 // cellRegistrarPkgPath is the import path of the kernel/cell package,
 // which defines the Registrar interface and RegisterReadiness method.
-const cellRegistrarPkgPath = PlatformModulePath + "/kernel/cell"
+const cellRegistrarPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 
 // adapterutilPkgPath is the import path of the adapterutil package,
 // which provides HealthToProbe (consumes ProbeName as first arg).
@@ -34,14 +34,14 @@ const adapterutilPkgPath = PlatformModulePath + "/adapters/adapterutil"
 // which provides WithHealthChecker (4th sanctioned ProbeName funnel
 // ingress — composition-root option pattern; consumes ProbeName as
 // first arg).
-const bootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
+const bootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 
 // probeNameSanctionedPkgs is the closed set of packages allowed to declare
 // a healthz.ProbeName typed const.  A const appearing in any other package
 // is rejected by A1.
 var probeNameSanctionedPkgs = map[string]bool{
 	// Framework-level (kernel owns the typed concept)
-	PlatformModulePath + "/kernel/healthz": true,
+	PlatformFrameworkModulePath + "/kernel/healthz": true,
 	// Adapter dependency probes
 	PlatformModulePath + "/adapters/grpc":     true,
 	PlatformModulePath + "/adapters/postgres": true,
@@ -52,9 +52,9 @@ var probeNameSanctionedPkgs = map[string]bool{
 	PlatformModulePath + "/adapters/mqtt":     true,
 	PlatformModulePath + "/adapters/oidc":     true,
 	// Runtime-level probe owners
-	PlatformModulePath + "/runtime/outbox":    true,
-	PlatformModulePath + "/runtime/websocket": true,
-	PlatformModulePath + "/runtime/saga":      true,
+	PlatformFrameworkModulePath + "/runtime/outbox":    true,
+	PlatformFrameworkModulePath + "/runtime/websocket": true,
+	PlatformFrameworkModulePath + "/runtime/saga":      true,
 	// Platform cells (cellgen healthz_gen.go — marker required)
 	PlatformCellsModulePath + "/configcore": true,
 	PlatformCellsModulePath + "/auditcore":  true,
@@ -86,16 +86,16 @@ var cellgenSanctionedPkgs = map[string]bool{
 // adapterSanctionedPkgs requires that all ProbeName values in these packages
 // end with the "_ready" suffix (adapter dependency-availability convention).
 var adapterSanctionedPkgs = map[string]bool{
-	PlatformModulePath + "/adapters/grpc":     true,
-	PlatformModulePath + "/adapters/postgres": true,
-	PlatformModulePath + "/adapters/redis":    true,
-	PlatformModulePath + "/adapters/rabbitmq": true,
-	PlatformModulePath + "/adapters/s3":       true,
-	PlatformModulePath + "/adapters/vault":    true,
-	PlatformModulePath + "/adapters/mqtt":     true,
-	PlatformModulePath + "/adapters/oidc":     true,
-	PlatformModulePath + "/runtime/websocket": true,
-	PlatformModulePath + "/runtime/saga":      true,
+	PlatformModulePath + "/adapters/grpc":              true,
+	PlatformModulePath + "/adapters/postgres":          true,
+	PlatformModulePath + "/adapters/redis":             true,
+	PlatformModulePath + "/adapters/rabbitmq":          true,
+	PlatformModulePath + "/adapters/s3":                true,
+	PlatformModulePath + "/adapters/vault":             true,
+	PlatformModulePath + "/adapters/mqtt":              true,
+	PlatformModulePath + "/adapters/oidc":              true,
+	PlatformFrameworkModulePath + "/runtime/websocket": true,
+	PlatformFrameworkModulePath + "/runtime/saga":      true,
 }
 
 // probenameInRepoLayerPrefixes is the set of per-layer package path prefixes
@@ -103,10 +103,10 @@ var adapterSanctionedPkgs = map[string]bool{
 // PROBENAME-SEALED-FUNNEL-01.  A package whose path does not start with any
 // of these prefixes is skipped by the main production scanner.
 var probenameInRepoLayerPrefixes = []string{
-	PlatformModulePath + "/kernel/",
+	PlatformFrameworkModulePath + "/kernel/",
 	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
-	PlatformModulePath + "/runtime/",
+	PlatformFrameworkModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",
 	PlatformModulePath + "/examples/",
 }

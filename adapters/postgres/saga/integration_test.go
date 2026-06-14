@@ -13,12 +13,12 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/postgres/saga"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	sagamod "github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/kernel/saga/sagajournaltest"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	sagamod "github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/kernel/saga/sagajournaltest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 )
 
 // Test-time lease durations and the post-expiry advance step, extracted

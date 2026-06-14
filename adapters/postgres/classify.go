@@ -28,7 +28,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // sqlStateClassPrefix returns the 2-character SQLSTATE class prefix (the first

@@ -26,7 +26,7 @@
 //     construction"), so the general constructor is never over-flagged.
 package rowscopeallauditfixture
 
-import "github.com/ghbvf/gocell/pkg/tenant"
+import "github.com/ghbvf/gocell/framework/pkg/tenant"
 
 // MintCrossTenantOutsideFunnel is the RED case: a cross-tenant obligation minted
 // outside the audited super-admin derivation. The funnel archtest must flag this

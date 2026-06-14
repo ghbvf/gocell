@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // Real-OS-signal end-to-end coverage for the signal wiring (PR #502

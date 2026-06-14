@@ -11,8 +11,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics/metricstest"
 )
 
 // TestOTelMetricProvider_CanceledCtxConformance enrolls otel.MetricProvider in

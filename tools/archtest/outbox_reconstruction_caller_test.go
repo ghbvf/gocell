@@ -39,11 +39,17 @@ func TestIsReconstructionAllowedSite(t *testing.T) {
 		symbol, rel string
 		want        bool
 	}{
-		{"sanctioned platform wire-decode site", PlatformModulePath + "/runtime/eventbus", unmarshal, "runtime/eventbus/eventbus.go", true},
+		{
+			"sanctioned platform wire-decode site", PlatformFrameworkModulePath + "/runtime/eventbus",
+			unmarshal, "runtime/eventbus/eventbus.go", true,
+		},
 		{"sanctioned platform storage site", PlatformModulePath + "/adapters/postgres", toEntry, "adapters/postgres/outbox_store.go", true},
 		{"consumer module forges allowlisted rel", "consumer.example/app/runtime/eventbus", unmarshal, "runtime/eventbus/eventbus.go", false},
 		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", unmarshal, "cells/foo/cell.go", false},
-		{"platform pkg, unknown symbol", PlatformModulePath + "/runtime/eventbus", "kernel/outbox.Bogus", "runtime/eventbus/eventbus.go", false},
+		{
+			"platform pkg, unknown symbol", PlatformFrameworkModulePath + "/runtime/eventbus",
+			"kernel/outbox.Bogus", "runtime/eventbus/eventbus.go", false,
+		},
 		{"unresolved pkg", "", unmarshal, "runtime/eventbus/eventbus.go", false},
 	}
 	for _, tc := range cases {

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	"github.com/ghbvf/gocell/pkg/migration"
+	"github.com/ghbvf/gocell/framework/pkg/migration"
 	"github.com/ghbvf/gocell/tests/testutil/pgclone"
 )
 

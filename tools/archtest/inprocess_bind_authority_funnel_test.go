@@ -70,13 +70,13 @@ import (
 const ruleInProcessBindAuthority = "INPROCESS-TRANSPORT-BIND-AUTHORITY-01"
 
 // transportPkgPath is the import path owning NewInProcess + InProcessTransport.
-const transportPkgPath = PlatformModulePath + "/runtime/transport"
+const transportPkgPath = PlatformFrameworkModulePath + "/runtime/transport"
 
 // newInProcessAllowedCallers is the closed set of packages that may mint an
 // InProcessTransport. Only the composition root (Builder.Build) mints the single
 // shared holder; bootstrap receives it via WithInProcessTransport (does not mint).
 var newInProcessAllowedCallers = map[string]struct{}{
-	PlatformModulePath + "/runtime/composition": {},
+	PlatformFrameworkModulePath + "/runtime/composition": {},
 }
 
 // isNewInProcessRef reports whether (pkgPath, name) refers to
@@ -148,10 +148,10 @@ func TestINPROCESS_TRANSPORT_BIND_AUTHORITY_01_SyntheticDetector(t *testing.T) {
 	assert.True(t, isNewInProcessRef(transportPkgPath, "NewInProcess"), "the minter must be detected")
 
 	green := []struct{ pkg, name string }{
-		{transportPkgPath, "ModeInProc"},                              // not the minter
-		{transportPkgPath, "CellTransport"},                           // the interface
-		{transportPkgPath, "NewMetrics"},                              // a sibling constructor
-		{PlatformModulePath + "/runtime/composition", "NewInProcess"}, // wrong pkg (a cell's own NewInProcess)
+		{transportPkgPath, "ModeInProc"},                                       // not the minter
+		{transportPkgPath, "CellTransport"},                                    // the interface
+		{transportPkgPath, "NewMetrics"},                                       // a sibling constructor
+		{PlatformFrameworkModulePath + "/runtime/composition", "NewInProcess"}, // wrong pkg (a cell's own NewInProcess)
 	}
 	for _, tc := range green {
 		assert.Falsef(t, isNewInProcessRef(tc.pkg, tc.name), "%s.%s must NOT be detected", tc.pkg, tc.name)

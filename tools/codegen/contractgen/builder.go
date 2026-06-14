@@ -13,11 +13,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/pkg/contractpath"
-	"github.com/ghbvf/gocell/runtime/schemavalidate"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/pkg/contractpath"
+	"github.com/ghbvf/gocell/framework/runtime/schemavalidate"
 )
 
 // buildContractSpec projects a single contract.yaml + its schemaRefs into a

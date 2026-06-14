@@ -21,7 +21,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ghbvf/gocell/runtime/transport"
+	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
 // dialSibling constructs a raw *http.Client and dispatches — the forbidden chokepoint.

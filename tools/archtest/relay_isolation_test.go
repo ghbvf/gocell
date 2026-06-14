@@ -91,9 +91,9 @@ import (
 )
 
 const (
-	relayIsoOutboxPkgPath    = PlatformModulePath + "/runtime/outbox"
-	relayIsoLifecyclePkgPath = PlatformModulePath + "/kernel/lifecycle"
-	relayIsoBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
+	relayIsoOutboxPkgPath    = PlatformFrameworkModulePath + "/runtime/outbox"
+	relayIsoLifecyclePkgPath = PlatformFrameworkModulePath + "/kernel/lifecycle"
+	relayIsoBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 	relayIsoRelayTypeName    = "Relay"
 	relayIsoMRTypeName       = "ManagedResource"
 	relayIsoAdapterTypeName  = "relayAdapter"
@@ -111,9 +111,9 @@ func TestRELAY_NOT_MANAGEDRESOURCE_01(t *testing.T) {
 	var adapterNamed *types.Named
 
 	loadPatterns := []string{
-		"./runtime/outbox/...",
-		"./kernel/lifecycle/...",
-		"./runtime/bootstrap/...",
+		"./framework/runtime/outbox/...",
+		"./framework/kernel/lifecycle/...",
+		"./framework/runtime/bootstrap/...",
 	}
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, loadPatterns),

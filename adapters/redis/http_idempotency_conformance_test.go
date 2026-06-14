@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
-	"github.com/ghbvf/gocell/runtime/http/idempotency/idempotencytest"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/http/idempotency/idempotencytest"
 )
 
 // redisExpiryMargin is a conservative buffer added to sleep durations so that

@@ -4,8 +4,8 @@
 package devicecell
 
 import (
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // ProbeRepoReady is the canonical readiness probe name for the devicecell cell's

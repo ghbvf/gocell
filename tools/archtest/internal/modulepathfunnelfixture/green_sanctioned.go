@@ -11,4 +11,4 @@ import "github.com/ghbvf/gocell/tools/archtest"
 // permitted source. This is the form that a "naive EvaluateConstString" would
 // have false-flagged — the object-identity exemption is exactly what makes the
 // typed upgrade safe.
-var _ = archtest.PlatformModulePath + "/pkg/z"
+var _ = archtest.PlatformModulePath + "/framework/pkg/z"

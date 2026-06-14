@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // commands is the top-level command registry — the single source of truth

@@ -87,7 +87,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/framework/pkg/pgquery"
 )
 
 const (

@@ -6,10 +6,10 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // TestTenant is the canonical test tenant UUID used by configcoretest helpers.

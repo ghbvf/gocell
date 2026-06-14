@@ -7,6 +7,6 @@
 // diagnostic.
 package redaliasimport
 
-import kout "github.com/ghbvf/gocell/kernel/outbox"
+import kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 var _ = kout.NewNoopEmitter()

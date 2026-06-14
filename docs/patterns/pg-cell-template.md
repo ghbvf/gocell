@@ -130,11 +130,11 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	foocorecell "github.com/ghbvf/gocell/cells/foocore"
-	"github.com/ghbvf/gocell/kernel/cell"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 type module struct{}
@@ -245,14 +245,14 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	foocorecell "github.com/ghbvf/gocell/cells/foocore"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/capability"
-	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
+	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // fooCoreModuleConfig bundles inputs for buildFooCoreOpts.

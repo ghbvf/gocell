@@ -1,6 +1,6 @@
 package grpc_service_in_contract_violate
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // rogueGRPCService calls reg.GRPCService from a hand-written, non-generated,
 // non-test file. This must trigger GRPC-SERVICE-IN-CONTRACT-01/A — hand-rolled

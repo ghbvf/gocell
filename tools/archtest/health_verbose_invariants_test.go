@@ -148,8 +148,8 @@ import (
 const (
 	ruleHealthVerboseWireShapeFrozen     = "HEALTH-VERBOSE-WIRE-SHAPE-FROZEN-01"
 	ruleHealthRedactedErrorMsgFunnel     = "HEALTH-REDACTED-ERROR-MSG-FUNNEL-01"
-	healthPackageRelativeRoot            = "runtime/http/health"
-	healthPackagePattern                 = "./runtime/http/health"
+	healthPackageRelativeRoot            = "framework/runtime/http/health"
+	healthPackagePattern                 = "./framework/runtime/http/health"
 	healthVerboseShapeName               = "verboseDependencyEntry"
 	healthSlogShapeName                  = "SlogDependencyEntry"
 	healthRedactedErrorMsgTypeName       = "redactedErrorMsg"

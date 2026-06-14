@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
 // TestScaffoldCell_GeneratesFiles verifies that ScaffoldCell creates both
@@ -197,7 +197,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"// +cell:listener:",
 				"func (c *MyCore) initInternal(",
 				"loadCellMetadata()",
-				"github.com/example/app/kernel/cell",
+				"github.com/example/app/framework/kernel/cell",
 			},
 			wantInCellYAML: []string{
 				"id: mycore",

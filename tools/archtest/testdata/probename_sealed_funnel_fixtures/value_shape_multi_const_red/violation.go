@@ -9,7 +9,7 @@
 // "fails healthz.NewProbeName validator"。
 package value_shape_multi_const_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // VIOLATION A1/value-shape on second const: BadProbe 含 hyphen,
 // 旧 scanner 取 vs.Values[0]=OkProbe 通过, BadProbe 漏检。

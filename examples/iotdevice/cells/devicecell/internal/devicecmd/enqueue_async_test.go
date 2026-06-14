@@ -9,15 +9,15 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
+	idemkey "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/query"
-	commandruntime "github.com/ghbvf/gocell/runtime/command"
-	idemkey "github.com/ghbvf/gocell/runtime/http/idempotency"
 )
 
 func newAsyncTestSvc(t *testing.T, opts ...Option) *Service {

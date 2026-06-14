@@ -3,7 +3,7 @@
 
 package statussummary
 
-import "github.com/ghbvf/gocell/kernel/cellvocab"
+import "github.com/ghbvf/gocell/framework/kernel/cellvocab"
 
 // PROJECTION-CONSISTENCY-01 (gh #960) — compile-time Hard gate. Projection
 // contracts must declare consistencyLevel L3 (WorkflowEventual) or L4

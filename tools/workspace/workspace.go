@@ -38,7 +38,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
@@ -47,6 +47,11 @@ const (
 	goWorkFile = "go.work"
 	goModFile  = "go.mod"
 )
+
+// frameworkSubdir is the workspace-root-relative directory holding the core
+// framework module (kernel/runtime/pkg) since the #1565 split. It is an on-disk
+// dir name, not a module path.
+const frameworkSubdir = "framework"
 
 // Module pairs a workspace member's on-disk directory (relative to the
 // workspace root, filepath.Clean'd — "." for the root module) with the Go
@@ -156,6 +161,76 @@ func Modules(root string) ([]Module, error) {
 	return mods, nil
 }
 
+// ExpandParentPrefix expands a root-relative parent-prefix package pattern that
+// spans MULTIPLE workspace members — e.g. "./cmd/...", "./adapters/...",
+// "./examples/..." — into one "./<member-dir>/..." pattern per member living
+// strictly under that prefix dir (cmd/ holds cmd/gocell + cmd/corebundle;
+// adapters/ holds adapters/postgres, adapters/redis, …).
+//
+// Such a prefix has no single owning module, so post-#1565 (no root module to
+// anchor "./cmd/...") it cannot be loaded as written: a ModeModule load errors
+// ("directory prefix cmd does not contain main module") and a workspace loader
+// that merely match-zeroes it SILENTLY DROPS the satellite coverage that
+// governance / security archtest rules declare over ./cmd/… ./adapters/… and
+// ./examples/…. Expanding to the real members restores that coverage — each
+// "./<member>/..." resolves as a normal workspace member in ModeWorkspace.
+//
+// Returns (expansions, true) iff pattern is "./<dir>/..." and ≥1 member lives
+// strictly under <dir>. Returns (nil, false) for everything else and the caller
+// keeps the pattern verbatim: a member owning <dir> exactly (normal
+// single-member resolution handles it), no member under <dir> (a genuine
+// match-zero), a single-module fixture (its sole "." member owns nothing under a
+// subdir), or a non-recursive pattern. Expansions are sorted for deterministic
+// load order.
+func ExpandParentPrefix(mods []Module, pattern string) ([]string, bool) {
+	if !strings.HasPrefix(pattern, "./") || !strings.HasSuffix(pattern, "/...") {
+		return nil, false
+	}
+	dir := strings.TrimSuffix(strings.TrimPrefix(pattern, "./"), "/...")
+	if dir == "" || dir == "." {
+		return nil, false
+	}
+	prefix := dir + "/"
+	var out []string
+	for _, m := range mods {
+		md := filepath.ToSlash(filepath.Clean(m.Dir))
+		if md == dir {
+			// A single member owns the prefix exactly → not a multi-member parent
+			// prefix; the caller's normal single-member resolution handles it.
+			return nil, false
+		}
+		if strings.HasPrefix(md, prefix) {
+			out = append(out, "./"+md+"/...")
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	sort.Strings(out)
+	return out, true
+}
+
+// CorePrefix returns the GoCell org/repo PREFIX (e.g. "github.com/ghbvf/gocell")
+// shared by every workspace member — the single source for callers that identify
+// or compose internal module paths: modrelease's internal-require matcher,
+// releasesmoke's internal-projection, and archtest's sibling-path composition
+// (<prefix>+"/adapters/…") and framework-symbol composition (<prefix>+"/framework/kernel/…").
+//
+// Resolution (framework-first, never a hardcoded literal, so a module rename /
+// /v2 bump is caught by the archtest anchor test TestPlatformModulePathMatchesGoMod):
+//   - GoCell workspace (#1565): the workspace root holds only go.work; the core
+//     framework module lives at root/framework. Read framework/go.mod and strip
+//     the trailing "/framework" to recover the prefix every sibling shares.
+//   - any root WITHOUT a framework/<go.mod> (external single-module consumer, or a
+//     consumer workspace whose root IS itself the module): fall back to root/go.mod,
+//     whose declared path IS the prefix.
+func CorePrefix(root string) (string, error) {
+	if fw, err := gomodutil.ReadModulePath(filepath.Join(root, frameworkSubdir)); err == nil {
+		return strings.TrimSuffix(fw, "/"+frameworkSubdir), nil
+	}
+	return gomodutil.ReadModulePath(root)
+}
+
 // crossCheckManifest enforces the bidirectional go.work ↔ manifest closure. It
 // is a no-op when no manifest exists (no metadata-module contract to verify).
 //
@@ -181,12 +256,23 @@ func crossCheckManifest(root string, useSet map[string]struct{}) error {
 	if err != nil {
 		return fmt.Errorf("workspace: read manifest: %w", err)
 	}
-	// Forward: manifest.modules ⊆ go.work.use.
+	// Forward: manifest.modules ⊆ go.work.use ∪ {"."}.
+	//
+	// The workspace root "." is exempt: since the #1565 framework split the repo
+	// root holds no go.mod (the core module moved to ./framework), so "." is not a
+	// go.work `use` member — yet it legitimately carries workspace-level platform
+	// metadata (contracts/journeys/assemblies/actors at the repo root, which did
+	// NOT move into framework/). The root dir always exists, so its metadata needs
+	// no compiled-module backing; every OTHER manifest entry must be a real
+	// go.work member.
 	manifestSet := make(map[string]struct{}, len(manifestPaths))
 	var missing []string
 	for _, p := range manifestPaths {
 		clean := filepath.Clean(p)
 		manifestSet[clean] = struct{}{}
+		if clean == "." {
+			continue
+		}
 		if _, ok := useSet[clean]; !ok {
 			missing = append(missing, p)
 		}

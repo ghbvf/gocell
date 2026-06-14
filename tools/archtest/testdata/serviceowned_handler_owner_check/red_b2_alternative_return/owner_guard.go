@@ -8,7 +8,7 @@ package red_b2_alternative_return
 import (
 	"errors"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {

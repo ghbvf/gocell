@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/pkg/fspath"
-	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/pkg/fspath"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 )
 
 const (

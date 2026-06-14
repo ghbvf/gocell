@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // The journaling decorator double-writes projection-source events into the durable

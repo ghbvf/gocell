@@ -3,16 +3,21 @@ module github.com/ghbvf/gocell/generated
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
+	github.com/kr/text v0.2.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+)
+
+require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
@@ -22,8 +27,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Local monorepo replace: under GOWORK=on the go.work workspace overrides this
-// and resolves the core module to the repo root; under GOWORK=off (the
-// release-consistency build) this replace makes the unpublished core module
-// resolve to the repo root instead of being fetched.
-replace github.com/ghbvf/gocell => ../
+replace github.com/ghbvf/gocell/framework => ../framework

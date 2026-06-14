@@ -19,15 +19,16 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 ### 分层结构
 
 ```
-kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
+framework/              — 独立 Go module github.com/ghbvf/gocell/framework
+framework/kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
+framework/runtime/      — 通用运行时（http / auth / worker / observability）
+framework/pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 corecells/    — 平台 Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/（独立 go.work 模块 github.com/ghbvf/gocell/corecells，#1560）
 contracts/    — 平台跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
 journeys/     — 平台 Journey 验收规格（J-*.yaml）+ status-board.yaml（动态交付状态）
 assemblies/   — 物理打包配置（assembly.yaml）
 fixtures/     — 测试夹具（fixture-*.yaml，供 run-journey 使用）
-runtime/      — 通用运行时（http / auth / worker / observability）
 adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket / s3 / oidc）
-pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
 cellmodules/  — Composition Root 层：将平台 Cell 绑定到 adapter，对外暴露 Module() composition.CellModule（accesscore / auditcore / configcore + 共享 helper cellsecrets）
 examples/     — 示例项目（ssobff / todoorder / iotdevice / corebundlestarter），可内置示例 cells/contracts/journeys
@@ -37,10 +38,10 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ### 依赖规则
 
-- kernel/ 不依赖 runtime/、adapters/、corecells/（只依赖标准库 + pkg/ + gopkg.in/yaml.v3）
-- corecells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
-- runtime/ 可依赖 kernel/ 和 pkg/，不依赖 corecells/、adapters/
-- adapters/ 实现 kernel/ 或 runtime/ 定义的接口
+- framework/kernel/ 不依赖 framework/runtime/、adapters/、corecells/（只依赖标准库 + framework/pkg/ + gopkg.in/yaml.v3）
+- corecells/ 依赖 framework/kernel/ 和 framework/runtime/，不依赖 adapters/（通过接口解耦）
+- framework/runtime/ 可依赖 framework/kernel/ 和 framework/pkg/，不依赖 corecells/、adapters/
+- adapters/ 实现 framework/kernel/ 或 framework/runtime/ 定义的接口
 - cellmodules/ 是 Composition Root 层，可依赖所有层（绑定 cell↔adapter，对外暴露 Module() composition.CellModule）
 - examples/ 可以依赖所有层
 
@@ -62,11 +63,11 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ## Go 编码规范
 
-- 错误用 `pkg/errcode` 包；新 `ERR_` 前缀命名空间须注册所有权并更新 golden，见 `.claude/rules/gocell/error-handling.md` §"错误码前缀"
+- 错误用 `framework/pkg/errcode` 包；新 `ERR_` 前缀命名空间须注册所有权并更新 golden，见 `.claude/rules/gocell/error-handling.md` §"错误码前缀"
 - 日志用 `slog`（结构化字段）
 - DB 字段 `snake_case`，JSON/Query/Path `camelCase`
 - 函数认知复杂度 ≤ 15
-- 新增/修改代码覆盖率 ≥ 80%，kernel/ 层 ≥ 90%（table-driven test）
+- 新增/修改代码覆盖率 ≥ 80%，framework/kernel/ 层 ≥ 90%（table-driven test）
 
 ## 修改代码前
 

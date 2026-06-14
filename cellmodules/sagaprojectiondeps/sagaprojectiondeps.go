@@ -7,14 +7,14 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterpgsaga "github.com/ghbvf/gocell/adapters/postgres/saga"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/distlock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/distlock"
 )
 
 // sagaProjectionLockNamespace scopes the per-projection leader-lock Redis keys.

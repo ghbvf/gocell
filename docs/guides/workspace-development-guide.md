@@ -6,13 +6,18 @@ when new modules are added in the future.
 
 ## Current state
 
-GoCell is a committed multi-module Go workspace. The root module remains
-`github.com/ghbvf/gocell`, and `go.work` also lists first-party satellite
-modules for composition bundles, examples, and adapter-consuming test surfaces.
+GoCell is a committed multi-module Go workspace. There is no `go.mod` at the
+repository root; the core framework lives in the `framework/` subdirectory as
+the satellite module `github.com/ghbvf/gocell/framework`. `go.work` lists all
+first-party satellite modules for composition bundles, examples, and
+adapter-consuming test surfaces.
 
 ```
-go.work                         # committed workspace membership
-go.mod                          # module github.com/ghbvf/gocell  (core)
+go.work                         # committed workspace membership (no root go.mod)
+framework/go.mod                # module github.com/ghbvf/gocell/framework  (core)
+framework/kernel/               # Cell/Slice runtime + governance tools
+framework/runtime/              # HTTP / auth / worker / observability
+framework/pkg/                  # shared utilities (errcode / ctxkeys / httputil / query)
 cellmodules/go.mod              # module github.com/ghbvf/gocell/cellmodules
 cmd/corebundle/go.mod           # module github.com/ghbvf/gocell/cmd/corebundle
 cmd/gocell/go.mod               # module github.com/ghbvf/gocell/cmd/gocell
@@ -22,7 +27,7 @@ tests/testutil/pgshare/go.mod   # compatibility testutil satellite
 ```
 
 The test satellites are deliberate: they may depend on adapter packages without
-forcing the root module to retain adapter `replace` entries. Root framework tests
+forcing the framework module to retain adapter `replace` entries. Framework tests
 must stay adapter-free; `hack/verify-root-no-adapter-import.sh` guards that
 boundary.
 

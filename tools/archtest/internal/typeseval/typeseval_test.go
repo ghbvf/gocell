@@ -201,9 +201,9 @@ func TestSplitWorkspacePattern_RoutesKnownSatellite(t *testing.T) {
 	assert.Equal(t, "tools", dir)
 	assert.Equal(t, "./archtest/internal/typeseval/...", pattern)
 
-	dir, pattern = splitWorkspacePattern(mods, "./pkg/...")
+	dir, pattern = splitWorkspacePattern(mods, "./framework/pkg/...")
 	assert.Equal(t, ".", dir)
-	assert.Equal(t, "./pkg/...", pattern)
+	assert.Equal(t, "./framework/pkg/...", pattern)
 
 	dir, pattern = splitWorkspacePattern(mods, "github.com/ghbvf/gocell/tools/archtest/internal/scanner")
 	assert.Equal(t, "tools", dir)
@@ -256,16 +256,16 @@ func TestLoadPackages_MixedRootAndSatellitePatternsShareTypeIdentity(t *testing.
 	root := findArchTestModuleRoot(t)
 	t.Setenv("GOWORK", "off")
 
-	pkgs, errs, err := LoadPackages(root, false, nil, "./kernel/metadata", "./tools/workspace")
+	pkgs, errs, err := LoadPackages(root, false, nil, "./framework/kernel/metadata", "./tools/workspace")
 	require.NoError(t, err)
 	require.Empty(t, errs, "load errors: %v", errs)
 
-	metadataPkg := packageByPath(pkgs, "github.com/ghbvf/gocell/kernel/metadata")
+	metadataPkg := packageByPath(pkgs, "github.com/ghbvf/gocell/framework/kernel/metadata")
 	require.NotNil(t, metadataPkg, "root metadata package should be loaded")
 	workspacePkg := packageByPath(pkgs, "github.com/ghbvf/gocell/tools/workspace")
 	require.NotNil(t, workspacePkg, "tools workspace package should be loaded")
 
-	importedMetadata := workspacePkg.Imports["github.com/ghbvf/gocell/kernel/metadata"]
+	importedMetadata := workspacePkg.Imports["github.com/ghbvf/gocell/framework/kernel/metadata"]
 	require.NotNil(t, importedMetadata, "tools/workspace should import root kernel/metadata")
 	require.Same(t, metadataPkg.Types, importedMetadata.Types, "workspace load must preserve shared type package identity")
 
@@ -394,7 +394,7 @@ func TestSharedResolver_ConcurrentInit(t *testing.T) {
 func TestSharedResolver_DifferentKeysIsolated(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	patternA := "./tools/archtest/internal/typeseval/..."
-	patternB := "./pkg/..."
+	patternB := "./framework/pkg/..."
 	keyA := cacheKey(root, false, patternA)
 	keyB := cacheKey(root, false, patternB)
 

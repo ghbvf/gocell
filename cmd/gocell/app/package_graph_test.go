@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
-	"github.com/ghbvf/gocell/runtime/devtools/catalog"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
+	"github.com/ghbvf/gocell/framework/runtime/devtools/catalog"
 )
 
 // wsmm* mirror the module / package paths of the reverse fixture under

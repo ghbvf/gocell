@@ -2,7 +2,7 @@
 
 ## Auth package
 
-Kernel auth plan 类型来自 `github.com/ghbvf/gocell/kernel/auth`。当同一文件也 import
+Kernel auth plan 类型来自 `github.com/ghbvf/gocell/framework/kernel/auth`。当同一文件也 import
 `runtime/auth` 时，kernel auth 使用别名 `kauth`。
 
 `cell.Registrar`、listener 常量和 route group 类型位于 `kernel/cell`。

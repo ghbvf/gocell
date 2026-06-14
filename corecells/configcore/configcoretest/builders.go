@@ -4,12 +4,12 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 
 	"github.com/ghbvf/gocell/corecells/configcore/slices/configsubscribe"
 	"github.com/ghbvf/gocell/corecells/configcore/slices/configwrite"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 )
 
 // BuildWriteOption configures BuildWriteService.

@@ -15,7 +15,7 @@
 // what PROM-CELL-LABEL-FUNNEL-01 forbids.
 package violation
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // leak reads HookEvent.CellID directly (NOT via promCellLabel) — a
 // PROM-CELL-LABEL-FUNNEL-01 violation.

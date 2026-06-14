@@ -15,7 +15,7 @@ package grpcwiringmintfixture
 import (
 	"google.golang.org/grpc"
 
-	. "github.com/ghbvf/gocell/runtime/grpc"
+	. "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
 // badMintBareIdent mints via BARE identifiers (dot-import) — the shape a

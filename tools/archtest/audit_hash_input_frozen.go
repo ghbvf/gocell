@@ -48,7 +48,7 @@ import (
 // auditLedgerPkgPath is the import path of runtime/audit/ledger.
 // Derived from PlatformModulePath so a module rename / /v2 bump updates exactly
 // one place.
-const auditLedgerPkgPath = PlatformModulePath + "/runtime/audit/ledger"
+const auditLedgerPkgPath = PlatformFrameworkModulePath + "/runtime/audit/ledger"
 
 // ---------------------------------------------------------------------------
 // AUDIT-HASH-INPUT-FROZEN-01 / A2
@@ -63,7 +63,7 @@ const auditLedgerPkgPath = PlatformModulePath + "/runtime/audit/ledger"
 func CheckAuditHashInputFrozenA2(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	return Run(t, Typed(TypedOpts{}, []string{
-		"./runtime/audit/ledger/...",
+		"./framework/runtime/audit/ledger/...",
 	}), runAuditHashInputA2Rule)
 }
 

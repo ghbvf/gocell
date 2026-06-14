@@ -6,9 +6,9 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
-	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	authconfig "github.com/ghbvf/gocell/framework/runtime/auth/config"
 )
 
 // jwtDeps groups JWT signing and verification components built at startup.

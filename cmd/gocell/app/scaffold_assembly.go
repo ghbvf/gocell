@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/pathsafe"
-	"github.com/ghbvf/gocell/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // scaffoldAssembly is the subcommand entry for `gocell scaffold assembly`.

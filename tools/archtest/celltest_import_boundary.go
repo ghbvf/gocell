@@ -52,7 +52,7 @@ func CheckCelltestImportBoundary(t *testing.T, _ ConfigForExternalCell) []Diagno
 	if err != nil {
 		t.Fatalf("CheckCelltestImportBoundary: cannot read module path: %v", err)
 	}
-	celltestImport := modPath + "/kernel/cell/celltest"
+	celltestImport := modPath + "/framework/kernel/cell/celltest"
 
 	allGoFiles, err := collectGoFiles(root)
 	if err != nil {
@@ -62,8 +62,8 @@ func CheckCelltestImportBoundary(t *testing.T, _ ConfigForExternalCell) []Diagno
 		t.Fatalf("CheckCelltestImportBoundary: no .go files found — module root may be wrong")
 	}
 
-	celltestPkgDir := filepath.Join(root, "kernel", "cell", "celltest")
-	celltestParentDir := filepath.Join(root, "kernel", "cell")
+	celltestPkgDir := filepath.Join(root, "framework", "kernel", "cell", "celltest")
+	celltestParentDir := filepath.Join(root, "framework", "kernel", "cell")
 
 	var diags []Diagnostic
 	diags = append(diags, celltestSubA(t, root, allGoFiles, celltestPkgDir, celltestImport)...)
@@ -130,7 +130,7 @@ func celltestSubB(t *testing.T, root string, allGoFiles []string, celltestPkgDir
 		}
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
-		if !strings.HasPrefix(rel, "kernel/") {
+		if !strings.HasPrefix(rel, "framework/kernel/") {
 			continue
 		}
 		imports, err := parseImports(f)

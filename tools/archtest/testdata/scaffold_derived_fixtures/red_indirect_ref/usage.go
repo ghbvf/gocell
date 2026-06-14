@@ -4,7 +4,7 @@
 // caller-allowlist scan.
 package red_indirect_ref
 
-import "github.com/ghbvf/gocell/pkg/pathsafe"
+import "github.com/ghbvf/gocell/framework/pkg/pathsafe"
 
 // Sink captures the force-overwrite constructor as a function value.
 var Sink = pathsafe.DerivedOverwrite

@@ -36,9 +36,9 @@ const (
 // ─── platform-symbol path constants (no bare literals) ───────────────────────
 
 const (
-	sessionStorePkg = PlatformModulePath + "/runtime/auth/session"
+	sessionStorePkg = PlatformFrameworkModulePath + "/runtime/auth/session"
 	userRepoPkg     = PlatformCellsModulePath + "/accesscore/internal/ports"
-	refreshStorePkg = PlatformModulePath + "/runtime/auth/refresh"
+	refreshStorePkg = PlatformFrameworkModulePath + "/runtime/auth/refresh"
 	invalidatorPkg  = PlatformCellsModulePath + "/accesscore/internal/credentialinvalidate"
 )
 
@@ -184,7 +184,7 @@ func CheckCredentialInvalidateFunnel01(t *testing.T, cfg ConfigForExternalCell) 
 	t.Helper()
 	patterns := []string{
 		"./corecells/accesscore/...",
-		"./runtime/auth/...",
+		"./framework/runtime/auth/...",
 		"./adapters/...",
 		"./cmd/...",
 	}
@@ -225,7 +225,7 @@ func CheckRefreshRevokeUserFunnel01(t *testing.T, cfg ConfigForExternalCell) []D
 	t.Helper()
 	patterns := []string{
 		"./corecells/accesscore/...",
-		"./runtime/auth/...",
+		"./framework/runtime/auth/...",
 		"./adapters/...",
 		"./cmd/...",
 	}
@@ -268,7 +268,7 @@ func CheckCredentialInvalidateApplierCanonical01(t *testing.T, cfg ConfigForExte
 	return scanApplierInterfaceCanonical(t, cfg, []string{
 		"./corecells/accesscore/internal/credentialinvalidate",
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./cmd/...",
 	})
 }

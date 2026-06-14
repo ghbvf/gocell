@@ -10,8 +10,8 @@ package rbacassign_direct_revoke_for_subject_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // 1. direct call — bypasses the credentialinvalidate funnel.

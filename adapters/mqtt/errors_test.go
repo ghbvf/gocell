@@ -10,7 +10,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // TestClassifyConnackReason_AllSpecCodes exercises every code in the

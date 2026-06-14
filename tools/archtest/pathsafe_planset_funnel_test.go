@@ -48,7 +48,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 )
 
 // TestPathsafePlanSetFunnel_ItemsFieldUnexported reflects pathsafe.PlanSet

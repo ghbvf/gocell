@@ -8,7 +8,7 @@ package rednonliteral
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 func hook(context.Context) {}

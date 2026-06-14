@@ -98,9 +98,9 @@ import (
 )
 
 const (
-	httpIdempotencyStoreIfacePkg   = PlatformModulePath + "/runtime/http/idempotency"
+	httpIdempotencyStoreIfacePkg   = PlatformFrameworkModulePath + "/runtime/http/idempotency"
 	httpIdempotencyStoreIfaceName  = "Store"
-	httpIdempotencyConformancePkg  = PlatformModulePath + "/runtime/http/idempotency/idempotencytest"
+	httpIdempotencyConformancePkg  = PlatformFrameworkModulePath + "/runtime/http/idempotency/idempotencytest"
 	httpIdempotencyConformanceFunc = "RunConformanceSuite"
 )
 
@@ -123,7 +123,7 @@ func TestHTTPIdempotencyConformanceEnrollment(t *testing.T) {
 	// invocation so that types.Implements uses pointer-identical *types.Named
 	// descriptors (cross-load comparisons are always false).
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./runtime/http/idempotency/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/runtime/http/idempotency/..."}, prodPatterns...)
 
 	var storeIface *types.Interface
 	var implPkgs []*types.Package
@@ -247,7 +247,7 @@ func TestHTTPIdempotencyConformanceEnrollment_REDFixture(t *testing.T) {
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./runtime/http/idempotency/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/runtime/http/idempotency/..."}, prodPatterns...)
 
 	var storeIface *types.Interface
 	var implPkgs []*types.Package
@@ -444,7 +444,7 @@ func collectHTTPIdempotencyStoreImpls(pkg *types.Package, iface *types.Interface
 //
 // Limitation (B4 blind-spot): the match is by (pkgPath, funcName). Any function
 // named "RunConformanceSuite" in idempotencytest (pkg path =
-// PlatformModulePath + "/runtime/http/idempotency/idempotencytest") qualifies.
+// PlatformFrameworkModulePath + "/runtime/http/idempotency/idempotencytest") qualifies.
 // An entirely different package exporting the same name would be a false
 // positive; in practice only idempotencytest does so.
 func hasHTTPIdempotencyConformanceCallTyped(f *ast.File, info *types.Info) bool {

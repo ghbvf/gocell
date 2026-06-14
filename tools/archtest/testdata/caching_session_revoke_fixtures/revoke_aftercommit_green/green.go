@@ -8,9 +8,9 @@ package revoke_aftercommit_green
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 type fakeCache struct{}

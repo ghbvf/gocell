@@ -15,12 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/secutil"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/secutil"
 )
 
 const (

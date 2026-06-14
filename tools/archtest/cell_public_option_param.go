@@ -19,17 +19,17 @@ package archtest
 const (
 	// rawPublicOptionForbiddenPersistenceTxRunner is the forbidden canonical
 	// path for kernel/persistence.TxRunner.
-	rawPublicOptionForbiddenPersistenceTxRunner = PlatformModulePath + "/kernel/persistence.TxRunner"
+	rawPublicOptionForbiddenPersistenceTxRunner = PlatformFrameworkModulePath + "/kernel/persistence.TxRunner"
 
 	// rawPublicOptionForbiddenOutboxPublisher is the forbidden canonical
 	// path for kernel/outbox.Publisher.
-	rawPublicOptionForbiddenOutboxPublisher = PlatformModulePath + "/kernel/outbox.Publisher"
+	rawPublicOptionForbiddenOutboxPublisher = PlatformFrameworkModulePath + "/kernel/outbox.Publisher"
 
 	// rawPublicOptionForbiddenOutboxWriter is the forbidden canonical
 	// path for kernel/outbox.Writer.
-	rawPublicOptionForbiddenOutboxWriter = PlatformModulePath + "/kernel/outbox.Writer"
+	rawPublicOptionForbiddenOutboxWriter = PlatformFrameworkModulePath + "/kernel/outbox.Writer"
 
 	// rawPublicOptionForbiddenOutboxEmitter is the forbidden canonical
 	// path for kernel/outbox.Emitter.
-	rawPublicOptionForbiddenOutboxEmitter = PlatformModulePath + "/kernel/outbox.Emitter"
+	rawPublicOptionForbiddenOutboxEmitter = PlatformFrameworkModulePath + "/kernel/outbox.Emitter"
 )

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cmd/gocell/internal/archtestrunner"
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // ---------------------------------------------------------------------------

@@ -11,13 +11,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/http/tlsutil"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 )
 
 // ProbeReady is the readiness probe name for the gRPC server, funneled through

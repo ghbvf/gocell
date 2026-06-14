@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/metricschema"
@@ -114,7 +114,7 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 			"Render the saga fanout artifacts from the saga.Status /",
 			"journal.EventKind const sets (single source of truth for",
 			"SAGA-STATUS-FANOUT-COVERAGE-01):",
-			"  kernel/saga/sagajournaltest/terminal_coverage_gen.go,",
+			"  framework/kernel/saga/sagajournaltest/terminal_coverage_gen.go,",
 			"  the readyz.md status table + alerting-rules.md kind legend.",
 			"[--dry-run]",
 		},

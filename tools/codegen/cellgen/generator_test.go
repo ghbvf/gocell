@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
@@ -79,7 +79,7 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	mustContain(t, got, "captureErr(c.queryH.RegisterRoutes(s))")
 
 	// no subscribe path → must NOT import wrapper / fmt
-	if strings.Contains(got, `"github.com/ghbvf/gocell/kernel/wrapper"`) {
+	if strings.Contains(got, `"github.com/ghbvf/gocell/framework/kernel/wrapper"`) {
 		t.Errorf("unexpected wrapper import in output without subscriptions:\n%s", got)
 	}
 }
@@ -109,7 +109,7 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 	got := string(out)
 
 	// New pattern: no wrapper import, no EventSpec var.
-	if strings.Contains(got, `"github.com/ghbvf/gocell/kernel/wrapper"`) {
+	if strings.Contains(got, `"github.com/ghbvf/gocell/framework/kernel/wrapper"`) {
 		t.Errorf("cell.tmpl with subscriptions must NOT import kernel/wrapper:\n%s", got)
 	}
 	if strings.Contains(got, "wrapper.EventSpec") {
@@ -670,8 +670,8 @@ func TestRenderHealthzGen_HappyPath(t *testing.T) {
 	mustContain(t, got, "func RegisterReadiness(reg cell.Registrar, p healthz.RepoProber) error {")
 
 	// Imports.
-	mustContain(t, got, `"github.com/ghbvf/gocell/kernel/cell"`)
-	mustContain(t, got, `"github.com/ghbvf/gocell/kernel/healthz"`)
+	mustContain(t, got, `"github.com/ghbvf/gocell/framework/kernel/cell"`)
+	mustContain(t, got, `"github.com/ghbvf/gocell/framework/kernel/healthz"`)
 }
 
 // TestRenderHealthzGen_UnderscoreCellID verifies that a cell id with underscores
@@ -749,7 +749,7 @@ func TestCellGen_SubscribeBlockUsesGeneratedPackage(t *testing.T) {
 	if strings.Contains(got, "wrapper.EventSpec") {
 		t.Errorf("cell.tmpl must NOT contain wrapper.EventSpec:\n%s", got)
 	}
-	if strings.Contains(got, `"github.com/ghbvf/gocell/kernel/wrapper"`) {
+	if strings.Contains(got, `"github.com/ghbvf/gocell/framework/kernel/wrapper"`) {
 		t.Errorf("cell.tmpl must NOT import kernel/wrapper:\n%s", got)
 	}
 

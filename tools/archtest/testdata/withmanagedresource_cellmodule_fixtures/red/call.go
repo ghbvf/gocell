@@ -7,7 +7,7 @@
 // reference a CallExpr.Fun-only walk would miss).
 package red
 
-import bootstrap "github.com/ghbvf/gocell/runtime/bootstrap"
+import bootstrap "github.com/ghbvf/gocell/framework/runtime/bootstrap"
 
 // call form: bootstrap.WithManagedResource(...) in CallExpr.Fun position.
 var _ = bootstrap.WithManagedResource(nil)

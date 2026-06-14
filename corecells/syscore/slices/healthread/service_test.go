@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/framework/runtime/syshealth"
 	cells "github.com/ghbvf/gocell/generated/contracts/http/admin/health/cells/v1"
-	"github.com/ghbvf/gocell/runtime/syshealth"
 )
 
 // fakeView is a test HealthView returning a canned Report. Shared across the

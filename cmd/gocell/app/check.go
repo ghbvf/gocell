@@ -15,10 +15,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/registry"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
 	"github.com/ghbvf/gocell/tools/packagesload"
 )

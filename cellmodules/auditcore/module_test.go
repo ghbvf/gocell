@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cellmodules/auditcore"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
-	"github.com/ghbvf/gocell/runtime/eventbus"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // testJWTAccessTokenTTL is the JWT TTL used in mem-mode tests.

@@ -9,11 +9,11 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
 	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*DeviceCell)(nil)

@@ -12,7 +12,7 @@ import (
 // sagaCoverageGenRel / readyzRel / alertingRel are the three targets the
 // saga-coverage generator writes, relative to the project root.
 const (
-	sagaCoverageGenRel = "kernel/saga/sagajournaltest/terminal_coverage_gen.go"
+	sagaCoverageGenRel = "framework/kernel/saga/sagajournaltest/terminal_coverage_gen.go"
 	sagaReadyzRel      = "docs/ops/readyz.md"
 	sagaAlertingRel    = "docs/ops/alerting-rules.md"
 )

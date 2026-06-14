@@ -60,7 +60,7 @@ func CheckSessionProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCe
 func sessionProtocolProductionPatterns() []string {
 	return []string{
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./adapters/...",
 	}
 }

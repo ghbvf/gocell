@@ -1,6 +1,6 @@
 package projection_register_violate
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // rogueRegister calls reg.RegisterProjection from a hand-written, non-generated,
 // non-test file. This must trigger PROJECTION-REGISTER-FUNNEL-01 — hand-rolled

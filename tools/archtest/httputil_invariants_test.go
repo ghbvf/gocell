@@ -36,15 +36,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
 // httputilResponseGoScope returns a DirsScope restricted to pkg/httputil/response.go.
 func httputilResponseGoScope(root string) Scope {
 	return DirsScope(
-		root, []string{"pkg/httputil"},
+		root, []string{"framework/pkg/httputil"},
 		MatchRels(func(rel string) bool {
-			return filepath.ToSlash(rel) == "pkg/httputil/response.go"
+			return filepath.ToSlash(rel) == "framework/pkg/httputil/response.go"
 		}),
 	)
 }
@@ -60,7 +60,7 @@ func httputilResponseGoScope(root string) Scope {
 func runHTTPUtilResponseRule(t *testing.T, ruleID string, rule func(*Pass) []Diagnostic) []Diagnostic {
 	t.Helper()
 	root := findModuleRoot(t)
-	const targetRel = "pkg/httputil/response.go"
+	const targetRel = "framework/pkg/httputil/response.go"
 	var foundFile bool
 	diags := Run(t, AST(httputilResponseGoScope(root)), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -189,11 +189,11 @@ func TestHttputilExportedRegistry(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	docGoPath := filepath.Join(root, "pkg", "httputil", "doc.go")
-	governancePath := filepath.Join(root, "kernel", "governance", "rules_http.go")
+	docGoPath := filepath.Join(root, "framework", "pkg", "httputil", "doc.go")
+	governancePath := filepath.Join(root, "framework", "kernel", "governance", "rules_http.go")
 
 	// 1. Collect all exported functions from pkg/httputil (excluding test files).
-	exported := collectExportedFuncs(t, root, "pkg/httputil")
+	exported := collectExportedFuncs(t, root, "framework/pkg/httputil")
 
 	// 2. Collect names registered in doc.go Stable Surface comment.
 	docRegistered := collectDocRegistered(t, docGoPath)
@@ -307,7 +307,7 @@ func TestHTTPUtil5xxLogRedact(t *testing.T) {
 	t.Parallel()
 	const targetRel = "pkg/httputil/response.go"
 	var foundFile bool
-	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/httputil"}), func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/pkg/httputil"}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}

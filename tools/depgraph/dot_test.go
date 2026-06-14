@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 

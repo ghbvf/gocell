@@ -11,9 +11,9 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/testutil"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // cancellingTxRunner simulates a tx runner that cancels the context and does

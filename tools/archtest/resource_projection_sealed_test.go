@@ -64,10 +64,10 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/projection"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 )
 
-const resourceProjectionPkgPath = PlatformModulePath + "/pkg/projection"
+const resourceProjectionPkgPath = PlatformFrameworkModulePath + "/pkg/projection"
 
 // TestResourceProjectionSealed01_AllFieldsUnexported reflectively asserts that
 // ResourceProjection has zero exported fields — the exact property that makes a
@@ -143,7 +143,7 @@ func TestResourceProjectionSealed01_SoleReconstructionSurface(t *testing.T) {
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./pkg/projection/..."}),
+		[]string{"./framework/pkg/projection/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != resourceProjectionPkgPath {
 				return nil

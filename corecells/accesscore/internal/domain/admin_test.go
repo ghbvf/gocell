@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // stubEffectiveAdminCounterImpl is a test-only EffectiveAdminCounterImpl

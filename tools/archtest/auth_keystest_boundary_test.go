@@ -34,7 +34,7 @@ func TestAuthKeystestBoundary_NegativeProbes(t *testing.T) {
 	t.Parallel()
 
 	modPath := PlatformModulePath
-	keystestImport := modPath + "/runtime/auth/keystest"
+	keystestImport := modPath + "/framework/runtime/auth/keystest"
 
 	// Probe A: parseImports must detect a keystest import in a kernel file.
 	t.Run("A_detects_kernel_keystest_import", func(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // buildProbeWithCast demonstrates the B3/A2 violation: casting a dynamic

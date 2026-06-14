@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // maxTopicLogLen caps the rune length of a broker-delivered topic before it is

@@ -20,10 +20,10 @@ package commandasyncdispatchfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/command"
-	"github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // fixtureClaimer is a typed-nil Claimer used only to satisfy the third positional

@@ -12,17 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	kcommand "github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	commandruntime "github.com/ghbvf/gocell/runtime/command"
-	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	kcommand "github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // command_sweep_behavior_test.go covers the END-TO-END behavior of the migrated

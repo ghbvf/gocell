@@ -80,11 +80,11 @@ import (
 const (
 	authzEpochClaimKey             = "authz_epoch"
 	authzEpochFieldName            = "AuthzEpoch"
-	authzEpochClaimsFile           = "kernel/auth/auth_types.go"
+	authzEpochClaimsFile           = "framework/kernel/auth/auth_types.go"
 	authzEpochClaimsType           = "Claims"
 	authzEpochStdMapVar            = "standardClaims"
-	authzEpochStdMapFile           = "runtime/auth/jwt.go"
-	authzEpochJWTFile              = "runtime/auth/jwt.go"
+	authzEpochStdMapFile           = "framework/runtime/auth/jwt.go"
+	authzEpochJWTFile              = "framework/runtime/auth/jwt.go"
 	authzEpochRedFixtureRel        = "tools/archtest/testdata/jwt_claims_with_authz_epoch_red/claims.go"
 	authzEpochTagOnlyRedFixtureRel = "tools/archtest/testdata/jwt_claims_with_authz_epoch_tag_only_red/claims.go"
 )

@@ -7,7 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialauthority"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // activeUser builds an active *domain.User with the given PasswordVersion.

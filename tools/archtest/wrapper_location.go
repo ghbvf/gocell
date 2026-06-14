@@ -18,16 +18,16 @@ package archtest
 
 const (
 	// wrapPersistenceWrapForCell is the canonical path for kernel/persistence.WrapForCell.
-	wrapPersistenceWrapForCell = PlatformModulePath + "/kernel/persistence.WrapForCell"
+	wrapPersistenceWrapForCell = PlatformFrameworkModulePath + "/kernel/persistence.WrapForCell"
 
 	// wrapOutboxWrapPublisherForCell is the canonical path for kernel/outbox.WrapPublisherForCell.
-	wrapOutboxWrapPublisherForCell = PlatformModulePath + "/kernel/outbox.WrapPublisherForCell"
+	wrapOutboxWrapPublisherForCell = PlatformFrameworkModulePath + "/kernel/outbox.WrapPublisherForCell"
 
 	// wrapOutboxWrapWriterForCell is the canonical path for kernel/outbox.WrapWriterForCell.
-	wrapOutboxWrapWriterForCell = PlatformModulePath + "/kernel/outbox.WrapWriterForCell"
+	wrapOutboxWrapWriterForCell = PlatformFrameworkModulePath + "/kernel/outbox.WrapWriterForCell"
 
 	// wrapOutboxWrapEmitterForCell is the canonical path for kernel/outbox.WrapEmitterForCell.
-	wrapOutboxWrapEmitterForCell = PlatformModulePath + "/kernel/outbox.WrapEmitterForCell"
+	wrapOutboxWrapEmitterForCell = PlatformFrameworkModulePath + "/kernel/outbox.WrapEmitterForCell"
 )
 
 // wrapperFunctionsCanonical is the closed set of wrapper functions whose

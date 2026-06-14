@@ -22,7 +22,7 @@ package archtest
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // TestSetupAdminNotPublic scans all contract.yaml files in the project and

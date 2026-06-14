@@ -12,7 +12,7 @@ package idemstatered
 import (
 	"context"
 
-	idem "github.com/ghbvf/gocell/runtime/http/idempotency"
+	idem "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 func stateSink(_ context.Context, _ idem.RequestState) {}

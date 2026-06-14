@@ -18,7 +18,7 @@ import (
 
 	helper "github.com/ghbvf/gocell/tools/archtest/testdata/testwait_external_fixtures/reason_cross_pkg_const_red_helper"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 func UseExternal(t testing.TB) {

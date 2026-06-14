@@ -29,8 +29,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/runtime/devtools/catalog"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/devtools/catalog"
 )
 
 // catalogExcludedCellFields lists CellMeta exported yaml-bearing fields that are

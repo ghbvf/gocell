@@ -308,10 +308,10 @@ var productionPatterns = []string{
 	"./generated/contracts/http/...",
 	"./corecells/...",
 	"./examples/...",
-	"./runtime/...",
+	"./framework/runtime/...",
 	"./adapters/...",
-	"./kernel/...",
-	"./pkg/...",
+	"./framework/kernel/...",
+	"./framework/pkg/...",
 }
 
 // INVARIANT: HTTP-CONTRACT-VISIBILITY-TYPE-SEGREGATION-01

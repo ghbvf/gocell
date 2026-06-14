@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/gomodutil"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // findRoot walks up from the current working directory to find the nearest
@@ -71,11 +71,13 @@ func hasRootMarker(dir string) bool {
 	return false
 }
 
-// readModule reads the module path from go.mod in the given root directory.
-// Delegates to gomodutil.ReadModulePath — the single shared parser used by
-// codegen, scaffold, the CLI, and archtest.
+// readModule returns the GoCell org/repo prefix (codegen ModulePath base) for the
+// project at root. Delegates to [workspace.CorePrefix], the single source shared
+// with archtest / modrelease: it reads root/framework/go.mod and strips
+// "/framework" for the GoCell framework-split layout (#1565), else falls back to
+// root/go.mod for a plain single-module consumer project.
 func readModule(root string) (string, error) {
-	return gomodutil.ReadModulePath(root)
+	return workspace.CorePrefix(root)
 }
 
 // parseProjectGuarded is [parseProject] plus a fail-fast guard against a

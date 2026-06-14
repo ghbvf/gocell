@@ -20,13 +20,13 @@ import (
 	"go.uber.org/goleak"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/errcode/errcodetest"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	authpkg "github.com/ghbvf/gocell/runtime/auth"
-	rtws "github.com/ghbvf/gocell/runtime/websocket"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	authpkg "github.com/ghbvf/gocell/framework/runtime/auth"
+	rtws "github.com/ghbvf/gocell/framework/runtime/websocket"
 )
 
 // stubAlwaysAllowAuth returns the supplied principal unconditionally.

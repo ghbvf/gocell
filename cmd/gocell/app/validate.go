@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]

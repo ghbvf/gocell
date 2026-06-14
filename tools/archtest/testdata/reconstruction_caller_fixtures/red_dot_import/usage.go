@@ -6,7 +6,7 @@
 // claim must not have.
 package red_dot_import
 
-import . "github.com/ghbvf/gocell/kernel/outbox"
+import . "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 // reconstruct invokes the dot-imported UnmarshalEnvelope directly
 // (bare-identifier form). Returning Entry only NAMES the sealed type — it never

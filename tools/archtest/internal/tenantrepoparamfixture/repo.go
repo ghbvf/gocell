@@ -26,7 +26,7 @@ package tenantrepoparamfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // FakeRepo mirrors the shape of accesscore's tenant-scoped repo interfaces.

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // stdoutCaptureMu / stderrCaptureMu serialize os.Stdout / os.Stderr
@@ -575,7 +575,7 @@ func TestPrintTargetList(t *testing.T) {
 
 // TestIsWithinRoot / TestEvalExistingPrefix previously lived here as a copy
 // of kernel/governance's tests. Coverage now lives in pkg/fspath
-// (github.com/ghbvf/gocell/pkg/fspath, see pkg/fspath/fspath_test.go) — no
+// (github.com/ghbvf/gocell/framework/pkg/fspath, see pkg/fspath/fspath_test.go) — no
 // duplication here.
 
 // TestPrintResult and the file:line:col / scope rendering tests previously

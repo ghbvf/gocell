@@ -16,14 +16,14 @@ import (
 	"github.com/ghbvf/gocell/adapters/mqtt"
 	devicemem "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/mem"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	deviceregistered "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
 )
 
 // smokeNamespace is the MQTT topic namespace the demo publishes under; it must

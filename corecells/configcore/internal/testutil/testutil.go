@@ -10,8 +10,8 @@ package testutil
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // RecordingWriter records outbox entries written to it. Set Err to simulate failures.

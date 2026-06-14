@@ -10,7 +10,7 @@
 // which sidesteps both the typed funnel and the metadata projection.
 package basesliceredfixture
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // VIOLATION: &cell.BaseSlice{} — forbidden composite literal.
 // Production code must use cell.MustNewBaseSliceFromMeta(slicePkg.SliceMetadata()).

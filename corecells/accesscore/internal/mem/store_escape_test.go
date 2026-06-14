@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
 )
 
 // TestLeaseInvalidatedAfterTxReturn is the escape regression for the

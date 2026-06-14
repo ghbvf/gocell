@@ -5,9 +5,9 @@ package sessionlogin
 
 import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	session "github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	session "github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // Service holds the dependencies for the sessionlogin slice.

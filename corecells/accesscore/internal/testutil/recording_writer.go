@@ -3,7 +3,7 @@ package testutil
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // RecordingWriter is test-only and does NOT satisfy L2 durability semantics

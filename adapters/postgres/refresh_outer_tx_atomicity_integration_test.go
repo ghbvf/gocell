@@ -38,8 +38,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh/storetest"
 )
 
 // b5 test policy durations (TEST-TIME-LITERAL-01: extract literals to

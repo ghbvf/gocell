@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
 )
 
 // projectionEventInsertSQL seeds one durable journal row directly. PR-01 has no production

@@ -41,19 +41,19 @@ Reference: adapted from docs/archive/constitution-from-winmdm.md (v1.3.0),
 
 | 层 | 目录 | 职责 | 可依赖 |
 |---|------|------|--------|
-| kernel | `kernel/` | Cell/Slice 运行时 + 治理工具（底座灵魂） | stdlib + `pkg/` + `gopkg.in/yaml.v3` |
-| cells | `cells/` | Cell 实现（accesscore / auditcore / configcore） | `kernel/` + `runtime/` |
-| runtime | `runtime/` | 通用运行时（http / auth / worker / observability） | `kernel/` + `pkg/` |
-| adapters | `adapters/` | 外部系统适配（postgres / redis / oidc / s3 等） | `kernel/` + `runtime/` 定义的接口 |
-| pkg | `pkg/` | 共享工具包（errcode / ctxkeys） | stdlib |
+| kernel | `framework/kernel/` | Cell/Slice 运行时 + 治理工具（底座灵魂） | stdlib + `framework/pkg/` + `gopkg.in/yaml.v3` |
+| cells | `cells/` | Cell 实现（accesscore / auditcore / configcore） | `framework/kernel/` + `framework/runtime/` |
+| runtime | `framework/runtime/` | 通用运行时（http / auth / worker / observability） | `framework/kernel/` + `framework/pkg/` |
+| adapters | `adapters/` | 外部系统适配（postgres / redis / oidc / s3 等） | `framework/kernel/` + `framework/runtime/` 定义的接口 |
+| pkg | `framework/pkg/` | 共享工具包（errcode / ctxkeys） | stdlib |
 | cmd | `cmd/` | CLI 入口 | 所有层 |
 | examples | `examples/` | 示例项目 | 所有层 |
 
 **不可违反的依赖禁令**：
 
-- `kernel/` MUST NOT 依赖 `runtime/`、`adapters/`、`cells/`
+- `framework/kernel/` MUST NOT 依赖 `framework/runtime/`、`adapters/`、`cells/`
 - `cells/` MUST NOT 依赖 `adapters/`（通过接口解耦）
-- `runtime/` MUST NOT 依赖 `cells/`、`adapters/`
+- `framework/runtime/` MUST NOT 依赖 `cells/`、`adapters/`
 - Cell 之间 MUST NOT 直接 import 另一个 Cell 的 `internal/`
   — **L0 例外**：L0 Cell（纯计算分区）可被同 Assembly 内兄弟
   Cell 直接导入，但 MUST 在 `cell.l0Dependencies` 显式声明
@@ -154,7 +154,7 @@ TDD 是所有代码的强制要求：
 
 | 层 | 最低覆盖率 | 测试风格 |
 |---|-----------|---------|
-| `kernel/` | ≥ 90% | table-driven test |
+| `framework/kernel/` | ≥ 90% | table-driven test |
 | 其他层（新增/修改代码） | ≥ 80% | unit + contract / integration |
 
 验证矩阵（按一致性等级）：
@@ -306,8 +306,8 @@ MUST 被视为安全事件：以 `slog` WARN 级别记录并附带请求
 - 待定决策（如 L0 目录位置、Journey 文件拆分、非契约依赖图
   最终形态）在工具实现中根据实际需要逐步确定，不预设。
   详见 `docs/architecture/v3-skeleton-todos.md`。
-- kernel/ 只有一个外部依赖（`gopkg.in/yaml.v3`）。新增
-  kernel 外部依赖 MUST 有充分理由并经架构审查。
+- framework/kernel/ 只有一个外部依赖（`gopkg.in/yaml.v3`）。新增
+  framework/kernel 外部依赖 MUST 有充分理由并经架构审查。
 
 ## 红线清单
 
@@ -371,7 +371,7 @@ MUST 被视为安全事件：以 `slog` WARN 级别记录并附带请求
   所有错误 MUST 被处理（`_ = someFunc()` 忽略错误 FORBIDDEN）
 - **Context**：所有函数首参 MUST 为 `context.Context`
 - **命名**：DB 字段 `snake_case`，JSON/Query/Path `camelCase`
-- **kernel 外部依赖**：仅 `gopkg.in/yaml.v3`
+- **framework/kernel 外部依赖**：仅 `gopkg.in/yaml.v3`
 - **提交**：Conventional Commits（`feat/fix/refactor/docs`）
 - **元数据**：`gopkg.in/yaml.v3` 解析；JSON Schema Draft 2020-12 校验
 - **认知复杂度**：函数 ≤ 15
@@ -406,7 +406,7 @@ MUST 被视为安全事件：以 `slog` WARN 级别记录并附带请求
    `/speckit.specify` → `/speckit.plan` → `/speckit.tasks` →
    `/speckit.implement`。
 
-9. **框架对标**：新建或重构 kernel/、cells/、runtime/、adapters/
+9. **框架对标**：新建或重构 framework/kernel/、cells/、framework/runtime/、adapters/
    模块时，MUST 先查阅 `docs/references/framework-comparison.md`
    并拉取对标源码，注明采纳/偏离理由。
 

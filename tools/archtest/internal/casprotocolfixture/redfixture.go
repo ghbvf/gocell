@@ -25,8 +25,8 @@
 package casprotocolfixture
 
 import (
-	"github.com/ghbvf/gocell/runtime/state/cas"
-	casPkg "github.com/ghbvf/gocell/runtime/state/cas"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
+	casPkg "github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 // dotImportNote: the dot-import form is in a sibling file (dotimport.go)

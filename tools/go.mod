@@ -4,7 +4,6 @@ go 1.25.11
 
 require (
 	github.com/eclipse/paho.golang v0.23.0
-	github.com/ghbvf/gocell v0.0.0
 	github.com/google/go-cmp v0.7.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/prometheus/client_golang v1.23.2
@@ -45,7 +44,9 @@ require (
 	github.com/ghbvf/gocell/adapters/mqtt v0.0.0
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -99,8 +100,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
-replace github.com/ghbvf/gocell => ../
-
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
@@ -110,3 +109,7 @@ replace github.com/ghbvf/gocell/adapters/mqtt => ../adapters/mqtt
 replace github.com/ghbvf/gocell/adapters/redis => ../adapters/redis
 
 replace github.com/ghbvf/gocell/generated => ../generated
+
+replace github.com/ghbvf/gocell/framework => ../framework
+
+replace github.com/ghbvf/gocell/tests => ../tests

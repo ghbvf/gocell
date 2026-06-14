@@ -30,7 +30,7 @@
 // none for the two Good* controls.
 package projectioncallsitefixture
 
-import "github.com/ghbvf/gocell/pkg/projection"
+import "github.com/ghbvf/gocell/framework/pkg/projection"
 
 // GoodScalarResponse is a GREEN control: Data is the sealed single-resource
 // carrier, exactly as contractgen emits for a `data:object` responseProjection

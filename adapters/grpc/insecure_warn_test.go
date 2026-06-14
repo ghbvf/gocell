@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
-	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
 )
 
 // fakeNonTCPAddr is a net.Addr that is NOT *net.TCPAddr (e.g. a bufconn address),

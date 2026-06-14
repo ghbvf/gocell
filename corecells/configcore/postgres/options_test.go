@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	configcore "github.com/ghbvf/gocell/corecells/configcore"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 func TestOptionsApplySettings(t *testing.T) {

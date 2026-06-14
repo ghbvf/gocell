@@ -9,8 +9,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // INVARIANT: SPAN-SETATTR-REDACT-01 — every string-valued span attribute

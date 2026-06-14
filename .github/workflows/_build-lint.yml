@@ -54,7 +54,7 @@ jobs:
       matrix:
         include:
           - shard: kernel
-            pkgs: ./kernel/...
+            pkgs: ./framework/kernel/...
             static_checks: true
           - shard: tools
             # archtest 16-shard matrix runs in .github/workflows/archtest-nightly.yml
@@ -75,7 +75,7 @@ jobs:
             pkgs: _dynamic_archtest_excluded
             static_checks: false
           - shard: runtime
-            pkgs: ./runtime/... ./pkg/...
+            pkgs: ./framework/runtime/... ./framework/pkg/...
             static_checks: false
           # corecells is its own go.work module (github.com/ghbvf/gocell/corecells,
           # #1560), so a root `./corecells/...` pattern stops at the nested-module
@@ -110,16 +110,19 @@ jobs:
           # (make verify → governance.yml); per-module example build runs in
           # hack/verify-workspace.sh — both iterate the go.work module funnel.
           # Likewise cmd/gocell (#1557) and cmd/corebundle (#1559) are each their
-          # own go.work module now: the `./cmd/...` pattern in the others-light
-          # shard below stops at each nested-module boundary and matches only
-          # cmd/internal. cmd/gocell + cmd/corebundle unit tests run in
+          # own go.work module: a root `./cmd/...` pattern matches zero packages
+          # (cmd carries no root-module code), so cmd unit tests run in
           # hack/verify-workspace-test.sh and their builds in hack/verify-workspace.sh
-          # — the same go.work funnel as examples/*.
+          # — the same go.work funnel as examples/*. Since #1565 the former
+          # root-module `tests/` subtree is itself a go.work module
+          # (github.com/ghbvf/gocell/tests); like adapters it needs the import-path
+          # pattern to resolve in workspace mode — a root `./tests/...` would stop
+          # at the nested-module boundary and match zero. contracts/ holds no Go.
           - shard: adapters
             pkgs: github.com/ghbvf/gocell/adapters/...
             static_checks: false
           - shard: others-light
-            pkgs: ./cmd/... ./tests/... ./contracts/...
+            pkgs: github.com/ghbvf/gocell/tests/...
             static_checks: false
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -132,8 +135,8 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
 
       # Static checks (Build, golangci-lint, kernel coverage gate) run only
       # on the kernel shard. Running them on every shard would cost 4x runner
@@ -145,50 +148,47 @@ jobs:
       # golangci-lint v2's default linter set — see the absence-rationale
       # comment between Build and golangci-lint below.)
       - name: Build
-        # `go build ./...` stops at nested-module boundaries: examples/* (#1556)
-        # and cmd/gocell (#1557) are not compiled here. Their per-module
-        # release-consistency build runs in hack/verify-workspace.sh (GOWORK=off);
+        # `go build ./framework/...` compiles the framework module (kernel /
+        # runtime / pkg, #1565). The repo root is a pure go.work workspace with
+        # no root module, so a bare `go build ./...` from root matches no module;
+        # the framework module is the core-layer compile surface this gate owns.
+        # The other go.work modules (corecells / adapters / examples/* / cmd/*)
+        # are compiled per-module in hack/verify-workspace.sh (GOWORK=off);
         # cmd/gocell additionally compiles via `gocell verify generated` /
         # `gocell verify codegen-*` in the Governance Strict `codegen` bucket
         # (hack/verify-generated.sh + hack/verify-codegen-*.sh; the dedicated
         # verify-codegen job here was removed in #1817 — see NOTE at file end).
         if: matrix.static_checks
-        run: go build ./...
+        run: go build ./framework/...
 
       # `go vet ./...` is intentionally absent here: golangci-lint v2 has
       # `govet` in its default-enabled linter set (see .golangci.yml line 4
       # comment), so a standalone vet step would re-walk the full repo AST
-      # for zero additional signal. Nested go.work modules are linted in the
-      # following satellite step through the same hack/lib/modules.sh funnel used
-      # by build/test. Cross-tag vet (e.g. `-tags=e2e`) is still done explicitly
+      # for zero additional signal. Every go.work module is linted in the
+      # following golangci-lint step through the same hack/lib/modules.sh funnel
+      # used by build/test. Cross-tag vet (e.g. `-tags=e2e`) is still done explicitly
       # below where the build tag changes the file set.
-      - name: golangci-lint
-        if: matrix.static_checks
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
-        with:
-          # SYNC: this version literal is the second copy of the single
-          # source declared in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION.
-          # Any drift means the CI lint shard and the local `make fmt` /
-          # `hack/verify-gofumpt.sh` paths apply different formatter rules
-          # to the same diff — defeating the gofumpt producer rollout.
-          # Reviewer-enforced sync (no archtest because the upstream is yaml).
-          version: v2.11.4
-          # `verify: true` runs `golangci-lint config verify` before linting so a
-          # broken `.golangci.yml` (v2 schema typo, unknown linter, malformed
-          # exclusions) fails fast instead of silently degrading to v1 parsing
-          # where new linters are ignored.
-          verify: true
-          # only-new-issues uses the GitHub pull-request diff API which
-          # refuses diffs larger than 300 files; fall back to
-          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
-          # metadata id sweeps) still get "new issue" filtering.
-          # On push (lint-mode: full) no filter is applied — every issue is
-          # surfaced so the develop branch stays clean as an absolute baseline.
-          # On pr (lint-mode: pr) use origin/<base-ref> so PRs targeting main
-          # or release/* lint against their actual merge-base, not develop.
-          args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
-
-      - name: golangci-lint workspace satellites
+      # golangci-lint runs once per go.work module via the shared funnel
+      # (hack/lib/modules.sh). Since #1565 the repo root is a pure go.work
+      # workspace with no module of its own, so there is no separate root-module
+      # lint via golangci-lint-action — framework (the former root module:
+      # kernel/runtime/pkg) is just another go.work member, linted in the loop
+      # below alongside every satellite. `config verify` runs once up front so a
+      # broken `.golangci.yml` (v2 schema typo, unknown linter, malformed
+      # exclusions) fails fast instead of silently degrading to v1 parsing —
+      # preserving the gate the removed action's `verify: true` provided.
+      #
+      # SYNC: the pinned golangci-lint version is the single source in
+      # hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (resolved here via
+      # gocell::golangci_lint::ensure); the local `make fmt` /
+      # `hack/verify-gofumpt.sh` paths resolve the same binary so the CI lint
+      # shard and the local formatter apply identical rules to the same diff.
+      # only-new-issues: --new-from-merge-base=origin/<base-ref> on PRs (so
+      # mass-rename PRs past the 300-file diff-API cap still get "new issue"
+      # filtering, and PRs targeting main/release lint against their real
+      # merge-base); empty on push (lint-mode: full) so develop stays clean as
+      # an absolute baseline.
+      - name: golangci-lint (all workspace modules)
         if: matrix.static_checks
         env:
           LINT_ARGS: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
@@ -200,6 +200,9 @@ jobs:
 
           root="$PWD"
           lint_bin="$(gocell::golangci_lint::ensure)"
+          # Fail fast on a broken config before walking modules (replaces the
+          # removed golangci-lint-action `verify: true`).
+          "$lint_bin" config verify --config "$root/.golangci.yml"
           module_dirs="$(gocell::modules::dirs)"
           while IFS= read -r dir; do
             [ -n "$dir" ] || continue
@@ -211,7 +214,7 @@ jobs:
             # golangci-lint skips those *_test.go files and their lint coverage
             # silently drops. Lint tools under both tags so the heavy suite + the
             # smoke source stay covered — the same cross-tag lane idea as
-            # `go vet -tags=e2e` below. Other satellites carry no tag-gated files,
+            # `go vet -tags=e2e` below. Other modules carry no tag-gated files,
             # so the flag stays empty.
             build_tags=""
             # gocell::modules::dirs yields `tools` (go work edit -json DiskPath);
@@ -404,7 +407,7 @@ jobs:
         run: |
           set -euo pipefail
           PROFILE="coverage-shard-${{ matrix.shard }}.out"
-          KERNEL_PREFIX='github.com/ghbvf/gocell/kernel/'
+          KERNEL_PREFIX='github.com/ghbvf/gocell/framework/kernel/'
 
           if [ ! -s "$PROFILE" ]; then
             echo "FAIL: $PROFILE missing or empty"; exit 1
@@ -552,7 +555,7 @@ jobs:
             run_adapters_extras: false
             run_adapters_race: false
           - shard: tests
-            filter: '^github.com/ghbvf/gocell/(tests|kernel|runtime|tools)/'
+            filter: '^github.com/ghbvf/gocell/(tests|framework/|tools)/'
             run_main_integration: true
             run_adapters_extras: false
             run_adapters_race: false
@@ -561,8 +564,8 @@ jobs:
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
 
       # Build slowgate (G9 SLOW-TEST-BUDGET) for the integration job — the
       # same wall-clock budget gate the build-test job uses, here applied to
@@ -905,8 +908,8 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
       - name: Build e2egate
         run: go build -o "$RUNNER_TEMP/e2egate" ./tools/e2egate/cmd/e2egate
       - name: Start dependencies (postgres + redis)
@@ -985,10 +988,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
       - name: Vet (cross-platform unit subset)
-        run: go vet ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+        run: go vet ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
         shell: bash
 
       - name: Cross-platform unit smoke
@@ -996,9 +999,9 @@ jobs:
         # Enable -race on macOS to maximise race-detector coverage.
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -race -count=1 -timeout 5m ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
           else
-            go test -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -count=1 -timeout 5m ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
           fi
         shell: bash
 
@@ -1026,8 +1029,8 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
       - name: ssobff startup smoke
         # GOCELL_TEST_DOCKER_REQUIRED=1 makes RequireDocker fail (not skip) when
         # the runner has no Docker, so this guard cannot silently pass as a SKIP
@@ -1107,7 +1110,10 @@ jobs:
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
           # build-test profiles: kernel, tools, runtime, corecells, adapters,
-          #   others-light (the `adapters` shard runs the import-path pattern
+          #   others-light. Post-#1565 the framework-layer shards scan the
+          #   framework/ module: coverage-shard-kernel.out <- ./framework/kernel/...;
+          #   coverage-shard-runtime.out <- ./framework/runtime/... + ./framework/pkg/....
+          #   (the `adapters` shard runs the import-path pattern
           #   github.com/ghbvf/gocell/adapters/... across all 14 adapter modules
           #   and writes one combined coverage-shard-adapters.out, see #1558).
           # integration-test profiles: adapters (main leg), corecells, corebundle,

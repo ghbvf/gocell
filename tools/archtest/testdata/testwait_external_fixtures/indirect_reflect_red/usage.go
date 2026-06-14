@@ -9,7 +9,7 @@ package indirect_reflect_red
 import (
 	"reflect"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // reflectRef wraps testwait.External using reflect.ValueOf — indirect reference.

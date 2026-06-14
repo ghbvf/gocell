@@ -99,10 +99,10 @@ import (
 
 // webhookPkgPath is the canonical import path of the kernel/webhook package —
 // derived from PlatformModulePath so no bare literal appears here.
-const webhookPkgPath = PlatformModulePath + "/kernel/webhook"
+const webhookPkgPath = PlatformFrameworkModulePath + "/kernel/webhook"
 
 const (
-	webhookPkgPattern  = "./kernel/webhook/..."
+	webhookPkgPattern  = "./framework/kernel/webhook/..."
 	signerFileBasename = "signer.go"
 	hmacPkgPath        = "crypto/hmac"
 	slogPkgPath        = "log/slog"
@@ -114,12 +114,12 @@ const (
 	// ssrfSanctionedDialFunc; #1493). computeMAC is package-unique, so the check is
 	// file-independent — computeMAC may move files freely. It also doubles as the
 	// callee identity for the A4 caller-allowlist scan (computeMAC's own FullName).
-	hmacSanctionedComputeMACFunc = PlatformModulePath + "/kernel/webhook.computeMAC"
+	hmacSanctionedComputeMACFunc = PlatformFrameworkModulePath + "/kernel/webhook.computeMAC"
 
 	// hmacSanctionedSignFunc / hmacSanctionedVerifyFunc are the go/types FullNames
 	// of the ONLY two functions permitted to call computeMAC (A4 caller-allowlist).
-	hmacSanctionedSignFunc   = "(*" + PlatformModulePath + "/kernel/webhook.hmacSigner).Sign"
-	hmacSanctionedVerifyFunc = "(*" + PlatformModulePath + "/kernel/webhook.hmacVerifier).Verify"
+	hmacSanctionedSignFunc   = "(*" + PlatformFrameworkModulePath + "/kernel/webhook.hmacSigner).Sign"
+	hmacSanctionedVerifyFunc = "(*" + PlatformFrameworkModulePath + "/kernel/webhook.hmacVerifier).Verify"
 )
 
 // webhookSealedInterfaces are the interface type names in kernel/webhook that

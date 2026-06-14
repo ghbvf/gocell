@@ -15,7 +15,7 @@ import (
 	"context"
 
 	syscell "github.com/ghbvf/gocell/corecells/syscore"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 type module struct{}

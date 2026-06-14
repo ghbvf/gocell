@@ -8,9 +8,9 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // assertKind is a helper that asserts err is a *errcode.Error with the given Kind.

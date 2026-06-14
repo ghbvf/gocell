@@ -7,7 +7,7 @@
 // assertion this enables.
 package blindspotfactoryhelper
 
-import "github.com/ghbvf/gocell/kernel/outbox"
+import "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 // MakeNoopWriter wraps the raw noop sink construction one package away from the
 // caller, so a callsite scan over the caller never sees the forbidden symbol.

@@ -30,7 +30,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // ---------------------------------------------------------------------------

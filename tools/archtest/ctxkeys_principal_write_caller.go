@@ -117,7 +117,7 @@ import (
 
 // ctxkeysPkgPath is the canonical import path of pkg/ctxkeys, anchored to
 // PlatformModulePath so a module rename updates exactly one place.
-const ctxkeysPkgPath = PlatformModulePath + "/pkg/ctxkeys"
+const ctxkeysPkgPath = PlatformFrameworkModulePath + "/pkg/ctxkeys"
 
 // principalSetterAllowlist maps each principal ctx-key setter to the
 // module-relative production files allowed to call it. All four setters share

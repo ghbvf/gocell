@@ -1,0 +1,237 @@
+package auth
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"math"
+	"net"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+)
+
+// BootstrapCredentials carries the env-driven HTTP Basic Auth credentials
+// used to protect the first-admin setup endpoint.
+//
+// ref: minio/minio internal/auth/credentials.go (length fail-fast at startup)
+// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env model
+type BootstrapCredentials struct {
+	Username []byte
+	Password []byte
+}
+
+// BootstrapRateLimiter decides whether a request identified by key should be
+// allowed. Implementations are injected by the caller so that runtime/auth does
+// not import runtime/http/middleware (which imports runtime/auth, creating a
+// cycle). Callers wire a concrete middleware.RateLimiter or an
+// adapters/ratelimit.TokenBucket which satisfies this interface structurally.
+//
+// There is no built-in "allow all" implementation — bootstrap routes must
+// always carry a real per-IP limiter to defeat brute-force enumeration of
+// operator credentials. Tests construct fakes locally if they need to bypass
+// rate limiting (see runtime/auth/bootstrap_test.go fakeRateLimiter).
+type BootstrapRateLimiter interface {
+	Allow(key string) bool
+}
+
+// BootstrapAuthFailObserver is invoked after a 401 or 429 response is written.
+// The reason string is one of:
+//   - "missing_header"    — Basic Auth header absent
+//   - "wrong_credentials" — header present but credentials do not match
+//   - "rate_limited"      — per-IP token bucket exhausted (429)
+//
+// Wiring an observer is how callers route bootstrap auth failures to audit logs
+// without importing cells/ from runtime/auth.
+type BootstrapAuthFailObserver = func(ctx context.Context, reason string)
+
+// NewBootstrapMiddleware constructs the HTTP middleware chain for bootstrap
+// authentication. The chain is: RateLimit (per-IP) → Basic Auth header parse →
+// constant-time username/password comparison → uniform 401 envelope on any
+// mismatch (no field-level oracle).
+//
+// onAuthFail is an optional observer invoked on every authentication failure
+// (after the response is written). The reason string is one of:
+// "missing_header", "wrong_credentials", "rate_limited". Callers use this
+// hook to write audit log entries without importing cells/. Pass nil to disable.
+//
+// Wire this middleware around the setup/admin handler to enforce D5 semantics:
+// env credentials authenticate the operator; body credentials define the admin
+// identity.
+func NewBootstrapMiddleware(
+	creds BootstrapCredentials,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) func(http.Handler) http.Handler {
+	return newBootstrapMiddleware(creds, limiter, onAuthFail)
+}
+
+// bootstrapWindowedLimiter extends BootstrapRateLimiter with window metadata for
+// Retry-After calculation — mirrors middleware.WindowedRateLimiter.
+type bootstrapWindowedLimiter interface {
+	BootstrapRateLimiter
+	Window() (window time.Duration, limit int)
+}
+
+// newBootstrapMiddleware constructs the HTTP middleware chain for bootstrap
+// authentication. The chain is: RateLimit (per-IP) → Basic Auth header parse →
+// constant-time username/password comparison → uniform 401 envelope on any
+// mismatch (no field-level oracle).
+//
+// All authentication failures share the same response shape and errcode
+// (ERR_AUTH_BOOTSTRAP_FAILED) so attackers cannot distinguish "wrong username"
+// from "wrong password".
+//
+// Rate limiting is applied first (before auth parsing) so brute-force is throttled
+// regardless of credential presence.
+//
+// onAuthFail is called after writing the 401 response. nil → no-op.
+//
+// ref: Go stdlib crypto/subtle.ConstantTimeCompare (timing-safe equality)
+func newBootstrapMiddleware(
+	creds BootstrapCredentials,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !allowBootstrapRequest(w, r, limiter, onAuthFail) {
+				return
+			}
+			if reason, ok := authenticateBootstrap(r, creds); !ok {
+				writeBootstrapAuthFailed(r.Context(), w)
+				if onAuthFail != nil {
+					onAuthFail(r.Context(), reason)
+				}
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// allowBootstrapRequest enforces the per-IP rate limit and writes the 429
+// envelope on rejection. Returns true when the request should proceed.
+// On rejection, onAuthFail (if non-nil) is called with reason="rate_limited"
+// so audit observers can record the blocked attempt.
+func allowBootstrapRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) bool {
+	if limiter.Allow(bootstrapClientIP(r)) {
+		return true
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(bootstrapRetryAfter(limiter)))
+	httputil.WriteError(r.Context(), w,
+		errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited, "too many requests"))
+	if onAuthFail != nil {
+		onAuthFail(r.Context(), "rate_limited")
+	}
+	return false
+}
+
+// hashCompareKey keys the constant-time credential comparison below. It is a
+// per-process random value — NOT a stored secret, never leaves the process, and
+// is regenerated each start. Its only purpose is to give constantTimeEqualHashed
+// fixed-length, unpredictable digests; its secrecy is not relied upon.
+var hashCompareKey = mustHashCompareKey()
+
+// mustHashCompareKey draws a 32-byte random key from the OS entropy source.
+// crypto/rand.Read does not fail on supported platforms (Go 1.24+); a failure
+// means no entropy is available, which is fatal for any authentication path.
+func mustHashCompareKey() []byte {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		panic(panicregister.Approved("auth-bootstrap-hash-key-entropy",
+			errcode.Assertion("crypto/rand unavailable for bootstrap credential hash key")))
+	}
+	return k
+}
+
+// authenticateBootstrap parses Basic Auth and constant-time-compares the
+// supplied credentials against creds. Returns ("", true) on match;
+// ("missing_header"|"wrong_credentials", false) on failure.
+//
+// Each field is compared via constantTimeEqualHashed, which reduces both sides to
+// a fixed 32-byte HMAC digest before subtle.ConstantTimeCompare. This closes the
+// length-timing oracle: ConstantTimeCompare returns 0 immediately when the slices
+// differ in length, so comparing raw credential bytes would leak the
+// username/password length to a timing attacker. Reducing to a constant-length
+// digest makes the check timing-independent of both content and length. AND-ing
+// the two results bitwise keeps the check constant-time across both comparisons.
+func authenticateBootstrap(r *http.Request, creds BootstrapCredentials) (string, bool) {
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		return "missing_header", false
+	}
+	userOK := constantTimeEqualHashed([]byte(user), creds.Username)
+	passOK := constantTimeEqualHashed([]byte(pass), creds.Password)
+	if userOK&passOK != 1 {
+		return "wrong_credentials", false
+	}
+	return "", true
+}
+
+// constantTimeEqualHashed reports 1 iff a and b are byte-equal, comparing their
+// fixed-length HMAC-SHA256 digests (keyed by the per-process hashCompareKey) so
+// the comparison time is independent of input length — no length oracle — and the
+// digests are unpredictable. Returns 0 otherwise.
+//
+// A keyed MAC is used rather than a bare hash because this is a length-normalising
+// equality check of in-memory operator credentials, not password storage: a slow
+// password KDF (bcrypt/scrypt/argon2) is inapplicable (the expected value is the
+// plaintext env credential, not a stored hash) and would only add latency to a
+// rate-limited path.
+//
+// ref: crypto/hmac godoc Example (hmac.New(sha256.New, key) + hmac.Equal),
+// mirroring runtime/auth/servicetoken.go's keyed-MAC comparison.
+func constantTimeEqualHashed(a, b []byte) int {
+	ha := hmac.New(sha256.New, hashCompareKey)
+	_, _ = ha.Write(a)
+	hb := hmac.New(sha256.New, hashCompareKey)
+	_, _ = hb.Write(b)
+	return subtle.ConstantTimeCompare(ha.Sum(nil), hb.Sum(nil))
+}
+
+func writeBootstrapAuthFailed(ctx context.Context, w http.ResponseWriter) {
+	httputil.WriteError(ctx, w, errcode.New(
+		errcode.KindUnauthenticated,
+		errcode.ErrAuthBootstrapFailed,
+		"bootstrap authentication failed",
+	))
+}
+
+// bootstrapClientIP extracts the client IP for rate-limit keying.
+// Mirrors middleware.clientIP to avoid cross-package dependency.
+func bootstrapClientIP(r *http.Request) string {
+	if ip, ok := ctxkeys.RealIPFrom(r.Context()); ok && ip != "" {
+		return ip
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// bootstrapRetryAfter computes the Retry-After value in seconds.
+// Mirrors middleware.computeRetryAfter to avoid cross-package dependency.
+func bootstrapRetryAfter(limiter BootstrapRateLimiter) int {
+	if wl, ok := limiter.(bootstrapWindowedLimiter); ok {
+		window, limit := wl.Window()
+		if limit > 0 && window > 0 {
+			secs := window.Seconds() / float64(limit)
+			return int(math.Ceil(secs))
+		}
+	}
+	return 1
+}

@@ -11,11 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/lifecycle"
-	kworker "github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/framework/kernel/worker"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // Compile-time assertions: Pool implements both lifecycle interfaces.

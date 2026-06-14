@@ -140,9 +140,9 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 	root := findModuleRoot(t)
 
 	scope := DirsScope(
-		root, []string{"runtime/auth"},
+		root, []string{"framework/runtime/auth"},
 		MatchRels(func(rel string) bool {
-			return rel == "runtime/auth/route.go"
+			return rel == "framework/runtime/auth/route.go"
 		}),
 	)
 
@@ -307,7 +307,7 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	specTypePath := modPath + "/kernel/contractspec"
+	specTypePath := modPath + "/framework/kernel/contractspec"
 
 	// Phase 1: collect all ContractSpec vars across all production packages.
 	// The rule returns nil — output accumulates in the shared specVars map.
@@ -318,7 +318,7 @@ func TestAuthRouteBootstrapClientsMutex(t *testing.T) {
 	})
 
 	// Phase 2: scan for auth.Route composite literals that violate the mutex.
-	routeTypePath := modPath + "/runtime/auth"
+	routeTypePath := modPath + "/framework/runtime/auth"
 	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		return scanRouteBootstrapClients(p, routeTypePath, specTypePath, specVars)
 	})
@@ -354,8 +354,8 @@ func TestAuthRouteBootstrapClientsMutex_FixturePattern(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	specTypePath := modPath + "/kernel/contractspec"
-	routeTypePath := modPath + "/runtime/auth"
+	specTypePath := modPath + "/framework/kernel/contractspec"
+	routeTypePath := modPath + "/framework/runtime/auth"
 
 	fixturePattern := "./tools/archtest/internal/authroutemutexfixture/..."
 

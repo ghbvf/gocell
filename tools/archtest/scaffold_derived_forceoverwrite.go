@@ -58,7 +58,7 @@ const ruleScaffoldDerivedForceOverwrite01 = "SCAFFOLD-DERIVED-FORCEOVERWRITE-01"
 const (
 	// pathsafePkgPath is the import path of pkg/pathsafe, derived from
 	// PlatformModulePath so a module rename / /v2 bump updates one place.
-	pathsafePkgPath     = PlatformModulePath + "/pkg/pathsafe"
+	pathsafePkgPath     = PlatformFrameworkModulePath + "/pkg/pathsafe"
 	derivedOverwriteFn  = "DerivedOverwrite"
 	derivedCtorFuncName = "planDerivedArtifact"
 	// derivedCtorRel pins the single permitted call-site file. It is a

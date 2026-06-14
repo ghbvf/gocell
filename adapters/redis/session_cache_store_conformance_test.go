@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session/storetest"
 )
 
 // txScopedRevokeStore wraps a session.Store so Revoke runs inside an ambient

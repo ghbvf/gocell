@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 )
 
@@ -328,7 +328,7 @@ func TestVerifyAllowsHandwrittenSiblingOfEntrypoint(t *testing.T) {
 	artifacts := writeExpectedArtifacts(t, root, project)
 
 	// cmd/fixture/run.go is created by newGeneratedFixture and is hand-written.
-	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "runtime/shutdown/shutdown.go")
+	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "framework/runtime/shutdown/shutdown.go")
 	gitInitAndCommit(t, root, allCommitted)
 
 	result, err := Verify(t.Context(), root, fixtureModule, project)
@@ -718,7 +718,7 @@ func newGeneratedFixture(t *testing.T) (string, *metadata.ProjectMeta) {
 
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", []byte("module "+fixtureModule+"\n\ngo 1.25.0\n"))
-	writeFile(t, root, "kernel/depgraph/depgraph.go", []byte(`package depgraph
+	writeFile(t, root, "framework/kernel/depgraph/depgraph.go", []byte(`package depgraph
 
 type Graph struct {
 	Module   string
@@ -738,7 +738,7 @@ func FromNodes(module string, nodes []*Node) *Graph {
 	return &Graph{Module: module, Packages: nodes}
 }
 `))
-	writeFile(t, root, "runtime/shutdown/shutdown.go", []byte(`package shutdown
+	writeFile(t, root, "framework/runtime/shutdown/shutdown.go", []byte(`package shutdown
 
 import "context"
 
@@ -746,10 +746,10 @@ func NotifyContext(parent context.Context) (context.Context, context.CancelFunc)
 	return context.WithCancel(parent)
 }
 `))
-	// The assembly main.go template imports {{.Module}}/runtime/observability/logging
+	// The assembly main.go template imports {{.Module}}/framework/runtime/observability/logging
 	// for the sink-side redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated
 	// segment). Provide a minimal stub so the generated main compiles.
-	writeFile(t, root, "runtime/observability/logging/logging.go", []byte(`package logging
+	writeFile(t, root, "framework/runtime/observability/logging/logging.go", []byte(`package logging
 
 import (
 	"log/slog"

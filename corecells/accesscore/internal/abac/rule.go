@@ -3,8 +3,8 @@ package abac
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // reservedRuleIDPrefix is reserved for framework decision-attribution sentinels

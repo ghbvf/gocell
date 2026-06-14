@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 

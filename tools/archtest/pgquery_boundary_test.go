@@ -94,7 +94,7 @@ func findLegacyQueryFiles(root string) []pgQueryBoundaryViolation {
 }
 
 func findLegacyQuerySymbols(root string) ([]pgQueryBoundaryViolation, error) {
-	files, err := scanner.DirsScope(root, []string{"pkg/query"}, scanner.IncludeTests()).Files()
+	files, err := scanner.DirsScope(root, []string{"framework/pkg/query"}, scanner.IncludeTests()).Files()
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func scanLegacyQueryBuilderUses(root, module, path string) ([]pgQueryBoundaryVio
 
 func pkgQueryImportAliases(fset *token.FileSet, file *ast.File, module string) (map[string]struct{}, int) {
 	aliases := map[string]struct{}{}
-	queryImport := module + "/pkg/query"
+	queryImport := module + "/framework/pkg/query"
 	var dotImportLine int
 
 	for _, imp := range file.Imports {

@@ -11,7 +11,12 @@ package archtest
 // façade (same convention as ARCHTEST-PASS-DRIVER-UNIT-01 / GOLDEN-HELPER-UNIT-01),
 // not a production invariant gate.
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/ghbvf/gocell/tools/gomodutil"
+)
 
 // TestStandardCellRulesComposition asserts the curated set is well-formed:
 // non-empty, every rule has a non-empty unique ID and a non-nil Run, and its
@@ -152,13 +157,31 @@ func TestValidateCellRule(t *testing.T) {
 func TestPlatformModulePathMatchesGoMod(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+
+	// Anchor: the core framework module's go.mod (root/framework, post-#1565).
+	// PlatformFrameworkModulePath MUST equal it — every framework symbol path is
+	// derived as PlatformFrameworkModulePath+"/kernel/…", compared against
+	// types.Pkg().Path() from loaded packages; a drift would make every such scan
+	// silently vacuous-green (and its RED fixtures, built from the same const, also
+	// pass) — zero CI signal across the whole module-path-agnostic funnel family.
+	fwGot, err := gomodutil.ReadModulePath(filepath.Join(root, frameworkSubdir))
+	if err != nil {
+		t.Fatalf("read framework/go.mod module path: %v", err)
+	}
+	if fwGot != PlatformFrameworkModulePath {
+		t.Fatalf("PlatformFrameworkModulePath = %q, but framework/go.mod declares module %q; "+
+			"the const must track go.mod or every framework symbol-path scan goes vacuous-green",
+			PlatformFrameworkModulePath, fwGot)
+	}
+
+	// Cross-check the org-prefix derivation: moduleImportPath strips "/framework"
+	// off the anchor and must land on PlatformModulePath (the sibling-module prefix).
 	got, err := moduleImportPath(root)
 	if err != nil {
-		t.Fatalf("read go.mod module path: %v", err)
+		t.Fatalf("resolve org prefix: %v", err)
 	}
 	if got != PlatformModulePath {
-		t.Fatalf("PlatformModulePath = %q, but go.mod declares module %q; the const must "+
-			"track go.mod or every PlatformModulePath-derived funnel scan goes vacuous-green",
-			PlatformModulePath, got)
+		t.Fatalf("PlatformModulePath = %q, but resolved org prefix is %q (framework module %q "+
+			"minus /framework)", PlatformModulePath, got, fwGot)
 	}
 }

@@ -13,12 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	rout "github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	rout "github.com/ghbvf/gocell/framework/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
 )
 
 // defaultReclaimBatchTest is the batchSize this integration suite passes to

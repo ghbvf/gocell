@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // signalGraceWindow bounds how long a ctx-ignoring sub-command may keep

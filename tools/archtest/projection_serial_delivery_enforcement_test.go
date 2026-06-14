@@ -85,14 +85,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 const (
-	serialGuarantorPkgPath  = PlatformModulePath + "/kernel/outbox"
+	serialGuarantorPkgPath  = PlatformFrameworkModulePath + "/kernel/outbox"
 	serialGuarantorTypeName = "SerialInOrderGuarantor"
 	serialGuarantorMethod   = "GuaranteesSerialInOrderDelivery"
 
@@ -109,7 +109,7 @@ const (
 
 	// serialGuardBootstrapPkgPath is the import path of the package owning the
 	// drain entrypoint, used to scope the drain-path binding scan.
-	serialGuardBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
+	serialGuardBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 
 	// serialGuarantorSoleImpl is the ONLY production type permitted to implement
 	// the marker — the serial in-memory bus. AMQP/MQTT and the
@@ -120,7 +120,7 @@ const (
 	// Adding a second legitimate serial transport (e.g. an ordered NATS consumer)
 	// is a DELIBERATE update: add it here AND it begins to qualify for projections.
 	// The exact-set assertion fails CI until this golden is updated — intended.
-	serialGuarantorSoleImpl = PlatformModulePath + "/runtime/eventbus.InMemoryEventBus"
+	serialGuarantorSoleImpl = PlatformFrameworkModulePath + "/runtime/eventbus.InMemoryEventBus"
 )
 
 // TestProjectionSerialDeliveryEnforcement01_MarkerFrozen (sub-rule A): the marker

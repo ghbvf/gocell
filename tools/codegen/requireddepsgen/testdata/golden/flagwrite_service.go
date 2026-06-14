@@ -5,8 +5,8 @@ package flagwrite
 
 import (
 	"github.com/ghbvf/gocell/corecells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // Service holds the dependencies for the flagwrite slice.

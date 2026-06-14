@@ -52,9 +52,9 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 	// single source for the on-disk scan root) so a relayout touches one
 	// place instead of a stale literal "cells" silently scanning nothing.
 	searchDirs := []string{
-		filepath.Join(root, "runtime"),
+		filepath.Join(root, "framework", "runtime"),
 		filepath.Join(root, "cmd"),
-		filepath.Join(root, "kernel"),
+		filepath.Join(root, "framework", "kernel"),
 		filepath.Join(root, "adapters"),
 		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),

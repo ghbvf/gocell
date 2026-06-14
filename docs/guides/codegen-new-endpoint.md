@@ -148,9 +148,9 @@ import (
     "context"
 
     createg "github.com/ghbvf/gocell/generated/contracts/http/myapp/widgets/create/v1"
-    "github.com/ghbvf/gocell/pkg/errcode"
-    kcell "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/runtime/auth"
+    "github.com/ghbvf/gocell/framework/pkg/errcode"
+    kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // CreateAdapter implements createg.Service.

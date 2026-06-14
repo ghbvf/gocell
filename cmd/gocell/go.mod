@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/cmd/gocell
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/tools v0.0.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/tools v0.46.0
@@ -12,6 +11,7 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
@@ -23,12 +23,6 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	mvdan.cc/gofumpt v0.9.2 // indirect
 )
-
-// Local monorepo replace: under GOWORK=on the go.work workspace overrides this
-// and resolves the core module to the repo root; under GOWORK=off (the
-// release-consistency build in hack/verify-workspace.sh) this replace makes the
-// unpublished core module resolve to the repo root instead of being fetched.
-replace github.com/ghbvf/gocell => ../../
 
 replace github.com/ghbvf/gocell/tools => ../../tools
 
@@ -46,3 +40,7 @@ replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 
 replace github.com/ghbvf/gocell/generated => ../../generated
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

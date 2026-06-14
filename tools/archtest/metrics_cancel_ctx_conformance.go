@@ -9,11 +9,11 @@ package archtest
 const (
 	// metricsProviderIfacePkg is the import path of the metrics.Provider
 	// interface package.
-	metricsProviderIfacePkg = PlatformModulePath + "/kernel/observability/metrics"
+	metricsProviderIfacePkg = PlatformFrameworkModulePath + "/kernel/observability/metrics"
 
 	// cancelCtxConformancePkg is the import path of the
 	// metricstest.RunCanceledCtxConformance conformance helper.
-	cancelCtxConformancePkg = PlatformModulePath + "/kernel/observability/metrics/metricstest"
+	cancelCtxConformancePkg = PlatformFrameworkModulePath + "/kernel/observability/metrics/metricstest"
 
 	// metricsConformanceOtelPkg is the import path of the otel metrics adapter
 	// package (used in the RED fixture).

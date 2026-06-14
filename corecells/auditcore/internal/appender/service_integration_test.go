@@ -14,12 +14,12 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/corecells/auditcore/internal/appender"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/idutil"
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
-	"github.com/ghbvf/gocell/runtime/audit/ledger/storetest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger/storetest"
 )
 
 // integTenant is the canonical-UUID tenant carried by the principal of every

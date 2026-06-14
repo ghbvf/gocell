@@ -15,7 +15,7 @@
 // DO NOT use this package in production code.
 package principalkindfixture
 
-import "github.com/ghbvf/gocell/runtime/auth"
+import "github.com/ghbvf/gocell/framework/runtime/auth"
 
 // nonExhaustive is the RED case: a switch on auth.PrincipalKind that handles
 // only PrincipalUser and omits every other constant, with no default clause.

@@ -1,6 +1,6 @@
 package dto
 
-import "github.com/ghbvf/gocell/pkg/redaction"
+import "github.com/ghbvf/gocell/framework/pkg/redaction"
 
 // TopicBootstrapAuthFailed is the outbox topic for event.auth.bootstrap-failed.v1.
 // Emitted by the setup slice when the bootstrap middleware rejects a request

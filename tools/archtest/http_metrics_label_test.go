@@ -97,7 +97,7 @@ func argIsResolvedCellLabel(expr ast.Expr, labelVar string) bool {
 // this archtest's job is to lock that the write point routes through the funnel.
 func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "http", "middleware", "metrics.go")
+	target := filepath.Join(root, "framework", "runtime", "http", "middleware", "metrics.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -222,7 +222,7 @@ func isRequestContextCall(expr ast.Expr, reqVar string) bool {
 
 func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "http", "router", "router.go")
+	target := filepath.Join(root, "framework", "runtime", "http", "router", "router.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -288,7 +288,7 @@ func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 
 func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "bootstrap", "phases_http.go")
+	target := filepath.Join(root, "framework", "runtime", "bootstrap", "phases_http.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -341,7 +341,7 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 
 func TestHTTPMetricsLabelNoConfigCellID01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "observability", "metrics", "provider_collector.go")
+	target := filepath.Join(root, "framework", "runtime", "observability", "metrics", "provider_collector.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -473,7 +473,7 @@ func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
 // not resolve the cell label itself.
 func TestHTTPMetricsLabelBodyLimitCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "http", "middleware", "body_limit.go")
+	target := filepath.Join(root, "framework", "runtime", "http", "middleware", "body_limit.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()

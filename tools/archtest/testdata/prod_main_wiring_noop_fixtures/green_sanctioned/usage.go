@@ -12,8 +12,8 @@
 package greensanctioned
 
 import (
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 )
 
 var (

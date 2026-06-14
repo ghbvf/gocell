@@ -7,10 +7,10 @@ import (
 
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/state/cas"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	refreshmem "github.com/ghbvf/gocell/framework/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 // testTenantID is the canonical test tenant UUID used across all corebundle

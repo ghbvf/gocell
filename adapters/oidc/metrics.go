@@ -3,8 +3,8 @@ package oidc
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // RefreshCollector observes OIDC JWKS refresh attempts so alerting rules can

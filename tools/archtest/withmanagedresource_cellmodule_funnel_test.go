@@ -92,7 +92,7 @@ const (
 	withManagedResourceFixturePrefix = "tools/archtest/testdata/withmanagedresource_cellmodule_fixtures/"
 )
 
-// bootstrapPkgPath ("github.com/ghbvf/gocell/runtime/bootstrap") is declared in
+// bootstrapPkgPath ("github.com/ghbvf/gocell/framework/runtime/bootstrap") is declared in
 // probename_sealed_funnel_test.go and reused here (same package).
 
 // collectWithManagedResourceFunnelViolations sweeps p.TypesInfo.Uses across every

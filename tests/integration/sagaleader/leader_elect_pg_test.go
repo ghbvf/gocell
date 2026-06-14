@@ -13,16 +13,16 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	pgsaga "github.com/ghbvf/gocell/adapters/postgres/saga"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	koutbox "github.com/ghbvf/gocell/kernel/outbox"
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/pkg/idutil"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/distlock"
-	"github.com/ghbvf/gocell/runtime/distlock/locktest"
-	"github.com/ghbvf/gocell/runtime/saga"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	koutbox "github.com/ghbvf/gocell/framework/kernel/outbox"
+	ksaga "github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/runtime/distlock"
+	"github.com/ghbvf/gocell/framework/runtime/distlock/locktest"
+	"github.com/ghbvf/gocell/framework/runtime/saga"
 )
 
 // noopEmitter is a koutbox.Emitter that discards entries — leader-elect tests

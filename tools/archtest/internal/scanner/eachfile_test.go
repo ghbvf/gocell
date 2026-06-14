@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 

@@ -31,8 +31,8 @@ package refreshinvariantsfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // txRunner is a fixture-local interface that mirrors the shape the rule

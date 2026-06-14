@@ -1,0 +1,1630 @@
+package bootstrap
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/kernel/auth"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/auth/authtest"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/runtime/config"
+	"github.com/ghbvf/gocell/framework/runtime/http/health"
+	"github.com/ghbvf/gocell/framework/runtime/http/router"
+	obshealthz "github.com/ghbvf/gocell/framework/runtime/observability/healthz"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
+)
+
+// errFullPhases returns Message + " " + Error() for *errcode.Error (Error() includes
+// internal diagnostic text), falling back to err.Error() for other error types.
+func errFullPhases(t *testing.T, err error) string {
+	t.Helper()
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		return ecErr.Message + " " + ecErr.Error()
+	}
+	return err.Error()
+}
+
+// --- phase5CollectRouteGroups: framework health group listener assignment ---
+
+// buildPhase5State constructs a minimal phaseState ready for
+// phase5CollectRouteGroups: it has an asm, a hh, and the registeredCheckers
+// map. The asm is started so health.Handler.aggregateCellHealth works.
+func buildPhase5State(t *testing.T) *phaseState {
+	t.Helper()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "phase5-test", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	_, s := newPhaseState()
+	s.asm = asm
+	s.hh = health.New(asm, obshealthz.NewAggregator(clock.Real()), clock.Real())
+	return s
+}
+
+// buildRouter creates a NewForListener router for the given ref so phase5 has a
+// real router map to iterate.
+func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
+	t.Helper()
+	r, err := router.NewForListener(clock.Real(), ref)
+	require.NoError(t, err)
+	return r
+}
+
+// TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener is an
+// intentional white-box test: b := New(clock.Real()) bypasses
+// phase0ValidateOptions. phase5CollectRouteGroups is a pure computation step —
+// it builds the framework health groups, which always target
+// cell.HealthListener. #673 removed the fallback remap onto PrimaryListener, so
+// the assignment no longer depends on which listeners are declared.
+func TestPhase5CollectRouteGroups_HealthGroupsTargetHealthListener(t *testing.T) {
+	t.Parallel()
+	b := New(clock.Real())
+	s := buildPhase5State(t)
+
+	groups := b.phase5CollectRouteGroups(s)
+
+	require.NotEmpty(t, groups, "phase5 must always produce framework health groups")
+	for i, rg := range groups {
+		assert.Equal(t, cell.HealthListener, rg.Listener,
+			"group[%d]: framework health groups must always target HealthListener (no fallback remap)", i)
+	}
+}
+
+// --- phase5MountRouteGroups: per-cell metrics label propagation ---
+
+// TestPhase5MountRouteGroups_PerCellMetricsLabel pins the bootstrap-level
+// contract for HTTP-METRICS-LABEL-REALIGN: when two RouteGroups with
+// different CellID values are mounted on the same router, requests
+// landing in each subtree must produce metrics observations carrying
+// that group's CellID — not the framework "_runtime" sentinel and
+// not a global value derived from assembly identity.
+func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
+	t.Parallel()
+	mc := metrics.NewInMemoryCollector()
+	rtr, err := router.NewForListener(
+		clock.Real(), cell.PrimaryListener,
+		router.WithMetricsCollector(mc),
+		router.WithCellIDClosedSet([]string{"accesscore", "auditcore"}),
+	)
+	require.NoError(t, err)
+
+	b := New(clock.Real())
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/access",
+			CellID:   "accesscore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/sessions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/audit",
+			CellID:   "auditcore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/events", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/framework",
+			// CellID intentionally empty: framework-owned RouteGroups should
+			// serve real matched routes but record metrics under _runtime.
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("GET /ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				return nil
+			},
+		},
+	}
+	require.NoError(t, b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: rtr,
+	}, groups))
+
+	// Drive one request into each subtree.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/access/sessions"},
+		{http.MethodGet, "/api/v1/audit/events"},
+	} {
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, "%s %s must reach the cell handler", tc.method, tc.path)
+	}
+
+	// A registered RouteGroup without CellID is a matched framework-owned route,
+	// not an unmatched 404. It must still record under the _runtime sentinel.
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/framework/ping", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	// Method mismatches on framework-owned RouteGroups should keep _runtime but
+	// still use the route-template fallback rather than route="unmatched".
+	rec = httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/framework/ping", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	// And one request that does NOT match either RouteGroup. It should be
+	// labeled with the framework sentinel, proving the fallback remains in place.
+	rec = httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orphan", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	snap := mc.Snapshot()
+	wantKeys := []metrics.RequestKey{
+		{Cell: "accesscore", Method: http.MethodGet, Route: "/api/v1/access/sessions", Status: http.StatusOK},
+		{Cell: "auditcore", Method: http.MethodGet, Route: "/api/v1/audit/events", Status: http.StatusOK},
+		{Cell: "_runtime", Method: http.MethodGet, Route: "/framework/ping", Status: http.StatusNoContent},
+		{Cell: "_runtime", Method: http.MethodPost, Route: "/framework/ping", Status: http.StatusMethodNotAllowed},
+		{Cell: "_runtime", Method: http.MethodGet, Route: "unmatched", Status: http.StatusNotFound},
+	}
+	for _, key := range wantKeys {
+		assert.Equalf(t, int64(1), snap.RequestCounts[key],
+			"want exactly one observation under %q; full snapshot=%v", key, snap.RequestCounts)
+	}
+
+	// Negative assertion: the assembly-derived "phase5-test" cellID
+	// (from buildPhase5State, were it used) and the legacy "default"
+	// fallback must NOT appear — neither path should leak into metrics.
+	for _, forbidden := range []string{"phase5-test", "default"} {
+		for key := range snap.RequestCounts {
+			assert.NotEqualf(t, forbidden, key.Cell,
+				"cell label %q must not appear in metrics snapshot (regression to global cellID derivation)", forbidden)
+		}
+	}
+}
+
+// TestPhase5_BootstrapDerivedClosedSet_DegradesOutOfSetCell pins the F8 gap:
+// the M12b closed set must come from the assembly via buildListenerRouterOpts
+// (router.WithCellIDClosedSet(s.asm.CellIDs())), NOT a hand-injected option, and
+// an out-of-set cell id reaching the metric write point must DEGRADE to the
+// _runtime sentinel. The sibling TestPhase5MountRouteGroups_PerCellMetricsLabel
+// hand-injects WithCellIDClosedSet and only covers in-set propagation; this
+// drives the real bootstrap derivation and exercises the out-of-set degradation
+// branch end-to-end.
+func TestPhase5_BootstrapDerivedClosedSet_DegradesOutOfSetCell(t *testing.T) {
+	t.Parallel()
+
+	// Assembly closed set = {accesscore} only. "rogue" is deliberately NOT a
+	// member (simulating a cell id that slipped past the M12a build gate).
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "f8-test", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("accesscore")))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	// Inject the collector via routerOpts and set NO metricsProvider, so the
+	// ONLY thing buildListenerRouterOpts adds beyond the collector is
+	// WithCellIDClosedSet(s.asm.CellIDs()) — proving the derivation rather than a
+	// hand-injected closed set.
+	mc := metrics.NewInMemoryCollector()
+	b := New(clock.Real(), WithRouterOptions(router.WithMetricsCollector(mc)))
+
+	opts, err := b.buildListenerRouterOpts(s, cell.PrimaryListener, listenerConfig{})
+	require.NoError(t, err)
+
+	rtr, err := router.NewForListener(clock.Real(), cell.PrimaryListener, opts...)
+	require.NoError(t, err)
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/access",
+			CellID:   "accesscore", // in the assembly closed set
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/sessions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/rogue",
+			CellID:   "rogue", // NOT in the assembly closed set → must degrade
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/x", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+	}
+	require.NoError(t, b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: rtr,
+	}, groups))
+
+	for _, p := range []string{"/api/v1/access/sessions", "/api/v1/rogue/x"} {
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		require.Equalf(t, http.StatusOK, rec.Code, "%s must reach the handler", p)
+	}
+
+	snap := mc.Snapshot()
+	// In-set cell records under its own id.
+	assert.Equalf(t, int64(1), snap.RequestCounts[metrics.RequestKey{
+		Cell: "accesscore", Method: http.MethodGet, Route: "/api/v1/access/sessions", Status: http.StatusOK,
+	}], "in-set cell must record cell=accesscore; snapshot=%v", snap.RequestCounts)
+
+	// Out-of-set cell DEGRADES to the sentinel (M12b runtime defense, closed set
+	// derived from s.asm.CellIDs() by buildListenerRouterOpts).
+	assert.Equalf(t, int64(1), snap.RequestCounts[metrics.RequestKey{
+		Cell: "_runtime", Method: http.MethodGet, Route: "/api/v1/rogue/x", Status: http.StatusOK,
+	}], "out-of-set cell must degrade to _runtime; snapshot=%v", snap.RequestCounts)
+
+	// The rogue cell id must NEVER appear as a metric label.
+	for key := range snap.RequestCounts {
+		assert.NotEqualf(t, "rogue", key.Cell,
+			"out-of-set cell id 'rogue' must not leak into metrics (M12b must degrade it); snapshot=%v", snap.RequestCounts)
+	}
+}
+
+// TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener pins the #673
+// reserved-boundary invariant: cell.HealthListener is framework-owned (it serves
+// only /healthz, /readyz, /metrics under CellID==""). A cell-owned RouteGroup
+// (CellID!="") targeting it would expose a business endpoint on the
+// unauthenticated loopback probe port, so phase5MountRouteGroups must fail-fast —
+// symmetric with the InternalListener guard. The check precedes the router
+// lookup, so the violation is rejected even when a HealthListener router exists.
+func TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener(t *testing.T) {
+	t.Parallel()
+	healthRtr, err := router.NewForListener(clock.Real(), cell.HealthListener)
+	require.NoError(t, err)
+
+	b := New(clock.Real())
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.HealthListener,
+			Prefix:   "/api/v1/rogue",
+			CellID:   "roguecell",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/leak", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+	}
+
+	err = b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.HealthListener: healthRtr,
+	}, groups)
+
+	require.Error(t, err, "cell-owned RouteGroup on cell.HealthListener must fail-fast")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"reserved-boundary violation must surface ERR_CELL_INVALID_CONFIG")
+	assert.Equal(t, errcode.KindInternal, ecErr.Kind)
+	assert.Contains(t, ecErr.Message, "cell.HealthListener",
+		"message must name cell.HealthListener so operators know the fix")
+}
+
+// --- phase0ValidateOptions tests ---
+
+func TestPhase0_AcceptsValidOptions(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
+	b := New(clock.Real(), WithHealthChecker("", func(_ context.Context) error { return nil }))
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
+}
+
+func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithHealthChecker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
+	b := New(clock.Real())
+	b.healthCheckers = append(b.healthCheckers, namedChecker{name: "test", fn: nil})
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `health checker "test" must not be nil`)
+}
+
+func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithCircuitBreaker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
+	b := New(clock.Real())
+	b.circuitBreakerNil = true
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "circuit breaker must not be nil")
+}
+
+// TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
+// WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
+// so phase0 has nothing to reject. JWT auth flows through []auth.ListenerAuth
+// authChain passed to WithListener.
+
+// Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
+// instance as WithAssembly. A mismatch would silently discover the verifier
+// in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
+func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
+	asmA := assembly.New(clock.Real(), assembly.Config{ID: "asm-a", DurabilityMode: outbox.DurabilityDemo})
+	asmB := assembly.New(clock.Real(), assembly.Config{ID: "asm-b", DurabilityMode: outbox.DurabilityDemo})
+	b := New(
+		clock.Real(),
+		WithAssembly(asmA),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asmB)}),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "AuthJWTFromAssembly carries")
+	assert.Contains(t, errFullPhases(t, err), "asm-a")
+	assert.Contains(t, errFullPhases(t, err), "asm-b")
+}
+
+func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "asm-match", DurabilityMode: outbox.DurabilityDemo})
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+// Round-3 finding #11: AuthMTLS without WithListenerTLS configuring
+// ClientAuth + ClientCAs is a programmer error — the handshake-layer chain
+// check would not run. Bootstrap.phase0 must reject the listener config.
+func TestPhase0_RejectsAuthMTLSWithoutTLS(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{auth.AuthMTLS{}}),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS without WithListenerTLS")
+}
+
+func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
+	pool := x509.NewCertPool()
+	cfg := &tls.Config{
+		ClientAuth: tls.RequestClientCert, // < VerifyClientCertIfGiven
+		ClientCAs:  pool,
+	}
+	b := New(
+		clock.Real(),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
+			WithListenerTLS(cfg)),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "ClientAuth")
+}
+
+func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
+	cfg := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		// ClientCAs: nil — handshake has no CA pool to validate against
+	}
+	b := New(
+		clock.Real(),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
+			WithListenerTLS(cfg)),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "ClientCAs is nil")
+}
+
+func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
+	pool := x509.NewCertPool()
+	cfg := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  pool,
+		// GetCertificate provides the server-side certificate at handshake time.
+		// Without at least one cert source, the TLS sanity check (Wave B) rejects
+		// the config because no TLS handshake can complete.
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return &tls.Certificate{}, nil },
+	}
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]auth.ListenerAuth{auth.AuthMTLS{}},
+			WithListenerTLS(cfg)),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+func TestChainProtectsRoutes(t *testing.T) {
+	stubVerifier := &stubIntentTokenVerifier{}
+	tests := []struct {
+		name  string
+		chain []auth.ListenerAuth
+		want  bool
+	}{
+		{
+			name:  "nil_chain_not_protected",
+			chain: nil,
+			want:  false,
+		},
+		{
+			name:  "empty_chain_not_protected",
+			chain: []auth.ListenerAuth{},
+			want:  false,
+		},
+		{
+			name:  "auth_none_not_protected",
+			chain: []auth.ListenerAuth{auth.AuthNone{}},
+			want:  false,
+		},
+		{
+			name:  "auth_jwt_protected",
+			chain: []auth.ListenerAuth{authtest.MustAuthJWT(stubVerifier)},
+			want:  true,
+		},
+		{
+			name:  "auth_mtls_protected",
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}},
+			want:  true,
+		},
+		{
+			name:  "auth_service_token_protected",
+			chain: []auth.ListenerAuth{authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			want:  true,
+		},
+		{
+			// AuthNone before a protective plan must not short-circuit to false.
+			name:  "mixed_none_then_mtls_protected",
+			chain: []auth.ListenerAuth{auth.AuthNone{}, auth.AuthMTLS{}},
+			want:  true,
+		},
+		{
+			// Multi-protective chain (mTLS outer + HMAC inner) is the
+			// canonical InternalListener configuration.
+			name:  "mixed_mtls_plus_service_token_protected",
+			chain: []auth.ListenerAuth{auth.AuthMTLS{}, authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			want:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, chainProtectsRoutes(tc.chain))
+		})
+	}
+}
+
+// PR269 round-3: TestPhase5_*RouteGroupPolicyMTLS* tests removed along with
+// cell.RouteGroup.Auth — RouteGroup-level mTLS no longer exists. Listener-level
+// AuthMTLS validation is covered by auth_plan_validate_test.go.
+
+// TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
+// WithInternalMiddleware and the internalMiddlewares field are deleted.
+// Internal listener authentication is now handled via cell.Policy on the
+// InternalListener declaration (WithListener(InternalListener, addr, policy)).
+
+// --- phase1LoadConfig tests ---
+
+func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	require.NoError(t, b.phase1LoadConfig(s))
+	assert.NotNil(t, s.cfg)
+	assert.Nil(t, s.cfgWatcher)
+}
+
+func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
+	closed := false
+	b := New(clock.Real())
+	b.closers = append(b.closers, closerFunc(func() error {
+		closed = true
+		return nil
+	}))
+	_, s := newPhaseState()
+	require.NoError(t, b.phase1LoadConfig(s))
+	assert.Len(t, s.teardowns, 1)
+
+	// Execute the teardown and verify closer was called.
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
+	assert.True(t, closed)
+}
+
+// --- phase2InitPubSub tests ---
+
+func TestPhase2_InitPubSub_DefaultsToInMemoryBus(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+	assert.NotNil(t, s.pub)
+	assert.NotNil(t, s.sub)
+}
+
+func TestPhase2_InitPubSub_ExplicitPublisherAndSubscriber(t *testing.T) {
+	pub := &phaseTestPublisher{}
+	sub := &phaseTestSubscriber{}
+	b := New(clock.Real(), WithPublisher(pub), WithSubscriber(sub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+	assert.Same(t, pub, s.pub.(*phaseTestPublisher))
+	assert.Same(t, sub, s.sub.(*phaseTestSubscriber))
+}
+
+func TestPhase2_InitPubSub_RegistersTeardownForCloser(t *testing.T) {
+	var closeCalled []string
+	sub := &phaseTestSubscriberCloser{name: "sub", log: &closeCalled}
+	b := New(clock.Real(), WithSubscriber(sub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+	require.Len(t, s.teardowns, 1)
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
+	assert.Equal(t, []string{"sub"}, closeCalled)
+}
+
+func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
+	// When pub and sub are the same object, only one teardown should be registered.
+	var closeCalled int
+	eb := &phaseTestSharedBus{closeCount: &closeCalled}
+	b := New(clock.Real(), WithPublisher(eb), WithSubscriber(eb))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	// Execute all teardowns.
+	for _, td := range s.teardowns {
+		require.NoError(t, td.fn(context.Background()))
+	}
+	assert.Equal(t, 1, closeCalled, "shared pub/sub must only be closed once")
+}
+
+func TestSamePubSubIdentity(t *testing.T) {
+	t.Run("same comparable instance", func(t *testing.T) {
+		eb := &phaseTestSharedBus{}
+		assert.True(t, samePubSubIdentity(eb, eb))
+	})
+
+	t.Run("different comparable instances", func(t *testing.T) {
+		assert.False(t, samePubSubIdentity(&phaseTestSharedBus{}, &phaseTestSharedBus{}))
+	})
+
+	t.Run("non-comparable dynamic type", func(t *testing.T) {
+		bus := nonComparablePubSub{labels: []string{"in-memory"}}
+		require.NotPanics(t, func() {
+			assert.False(t, samePubSubIdentity(bus, bus))
+		})
+	})
+}
+
+func TestPhase2_InitPubSub_NonComparablePubSubDoesNotPanic(t *testing.T) {
+	bus := nonComparablePubSub{labels: []string{"in-memory"}}
+	b := New(clock.Real(), WithPublisher(bus), WithSubscriber(bus))
+	_, s := newPhaseState()
+
+	require.NotPanics(t, func() {
+		b.phase2InitPubSub(s)
+	})
+	assert.Len(t, s.teardowns, 2, "non-comparable pub/sub values cannot be identity-compared, so both closes are registered")
+}
+
+// --- phase3InitAssembly tests ---
+
+func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	s.cfg = config.NewFromMap(make(map[string]any))
+	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
+	assert.NotNil(t, s.asm)
+	assert.NotNil(t, s.reloads)
+}
+
+func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "pre", DurabilityMode: outbox.DurabilityDemo})
+	b := New(clock.Real(), WithAssembly(asm))
+	_, s := newPhaseState()
+	s.cfg = config.NewFromMap(make(map[string]any))
+	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
+	assert.Same(t, asm, s.asm)
+}
+
+func TestPhase3_InitAssembly_RegistersAssemblyTeardown(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	s.cfg = config.NewFromMap(make(map[string]any))
+	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
+	// Two teardowns: Shutdown + assembly drain+Stop.
+	assert.Len(t, s.teardowns, 2)
+}
+
+// --- phase8StartWorkers tests ---
+
+func TestPhase8_StartWorkers_NoWorkers_EmptyWorkerErrCh(t *testing.T) {
+	b := New(clock.Real()) // no workers
+	runCtx, s := newPhaseState()
+	b.phase8StartWorkers(runCtx, s)
+	assert.Nil(t, s.workerErrCh, "workerErrCh must be nil when no workers are registered")
+}
+
+func TestPhase8_StartWorkers_WorkersRegistered_WorkerErrChCreated(t *testing.T) {
+	w := &countWorker{}
+	b := New(clock.Real(), WithWorkers(w))
+	runCtx, s := newPhaseState()
+	b.phase8StartWorkers(runCtx, s)
+	assert.NotNil(t, s.workerErrCh)
+	// runCtx cancel causes worker to exit.
+	s.runCancel()
+	select {
+	case <-s.workerErrCh:
+	case <-time.After(testtime.D2s):
+		t.Fatal("worker did not exit after runCtx cancel")
+	}
+}
+
+// --- runState rollback tests ---
+
+func TestRunState_Rollback_ExecutesTeardownsLIFO(t *testing.T) {
+	var order []int
+	_, s := newRunState()
+	s.addTeardown(func(_ context.Context) error { order = append(order, 1); return nil })
+	s.addTeardown(func(_ context.Context) error { order = append(order, 2); return nil })
+	s.addTeardown(func(_ context.Context) error { order = append(order, 3); return nil })
+
+	cause := errors.New("startup failed")
+	err := s.rollback(context.Background(), cause)
+	assert.ErrorIs(t, err, cause)
+	assert.Equal(t, []int{3, 2, 1}, order)
+}
+
+func TestRunState_Rollback_CancelsRunCtx(t *testing.T) {
+	runCtx, s := newRunState()
+	_ = s.rollback(context.Background(), errors.New("x"))
+	select {
+	case <-runCtx.Done():
+		// expected
+	default:
+		t.Fatal("runCtx must be canceled after rollback")
+	}
+}
+
+func TestRunState_Rollback_ContinuesThroughTeardownErrors(t *testing.T) {
+	_, s := newRunState()
+	var executed []int
+	td2Err := errors.New("teardown 2 failed")
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 1); return nil })
+	s.addTeardown(func(_ context.Context) error {
+		executed = append(executed, 2)
+		return td2Err
+	})
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 3); return nil })
+
+	cause := errors.New("cause")
+	err := s.rollback(context.Background(), cause)
+	// cause is in the joined tree.
+	assert.ErrorIs(t, err, cause)
+	// teardown-2 error is surfaced in the joined tree.
+	assert.ErrorIs(t, err, td2Err)
+	// All three teardowns executed despite error in teardown 2.
+	assert.Equal(t, []int{3, 2, 1}, executed)
+}
+
+func TestRunState_Rollback_JoinsNamedTeardownErrorWithCause(t *testing.T) {
+	_, s := newRunState()
+	sentinel := errors.New("mydb failed")
+	s.addNamedTeardown("mydb", func(_ context.Context) error { return sentinel })
+
+	cause := errors.New("startup cause")
+	err := s.rollback(context.Background(), cause)
+
+	assert.ErrorIs(t, err, cause)
+	assert.ErrorIs(t, err, sentinel)
+
+	var pe *phaseError
+	require.True(t, errors.As(err, &pe), "expected *phaseError in joined tree; got %T: %v", err, err)
+	assert.Equal(t, "teardown_mydb", pe.Phase)
+}
+
+func TestRunState_Rollback_PanickingTeardownRecoveredAndContinues(t *testing.T) {
+	_, s := newRunState()
+	var executed []int
+	// Registration order: 1, 2, 3 → LIFO execution: 3, 2, 1.
+	// Let teardown-2 (execution-order middle) panic.
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 1); return nil })
+	s.addTeardown(func(_ context.Context) error {
+		executed = append(executed, 2)
+		panic(errors.New("boom"))
+	})
+	s.addTeardown(func(_ context.Context) error { executed = append(executed, 3); return nil })
+
+	cause := errors.New("startup cause")
+
+	// rollback must not panic out.
+	var err error
+	require.NotPanics(t, func() {
+		err = s.rollback(context.Background(), cause)
+	})
+
+	// All three teardowns ran (LIFO: 3, 2, 1 — 2 panicked but 1 still ran).
+	assert.Equal(t, []int{3, 2, 1}, executed)
+	// cause is in the joined tree.
+	assert.ErrorIs(t, err, cause)
+	// panic payload surfaced in joined tree.
+	assert.Contains(t, err.Error(), "boom")
+}
+
+// TestRunState_Rollback_NamedPanicWrappedInPhaseErrorAndContinues verifies that
+// when a named teardown panics during rollback:
+//   - the panic is recovered and converted to an error,
+//   - the error is wrapped in *phaseError with the correct Phase label,
+//   - errors.Is(result, cause) holds (cause is first in the joined tree),
+//   - other teardowns still execute (LIFO not interrupted).
+func TestRunState_Rollback_NamedPanicWrappedInPhaseErrorAndContinues(t *testing.T) {
+	_, s := newRunState()
+	var executed []string
+
+	boom := errors.New("boom")
+	// Registration order: ok1, mydb, ok2 → LIFO execution: ok2, mydb, ok1.
+	s.addNamedTeardown("ok1", func(_ context.Context) error {
+		executed = append(executed, "ok1")
+		return nil
+	})
+	s.addNamedTeardown("mydb", func(_ context.Context) error {
+		executed = append(executed, "mydb")
+		panic(boom)
+	})
+	s.addNamedTeardown("ok2", func(_ context.Context) error {
+		executed = append(executed, "ok2")
+		return nil
+	})
+
+	cause := errors.New("startup cause")
+
+	var err error
+	require.NotPanics(t, func() {
+		err = s.rollback(context.Background(), cause)
+	})
+
+	// All three teardowns executed in LIFO order despite mydb panicking.
+	assert.Equal(t, []string{"ok2", "mydb", "ok1"}, executed)
+
+	// cause is always first in the joined tree.
+	assert.ErrorIs(t, err, cause)
+
+	// The panic payload must be reachable via errors.Is.
+	assert.ErrorIs(t, err, boom)
+
+	// The panic error must be wrapped in *phaseError with the correct Phase.
+	var pe *phaseError
+	require.True(t, errors.As(err, &pe), "expected *phaseError in joined tree; got %T: %v", err, err)
+	assert.Equal(t, "teardown_mydb", pe.Phase)
+}
+
+// --- shutdownReason tests ---
+
+func TestShutdownReason_Values(t *testing.T) {
+	// Verify the iota values are distinct and stable.
+	assert.NotEqual(t, reasonCtxCancel, reasonHTTPError)
+	assert.NotEqual(t, reasonHTTPError, reasonWorkerError)
+	assert.NotEqual(t, reasonWorkerError, reasonRouterError)
+}
+
+// --- phase10 unit tests ---
+
+func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
+	// PR-A14b: phase5BuildHTTPRouter is replaced by phase5BuildRouters.
+	// phase10ReadinessFlip only requires s.hh (may be nil) and s.reloads.
+	// Setting up a full router is no longer needed to test the readiness flip.
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	s.cfg = config.NewFromMap(make(map[string]any))
+	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
+	// s.hh is nil — phase10ReadinessFlip guards against nil hh.
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	b.phase10ReadinessFlip(shutCtx, s)
+	// After flip, BeginShutdown has been called; calling again returns an already-closed channel.
+	select {
+	case <-s.reloads.BeginShutdown():
+		// drained channel is closed — BeginShutdown has been called.
+	default:
+		t.Fatal("reloads.BeginShutdown must have been called by readiness flip")
+	}
+}
+
+func TestPhase10LIFOTeardown_ExecutesInReverseOrder(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	var order []int
+	s.addTeardown(func(_ context.Context) error { order = append(order, 1); return nil })
+	s.addTeardown(func(_ context.Context) error { order = append(order, 2); return nil })
+
+	errs := b.phase10LIFOTeardown(context.Background(), s)
+	assert.Empty(t, errs)
+	assert.Equal(t, []int{2, 1}, order)
+}
+
+func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+	s.addTeardown(func(_ context.Context) error { return errors.New("td1") })
+	s.addTeardown(func(_ context.Context) error { return errors.New("td2") })
+
+	errs := b.phase10LIFOTeardown(context.Background(), s)
+	// Both teardowns executed, both errors collected.
+	assert.Len(t, errs, 2)
+}
+
+// TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues verifies that
+// phase10LIFOTeardown has symmetric panic protection with rollback: a panicking
+// teardown is recovered via safeTeardown, wrapped in phaseError (if named),
+// and the remaining teardowns still execute in LIFO order.
+func TestPhase10LIFOTeardown_PanickingTeardownRecoveredAndContinues(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	var executed []string
+	boom := errors.New("boom-shutdown")
+
+	// Registration order: ok1, panic-db, ok2 → LIFO execution: ok2, panic-db, ok1.
+	s.addNamedTeardown("ok1", func(_ context.Context) error {
+		executed = append(executed, "ok1")
+		return nil
+	})
+	s.addNamedTeardown("panic-db", func(_ context.Context) error {
+		executed = append(executed, "panic-db")
+		panic(boom)
+	})
+	s.addNamedTeardown("ok2", func(_ context.Context) error {
+		executed = append(executed, "ok2")
+		return nil
+	})
+
+	var errs []error
+	require.NotPanics(t, func() {
+		errs = b.phase10LIFOTeardown(context.Background(), s)
+	})
+
+	// LIFO order: ok2 first, then panic-db, then ok1 — panic does not interrupt.
+	assert.Equal(t, []string{"ok2", "panic-db", "ok1"}, executed)
+
+	// Exactly one error collected (the panicking teardown).
+	require.Len(t, errs, 1)
+
+	// The error is wrapped in *phaseError with the correct Phase.
+	var pe *phaseError
+	require.True(t, errors.As(errs[0], &pe), "expected *phaseError; got %T: %v", errs[0], errs[0])
+	assert.Equal(t, "teardown_panic-db", pe.Phase)
+
+	// The original panic value is reachable via errors.Is.
+	assert.ErrorIs(t, errs[0], boom)
+}
+
+// TestPhase10LIFOTeardown_PanickingTeardownJoinedIntoFinalError verifies that
+// phase10OrchestrateShutdown surfaces panicking teardown errors in its return
+// value (they are joined into teardownErr).
+func TestPhase10LIFOTeardown_PanickingTeardownJoinedIntoFinalError(t *testing.T) {
+	// Use phase10LIFOTeardown directly: the panicking error must appear in the
+	// joined []error slice returned, confirming it is not silently swallowed.
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	boom := errors.New("shutdown-panic")
+	s.addNamedTeardown("svc", func(_ context.Context) error { panic(boom) })
+	s.addTeardown(func(_ context.Context) error { return nil }) // survives
+
+	var errs []error
+	require.NotPanics(t, func() {
+		errs = b.phase10LIFOTeardown(context.Background(), s)
+	})
+
+	require.Len(t, errs, 1, "panicking teardown must contribute exactly one error")
+	assert.ErrorIs(t, errs[0], boom, "original panic error must be reachable via errors.Is")
+}
+
+// --- runCtx independence tests ---
+
+func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
+	// runCtx derived from Background; canceling the "external" ctx
+	// must NOT cancel runCtx.
+	_, extCancel := context.WithCancel(context.Background())
+	defer extCancel()
+
+	runCtx, _ := newPhaseState()
+	// Verify runCtx is alive before external cancel.
+	select {
+	case <-runCtx.Done():
+		t.Fatal("runCtx must be alive at start")
+	default:
+	}
+
+	extCancel()
+
+	// runCtx must still be alive after external cancel.
+	select {
+	case <-runCtx.Done():
+		t.Fatal("runCtx must NOT be canceled when external ctx is canceled")
+	default:
+		// expected: runCtx is independent
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T19: addCloser dual-path teardown tests
+// ---------------------------------------------------------------------------
+
+// TestPhaseState_AddCloser_PrefersContextCloser verifies that addCloser
+// registers a ContextCloser's Close method directly (ctx budget propagated).
+func TestPhaseState_AddCloser_PrefersContextCloser(t *testing.T) {
+	var receivedCtx context.Context
+	cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+		receivedCtx = ctx
+		return nil
+	}}
+
+	_, s := newPhaseState()
+	s.addCloser(cc)
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
+
+	// The ctx passed to the teardown must be the shut ctx, not Background.
+	deadline, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline")
+	_, refDeadline := shutCtx.Deadline()
+	assert.Equal(t, refDeadline, hasDeadline,
+		"deadline presence must match shutCtx; got deadline=%v", deadline)
+}
+
+// TestPhaseState_AddCloser_FallsBackToIoCloser verifies that a plain io.Closer
+// is wrapped by IgnoreCtx and still registered for teardown.
+func TestPhaseState_AddCloser_FallsBackToIoCloser(t *testing.T) {
+	closed := false
+	ic := &ioCloserSpy{fn: func() error { closed = true; return nil }}
+
+	_, s := newPhaseState()
+	s.addCloser(ic)
+	require.Len(t, s.teardowns, 1)
+
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
+	assert.True(t, closed, "io.Closer must be called via IgnoreCtx wrapper")
+}
+
+// TestPhaseState_AddCloser_SkipsNil verifies that addCloser(nil) does not
+// register any teardown.
+func TestPhaseState_AddCloser_SkipsNil(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser(nil)
+	assert.Empty(t, s.teardowns, "nil resource must not register a teardown")
+}
+
+// TestPhaseState_AddCloser_SkipsNonCloser verifies that a resource that
+// implements neither ContextCloser nor io.Closer is silently skipped.
+func TestPhaseState_AddCloser_SkipsNonCloser(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser("just-a-string")
+	assert.Empty(t, s.teardowns)
+}
+
+// TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser verifies that
+// addCloser prefers ContextCloser (CloseCtx) over io.Closer when both are
+// available — which is the case for *config.Watcher after T14.
+func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T) {
+	var receivedCtx context.Context
+	watcherClosed := false
+
+	spy := &watcherCloserSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			watcherClosed = true
+			return nil
+		},
+	}
+
+	_, s := newPhaseState()
+
+	// Use addCloser directly — spy implements both Close() and CloseCtx(ctx).
+	// addCloser should pick CloseCtx (ContextCloser path).
+	s.addCloser(spy)
+
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
+
+	assert.True(t, watcherClosed)
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline (not Background)")
+}
+
+// ---------------------------------------------------------------------------
+// T19: phase2InitPubSub shutCtx propagation tests
+// ---------------------------------------------------------------------------
+
+// TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx verifies that the
+// teardown registered by phase2InitPubSub passes the shutCtx directly to
+// sub.Close — i.e. the shared shutdown budget is propagated to the subscriber.
+func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
+	var receivedCtx context.Context
+	sub := &pubSubCtxSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			return nil
+		},
+	}
+
+	b := New(clock.Real(), WithSubscriber(sub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	require.Len(t, s.teardowns, 1)
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
+
+	require.NotNil(t, receivedCtx, "sub.Close must have been called")
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "sub.Close must receive ctx with deadline (shutCtx)")
+}
+
+// TestPhase2InitPubSub_PublisherCloseReceivesShutCtx verifies that when a
+// separate publisher is configured, its teardown also receives shutCtx.
+func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
+	var subReceivedCtx, pubReceivedCtx context.Context
+
+	sub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		subReceivedCtx = ctx
+		return nil
+	}}
+	pub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		pubReceivedCtx = ctx
+		return nil
+	}}
+
+	b := New(clock.Real(), WithSubscriber(sub), WithPublisher(pub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	// Two teardowns: one for sub, one for pub (different instances).
+	require.Len(t, s.teardowns, 2)
+	for _, td := range s.teardowns {
+		require.NoError(t, td.fn(shutCtx))
+	}
+
+	require.NotNil(t, subReceivedCtx, "sub.Close must have been called")
+	require.NotNil(t, pubReceivedCtx, "pub.Close must have been called")
+
+	_, subHasDeadline := subReceivedCtx.Deadline()
+	assert.True(t, subHasDeadline, "sub.Close must receive ctx with deadline")
+
+	_, pubHasDeadline := pubReceivedCtx.Deadline()
+	assert.True(t, pubHasDeadline, "pub.Close must receive ctx with deadline")
+}
+
+// TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce verifies that when pub
+// and sub are the same instance, exactly one Close call is registered.
+func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
+	var closeCount int
+	eb := &pubSubCtxSpy{closeFn: func(_ context.Context) error {
+		closeCount++
+		return nil
+	}}
+
+	b := New(clock.Real(), WithPublisher(eb), WithSubscriber(eb))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	for _, td := range s.teardowns {
+		require.NoError(t, td.fn(shutCtx))
+	}
+	assert.Equal(t, 1, closeCount, "shared pub/sub bus must be closed exactly once")
+}
+
+// TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers verifies that
+// phase10LIFOTeardown passes the shutCtx to every registered teardown function,
+// including those added via addCloser from ContextCloser resources.
+func TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers(t *testing.T) {
+	const numClosers = 3
+	receivedCtxs := make([]context.Context, numClosers)
+
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	for i := range numClosers {
+		idx := i
+		cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+			receivedCtxs[idx] = ctx
+			return nil
+		}}
+		s.addCloser(cc)
+	}
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	errs := b.phase10LIFOTeardown(shutCtx, s)
+	assert.Empty(t, errs, "all teardowns must succeed")
+
+	for i, ctx := range receivedCtxs {
+		require.NotNil(t, ctx, "closer %d must have been called", i)
+		_, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline, "closer %d must receive ctx with deadline (shutCtx)", i)
+	}
+}
+
+// --- Helpers / stubs ---
+
+// ctxCloserSpy implements lifecycle.ContextCloser and records the ctx it receives.
+type ctxCloserSpy struct {
+	fn func(ctx context.Context) error
+}
+
+func (s *ctxCloserSpy) Close(ctx context.Context) error {
+	return s.fn(ctx)
+}
+
+// ioCloserSpy implements io.Closer only (no Close(ctx)).
+type ioCloserSpy struct {
+	fn func() error
+}
+
+func (s *ioCloserSpy) Close() error {
+	return s.fn()
+}
+
+// watcherCloserSpy implements lifecycle.ContextCloser (Close(ctx) error) so
+// that addCloser picks the ContextCloser path and propagates the shut budget.
+// It also implements io.Closer for the fallback path test.
+type watcherCloserSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+// Close implements lifecycle.ContextCloser — addCloser checks this first.
+func (w *watcherCloserSpy) Close(ctx context.Context) error {
+	return w.closeFn(ctx)
+}
+
+// --- Helpers / stubs (existing) ---
+
+// phaseTestPublisher is a no-op outbox.Publisher for phase tests.
+type phaseTestPublisher struct{}
+
+func (p *phaseTestPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (p *phaseTestPublisher) Close(_ context.Context) error                       { return nil }
+
+// phaseTestSubscriber is a no-op outbox.Subscriber for phase tests.
+type phaseTestSubscriber struct{}
+
+func (s *phaseTestSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *phaseTestSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return nil
+}
+func (s *phaseTestSubscriber) Close(_ context.Context) error { return nil }
+
+// phaseTestSubscriberCloser tracks Close calls and exposes an outbox.Subscriber interface.
+type phaseTestSubscriberCloser struct {
+	name string
+	log  *[]string
+}
+
+func (s *phaseTestSubscriberCloser) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+
+func (s *phaseTestSubscriberCloser) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return nil
+}
+
+func (s *phaseTestSubscriberCloser) Close(_ context.Context) error {
+	*s.log = append(*s.log, s.name)
+	return nil
+}
+
+// phaseTestSharedBus implements both Publisher and Subscriber with a Close count tracker.
+// Used to verify double-close protection when pub == sub.
+type phaseTestSharedBus struct {
+	closeCount *int
+}
+
+func (b *phaseTestSharedBus) Publish(_ context.Context, _ string, _ []byte) error  { return nil }
+func (b *phaseTestSharedBus) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (b *phaseTestSharedBus) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return nil
+}
+
+func (b *phaseTestSharedBus) Close(_ context.Context) error {
+	*b.closeCount++
+	return nil
+}
+
+// closerFunc is a func adapter for io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
+// pubSubCtxSpy implements both outbox.Publisher and outbox.Subscriber with a
+// ctx-recording Close. Used for T19 shutCtx propagation tests in phase2.
+type pubSubCtxSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+func (s *pubSubCtxSpy) Publish(_ context.Context, _ string, _ []byte) error  { return nil }
+func (s *pubSubCtxSpy) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *pubSubCtxSpy) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return nil
+}
+
+func (s *pubSubCtxSpy) Close(ctx context.Context) error {
+	return s.closeFn(ctx)
+}
+
+type nonComparablePubSub struct {
+	labels []string
+}
+
+func (b nonComparablePubSub) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (b nonComparablePubSub) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+
+func (b nonComparablePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (b nonComparablePubSub) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
+	return nil
+}
+func (b nonComparablePubSub) Close(_ context.Context) error { return nil }
+
+// ---------------------------------------------------------------------------
+// F21: phaseError label tests
+// ---------------------------------------------------------------------------
+
+// TestBootstrapTeardown_ErrorsContainPhaseLabel verifies that phase10LIFOTeardown
+// wraps non-nil teardown errors in phaseError so that the component name is
+// carried with the error for post-mortem diagnosis.
+//
+// ref: sigs.k8s.io/controller-runtime engageStopProcedure — per-step error labeling.
+func TestBootstrapTeardown_ErrorsContainPhaseLabel(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	sentinel := errors.New("disk full")
+
+	// Register one named teardown that fails and one that succeeds.
+	s.addNamedTeardown("my-db", func(_ context.Context) error { return sentinel })
+	s.addTeardown(func(_ context.Context) error { return nil })
+
+	shutCtx := context.Background()
+	errs := b.phase10LIFOTeardown(shutCtx, s)
+
+	require.Len(t, errs, 1, "expected exactly one teardown error")
+
+	// The error must be wrapped in phaseError.
+	var pe *phaseError
+	require.True(t, errors.As(errs[0], &pe), "error must be a *phaseError; got %T: %v", errs[0], errs[0])
+	assert.Equal(t, "teardown_my-db", pe.Phase)
+
+	// Unwrap must yield the original sentinel so errors.Is still works.
+	assert.ErrorIs(t, errs[0], sentinel)
+}
+
+// TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled verifies that teardowns
+// registered without a name (via addTeardown) still surface their errors, but
+// without a phaseError wrapper.
+func TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	sentinel := errors.New("connection reset")
+	s.addTeardown(func(_ context.Context) error { return sentinel })
+
+	errs := b.phase10LIFOTeardown(context.Background(), s)
+
+	require.Len(t, errs, 1)
+
+	// Anonymous teardown: error is NOT wrapped in phaseError.
+	var pe *phaseError
+	assert.False(t, errors.As(errs[0], &pe), "anonymous teardown must not wrap in phaseError")
+	assert.ErrorIs(t, errs[0], sentinel)
+}
+
+// TestBootstrapTeardown_LIFOOrder verifies teardowns execute in reverse
+// registration order (LIFO).
+func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
+	b := New(clock.Real())
+	_, s := newPhaseState()
+
+	var order []int
+	for i := range 3 {
+		idx := i
+		s.addNamedTeardown(fmt.Sprintf("step%d", idx), func(_ context.Context) error {
+			order = append(order, idx)
+			return nil
+		})
+	}
+
+	b.phase10LIFOTeardown(context.Background(), s)
+
+	assert.Equal(t, []int{2, 1, 0}, order, "teardowns must run in LIFO order")
+}
+
+// ---------------------------------------------------------------------------
+// Stub types for TestChainProtectsRoutes
+// ---------------------------------------------------------------------------
+
+type stubIntentTokenVerifier struct{}
+
+func (s *stubIntentTokenVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+	return auth.Claims{}, nil
+}
+
+type stubNonceStore struct{}
+
+func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *stubNonceStore) Kind() auth.NonceStoreKind {
+	return auth.NonceStoreKindInMemory
+}
+
+type stubHMACKeyring struct{}
+
+// Current/Secrets must return >= auth.MinHMACKeyBytes (32 bytes) — short keys
+// panic at NewAuthServiceToken construction (PR269 round-3 F5).
+func (s *stubHMACKeyring) Current() []byte {
+	return []byte("test-secret-32-bytes-padding----")
+}
+func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
+
+// ---------------------------------------------------------------------------
+// T-06: phase5 FinalizeAuth called twice returns labeled error
+// ---------------------------------------------------------------------------
+
+// TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError verifies that
+// calling phase5FinalizeAllRouters a second time (after authFinalized=true) returns
+// an error that names the listener ref, making post-mortem diagnosis unambiguous.
+func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing.T) {
+	b := New(clock.Real(), WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	s := buildPhase5State(t)
+
+	routers := map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
+	}
+
+	// First call must succeed.
+	require.NoError(t, b.phase5FinalizeAllRouters(routers))
+
+	// Second call must fail and include the listener ref in the error.
+	err := b.phase5FinalizeAllRouters(routers)
+	require.Error(t, err, "FinalizeAuth called twice must return an error")
+	assert.Contains(t, err.Error(), "finalize auth",
+		"error must contain 'finalize auth' label to identify the failing phase")
+	_ = s // s is built for test hygiene (health handler initialisation).
+}
+
+func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "InternalListener")
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS")
+	assert.Contains(t, errFullPhases(t, err), "bootstrap.WithListener")
+}
+
+func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0",
+		[]auth.ListenerAuth{authtest.MustAuthJWT(&stubIntentTokenVerifier{})}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "internal guard")
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS")
+}
+
+func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
+}
+
+func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
+	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{plan}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.NoError(t, err)
+}
+
+func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T) {
+	plan := authtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(clock.Real(), WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthMTLS{}, plan}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Path3 TLS phase0 三连
+// ---------------------------------------------------------------------------
+
+// TestPhase0_TLSConfigEmpty_Rejected verifies that a TLS config with no
+// certificate source is rejected at phase0 (Wave B sanity check).
+func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
+			WithListenerTLS(&tls.Config{})), // no Certificates / GetCertificate / GetConfigForClient
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS config has no Certificates / GetCertificate / GetConfigForClient")
+}
+
+// TestPhase0_TLSConfigWithCertificates_Accepted verifies that a TLS config
+// carrying a non-empty static certificate (chain bytes present) passes the
+// phase0 handshake-ability check.
+func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
+	// We do not need a real key pair — we only need at least one of
+	// Certificate / PrivateKey / Leaf to be non-zero so the sanity check
+	// recognizes this as a populated entry. Actual TLS handshake is not
+	// exercised in this unit test.
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
+			WithListenerTLS(&tls.Config{
+				Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}}},
+			})),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+// TestPhase0_TLSConfigCertificateZeroValue_Rejected verifies that a TLS config
+// whose Certificates slice contains only zero-value entries (no chain, no key,
+// no Leaf) is rejected at phase0 — the listener would otherwise fail at the
+// first ClientHello with an opaque tls error rather than fail-fast at startup.
+func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
+			WithListenerTLS(&tls.Config{
+				Certificates: []tls.Certificate{{}},
+			})),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "zero-value tls.Certificate")
+}
+
+// TestPhase0_TLSConfigWithGetCertificate_Accepted verifies that a TLS config
+// with a non-nil GetCertificate callback is accepted at phase0.
+func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}},
+			WithListenerTLS(&tls.Config{
+				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return &tls.Certificate{}, nil
+				},
+			})),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}

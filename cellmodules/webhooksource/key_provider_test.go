@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // validLocalAESKey is a 64-char hex string decoding to 32 bytes.

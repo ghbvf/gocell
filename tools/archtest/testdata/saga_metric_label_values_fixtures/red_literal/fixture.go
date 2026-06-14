@@ -11,7 +11,7 @@ package sagaenumred
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/framework/runtime/saga/executor"
 )
 
 // One sink per frozen executor label enum, so the A2 guard's type-binding is

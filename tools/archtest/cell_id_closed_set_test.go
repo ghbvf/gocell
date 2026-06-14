@@ -128,7 +128,7 @@ func collectResolveCellLabelBodyViolations(fn *ast.FuncDecl, label string) []str
 // TestCellIDClosedSet01_FunnelBody locks the membership funnel body shape.
 func TestCellIDClosedSet01_FunnelBody(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "observability", "metrics", "cell_label.go")
+	target := filepath.Join(root, "framework", "runtime", "observability", "metrics", "cell_label.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -244,7 +244,7 @@ func ResolveCellLabel(ctx context.Context, valid map[string]struct{}) CellLabel 
 // blocks OTHER packages; this closes the in-package gap).
 func TestCellIDClosedSet01_SealedConstruction(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, "runtime", "observability", "metrics")
+	dir := filepath.Join(root, "framework", "runtime", "observability", "metrics")
 	// findProductionGoFilesInDir wraps scanner.DirsScope(...).Files() (the
 	// scanner framework, SCANNER-FRAMEWORK-USAGE-01) and excludes _test.go.
 	files, err := findProductionGoFilesInDir(dir)
@@ -283,7 +283,7 @@ func TestCellIDClosedSet01_SealedConstruction(t *testing.T) {
 // to "_runtime" rather than emitting an empty or forged cell.
 func TestCellIDClosedSet01_StringSentinel(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "observability", "metrics", "cell_label.go")
+	target := filepath.Join(root, "framework", "runtime", "observability", "metrics", "cell_label.go")
 	rel := slashRel(t, root, target)
 
 	fset := token.NewFileSet()
@@ -327,7 +327,7 @@ func TestCellIDClosedSet01_UpstreamSource(t *testing.T) {
 	root := findModuleRoot(t)
 
 	// --- bootstrap source lock ---
-	bsPath := filepath.Join(root, "runtime", "bootstrap", "phases_http.go")
+	bsPath := filepath.Join(root, "framework", "runtime", "bootstrap", "phases_http.go")
 	bsRel := slashRel(t, root, bsPath)
 	fset := token.NewFileSet()
 	bsFile, err := parser.ParseFile(fset, bsPath, nil, parser.SkipObjectResolution)
@@ -358,7 +358,7 @@ func TestCellIDClosedSet01_UpstreamSource(t *testing.T) {
 		bsRel, ruleCellIDClosedSet)
 
 	// --- router buildMux pass-through lock ---
-	rtPath := filepath.Join(root, "runtime", "http", "router", "router.go")
+	rtPath := filepath.Join(root, "framework", "runtime", "http", "router", "router.go")
 	rtRel := slashRel(t, root, rtPath)
 	rtFile, err := parser.ParseFile(fset, rtPath, nil, parser.SkipObjectResolution)
 	require.NoErrorf(t, err, "%s: parse failed", rtRel)

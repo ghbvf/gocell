@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 func UseTestwait(t testing.TB) {

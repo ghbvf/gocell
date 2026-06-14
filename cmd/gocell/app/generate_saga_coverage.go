@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 )
@@ -90,7 +90,7 @@ func sagaCoverageDocTargets(realRoot string, art sagacoveragegen.Artifacts) []sa
 func writeSagaCoverageArtifacts(realRoot string, art sagacoveragegen.Artifacts, dryRun bool) ([]string, error) {
 	var written []string
 
-	genPath := filepath.Join(realRoot, "kernel", "saga", "sagajournaltest", "terminal_coverage_gen.go")
+	genPath := filepath.Join(realRoot, "framework", "kernel", "saga", "sagajournaltest", "terminal_coverage_gen.go")
 	res, err := codegen.Write(codegen.WriteOptions{
 		Path:     genPath,
 		Content:  art.TerminalCoverageGo,

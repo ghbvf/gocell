@@ -12,11 +12,11 @@ import (
 	"github.com/prometheus/common/expfmt"
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	runtimemetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/observability/metrics/metricstest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	runtimemetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics/metricstest"
 )
 
 // Integration-style tests that drive runtime / kernel collectors through

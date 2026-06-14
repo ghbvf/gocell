@@ -12,7 +12,7 @@
 // (metric / leader / backoff).
 package reconcileloopredfixture
 
-import "github.com/ghbvf/gocell/kernel/reconcile"
+import "github.com/ghbvf/gocell/framework/kernel/reconcile"
 
 //nolint:all // intentional violations for archtest RED fixture
 var (

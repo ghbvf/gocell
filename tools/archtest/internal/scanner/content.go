@@ -47,7 +47,7 @@ func LoadContentFiles(s Scope, suffixes []string) ([]ContentContext, error) {
 		if relErr != nil {
 			return nil, fmt.Errorf("scanner.LoadContentFiles: rel-failed: %w", relErr)
 		}
-		relSlash := filepath.ToSlash(rel)
+		relSlash := StripFrameworkPrefix(filepath.ToSlash(rel))
 		// #nosec G304 -- absPath is derived from a checked-in module subtree
 		// already filtered through scope.collectFile (path-segment escape
 		// guard + archtestInternalRel + ExcludeRels + MatchRels). archtest reads

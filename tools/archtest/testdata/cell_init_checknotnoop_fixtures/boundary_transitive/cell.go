@@ -10,7 +10,7 @@ package boundarytransitive
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // BoundaryTransitiveCell is the fake L2+ cell type. The archtest matches it

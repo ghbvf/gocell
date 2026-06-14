@@ -8,9 +8,9 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/credentialinvalidate"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // Mutator is the single entry point for all authz-field mutations on a User

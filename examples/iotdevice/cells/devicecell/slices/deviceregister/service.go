@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TopicDeviceRegistered is the canonical event topic for device registration events.

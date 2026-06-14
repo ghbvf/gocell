@@ -539,13 +539,13 @@ func TestFirstBarePlatformLiteralLine_partition(t *testing.T) {
 		},
 		{
 			"bare-literal-child-path",
-			"package p\nvar _ = \"github.com/ghbvf/gocell/pkg/x\"\n", true,
+			"package p\nvar _ = \"github.com/ghbvf/gocell/framework/pkg/x\"\n", true,
 		},
 		{"only-fragments-no-bare", // reconstruction detector's job, not firstBare's
 			"package p\nconst a = \"github.com/\"\nconst b = \"ghbvf/gocell\"\nvar _ = a + b\n", false},
 		{
 			"gocell-import-path-excluded",
-			"package p\nimport _ \"github.com/ghbvf/gocell/pkg/errcode\"\n", false,
+			"package p\nimport _ \"github.com/ghbvf/gocell/framework/pkg/errcode\"\n", false,
 		},
 	}
 	for _, c := range cases {

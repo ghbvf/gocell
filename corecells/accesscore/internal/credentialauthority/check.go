@@ -2,7 +2,7 @@ package credentialauthority
 
 import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Check is the sealed option type for Assert. Implementations live in this

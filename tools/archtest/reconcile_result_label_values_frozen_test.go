@@ -174,7 +174,7 @@ func resultValuesDiff(got, want []string) string {
 func TestReconcileResultLabelValuesFrozen01(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	const reconcilePkg = PlatformFrameworkModulePath + "/kernel/reconcile"
 	var gotValues []string
 
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
@@ -271,7 +271,7 @@ func scanRecordResultCallsites(p *Pass) []Diagnostic {
 func TestReconcileResultLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	const reconcilePkg = PlatformFrameworkModulePath + "/kernel/reconcile"
 	var allDiags []Diagnostic
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != reconcilePkg {

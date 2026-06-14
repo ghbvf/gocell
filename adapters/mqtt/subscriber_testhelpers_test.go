@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // mustNewEntry builds a sealed outbox.Entry via the producer constructor

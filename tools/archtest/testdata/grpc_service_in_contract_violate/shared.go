@@ -8,7 +8,7 @@
 package grpc_service_in_contract_violate
 
 import (
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 // fixtureSpec builds a minimal GRPCServiceSpec for the fixture callsites.

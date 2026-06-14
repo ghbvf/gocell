@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/modrelease"
 	"github.com/ghbvf/gocell/tools/workspace"
 )
@@ -143,7 +142,7 @@ func bumpLibraries(root, version string) error {
 // every installable binary module, writing the result to disk. The root module
 // prefix is read from root/go.mod (never a hardcoded literal).
 func stripInstallable(root, version string) error {
-	prefix, err := gomodutil.ReadModulePath(root)
+	prefix, err := workspace.CorePrefix(root)
 	if err != nil {
 		return fmt.Errorf("read root module path: %w", err)
 	}

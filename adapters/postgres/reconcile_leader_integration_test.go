@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/reconcile"
-	"github.com/ghbvf/gocell/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/framework/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/kernel/reconcile/reconciletest"
 )
 
 // reconcilePGTestLeaseTTL + mustPGLease are declared in the untagged

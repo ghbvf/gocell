@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/cmdrun"
+	"github.com/ghbvf/gocell/framework/pkg/cmdrun"
 )
 
 // changedArchtestFiles returns the set of top-level tools/archtest/*_test.go

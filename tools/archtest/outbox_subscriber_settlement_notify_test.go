@@ -69,7 +69,7 @@ func scanOutboxSubscriberSettlement(t *testing.T) (implPkgSet, notifyPkgSet map[
 	t.Helper()
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/outbox/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/outbox/..."}, prodPatterns...)
 
 	var subIface *types.Interface
 	var allPkgs []*types.Package

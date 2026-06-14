@@ -63,9 +63,9 @@ func TestNO_TEST_DEVICE_PRINCIPAL_IN_PRODUCTION_01(t *testing.T) {
 	// so test helpers call it freely). Platform cells route through
 	// platformCellScanDirs (single source for the on-disk scan root).
 	searchDirs := []string{
-		filepath.Join(root, "runtime"),
+		filepath.Join(root, "framework", "runtime"),
 		filepath.Join(root, "cmd"),
-		filepath.Join(root, "kernel"),
+		filepath.Join(root, "framework", "kernel"),
 		filepath.Join(root, "adapters"),
 		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),

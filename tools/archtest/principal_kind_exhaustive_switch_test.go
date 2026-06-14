@@ -68,7 +68,7 @@ import (
 const (
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a
 	// module rename updates exactly one place — never a bare literal.
-	principalKindPkgPath  = PlatformModulePath + "/runtime/auth"
+	principalKindPkgPath  = PlatformFrameworkModulePath + "/runtime/auth"
 	principalKindTypeName = "PrincipalKind"
 )
 

@@ -90,7 +90,7 @@
 //     generated cell_gen.go — EvaluateConstString returns ("", false) → the
 //     check is skipped (conservatively not flagging). In practice cellgen always
 //     emits a string literal, so this case cannot arise from the template.
-//   - B3. Dot-import (`import . "github.com/ghbvf/gocell/kernel/cell"`) makes
+//   - B3. Dot-import (`import . "github.com/ghbvf/gocell/framework/kernel/cell"`) makes
 //     GRPCService(spec) appear as a bare *ast.Ident (not *ast.SelectorExpr),
 //     invisible to isGRPCServiceCall / ResolveMethodCall. Mitigated by the
 //     revive dot-imports linter rule in .golangci.yml (prohibits all dot-imports
@@ -124,7 +124,7 @@ import (
 const (
 	// grpcServiceRegistrarPkgPath is derived from PlatformModulePath
 	// (ARCHTEST-MODULE-PATH-FUNNEL-01: no bare module-path literal).
-	grpcServiceRegistrarPkgPath = PlatformModulePath + "/kernel/cell"
+	grpcServiceRegistrarPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 	grpcServiceMethod           = "GRPCService"
 )
 

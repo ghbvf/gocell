@@ -23,12 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/adapters/postgres/saga"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/kernel/saga/sagajournaltest"
-	"github.com/ghbvf/gocell/kernel/saga/sagaprojection"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/kernel/saga/sagajournaltest"
+	"github.com/ghbvf/gocell/framework/kernel/saga/sagaprojection"
 )
 
 // ---------------------------------------------------------------------------

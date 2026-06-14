@@ -81,7 +81,7 @@ func TestAdapterErrorClassificationTransient01(t *testing.T) {
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err, "read module path from go.mod")
 
-	errcodePkgPath := modPath + "/pkg/errcode"
+	errcodePkgPath := modPath + "/framework/pkg/errcode"
 
 	// Downstream Hard: scan pkg/errcode; every write to Error.transient must
 	// be lexically inside func WrapInfra.

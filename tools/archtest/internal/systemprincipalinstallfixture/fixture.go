@@ -20,7 +20,7 @@ package systemprincipalinstallfixture
 import (
 	"context"
 
-	. "github.com/ghbvf/gocell/kernel/projection" //nolint:revive,staticcheck // RED fixture: dot-import bare-ident is the form under test
+	. "github.com/ghbvf/gocell/framework/kernel/projection" //nolint:revive,staticcheck // RED fixture: dot-import bare-ident is the form under test
 )
 
 // bypassInstallFromUnsanctionedCaller installs the system principal from a caller

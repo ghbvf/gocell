@@ -15,10 +15,10 @@ import (
 	"time"
 
 	configevents "github.com/ghbvf/gocell/corecells/configcore/internal/events"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // defaultTombstoneTTL is the minimum safe tombstone retention period. It is

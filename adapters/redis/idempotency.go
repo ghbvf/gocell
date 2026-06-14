@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------

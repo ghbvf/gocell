@@ -28,7 +28,7 @@ package archtest
 //	  (a) field declared on wireMessage / ObservabilityMetadata in
 //	      kernel/outbox, AND
 //	  (b) field type resolves via go/types to
-//	      github.com/ghbvf/gocell/pkg/idutil.SafeID.
+//	      github.com/ghbvf/gocell/framework/pkg/idutil.SafeID.
 //	Any deviation (revert to `string`, alias to another named string type,
 //	rename) fails archtest in CI. Type-system layer: json.Unmarshal cannot
 //	decode an unsafe value into a SafeID field — there is no parser-level
@@ -115,9 +115,9 @@ import (
 )
 
 const (
-	safeIDPkgPath          = PlatformModulePath + "/pkg/idutil"
+	safeIDPkgPath          = PlatformFrameworkModulePath + "/pkg/idutil"
 	safeIDTypeName         = "SafeID"
-	outboxPkgPath          = PlatformModulePath + "/kernel/outbox"
+	outboxPkgPath          = PlatformFrameworkModulePath + "/kernel/outbox"
 	wireMessageType        = "wireMessage"
 	wireMessageExportedOld = "WireMessage"
 	observabilityType      = "ObservabilityMetadata"
@@ -224,7 +224,7 @@ func CheckSafeIDWireMessageUsage01(t *testing.T, cfg ConfigForExternalCell) []Di
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."}),
+		[]string{"./framework/kernel/outbox/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -253,7 +253,7 @@ func CheckSafeIDUpstreamFunnelHard01(t *testing.T, _ ConfigForExternalCell) []Di
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."}),
+		[]string{"./framework/kernel/outbox/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -480,7 +480,7 @@ func checkSafeIDFields(pkg *types.Package) []Diagnostic { //nolint:gocognit,lll 
 	return diags
 }
 
-// isSafeIDType reports whether t resolves to github.com/ghbvf/gocell/pkg/idutil.SafeID.
+// isSafeIDType reports whether t resolves to github.com/ghbvf/gocell/framework/pkg/idutil.SafeID.
 // Aliases flatten to the same TypeName, so `type Foo = idutil.SafeID` is
 // treated as SafeID.
 func isSafeIDType(t types.Type) bool {

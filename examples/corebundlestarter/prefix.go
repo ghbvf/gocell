@@ -1,6 +1,6 @@
 package main
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // init registers the corebundlestarter error-code prefix with the global
 // errcode prefix registry (#1091 reference pattern).

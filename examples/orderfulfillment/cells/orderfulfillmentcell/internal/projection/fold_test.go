@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/projection"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
 )
 
 // TestFoldStatus_AllKinds covers every valid journal.EventKind and asserts the

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // spyCacheMetrics is an in-package spy for the cacheMetricsRecorder seam so the

@@ -60,7 +60,7 @@ import (
 // Mint funnel target: the credentialfence package path (derived from
 // PlatformModulePath) and the Mint function name.
 const (
-	fenceTokenPkgPath  = PlatformModulePath + "/runtime/auth/credentialfence"
+	fenceTokenPkgPath  = PlatformFrameworkModulePath + "/runtime/auth/credentialfence"
 	fenceTokenMintFunc = "Mint"
 )
 
@@ -134,7 +134,7 @@ func CheckFenceTokenMintFunnel(t *testing.T, _ ConfigForExternalCell) []Diagnost
 	// FenceToken on its own is caught.
 	patterns := []string{
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./adapters/...",
 		"./cmd/...",
 		"./examples/...",

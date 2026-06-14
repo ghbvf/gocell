@@ -1,7 +1,6 @@
 go 1.25.11
 
 use (
-	.
 	./adapters/adapterutil
 	./adapters/grpc
 	./adapters/mqtt
@@ -26,7 +25,9 @@ use (
 	./examples/ssobff
 	./examples/todoorder
 	./examples/webhookdemo
+	./framework
 	./generated
+	./tests
 	./tests/integration
 	./tests/testutil/pgshare
 	./tools

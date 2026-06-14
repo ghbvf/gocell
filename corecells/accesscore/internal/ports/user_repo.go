@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
 )
 
 // UserRepository persists and retrieves User aggregates.

@@ -146,7 +146,7 @@ func collectTenancyMinters(p *Pass) []string {
 func TestReconcileTenancyDeclared01(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	const reconcilePkg = PlatformFrameworkModulePath + "/kernel/reconcile"
 	var got []string
 
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {

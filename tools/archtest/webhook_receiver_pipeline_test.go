@@ -98,8 +98,8 @@ import (
 )
 
 const (
-	runtimeWebhookPkgPath = PlatformModulePath + "/runtime/webhook"
-	runtimeWebhookPattern = "./runtime/webhook/..."
+	runtimeWebhookPkgPath = PlatformFrameworkModulePath + "/runtime/webhook"
+	runtimeWebhookPattern = "./framework/runtime/webhook/..."
 
 	// allowedVerifiedConstructor is the only function in runtime/webhook
 	// that may construct a verified{} composite literal.

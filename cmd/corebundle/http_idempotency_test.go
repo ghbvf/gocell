@@ -9,12 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/composition"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 // TestBuildHTTPIdempotencyStore_NilClientReturnsNilNil verifies that a nil

@@ -6,11 +6,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	runtimecrypto "github.com/ghbvf/gocell/runtime/crypto"
-	runtimewebhook "github.com/ghbvf/gocell/runtime/webhook"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	runtimecrypto "github.com/ghbvf/gocell/framework/runtime/crypto"
+	runtimewebhook "github.com/ghbvf/gocell/framework/runtime/webhook"
 )
 
 // upsertWebhookSourceSQL inserts or replaces a source's encrypted secret. The

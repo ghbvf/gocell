@@ -58,15 +58,17 @@ func TestPublishableModuleSet01(t *testing.T) {
 		t.Fatalf("%s: PublishableModules: %v", publishableModuleSetRule, err)
 	}
 
-	// Anti-vacuity: a real workspace has the root + many satellites; an empty or
-	// root-only result means the enumeration mis-resolved.
+	// Anti-vacuity: a real workspace has the core framework module + many
+	// satellites; an empty or core-only result means the enumeration mis-resolved.
 	if len(mods) < 2 {
 		t.Fatalf("%s: anti-vacuity failed: derived %d publishable modules, want >= 2", publishableModuleSetRule, len(mods))
 	}
-	var hasRoot bool
+	var hasCore bool
 	for _, m := range mods {
-		if filepath.ToSlash(filepath.Clean(m.Dir)) == "." {
-			hasRoot = true
+		// Post-#1565 the core publishable module is the framework module at
+		// ./framework (the repo root holds only go.work, no module).
+		if filepath.ToSlash(filepath.Clean(m.Dir)) == "framework" {
+			hasCore = true
 		}
 		// Tag-path well-formedness: every member maps to a valid synchronized tag.
 		tag := tagPathFor(m.Dir, "v1.2.3")
@@ -74,8 +76,8 @@ func TestPublishableModuleSet01(t *testing.T) {
 			t.Errorf("%s: module %q yields malformed tag %q", publishableModuleSetRule, m.Dir, tag)
 		}
 	}
-	if !hasRoot {
-		t.Fatalf("%s: anti-vacuity failed: root module (Dir \".\") absent from publishable set", publishableModuleSetRule)
+	if !hasCore {
+		t.Fatalf("%s: anti-vacuity failed: core framework module (Dir \"framework\") absent from publishable set", publishableModuleSetRule)
 	}
 
 	got := renderPublishable(mods)

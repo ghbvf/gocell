@@ -14,7 +14,7 @@ package sagataileradvancerfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // badCaller is a stub struct that illegally calls AdvanceIfOwner from a

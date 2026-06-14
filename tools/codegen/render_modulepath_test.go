@@ -22,7 +22,7 @@ func TestFormatGoSource_GroupsByModulePath(t *testing.T) {
 import (
 	"fmt"
 	"github.com/stretchr/testify/assert"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/acme/svc/internal/widget"
 )
 
@@ -46,7 +46,7 @@ func F(t assert.TestingT) {
 		want := `import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/acme/svc/internal/widget"
@@ -68,7 +68,7 @@ func F(t assert.TestingT) {
 	"github.com/acme/svc/internal/widget"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )`
 		if !bytes.Contains(out, []byte(want)) {
 			t.Errorf("ghbvf module imports not grouped as local.\n--- want substring\n%s\n--- got\n%s", want, out)

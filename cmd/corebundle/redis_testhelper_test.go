@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 )
 
 // fakeDistributedClaimer is a test fake that reports ClaimerKindDistributed.

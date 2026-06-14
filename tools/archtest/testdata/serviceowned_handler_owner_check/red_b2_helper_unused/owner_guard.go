@@ -6,7 +6,7 @@
 // (typed function choice form violated).
 package red_b2_helper_unused
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // Canonical helper — B2b passes — but unused by CheckOwner below.
 //

@@ -52,8 +52,8 @@ func TestIsProjectionApplyHookAllowed(t *testing.T) {
 		want         bool
 	}{
 		{"_test.go exempt regardless of pkg", "consumer.example/app/foo", "foo/bar_test.go", true},
-		{"sanctioned kernel/projection", PlatformModulePath + "/kernel/projection", "kernel/projection/coordinator.go", true},
-		{"sanctioned bootstrap drain", PlatformModulePath + "/runtime/bootstrap", "runtime/bootstrap/phases_projection.go", true},
+		{"sanctioned kernel/projection", PlatformFrameworkModulePath + "/kernel/projection", "kernel/projection/coordinator.go", true},
+		{"sanctioned bootstrap drain", PlatformFrameworkModulePath + "/runtime/bootstrap", "runtime/bootstrap/phases_projection.go", true},
 		{"consumer forges kernel/projection rel", "consumer.example/app/kernel/projection", "kernel/projection/coordinator.go", false},
 		{"consumer forges drain rel", "consumer.example/app/runtime/bootstrap", "runtime/bootstrap/phases_projection.go", false},
 		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", "cells/foo/cell.go", false},

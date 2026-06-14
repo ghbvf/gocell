@@ -15,7 +15,7 @@ package tenantscopefixture
 import (
 	"context"
 
-	. "github.com/ghbvf/gocell/pkg/tenant" //nolint:revive,staticcheck // RED fixture: dot-import is the form under test
+	. "github.com/ghbvf/gocell/framework/pkg/tenant" //nolint:revive,staticcheck // RED fixture: dot-import is the form under test
 )
 
 // dotImportScopeWrite writes a tx tenant scope via a dot-imported bare WithScope

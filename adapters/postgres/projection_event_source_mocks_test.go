@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // Shared unit-test mocks for the PG projection journal source. These were the

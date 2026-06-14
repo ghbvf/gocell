@@ -3,9 +3,9 @@ package projection
 import (
 	"fmt"
 
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
 )
 
 // terminalStatuses is the closed set of terminal status values. Used for the

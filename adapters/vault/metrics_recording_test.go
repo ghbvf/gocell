@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 )
 
 // recordingProvider is an in-memory, concurrency-safe metrics.Provider for vault

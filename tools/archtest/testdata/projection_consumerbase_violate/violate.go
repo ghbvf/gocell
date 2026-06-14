@@ -10,7 +10,7 @@
 // DO NOT use this package in production code.
 package projection_consumerbase_violate
 
-import "github.com/ghbvf/gocell/runtime/bootstrap"
+import "github.com/ghbvf/gocell/framework/runtime/bootstrap"
 
 // violatingWiring assembles a composition-root option slice that registers
 // projection infrastructure but omits WithConsumerBase. This is the violation

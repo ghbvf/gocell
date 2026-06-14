@@ -8,7 +8,7 @@ package ctx_param_passes
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // Service holds an injected clock.

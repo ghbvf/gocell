@@ -13,7 +13,7 @@
 
 package wrongid
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 
 // Documentation reference (legacy file scanner would match the substring here):
 //

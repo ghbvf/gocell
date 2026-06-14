@@ -7,7 +7,7 @@
 // option's IsNilInterface call (it is not a required-field guard).
 package greenoptionalisnil
 
-import "github.com/ghbvf/gocell/pkg/validation"
+import "github.com/ghbvf/gocell/framework/pkg/validation"
 
 // Repo is the required dependency interface.
 type Repo interface{ Get() }

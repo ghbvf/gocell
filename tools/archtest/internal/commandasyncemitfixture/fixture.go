@@ -15,8 +15,8 @@ package commandasyncemitfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // commandTopic is a const string in the reserved command namespace.

@@ -24,7 +24,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	pgalias "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // qualifiedPGCalls exercises the four banned postgres constructors in

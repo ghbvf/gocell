@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 // layerColors maps each layer to a Graphviz fill color. Stable colors let

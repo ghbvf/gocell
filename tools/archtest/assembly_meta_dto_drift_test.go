@@ -26,8 +26,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/runtime/devtools/catalog"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/devtools/catalog"
 )
 
 // catalogExcludedAssemblyFields lists AssemblyMeta exported fields that are

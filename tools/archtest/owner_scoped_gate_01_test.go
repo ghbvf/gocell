@@ -75,7 +75,7 @@ const ruleOwnerScopedGateExactSet01 = "OWNER-SCOPED-GATE-EXACT-SET-01"
 // authzImportPath is the canonical import path of the sealed permission registry
 // (pkg/authz). The second argument of every owner-scoped gate must be a call to one
 // of its Perm*() accessor functions.
-const authzImportPath = PlatformModulePath + "/pkg/authz"
+const authzImportPath = PlatformFrameworkModulePath + "/pkg/authz"
 
 // ownerScopedGateExpectedSet is the FROZEN set of owner-scoped route gates, keyed
 // "<handler>|<pathParam>|<permAccessor>". Adding/removing an owner endpoint, or

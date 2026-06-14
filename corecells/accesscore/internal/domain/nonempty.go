@@ -3,7 +3,7 @@ package domain
 import (
 	"encoding/json"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // NonEmpty is a string guaranteed non-empty at the type-system layer.

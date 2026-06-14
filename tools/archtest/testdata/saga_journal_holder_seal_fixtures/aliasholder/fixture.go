@@ -9,7 +9,7 @@
 // Loaded only via Run(t, Fixture(...)).
 package aliasholder
 
-import "github.com/ghbvf/gocell/kernel/saga/journal"
+import "github.com/ghbvf/gocell/framework/kernel/saga/journal"
 
 // aliasedCore is a package-level alias to the Heartbeat-free core interface.
 type aliasedCore = journal.JournalCore

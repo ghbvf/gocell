@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // localBareCellID is a local var bound to a bare string literal — using
 // it at a cell-id position is the Ident→BasicLit chain bypass that A1

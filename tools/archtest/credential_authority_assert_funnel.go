@@ -27,7 +27,7 @@ const ruleCredentialAuthorityAssertFunnel01 = "CREDENTIAL-AUTHORITY-ASSERT-FUNNE
 
 const (
 	credAuthorityPkgPath = PlatformCellsModulePath + "/accesscore/internal/credentialauthority"
-	credSessionPkgPath   = PlatformModulePath + "/runtime/auth/session"
+	credSessionPkgPath   = PlatformFrameworkModulePath + "/runtime/auth/session"
 	credDomainUserPkg    = PlatformCellsModulePath + "/accesscore/internal/domain"
 )
 
@@ -395,7 +395,7 @@ func collectCalleeReferenceViolations(t *testing.T, cfg ConfigForExternalCell) [
 	return runFunnelDualScan(t, cfg, []string{
 		"./corecells/...",
 		"./cmd/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 	}, func(p *Pass, file *ast.File, rel string) []Diagnostic {
 		if strings.HasSuffix(rel, "_test.go") {
 			return nil

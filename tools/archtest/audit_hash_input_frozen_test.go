@@ -116,7 +116,7 @@ var expectedAuditHashInputFields = []auditHashInputField{
 func TestAuditHashInputFrozen_A1_StructShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	protocolPath := filepath.Join(root, "runtime", "audit", "ledger", "protocol.go")
+	protocolPath := filepath.Join(root, "framework", "runtime", "audit", "ledger", "protocol.go")
 	got := collectAuditHashInputFields(t, protocolPath)
 	if !reflect.DeepEqual(got, expectedAuditHashInputFields) {
 		t.Errorf("AUDIT-HASH-INPUT-FROZEN-01 A1: auditHashInput shape drifted.\n"+

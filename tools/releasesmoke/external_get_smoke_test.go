@@ -18,8 +18,8 @@ import (
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/modrelease"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 const (
@@ -28,9 +28,9 @@ const (
 	// suffix-less module paths (a vN>=2 would require a /vN path suffix).
 	synthVersion = "v0.99.99"
 	// probe is the satellite an external consumer fetches; its transitive internal
-	// closure (gocell, adapterutil) is the anti-vacuity surface.
+	// closure (framework, adapterutil) is the anti-vacuity surface.
 	probe       = "github.com/ghbvf/gocell/adapters/postgres"
-	probeCore   = "github.com/ghbvf/gocell"
+	probeCore   = "github.com/ghbvf/gocell/framework"
 	probeAdpUtl = "github.com/ghbvf/gocell/adapters/adapterutil"
 )
 
@@ -155,7 +155,7 @@ func TestExternalGet_AllPublishable_Build(t *testing.T) {
 // Go ignores a dependency's replace (the OTel-canonical shape).
 func buildProxy(t *testing.T, root, version string, omit ...string) string { //nolint:unparam // R2-approved: synthetic version by design
 	t.Helper()
-	prefix, err := gomodutil.ReadModulePath(root)
+	prefix, err := workspace.CorePrefix(root)
 	if err != nil {
 		t.Fatalf("read root module path: %v", err)
 	}

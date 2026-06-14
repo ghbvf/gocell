@@ -73,7 +73,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 		pInfo *types.Info
 	}
 	var result a2Result
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
 			return nil
 		}
@@ -142,7 +142,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	if pInfo != nil {
 		approvedObj := pInfo.Uses[approvedSel.Sel]
 		approvedFn, isFn := approvedObj.(*types.Func)
-		const panicregPkgPath = PlatformModulePath + "/pkg/panicregister"
+		const panicregPkgPath = PlatformFrameworkModulePath + "/pkg/panicregister"
 		if !isFn || approvedFn.Pkg() == nil || approvedFn.Pkg().Path() != panicregPkgPath || approvedFn.Name() != "Approved" {
 			t.Fatalf("%s/A2: Approved must resolve to %s.Approved, got %v", fixtureCellIDRuleID, panicregPkgPath, approvedObj)
 		}
@@ -171,7 +171,7 @@ func TestFixtureCellIDTypedBuilder_NewCellIDBodyShape(t *testing.T) {
 	if pInfo != nil {
 		assertObj := pInfo.Uses[assertSel.Sel]
 		assertFn, isFn := assertObj.(*types.Func)
-		const errcodePkgPath = PlatformModulePath + "/pkg/errcode"
+		const errcodePkgPath = PlatformFrameworkModulePath + "/pkg/errcode"
 		if !isFn || assertFn.Pkg() == nil || assertFn.Pkg().Path() != errcodePkgPath || assertFn.Name() != "Assertion" {
 			t.Fatalf("%s/A2: Assertion must resolve to %s.Assertion, got %v", fixtureCellIDRuleID, errcodePkgPath, assertObj)
 		}
@@ -207,7 +207,7 @@ func TestFixtureCellIDTypedBuilder_VarInitializerShape(t *testing.T) {
 		specs []*ast.ValueSpec
 	}
 	var collected result
-	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/kernel/metadata/metadatatest/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != metadatatestPkgPath {
 			return nil
 		}

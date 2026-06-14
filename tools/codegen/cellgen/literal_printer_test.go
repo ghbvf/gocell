@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -21,7 +21,7 @@ func fmtLiteral(t *testing.T, lit string) string {
 	t.Helper()
 	src := fmt.Sprintf(`package testpkg
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 var _ = %s
 `, lit)

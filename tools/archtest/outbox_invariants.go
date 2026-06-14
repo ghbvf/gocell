@@ -58,7 +58,7 @@ import (
 	"strings"
 	"testing"
 
-	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
+	kerneloutbox "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -71,7 +71,7 @@ const (
 
 // outboxKernelPkgPath is the import path of kernel/outbox, derived from
 // PlatformModulePath so a module rename / /v2 bump updates one place.
-const outboxKernelPkgPath = PlatformModulePath + "/kernel/outbox"
+const outboxKernelPkgPath = PlatformFrameworkModulePath + "/kernel/outbox"
 
 // fixtureOutboxPackagePath is the fake outbox package path used by the
 // topic-failopen fixture packages under testdata/topic_const_fixtures/.

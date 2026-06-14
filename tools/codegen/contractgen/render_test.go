@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -410,7 +410,7 @@ func TestRender_HTTP_Transport(t *testing.T) {
 // rendering: rendering the subscription template (which imports framework
 // kernel packages) under an EXTERNAL module path produces valid Go, and the
 // framework kernel import is grouped as third-party (#1083). In an external
-// repo, github.com/ghbvf/gocell/kernel/... is a go-get dependency, not local.
+// repo, github.com/ghbvf/gocell/framework/kernel/... is a go-get dependency, not local.
 func TestRender_ExternalModulePath(t *testing.T) {
 	root := repoRoot(t)
 	p := loadTodoorderProject(t, root)
@@ -431,7 +431,7 @@ func TestRender_ExternalModulePath(t *testing.T) {
 	// of the generated code) and must NOT be pinned into a local block keyed to
 	// the external module — i.e. rendering did not hardcode github.com/ghbvf/gocell
 	// as the local prefix.
-	if !bytes.Contains(out, []byte("github.com/ghbvf/gocell/kernel/")) {
+	if !bytes.Contains(out, []byte("github.com/ghbvf/gocell/framework/kernel/")) {
 		t.Errorf("expected framework kernel import in rendered subscription, got:\n%s", out)
 	}
 	if bytes.Contains(out, []byte(extMod)) {
@@ -1311,7 +1311,7 @@ func TestSagaGoldenCompiles(t *testing.T) {
 	// not older than the replaced dependency (else go build refuses).
 	goDirective := "go 1.25"
 	// #nosec G304 -- test-internal: root is the repo module root, not user input.
-	if data, rerr := os.ReadFile(filepath.Join(root, "go.mod")); rerr == nil {
+	if data, rerr := os.ReadFile(filepath.Join(root, "framework", "go.mod")); rerr == nil {
 		for _, ln := range strings.Split(string(data), "\n") {
 			if strings.HasPrefix(ln, "go ") {
 				goDirective = strings.TrimSpace(ln)
@@ -1320,7 +1320,7 @@ func TestSagaGoldenCompiles(t *testing.T) {
 		}
 	}
 	gomod := "module sagagoldencompile\n\n" + goDirective +
-		"\n\nrequire github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => " + root + "\n"
+		"\n\nrequire github.com/ghbvf/gocell/framework v0.0.0\n\nreplace github.com/ghbvf/gocell/framework => " + root + "/framework\n"
 	writeFile("go.mod", []byte(gomod))
 
 	cmd := exec.Command("go", "build", "./...")

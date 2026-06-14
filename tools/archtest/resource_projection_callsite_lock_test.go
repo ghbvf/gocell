@@ -56,7 +56,7 @@ import (
 	"go/types"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 const projectionCallsiteFixturePkg = "./tools/archtest/internal/projectioncallsitefixture"

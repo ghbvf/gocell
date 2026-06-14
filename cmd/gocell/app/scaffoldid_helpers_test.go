@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // mustID wraps scaffoldid.Parse with t.Fatal on validation error so cmd-layer

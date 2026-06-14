@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
 )
 
 const (

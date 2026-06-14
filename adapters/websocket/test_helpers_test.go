@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
-	rtws "github.com/ghbvf/gocell/runtime/websocket"
+	rtws "github.com/ghbvf/gocell/framework/runtime/websocket"
 )
 
 // requireUpgradeHandler constructs an UpgradeHandler for test wiring.

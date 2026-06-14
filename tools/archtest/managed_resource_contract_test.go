@@ -125,7 +125,7 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
 	adapterPrefix := modulePath + "/adapters/"
-	lifecyclePkg := modulePath + "/kernel/lifecycle"
+	lifecyclePkg := modulePath + "/framework/kernel/lifecycle"
 
 	var managedResource *types.Interface
 	var adapterTypes []adapterExportedType

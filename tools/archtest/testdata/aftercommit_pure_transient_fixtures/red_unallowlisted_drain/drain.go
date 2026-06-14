@@ -9,7 +9,7 @@ package redunallowlisteddrain
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 func drain(ctx context.Context) {

@@ -6,7 +6,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports/conformance"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 )
 
 // TestMemPolicyRepo_Conformance enrolls the in-memory PolicyRepository in the

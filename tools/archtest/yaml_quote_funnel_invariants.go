@@ -83,7 +83,7 @@ const (
 	// yamlsafePkgPath is the canonical import path of the yamlsafe package —
 	// a GoCell platform symbol path, anchored to PlatformModulePath so a module
 	// rename updates exactly one place and no bare literal appears here.
-	yamlsafePkgPath = PlatformModulePath + "/pkg/yamlsafe"
+	yamlsafePkgPath = PlatformFrameworkModulePath + "/pkg/yamlsafe"
 
 	yamlsafeScalarType  = "Scalar"
 	yamlsafeQuoteFunc   = "Quote"

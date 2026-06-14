@@ -7,9 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	runtimecrypto "github.com/ghbvf/gocell/runtime/crypto"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	runtimecrypto "github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // webhookStubTransformer is a non-nil ValueTransformer for the constructor-guard

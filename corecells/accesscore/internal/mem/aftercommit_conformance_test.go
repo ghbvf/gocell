@@ -3,8 +3,8 @@ package mem
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence/persistencetest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence/persistencetest"
 )
 
 // TestMemTxRunner_AfterCommitConformance asserts the store-bound mem runner

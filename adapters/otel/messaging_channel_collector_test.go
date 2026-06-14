@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/kernel/observability/poolstats"
+	"github.com/ghbvf/gocell/framework/kernel/observability/poolstats"
 )
 
 // messagingChannelAggregated holds the per-state and per-pool-max aggregations

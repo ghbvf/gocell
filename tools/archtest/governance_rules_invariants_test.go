@@ -466,7 +466,7 @@ func testINV3ProductionSource(t *testing.T) {
 // *types.Package whose import graph includes at least kernel/governance itself.
 // We exercise:
 //
-//	(a) known path PlatformModulePath+"/kernel/governance" — DFS must find non-nil.
+//	(a) known path PlatformFrameworkModulePath+"/kernel/governance" — DFS must find non-nil.
 //	(b) non-existent path PlatformModulePath+"/does/not/exist" — must return nil.
 //	(c) nil pkg input — must safely return nil without panic.
 func TestFindTypesPackageByPath(t *testing.T) {

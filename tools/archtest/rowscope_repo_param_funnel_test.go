@@ -112,7 +112,7 @@ const (
 	// ledgerStorePkg is the audit ledger ports package (Store interface). Derived
 	// from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a module rename
 	// updates exactly one place.
-	ledgerStorePkg = PlatformModulePath + "/runtime/audit/ledger"
+	ledgerStorePkg = PlatformFrameworkModulePath + "/runtime/audit/ledger"
 	// rowScopeRepoParamFixPkg is a relative load path for go/packages — NOT a
 	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	rowScopeRepoParamFixPkg = "./tools/archtest/internal/rowscoperepoparamfixture"

@@ -54,7 +54,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 )
 
 // peerIdentityWantFields is the frozen curated field set: name → reflect type

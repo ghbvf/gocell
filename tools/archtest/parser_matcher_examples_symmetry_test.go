@@ -106,7 +106,7 @@ func TestParserMatcherExamplesSymmetry01(t *testing.T) {
 func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 	t.Parallel()
 
-	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != parserMatcherMetadataPkg {
 			return nil
 		}
@@ -173,7 +173,7 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 	t.Parallel()
 
-	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != parserMatcherMetadataPkg {
 			return nil
 		}

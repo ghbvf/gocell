@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // testAuditRead is the canonical action string for PermAuditRead, used throughout

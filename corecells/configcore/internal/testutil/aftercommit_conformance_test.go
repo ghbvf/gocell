@@ -3,7 +3,7 @@ package testutil
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/persistence/persistencetest"
+	"github.com/ghbvf/gocell/framework/kernel/persistence/persistencetest"
 )
 
 // TestNoopTxRunner_AfterCommitConformance asserts the configcore test-util

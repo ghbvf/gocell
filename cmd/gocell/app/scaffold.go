@@ -11,12 +11,12 @@ import (
 	"text/template"
 	"unicode"
 
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/pathsafe"
-	"github.com/ghbvf/gocell/pkg/scaffoldid"
-	"github.com/ghbvf/gocell/pkg/yamlsafe"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/framework/pkg/yamlsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 

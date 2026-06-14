@@ -44,7 +44,7 @@ func TestSAFEIDWireMessageUsage01_BlindSpot_NewWireStruct(t *testing.T) {
 
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/outbox/..."}),
+		[]string{"./framework/kernel/outbox/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != outboxPkgPath {
 				return nil
@@ -102,7 +102,7 @@ func TestSAFEIDUpstreamFunnelHard01_BlindSpot_NoReExport(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"kernel/outbox"})
+	scope := DirsScope(root, []string{"framework/kernel/outbox"})
 
 	var diags []Diagnostic
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {

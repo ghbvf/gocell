@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadContractOwner uses a bare string literal in ContractMeta.OwnerCell —
 // must be flagged by A1 (direct field position).

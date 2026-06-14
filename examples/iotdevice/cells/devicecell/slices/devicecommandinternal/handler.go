@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // InternalListAdapter wraps Service to implement listcontract.Service for

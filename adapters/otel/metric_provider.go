@@ -8,8 +8,8 @@ import (
 	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/ghbvf/gocell/adapters/otel/internal/otelwrap"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // MetricProvider implements metrics.Provider backed by an OTel Meter.

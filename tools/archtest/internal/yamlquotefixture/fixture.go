@@ -6,7 +6,7 @@
 // shape encoded here.
 package yamlquotefixture
 
-import "github.com/ghbvf/gocell/pkg/yamlsafe"
+import "github.com/ghbvf/gocell/framework/pkg/yamlsafe"
 
 // AliasOfScalar is a true type alias of yamlsafe.Scalar. Conversions through
 // this alias must still be flagged by YAML-QUOTE-FUNNEL-01 — the archtest

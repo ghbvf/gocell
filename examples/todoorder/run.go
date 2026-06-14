@@ -17,18 +17,18 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/ghbvf/gocell/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/auth"
 
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // demoTxRunner is a pass-through TxRunner for demo mode: executes fn directly

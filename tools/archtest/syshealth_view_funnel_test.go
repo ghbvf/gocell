@@ -56,7 +56,7 @@ const (
 	ruleSyshealthViewCtxFunnel = "SYSHEALTH-VIEW-CTX-FUNNEL-01"
 	// syshealthPkgPath is the canonical import path of runtime/syshealth, anchored
 	// to PlatformModulePath so a module rename updates exactly one place.
-	syshealthPkgPath        = PlatformModulePath + "/runtime/syshealth"
+	syshealthPkgPath        = PlatformFrameworkModulePath + "/runtime/syshealth"
 	withHealthViewFn        = "WithHealthView"
 	healthViewFromContextFn = "HealthViewFromContext"
 )

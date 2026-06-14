@@ -56,8 +56,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 )
 
 // principalCanonicalField is one frozen (name, jsonTag) pair on PrincipalMetadata.

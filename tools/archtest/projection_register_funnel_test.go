@@ -73,7 +73,7 @@ const (
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01: no bare
 	// module-path literal — the sibling apply-hook const is grandfathered in the
 	// frozen baseline; new ones must derive).
-	projectionRegistrarPkgPath = PlatformModulePath + "/kernel/cell"
+	projectionRegistrarPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 	projectionRegisterMethod   = "RegisterProjection"
 )
 

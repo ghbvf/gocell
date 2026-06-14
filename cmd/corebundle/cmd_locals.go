@@ -7,7 +7,7 @@ import (
 
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
 )
 
 // cmdLocals holds cmd-private wiring that is NOT on composition.SharedDeps —

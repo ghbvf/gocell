@@ -71,10 +71,10 @@ import (
 )
 
 const (
-	cursorConformancePkg      = PlatformModulePath + "/kernel/projection/projectiontest"
+	cursorConformancePkg      = PlatformFrameworkModulePath + "/kernel/projection/projectiontest"
 	cursorConformanceFuncName = "RunCursorConformance"
 
-	cursorIfacePkg  = PlatformModulePath + "/kernel/projection"
+	cursorIfacePkg  = PlatformFrameworkModulePath + "/kernel/projection"
 	cursorIfaceName = "Cursor"
 
 	fixtureCursorEnrollPkg = PlatformModulePath + "/tools/archtest/internal/projectioncursorenrollfixture"
@@ -211,7 +211,7 @@ func TestProjectionCursorConformanceEnroll01_RedFixture(t *testing.T) {
 	}
 
 	loadPatterns := []string{
-		"./kernel/projection/...",
+		"./framework/kernel/projection/...",
 		"./tools/archtest/internal/projectioncursorenrollfixture/...",
 	}
 

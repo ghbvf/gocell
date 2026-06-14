@@ -10,8 +10,8 @@ package scopedread
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // Do scopes the context to tenant t (tenant.WithScope), runs fn inside a

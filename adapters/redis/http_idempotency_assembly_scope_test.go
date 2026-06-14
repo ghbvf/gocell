@@ -10,10 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
-	"github.com/ghbvf/gocell/runtime/http/idempotency/idempotencytest"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/http/idempotency/idempotencytest"
 )
 
 // http_idempotency_assembly_scope_test.go — behavioral proof of full-assembly

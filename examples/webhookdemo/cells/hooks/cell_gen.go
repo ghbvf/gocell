@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	webhook "github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	webhook "github.com/ghbvf/gocell/framework/kernel/webhook"
 )
 
 var _ cell.Cell = (*HooksCell)(nil)

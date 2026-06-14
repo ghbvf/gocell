@@ -95,7 +95,7 @@ var authPlanConstructorNames = map[string]struct{}{
 // AuthPlan constructor names and types. Resolved via go/types — the package
 // alias chosen at any given import site (`auth`, `kauth`, `myauth`, …) is
 // irrelevant; only the import path identifies the type's origin.
-const authPlanPkgPath = PlatformModulePath + "/kernel/auth"
+const authPlanPkgPath = PlatformFrameworkModulePath + "/kernel/auth"
 
 // authPlanStringAllowlist contains files that legitimately return or use the
 // old policy-name strings as Describe() return values, observability labels,
@@ -360,7 +360,7 @@ func dedupAuthPlanDiags(diags []Diagnostic) []Diagnostic {
 // was `pkg.Name == "cell"`. Maintaining an explicit alias allow-list ({auth,
 // kauth, …}) makes any new alias a silent bypass — the AI-robust gap the
 // reviewer flagged. Resolving through go/types is alias-agnostic by
-// construction: `import myauth "github.com/ghbvf/gocell/kernel/auth"` still
+// construction: `import myauth "github.com/ghbvf/gocell/framework/kernel/auth"` still
 // resolves Uses[*ast.Ident{Name:"myauth"}] back to the kernel/auth package
 // object whose Path() is authPlanPkgPath.
 //
@@ -372,7 +372,7 @@ func dedupAuthPlanDiags(diags []Diagnostic) []Diagnostic {
 //   - method values / function pointers (e.g. `f := auth.NewAuthJWT`) — the
 //     Uses[*ast.Ident] resolution still fires on the SelectorExpr.Sel of the
 //     RHS, so the rule still flags the assignment.
-//   - dot-import (`import . "github.com/ghbvf/gocell/kernel/auth"` then
+//   - dot-import (`import . "github.com/ghbvf/gocell/framework/kernel/auth"` then
 //     `_ = AuthMTLS{}`) — the type-AST is then a bare *ast.Ident, and
 //     Uses[ident] still resolves to the kernel/auth *types.TypeName. Covered.
 //   - cgo / unsafe-pointer construction — not expressible for sealed

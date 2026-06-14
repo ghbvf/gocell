@@ -84,8 +84,8 @@ const (
 	// metadataPkgPath / metadatatestPkgPath derive from PlatformModulePath so
 	// a module rename / /v2 bump updates one place
 	// (ARCHTEST-MODULE-PATH-FUNNEL-01).
-	metadataPkgPath     = PlatformModulePath + "/kernel/metadata"
-	metadatatestPkgPath = PlatformModulePath + "/kernel/metadata/metadatatest"
+	metadataPkgPath     = PlatformFrameworkModulePath + "/kernel/metadata"
+	metadatatestPkgPath = PlatformFrameworkModulePath + "/kernel/metadata/metadatatest"
 )
 
 // cellIDFieldPosition identifies a struct field (or slice-field element
@@ -232,7 +232,7 @@ func scanCellIDFixtureViolations(t *testing.T, allowSelfFiles, carveOuts map[str
 	scopePrefixes := []string{"kernel/"}
 	var violations []Diagnostic
 	collect := func(opts TypedOpts) {
-		_ = Run(t, Typed(opts, []string{"./kernel/..."}), func(p *Pass) []Diagnostic {
+		_ = Run(t, Typed(opts, []string{"./framework/kernel/..."}), func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
 			}

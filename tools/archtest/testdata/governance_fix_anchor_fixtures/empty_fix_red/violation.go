@@ -14,7 +14,7 @@
 // Expected: 1 violation from the fix-arg scan path.
 package empty_fix_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 type fakeLocator struct{}
 

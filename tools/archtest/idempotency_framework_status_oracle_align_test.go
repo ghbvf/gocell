@@ -33,8 +33,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 func TestIdempotencyFrameworkStatusOracleAlign01(t *testing.T) {

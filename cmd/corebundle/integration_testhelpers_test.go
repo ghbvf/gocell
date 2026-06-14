@@ -7,19 +7,19 @@ import (
 	"net"
 	"testing"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/auth/authtest"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/auth/authtest"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 
 	"github.com/stretchr/testify/require"
 
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // runner is the minimal interface shared by *bootstrap.Bootstrap and

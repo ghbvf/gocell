@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/distlock"
-	"github.com/ghbvf/gocell/runtime/distlock/locktest"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/runtime/distlock"
+	"github.com/ghbvf/gocell/framework/runtime/distlock/locktest"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
