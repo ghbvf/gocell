@@ -83,16 +83,26 @@ type markerStep struct {
 // test). Hard is reachable but not low-cost — it would require modrelease to own
 // the full stable tag set (a `--print-stable-tags` golden the workflow consumes
 // verbatim), re-merging the marker into modrelease's surface (in tension with
-// "modrelease = pure module tags") + 3 files; tracked as a backlog Hard-ization
-// issue per ai-robust.md §审查要求.
+// "modrelease = pure module tags") + 3 files; tracked as backlog Hard-ization
+// issue #2141 per ai-robust.md §审查要求.
 //
-// Blind spot (disclosed): this scans the run-block TEXT, not the executed git
-// pushes — it proves the marker is constructed into the push array, not that the
-// push succeeds. Push success / tag-set atomicity is covered at release time by
-// the --atomic push + `gh release create --verify-tag` + the "Validate satellite
-// tag set (stable resume)" step. A maintainer who renames "Tag modules" or moves
-// the mint to a new step evades the anti-vacuity tally loudly (require.Positive),
-// not silently.
+// Blind spot (disclosed):
+//   - This scans the run-block TEXT, not the executed git pushes — it proves the
+//     marker is constructed into the push array, not that the push succeeds. Push
+//     success / tag-set atomicity is covered at release time by the --atomic push +
+//     `gh release create --verify-tag` + the "Validate satellite tag set (stable
+//     resume)" step.
+//   - markerMintRe binds to the `tags=("$TAG" …)` array-literal form. A maintainer
+//     who rewrites the push set into append form (e.g. `tags+=("$TAG")`) would evade
+//     the positive match; the Hard-ization (#2141) closes this by deriving the set
+//     from modrelease + golden instead of scanning shell text.
+//   - Only the "Tag modules" step is scanned; the sibling "Validate satellite tag
+//     set (stable resume)" step (which re-derives the library tags on resume) is NOT
+//     guarded here — its correctness rides on the same modrelease source plus the
+//     release-time peel-to-marker-commit check.
+//   - A maintainer who renames "Tag modules" or moves the mint to a new step evades
+//     the positive check but trips the anti-vacuity tally loudly (require.Positive),
+//     not silently.
 //
 // ref: kubernetes/kubernetes (bare vX.Y.Z = release marker; staging modules tag
 //

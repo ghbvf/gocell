@@ -275,6 +275,9 @@ jobs:
             exit 0
           fi
           mapfile -t module_tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
+          # Sanity floor only — the EXACT publishable set is Hard golden-locked by
+          # PUBLISHABLE-MODULE-SET-01 (modrelease testdata/publishable.golden). The
+          # >=2 here just catches modrelease returning empty/garbage at release time.
           if [ "${#module_tags[@]}" -lt 2 ]; then
             echo "::error::modrelease produced ${#module_tags[@]} library tag(s) for $TAG; expected the full publishable module set."
             exit 1
