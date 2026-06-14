@@ -411,20 +411,54 @@ type integrationShardFilter struct {
 	filter string
 }
 
-// readIntegrationShardFilters decodes the integration-test job's
-// strategy.matrix.include[] and returns the (shard, filter) pairs that carry
-// run_main_integration: true with a non-empty filter. A shard is excluded when
-// either condition fails, on principle: run_main_integration:false means the leg
-// runs no main integration step at all, and an empty filter means the leg does
-// not route by import-path prefix (the Test step rejects an empty SHARD_FILTER) —
-// so the exactly-one-shard partition assertion is meaningless for it. The
-// adapters-race leg (empty filter + run_main_integration:false) is the sole
-// current instance of both, but the predicate is written against the semantics,
-// not that one shard.
+// matrixShardInclude is one decoded strategy.matrix.include[] entry of the
+// integration-test job. Named (not anonymous) so selectMainShardFilters can be
+// unit-tested with synthetic includes. The local YAML shape is decoupled from
+// ci_pinning_test.go's workflowStep (mirrors archtest_ci_shard_count_test.go's
+// archtestWorkflowConfig rationale) so adding matrix fields here cannot regress
+// the pin / step archtests.
+type matrixShardInclude struct {
+	Shard              string `yaml:"shard"`
+	Filter             string `yaml:"filter"`
+	RunMainIntegration bool   `yaml:"run_main_integration"`
+}
+
+// selectMainShardFilters splits the matrix includes into (a) the routing filters
+// of every run_main_integration shard and (b) the names of any
+// run_main_integration shard that declares an EMPTY filter — a fail-open
+// configuration that must be rejected, not skipped.
 //
-// The local YAML shape is decoupled from ci_pinning_test.go's workflowStep
-// (mirrors archtest_ci_shard_count_test.go's archtestWorkflowConfig rationale)
-// so adding matrix fields here cannot regress the pin / step archtests.
+// Empty-filter main shards are a violation, not an exclusion: the discovery step
+// (gated `if: matrix.run_main_integration`) routes with `grep -E "$SHARD_FILTER"`,
+// and an empty regex matches EVERY package — such a shard would run (and
+// coverage-bill) the entire integration set, silently breaking the disjoint
+// guarantee. A non-run_main_integration leg (adapters-race) never reaches that
+// step, so its empty filter is correctly excluded with no violation. Modeling
+// empty-as-excluded (the original fail-open bug) let the dangerous
+// run_main_integration+empty case pass the partition assertion vacuously.
+func selectMainShardFilters(includes []matrixShardInclude) (kept []integrationShardFilter, emptyMainShards []string) {
+	for _, inc := range includes {
+		if !inc.RunMainIntegration {
+			continue // race-only leg; never reaches the import-path discovery step
+		}
+		if inc.Filter == "" {
+			emptyMainShards = append(emptyMainShards, inc.Shard)
+			continue
+		}
+		kept = append(kept, integrationShardFilter{shard: inc.Shard, filter: inc.Filter})
+	}
+	return kept, emptyMainShards
+}
+
+// readIntegrationShardFilters decodes the integration-test job's
+// strategy.matrix.include[] and returns the (shard, filter) routing pairs of
+// every run_main_integration shard. It fails the test if any
+// run_main_integration shard declares an empty filter — `grep -E "$SHARD_FILTER"`
+// treats an empty regex as match-all, so such a shard double-runs every
+// integration package. This is the nightly-archtest half of a fail-closed pair;
+// the runtime half is the discovery step's own `test -n "$SHARD_FILTER"` guard
+// in _build-lint.yml. Only run_main_integration:false legs (adapters-race) are
+// excluded — they never run the import-path discovery.
 func readIntegrationShardFilters(t *testing.T, root string) []integrationShardFilter {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
@@ -434,11 +468,7 @@ func readIntegrationShardFilters(t *testing.T, root string) []integrationShardFi
 		Jobs map[string]struct {
 			Strategy struct {
 				Matrix struct {
-					Include []struct {
-						Shard              string `yaml:"shard"`
-						Filter             string `yaml:"filter"`
-						RunMainIntegration bool   `yaml:"run_main_integration"`
-					} `yaml:"include"`
+					Include []matrixShardInclude `yaml:"include"`
 				} `yaml:"matrix"`
 			} `yaml:"strategy"`
 		} `yaml:"jobs"`
@@ -448,13 +478,13 @@ func readIntegrationShardFilters(t *testing.T, root string) []integrationShardFi
 	job, ok := cfg.Jobs["integration-test"]
 	require.True(t, ok, "integration-test job missing from _build-lint.yml")
 
-	var out []integrationShardFilter
-	for _, inc := range job.Strategy.Matrix.Include {
-		if inc.RunMainIntegration && inc.Filter != "" {
-			out = append(out, integrationShardFilter{shard: inc.Shard, filter: inc.Filter})
-		}
-	}
-	return out
+	kept, emptyMain := selectMainShardFilters(job.Strategy.Matrix.Include)
+	require.Emptyf(t, emptyMain,
+		"run_main_integration shard(s) %v declare an empty filter; the discovery step's "+
+			"`grep -E \"$SHARD_FILTER\"` treats an empty regex as match-all, double-running every "+
+			"integration package — declare a non-empty import-path filter. "+
+			"See CI-INTEGRATION-SHARD-PARTITION-01.", emptyMain)
+	return kept
 }
 
 // shardRouteFilter is a compiled run_main_integration shard filter.
@@ -600,6 +630,33 @@ func TestArchtest_CIIntegrationShardPartition_FixtureMetaTest(t *testing.T) {
 	}
 	assert.Len(t, routeShards(PlatformModulePath+"/tests/integration", overlap), 2,
 		"two matching filters must both be reported so the disjoint (≤1) assertion can fire")
+}
+
+// TestArchtest_CIIntegrationShardPartition_SelectMainShardFiltersFixture is the
+// synthetic red/green case for selectMainShardFilters' empty-filter fail-closed
+// guard (ai-robust.md: synthetic red case + anti-vacuity). It proves a
+// run_main_integration shard with an EMPTY filter is reported as a violation
+// (the fail-open hole this guard closes — an empty `grep -E` matches all
+// packages), a non-empty one is kept, and a non-main leg's empty filter is
+// excluded without violation.
+func TestArchtest_CIIntegrationShardPartition_SelectMainShardFiltersFixture(t *testing.T) {
+	t.Parallel()
+	includes := []matrixShardInclude{
+		{Shard: "tests", Filter: "^x/(tests)/", RunMainIntegration: true},
+		{Shard: "adapters-race", Filter: "", RunMainIntegration: false},
+		{Shard: "badmain", Filter: "", RunMainIntegration: true},
+	}
+	kept, emptyMain := selectMainShardFilters(includes)
+
+	// GREEN: the non-empty main shard is kept; the race leg is silently excluded.
+	require.Len(t, kept, 1)
+	assert.Equal(t, "tests", kept[0].shard)
+
+	// RED: the run_main_integration shard with an empty filter is reported as a
+	// violation, NOT silently skipped — closing the fail-open hole where an empty
+	// SHARD_FILTER (grep match-all) would double-run every integration package.
+	assert.Equal(t, []string{"badmain"}, emptyMain,
+		"a run_main_integration shard with an empty filter must be a reported violation, not skipped")
 }
 
 // TestArchtest_CIRaceLaneSubset_01 — INVARIANT: CI-RACE-LANE-SUBSET-01

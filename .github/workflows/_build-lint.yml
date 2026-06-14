@@ -673,6 +673,14 @@ jobs:
           # DISCOVERY-01) and avoids hardcoded `./<path>/...` globs in the
           # `go test` invocation. Empty-set fail-fast fires per shard so a
           # mis-typed filter doesn't pass silently.
+          # An empty $SHARD_FILTER makes `grep -E ""` match EVERY package, so
+          # this run_main_integration shard would run (and coverage-bill) the
+          # whole integration set, silently breaking the disjoint guarantee.
+          # This step is gated `if: matrix.run_main_integration`, so every shard
+          # reaching here MUST carry a non-empty filter (runtime half of the
+          # CI-INTEGRATION-SHARD-PARTITION-01 fail-closed pair; the nightly half
+          # is readIntegrationShardFilters in the archtest).
+          test -n "$SHARD_FILTER" || { echo "FAIL: run_main_integration shard '$SHARD_NAME' has an empty filter; an empty SHARD_FILTER matches all packages (grep -E '') and would double-run the whole integration set" >&2; exit 1; }
           mapfile -t pkgs < <(comm -13 "$tmp/bare.txt" "$tmp/tagged.txt" | awk -F'|' '{print $1}' | grep -E "$SHARD_FILTER" | sort -u)
           test "${#pkgs[@]}" -gt 0 || { echo "FAIL: no integration packages discovered for shard '$SHARD_NAME' (filter='$SHARD_FILTER'); either filter regex is wrong or the package set under that prefix vanished" >&2; exit 1; }
           printf 'Shard %s integration packages (%d):\n' "$SHARD_NAME" "${#pkgs[@]}"
