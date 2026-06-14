@@ -13,7 +13,7 @@
 # diverge from issue #1660's literal "base64url" for this reason.
 #
 # This helper is the single source for the state machine. Producers (ship/fix/
-# pr-review skills + codex-pr-router) call `emit-block --kind=K --pr=N` with only
+# pr-review skills) call `emit-block --kind=K --pr=N` with only
 # the irreducible facts; the engine derives EVERYTHING else so no producer
 # hand-encodes the mapping:
 #   - derive_facts(): kind -> {phase, verdict, round} (the single mapping source,
@@ -69,7 +69,7 @@ usage: pr-meta.sh <emit-block|decode|extract|round|selftest> [args]
                   derives phase/verdict/round/refs/session/worktree from --kind +
                   --pr; flags: --tool --phase --verdict --findings --ci --oos and
                   overrides --head-sha --base-ref --head-ref --round-base
-                  --session --worktree (router supplies its gated values)
+                  --session --worktree (callers may supply gated values)
   decode          read markdown/block on stdin, print validated JSON
   extract <PR#>   fetch PR comments, print the latest block JSON iff fresh
   round   <PR#>   fetch PR comments, print max cycle.round for this PR (0 if none)
@@ -325,8 +325,8 @@ def derive(facts):
 
 
 # PHASE_BY_KIND / FIXED_VERDICT_BY_KIND are the single source of the
-# kind->{phase,verdict} mapping that producers (ship/fix/pr-review skills +
-# codex-pr-router) used to hand-encode. derive_facts() below derives phase /
+# kind->{phase,verdict} mapping that producers (ship/fix/pr-review skills)
+# used to hand-encode. derive_facts() below derives phase /
 # verdict / cycle.round from these, so no producer re-states the mapping.
 PHASE_BY_KIND = {"ship": "ship", "fix": "fix", "ci": "check", "oos": "review"}
 FIXED_VERDICT_BY_KIND = {
@@ -341,7 +341,7 @@ def derive_facts(minimal):
 
     Single source of the kind->{phase,verdict,round} mapping (selftest-locked).
     Producers supply only the irreducible facts; the mapping lives here once so
-    neither the skills nor the codex-pr-router hand-encode it:
+    the skills never hand-encode it:
 
       phase:   ship->ship, fix->fix, ci->check, oos->review,
                pr-review->minimal["phase"] (review|check, a genuine mode choice)
@@ -829,8 +829,8 @@ def do_selftest(schema):
 
     # ------------------------------------------------------------------
     # 9. emit-block derive_facts: kind -> phase/verdict/round single source
-    # F10: locks the mapping that producers (ship/fix/pr-review skills +
-    # codex-pr-router) used to hand-encode. Any drift in phase/verdict/round
+    # F10: locks the mapping that producers (ship/fix/pr-review skills)
+    # used to hand-encode. Any drift in phase/verdict/round
     # derivation fails here, not silently in a producer.
     # ------------------------------------------------------------------
 
@@ -1092,13 +1092,13 @@ normalize_pr() {
     printf '%s' "${pr}"
 }
 
-# cmd_emit_block is the single producer-facing funnel: ship/fix/pr-review skills
-# and the codex-pr-router all call it instead of hand-building the
+# cmd_emit_block is the single producer-facing funnel: the ship/fix/pr-review
+# skills all call it instead of hand-building the
 # kind/phase/verdict/round JSON. It assembles the minimal facts (deriving
 # refs/roundBase/session/worktree unless overridden) and pipes them to the
 # offline `emitblock` engine mode, which applies derive_facts (the single mapping
-# source) + derive (schema/cycle/next/idempotencyKey). The router overrides
-# --head-sha/--base-ref/--head-ref/--round-base to preserve its gated values.
+# source) + derive (schema/cycle/next/idempotencyKey). Callers may override
+# --head-sha/--base-ref/--head-ref/--round-base to preserve gated values.
 cmd_emit_block() {
     local kind="" pr="" tool="claude-code" phase="" verdict=""
     local findings="" ci="" oos=""
@@ -1145,7 +1145,7 @@ cmd_emit_block() {
     fi
 
     # session/worktree: __ENV__ sentinel => derive from env; an explicit flag
-    # (including empty, used by the router) passes through, with empty => null.
+    # (including empty) passes through, with empty => null.
     if [[ "${session}" == "__ENV__" ]]; then session="${CLAUDE_CODE_SESSION_ID:-}"; fi
     if [[ "${worktree}" == "__ENV__" ]]; then
         worktree="$(git rev-parse --show-toplevel 2>/dev/null || true)"

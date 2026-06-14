@@ -172,7 +172,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **不可自动执行**: 并发语义变更、接口签名修改、新依赖、数据流方向变更、Cx3+。
 
-> **auto context（无监督）vs manual context（交互 `/fix`）**：上表 **只有 [AUTO-FIX] 行**（≤2 文件 + 非禁域）能在**无监督自动路径**执行——pr-monitor `--mode=auto` 的 `Skill("fix")` 与 codex-pr-router daemon 只跑这一档。「Cx2 超 2 文件或触禁域 → 执行推荐方案」「记录报告，标注阻塞」是 **manual context**（human 在场的交互 `/fix`）专属；无监督路径遇到这些一律 **surface + 转人工，绝不自动改**。daemon 侧此边界由 router 的 **post-exec eligibility 机器闸**强制（codex 改 >2 文件 / `kernel`·migration·`runtime/bootstrap` 路径 → revert + escalate，不 push，见 `codex-pr-router/README.md`）；Claude `Skill("fix")` 侧靠本表 + §不可自动执行清单自限。并发语义不可路径检测，留 prompt + Cx3 门兜底。
+> **auto context（无监督）vs manual context（交互 `/fix`）**：上表 **只有 [AUTO-FIX] 行**（≤2 文件 + 非禁域）能在**无监督自动路径**执行——pr-monitor `--mode=auto` 的 `Skill("fix")` 只跑这一档。「Cx2 超 2 文件或触禁域 → 执行推荐方案」「记录报告，标注阻塞」是 **manual context**（human 在场的交互 `/fix`）专属；无监督路径遇到这些一律 **surface + 转人工，绝不自动改**。Claude `Skill("fix")` 侧靠本表 + §不可自动执行清单自限。并发语义不可路径检测，留 prompt + Cx3 门兜底。
 
 **何时用 AskUserQuestion**: 见文末 §沟通规则（默认自动决策，不逐条问）。
 
@@ -276,7 +276,7 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 按 `issues` B5 ② 等 CI 收敛 + 失败回阶段 1-4 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `<!-- pm:ci -->` 模板）：全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[…],"passedChecks":<n>,"totalChecks":<m>}'`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴。
 
-**步骤 5: 自动启动监控**：所有评论 + label 操作完成后，**自动启动** `/loop 20m /pr-monitor <PR#>`（check-side；每 20min 调一次**无状态**的 `/pr-monitor` 跟 `--check` 进展，约 2 次无进展即转人工，human-in-loop 可随时停）。交互会话内常驻；headless 一次性会话由 codex-pr-router daemon 接管。
+**步骤 5: 自动启动监控**：所有评论 + label 操作完成后，**自动启动** `/loop 20m /pr-monitor <PR#>`（check-side；每 20min 调一次**无状态**的 `/pr-monitor` 跟 `--check` 进展，约 2 次无进展即转人工，human-in-loop 可随时停）。交互会话内常驻；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管。
 
 完成后 **TaskUpdate → completed**。
 
