@@ -22,7 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,8 +39,13 @@ import (
 
 // File-local duration consts for values not present in testtime.
 const (
-	// testLeaseAdvance is used in TestIntegration_ResumeAfterRestart to advance
-	// the clock past the 60s lease expiry so coordinator 2 can re-claim.
+	// testLeaseAdvance advances the clock past the 60s lease expiry (LeaseDuration
+	// in newTestHarness) so the next tick can re-claim. Used by
+	// TestIntegration_ResumeAfterRestart (phase 2) and also by
+	// driveScenario5ToTerminal (scenario-5 step2/step3 advances) — both need to
+	// expire a prior claim lease before the subsequent tick can acquire a new one.
+	// The value (65s) = Config.LeaseDuration(60s) + 5s grace, ensuring the lease
+	// has fully expired before the next ClaimPending call.
 	testLeaseAdvance = 65 * time.Second
 )
 
@@ -1067,7 +1072,14 @@ func assertPhase3RecoveryFinal(t *testing.T, j *journal.MemJournal, instID iduti
 //   - nil → both compensations succeed → StatusCompensated (KindSagaCompensated)
 //   - err → step2's Compensate fails; the walk continues to step1 (best-effort)
 //     → StatusCompensationFailed (KindSagaCompensationFailed)
-func scenario5Def(defID idutil.SafeID, step2CompensateErr error) *ksaga.Definition {
+//
+// step3Compensated is an observable counter for step3's Compensate handler. Even
+// though step3 has a Compensate registered, collectCommittedSteps only includes
+// steps that produced a KindStepCompleted journal event — step3 never commits
+// (its Run returns an error), so it is never added to the reverse walk and its
+// Compensate is never called. Callers can assert step3Compensated.Load() == 0
+// to lock this "uncommitted step stays outside reverse walk" invariant.
+func scenario5Def(defID idutil.SafeID, step2CompensateErr error, step3Compensated *atomic.Int64) *ksaga.Definition {
 	return &ksaga.Definition{
 		ID: defID,
 		Steps: []ksaga.Step{
@@ -1086,6 +1098,13 @@ func scenario5Def(defID idutil.SafeID, step2CompensateErr error) *ksaga.Definiti
 				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
 					return nil, errors.New("step3 deliberately fails to trigger compensation")
 				},
+				// step3.Compensate is intentionally registered to prove that an
+				// uncommitted step's Compensate is never invoked: collectCommittedSteps
+				// filters by KindStepCompleted, and step3 never produces one.
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error {
+					step3Compensated.Add(1)
+					return nil
+				},
 			},
 		},
 	}
@@ -1096,6 +1115,9 @@ func scenario5Def(defID idutil.SafeID, step2CompensateErr error) *ksaga.Definiti
 // the clock past the 60s lease between claims so each subsequent tick can re-claim.
 // step3's tick runs the entire reverse compensation walk inside a single driveOne,
 // so the saga reaches its terminal event on that final tick.
+//
+// Each testLeaseAdvance call (= Config.LeaseDuration(60s) + 5s grace, see
+// newTestHarness) expires the prior claim lease so the next tick can re-claim.
 func driveScenario5ToTerminal(t *testing.T, h *testHarness, inst ksaga.Instance) {
 	t.Helper()
 	if err := h.j.Enqueue(context.Background(), inst); err != nil {
@@ -1105,14 +1127,14 @@ func driveScenario5ToTerminal(t *testing.T, h *testHarness, inst ksaga.Instance)
 	// step1 commits — the initial claim needs no lease expiry.
 	tickOnceAndWait(t, h.clk, func() bool {
 		evs, err := h.j.Load(context.Background(), inst.ID)
-		return err == nil && len(evs) >= 1
+		return err == nil && len(evs) >= 1 && evs[len(evs)-1].Kind == journal.KindStepCompleted
 	})
 
 	// step2 commits — expire step1's lease first so the next tick re-claims.
 	h.clk.Advance(testLeaseAdvance)
 	tickOnceAndWait(t, h.clk, func() bool {
 		evs, err := h.j.Load(context.Background(), inst.ID)
-		return err == nil && len(evs) >= 2
+		return err == nil && len(evs) >= 2 && evs[len(evs)-1].Kind == journal.KindStepCompleted
 	})
 
 	// step3 fails → reverse compensation walk → terminal, all within one driveOne.
@@ -1128,7 +1150,7 @@ func driveScenario5ToTerminal(t *testing.T, h *testHarness, inst ksaga.Instance)
 // the same shape covers both the clean-rollback and compensation-failed paths.
 type scenario5JournalShape struct {
 	step2Comp journal.EventKind // KindStepCompensated or KindStepCompensationFailed (reverse walk: step2 first)
-	step1Comp journal.EventKind // KindStepCompensated (step1 always compensates cleanly here)
+	step1Comp journal.EventKind // KindStepCompensated — step1.Compensate returns nil in both current tests
 	terminal  journal.EventKind // KindSagaCompensated or KindSagaCompensationFailed
 }
 
@@ -1182,7 +1204,8 @@ func assertScenario5ForwardEmitsOnly(t *testing.T, h *testHarness, defID idutil.
 	t.Helper()
 	entries := h.emitter.Snapshot()
 	if len(entries) != 2 {
-		t.Fatalf("emitter entries = %d, want 2 (forward step1+step2 only; compensation emits nothing)", len(entries))
+		t.Errorf("emitter entries = %d, want 2 (forward step1+step2 only; compensation emits nothing)", len(entries))
+		return
 	}
 	wantTopic := stepCompletedTopic(defID)
 	gotSteps := make([]string, 0, len(entries))
@@ -1199,7 +1222,7 @@ func assertScenario5ForwardEmitsOnly(t *testing.T, h *testHarness, defID idutil.
 		}
 		gotSteps = append(gotSteps, string(ev.Step))
 	}
-	if !reflect.DeepEqual(gotSteps, []string{"step1", "step2"}) {
+	if !slices.Equal(gotSteps, []string{"step1", "step2"}) {
 		t.Errorf("emitted step-completed steps = %v, want [step1 step2]", gotSteps)
 	}
 	if got := h.disp.KickCount(); got != 2 {
@@ -1221,7 +1244,8 @@ func assertScenario5ForwardEmitsOnly(t *testing.T, h *testHarness, defID idutil.
 func TestIntegration_Compensation_MultiStepReverseWalk_Compensated(t *testing.T) {
 	const defID idutil.SafeID = "scenario5compensated"
 
-	h := newTestHarness(t, scenario5Def(defID, nil))
+	var step3Compensated atomic.Int64
+	h := newTestHarness(t, scenario5Def(defID, nil, &step3Compensated))
 	cancel := startCoord(t, h.coord)
 	defer cancel()
 
@@ -1238,6 +1262,9 @@ func TestIntegration_Compensation_MultiStepReverseWalk_Compensated(t *testing.T)
 		terminal:  journal.KindSagaCompensated,
 	})
 	assertScenario5ForwardEmitsOnly(t, h, defID)
+	if got := step3Compensated.Load(); got != 0 {
+		t.Errorf("step3.Compensate called %d times, want 0 (step3 never committed → outside reverse walk)", got)
+	}
 }
 
 // TestIntegration_Compensation_MultiStepReverseWalk_CompensationFailed is the
@@ -1250,7 +1277,8 @@ func TestIntegration_Compensation_MultiStepReverseWalk_Compensated(t *testing.T)
 func TestIntegration_Compensation_MultiStepReverseWalk_CompensationFailed(t *testing.T) {
 	const defID idutil.SafeID = "scenario5compfailed"
 
-	h := newTestHarness(t, scenario5Def(defID, errors.New("step2 compensation deliberately fails")))
+	var step3Compensated atomic.Int64
+	h := newTestHarness(t, scenario5Def(defID, errors.New("step2 compensation deliberately fails"), &step3Compensated))
 	cancel := startCoord(t, h.coord)
 	defer cancel()
 
@@ -1267,4 +1295,7 @@ func TestIntegration_Compensation_MultiStepReverseWalk_CompensationFailed(t *tes
 		terminal:  journal.KindSagaCompensationFailed,
 	})
 	assertScenario5ForwardEmitsOnly(t, h, defID)
+	if got := step3Compensated.Load(); got != 0 {
+		t.Errorf("step3.Compensate called %d times, want 0 (step3 never committed → outside reverse walk)", got)
+	}
 }
