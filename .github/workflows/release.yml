@@ -247,18 +247,23 @@ jobs:
           bash hack/verify-workspace.sh
 
       - name: Tag modules
-        # Root always tags at HEAD. Stable additionally tags every publishable
-        # satellite <reldir>/vX.Y.Z at the same (pin) commit; the tag set is
-        # derived from the same publishable enumeration as the golden guard, must
-        # contain the root tag, and is pushed --atomic so a partial set never
-        # lands. Snapshots tag root only.
+        # Snapshots tag the bare $TAG only. Stable mints the bare $TAG as the GitHub
+        # Release MARKER tag (NOT a module tag: post-#1565 no module sits at the repo
+        # root, so modrelease's --print-tag-paths correctly emits only the per-module
+        # <reldir>/vX.Y.Z library tags — see modrelease_test.go TestTagPaths). The
+        # workflow prepends the bare marker to those library tags and pushes the
+        # whole set --atomic so a partial set never lands. This restores the pre-#1565
+        # ref topology — a bare vX.Y.Z at the release commit alongside every library
+        # tag — which `gh release create --verify-tag`, goreleaser {{.Tag}}, and the
+        # verify-job resume sentinel all resolve against (k8s/gopls convention; #2134).
+        # Guarded by RELEASE-STABLE-MARKER-TAG-01.
         #
-        # Resume: the verify job's tag_exists check inspects only the ROOT tag.
-        # The --atomic push makes root + satellites land all-or-nothing, so the root
-        # tag normally reflects the whole set — but on a stable resume the next step
-        # ("Validate satellite tag set") additionally proves every satellite tag
-        # exists and peels to the same commit, fail-closed (F3), rather than
-        # trusting the atomic invariant alone.
+        # Resume: the verify job's tag_exists check inspects only the bare MARKER tag.
+        # The --atomic push makes marker + library tags land all-or-nothing, so the
+        # marker normally reflects the whole set — but on a stable resume the next step
+        # ("Validate satellite tag set") additionally proves every library tag exists
+        # and peels to the same commit, fail-closed (F3), rather than trusting the
+        # atomic invariant alone.
         if: needs.verify.outputs.tag_exists != 'true'
         run: |
           set -euo pipefail
@@ -269,18 +274,21 @@ jobs:
             git push origin "$TAG"
             exit 0
           fi
-          mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
-          if [ "${#tags[@]}" -lt 2 ]; then
-            echo "::error::expected root + satellite tags from modrelease, got ${#tags[@]}."
+          mapfile -t module_tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
+          if [ "${#module_tags[@]}" -lt 2 ]; then
+            echo "::error::modrelease produced ${#module_tags[@]} library tag(s) for $TAG; expected the full publishable module set."
             exit 1
           fi
-          case " ${tags[*]} " in
-            *" $TAG "*) ;;
-            *) echo "::error::root tag $TAG missing from derived tag set."; exit 1 ;;
-          esac
+          # The bare $TAG is the GitHub Release MARKER tag, prepended to the per-module
+          # library tags. modrelease never emits it (post-#1565 no module sits at the
+          # repo root; see modrelease_test.go TestTagPaths), so the workflow mints it
+          # here — restoring the pre-#1565 ref topology that `gh release create
+          # --verify-tag`, goreleaser {{.Tag}}, and the verify-job resume sentinel
+          # resolve against (#2134, RELEASE-STABLE-MARKER-TAG-01).
+          tags=("$TAG" "${module_tags[@]}")
           # Operator-visible preview of the exact set about to be pushed.
           {
-            echo "### Release $TAG — tagging ${#tags[@]} modules"
+            echo "### Release $TAG — marker tag + ${#module_tags[@]} library module tags"
             printf -- '- %s\n' "${tags[@]}"
           } >>"$GITHUB_STEP_SUMMARY"
           # Push the now-verified pin commit to develop (only if one was created).
@@ -301,28 +309,29 @@ jobs:
           git push origin --atomic "${tags[@]}"
 
       - name: Validate satellite tag set (stable resume)
-        # On resume the root tag exists but the GitHub Release is missing. tag_exists
-        # is set off the ROOT tag only, so before creating the release prove the FULL
-        # synchronized set is present and consistent: every derived tag must exist
-        # and peel to the same commit as the root tag, else fail closed (F3). This
-        # catches a prior run that tagged root but lost the satellite --atomic push.
+        # On resume the bare marker tag exists but the GitHub Release is missing.
+        # tag_exists is set off the MARKER tag only, so before creating the release
+        # prove the FULL synchronized set is present and consistent: every library tag
+        # must exist and peel to the same commit as the marker, else fail closed (F3).
+        # This catches a prior run that tagged the marker but lost the library
+        # --atomic push.
         if: needs.verify.outputs.tag_exists == 'true' && needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
-          root_commit="$(git rev-parse "$TAG^{commit}")"
-          mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
-          [ "${#tags[@]}" -ge 2 ] || { echo "::error::derived tag set too small (${#tags[@]})."; exit 1; }
+          marker_commit="$(git rev-parse "$TAG^{commit}")"
+          mapfile -t module_tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
+          [ "${#module_tags[@]}" -ge 2 ] || { echo "::error::derived library tag set too small (${#module_tags[@]})."; exit 1; }
           missing=0
-          for tag in "${tags[@]}"; do
+          for tag in "${module_tags[@]}"; do
             if ! c="$(git rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null)"; then
-              echo "::error::resume: satellite tag '$tag' is missing (root tagged but satellite set incomplete)."
+              echo "::error::resume: library tag '$tag' is missing (marker tagged but library set incomplete)."
               missing=1
-            elif [ "$c" != "$root_commit" ]; then
-              echo "::error::resume: tag '$tag' points at $c, not the root tag commit $root_commit."
+            elif [ "$c" != "$marker_commit" ]; then
+              echo "::error::resume: tag '$tag' points at $c, not the marker tag commit $marker_commit."
               missing=1
             fi
           done
-          [ "$missing" -eq 0 ] || { echo "::error::resume aborted: satellite tag set incomplete/inconsistent — delete the partial tags and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          [ "$missing" -eq 0 ] || { echo "::error::resume aborted: library tag set incomplete/inconsistent — delete the partial tags and re-dispatch." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
 
       # ── goreleaser: CLI binary + docker (stable only) ──────────────────────
       # Runs after tags are pushed so goreleaser can resolve {{.Tag}} from the
@@ -384,6 +393,11 @@ jobs:
         if: needs.verify.outputs.prerelease != 'true'
         env:
           GOWORK: "off"
+          # Pin goreleaser's {{.Tag}} to the bare marker (#2134): the marker + N
+          # library tags share the release commit, so git-describe resolution is
+          # ambiguous; an unpinned {{.Tag}} could resolve to framework/vX.Y.Z and
+          # fail the cliVersion == $TAG smoke below (and corrupt ldflags / docker tag).
+          GORELEASER_CURRENT_TAG: ${{ needs.verify.outputs.tag }}
         run: |
           set -euo pipefail
           goreleaser build --single-target --clean
@@ -423,6 +437,9 @@ jobs:
         if: needs.verify.outputs.prerelease != 'true'
         env:
           GOWORK: "off"
+          # Pin {{.Tag}} to the bare marker (#2134): deterministic across the marker +
+          # library tags that share the release commit (see pre-publish smoke step).
+          GORELEASER_CURRENT_TAG: ${{ needs.verify.outputs.tag }}
           GITHUB_TOKEN: ${{ github.token }}
         run: goreleaser release --clean
 
