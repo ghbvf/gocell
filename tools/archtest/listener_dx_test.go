@@ -9,8 +9,14 @@ package archtest
 //   - production Go must not reintroduce deleted listener option APIs;
 //   - production Go must not reintroduce the old auth.Route Delegated surface;
 //   - owner API signatures for RouteGroup.Register and auth.Mount stay aligned;
-//   - active docs/godoc must not show old listener APIs, Delegated examples, or
-//     the legacy single-mux route registration surface.
+//   - active docs/godoc must not show old listener APIs, the deleted auth.Route
+//     Delegated surface in its Go-syntax forms (`Delegated:` / `.Delegated` /
+//     `WithDelegatedMatcher` / the `Delegated bool` field declaration), or the
+//     legacy single-mux route registration surface. The bare English word
+//     "delegated" is NOT forbidden — "delegated ownership" is live ABAC
+//     vocabulary (see .claude/rules/gocell/tenancy.md); only the deleted Go
+//     surface is. TestListenerDXA52DocTermFixture is the RED/GREEN anti-vacuity
+//     proof for this distinction.
 //
 // Historical provenance remains allowed in docs/plans/**,
 // docs/reviews/**, docs/archive/**, and CHANGELOG.md.
@@ -20,6 +26,7 @@ import (
 	"go/ast"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -27,6 +34,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ruleListenerDXA52 labels assertion failures with the A52 batch id. The file's
+// registered invariant is LISTENER-DX-01 (see the INVARIANT header above); both
+// ids resolve to this file via `grep -rn`.
 const ruleListenerDXA52 = "LISTENER-DX-A52"
 
 var oldListenerAPIIdents = map[string]struct{}{
@@ -56,7 +66,19 @@ var activeDocForbiddenTerms = []string{
 	"WithHTTPInternalAddr",
 	"WithPrimaryListener",
 	"WithInternalListener",
-	"Delegated",
+	// The deleted auth.Route Delegated surface is matched by its Go-syntax forms
+	// only: the composite-literal key (auth.Route{Delegated: ...}), a field access
+	// (route.Delegated), and the deleted helper (WithDelegatedMatcher). The field
+	// *declaration* form (`Delegated bool`) needs whitespace tolerance (a single
+	// space in hand-written docs, a gofmt tab in pasted structs) so it lives in
+	// listenerDXForbiddenDocPatterns, not here. We deliberately do NOT forbid the
+	// bare word "Delegated": "delegated ownership" is live ABAC vocabulary
+	// (.claude/rules/gocell/tenancy.md, ADR 202606121400-1348) and a
+	// case-sensitive substring false-positives on that prose. Anti-vacuity proof:
+	// TestListenerDXA52DocTermFixture.
+	"Delegated:",
+	".Delegated",
+	"WithDelegatedMatcher",
 }
 
 var productionForbiddenSurfaceTerms = []string{
@@ -383,15 +405,11 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err)
-	lines := strings.Split(string(data), "\n")
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
-	for i, line := range lines {
-		for _, term := range terms {
-			if strings.Contains(line, term) {
-				violations = append(violations, listenerDXViolation(root, path, i+1,
-					fmt.Sprintf("active docs/godoc contains %q", term)))
-			}
+	for i, line := range strings.Split(string(data), "\n") {
+		for _, term := range listenerDXLineForbiddenTerms(line) {
+			violations = append(violations, listenerDXViolation(root, path, i+1,
+				fmt.Sprintf("active docs/godoc contains %q", term)))
 		}
 	}
 	return violations
@@ -407,14 +425,10 @@ func activeDocTermViolationsFromFile(p *Pass, file *ast.File) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("%s:0: cannot read file: %v", rel, err)}
 	}
-	lines := strings.Split(string(data), "\n")
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
-	for i, line := range lines {
-		for _, term := range terms {
-			if strings.Contains(line, term) {
-				violations = append(violations, fmt.Sprintf("%s:%d: active docs/godoc contains %q", rel, i+1, term))
-			}
+	for i, line := range strings.Split(string(data), "\n") {
+		for _, term := range listenerDXLineForbiddenTerms(line) {
+			violations = append(violations, fmt.Sprintf("%s:%d: active docs/godoc contains %q", rel, i+1, term))
 		}
 	}
 	return violations
@@ -424,25 +438,40 @@ func activeDocTermViolationsFromFile(p *Pass, file *ast.File) []string {
 // for forbidden terms. Run parses with ParseComments so file.Comments is populated.
 func activeGoCommentTermViolationsPass(p *Pass, file *ast.File) []string {
 	var violations []string
-	terms := listenerDXForbiddenDocTerms()
 	for _, group := range file.Comments {
 		for _, comment := range group.List {
-			for _, term := range terms {
-				if strings.Contains(comment.Text, term) {
-					violations = append(violations, fmt.Sprintf("%s:%d: active godoc/comment contains %q",
-						p.Rel(file), p.Fset.Position(comment.Pos()).Line, term))
-				}
+			for _, term := range listenerDXLineForbiddenTerms(comment.Text) {
+				violations = append(violations, fmt.Sprintf("%s:%d: active godoc/comment contains %q",
+					p.Rel(file), p.Fset.Position(comment.Pos()).Line, term))
 			}
 		}
 	}
 	return violations
 }
 
-func listenerDXForbiddenDocTerms() []string {
-	terms := make([]string, 0, len(activeDocForbiddenTerms)+len(oldRouteSurfaceDocTerms))
-	terms = append(terms, activeDocForbiddenTerms...)
-	terms = append(terms, oldRouteSurfaceDocTerms...)
-	return terms
+// listenerDXForbiddenDocTerms is the single combined term set forbidden in
+// active docs/godoc: the active-doc listener/route terms plus the legacy
+// single-mux route-surface terms. Computed once at package init. Do NOT scan
+// against the two source vars directly — listenerDXLineForbiddenTerms is the
+// sole per-line entry point, so the anti-vacuity fixture covers every term.
+var listenerDXForbiddenDocTerms = append(
+	append([]string{}, activeDocForbiddenTerms...),
+	oldRouteSurfaceDocTerms...,
+)
+
+// listenerDXForbiddenDocPatterns matches deleted-surface Go-syntax forms that a
+// fixed substring cannot capture. Currently the auth.Route.Delegated *field
+// declaration* (`Delegated bool`): its inter-token whitespace varies (a single
+// space in hand-written docs, a gofmt tab in pasted struct code), so \s+ covers
+// both, while the trailing `bool` field-type token keeps it disjoint from
+// "delegated ownership" ABAC prose. Each entry carries a probe line it MUST
+// match so TestListenerDXA52DocTermFixture's anti-vacuity loop covers patterns
+// as well as substring terms.
+var listenerDXForbiddenDocPatterns = []struct {
+	re    *regexp.Regexp
+	probe string
+}{
+	{regexp.MustCompile(`\bDelegated\s+bool\b`), "\tDelegated bool // deleted auth.Route field"},
 }
 
 func listenerDXViolation(root, path string, line int, msg string) string {
@@ -451,4 +480,100 @@ func listenerDXViolation(root, path string, line int, msg string) string {
 		rel = path
 	}
 	return fmt.Sprintf("%s:%d: %s", filepath.ToSlash(rel), line, msg)
+}
+
+// listenerDXLineForbiddenTerms returns every forbidden doc/godoc token contained
+// in line — both fixed substrings (listenerDXForbiddenDocTerms) and Go-syntax
+// regexps (listenerDXForbiddenDocPatterns). It is the single per-line matcher
+// shared by the .md, doc.go, and Go-comment scanners, so the RED/GREEN
+// guarantees in TestListenerDXA52DocTermFixture apply uniformly across all three
+// doc surfaces.
+func listenerDXLineForbiddenTerms(line string) []string {
+	var hits []string
+	for _, term := range listenerDXForbiddenDocTerms {
+		if strings.Contains(line, term) {
+			hits = append(hits, term)
+		}
+	}
+	for _, pat := range listenerDXForbiddenDocPatterns {
+		if m := pat.re.FindString(line); m != "" {
+			hits = append(hits, m)
+		}
+	}
+	return hits
+}
+
+// TestListenerDXA52DocTermFixture is the anti-vacuity guard for the active
+// docs/godoc term scan. It proves the matcher still catches the deleted
+// auth.Route Delegated surface in its Go-syntax forms, and does NOT regress to
+// false-positiving on legitimate "delegated ownership" ABAC prose (live
+// vocabulary in .claude/rules/gocell/tenancy.md and ADR 202606121400-1348).
+// Without this fixture, narrowing the term set could silently become vacuous.
+func TestListenerDXA52DocTermFixture(t *testing.T) {
+	// Deleted listener/route surface as it would actually appear in docs or
+	// godoc example code — each MUST stay flagged.
+	flagged := []struct {
+		name string
+		line string
+	}{
+		{"route composite-literal key", "reg.Mount(auth.Route{Delegated: true})"},
+		{"route field access", "if route.Delegated {"},
+		{"deleted matcher helper", "auth.WithDelegatedMatcher(jwtMatcher)"},
+		{"deleted listener option", "bootstrap.WithPrimaryListener(addr)"},
+		{"field declaration (space)", "\tDelegated bool // legacy auth.Route field"},
+		{"field declaration (gofmt tab)", "\tDelegated\tbool"},
+	}
+	for _, tc := range flagged {
+		t.Run("flagged/"+tc.name, func(t *testing.T) {
+			assert.NotEmpty(t, listenerDXLineForbiddenTerms(tc.line),
+				"%s: deleted surface %q must be flagged", ruleListenerDXA52, tc.line)
+		})
+	}
+
+	// Legitimate live vocabulary that merely contains the English word
+	// "delegated" — each MUST pass. The bare-substring guard false-positived here.
+	allowed := []struct {
+		name string
+		line string
+	}{
+		{"ADR ownership heading", "- **Delegated ownership** (MDM, future): the resource has a *separate* owner"},
+		{"lowercase abac prose", "delegated ownership (owner != id, e.g. a device) uses subject.sub == resource.owner"},
+		{"owner attribute comparison", "`subject.sub == resource.owner`, where `resource.owner` is supplied by a PIP"},
+	}
+	for _, tc := range allowed {
+		t.Run("allowed/"+tc.name, func(t *testing.T) {
+			assert.Empty(t, listenerDXLineForbiddenTerms(tc.line),
+				"%s: legitimate prose %q must not be flagged", ruleListenerDXA52, tc.line)
+		})
+	}
+
+	// Mechanical anti-vacuity over the WHOLE term set (not just the Delegated
+	// forms above): every forbidden term must be reachable via the shared matcher,
+	// and none may be empty (an empty term matches every line). Self-maintaining —
+	// a newly added term is auto-covered, so the matcher can never silently drop a
+	// source list or admit a vacuous term.
+	t.Run("every_term_is_live", func(t *testing.T) {
+		require.NotEmpty(t, listenerDXForbiddenDocTerms, "%s: forbidden term set is empty", ruleListenerDXA52)
+		for _, term := range listenerDXForbiddenDocTerms {
+			require.NotEmpty(t, term,
+				"%s: an empty forbidden term would flag every line", ruleListenerDXA52)
+			probe := "doc text mentioning " + term + " inline"
+			assert.NotEmpty(t, listenerDXLineForbiddenTerms(probe),
+				"%s: forbidden term %q is unreachable via the shared matcher", ruleListenerDXA52, term)
+		}
+	})
+
+	// Same anti-vacuity for the regexp dimension: every pattern must carry a probe
+	// it actually matches via the shared matcher, so a dropped/broken pattern (or a
+	// pattern whose probe stops matching) fails loudly instead of silently passing.
+	t.Run("every_pattern_is_live", func(t *testing.T) {
+		require.NotEmpty(t, listenerDXForbiddenDocPatterns, "%s: forbidden pattern set is empty", ruleListenerDXA52)
+		for _, pat := range listenerDXForbiddenDocPatterns {
+			require.NotNil(t, pat.re, "%s: a nil forbidden pattern would never match", ruleListenerDXA52)
+			require.NotEmpty(t, pat.probe,
+				"%s: forbidden pattern %q has no anti-vacuity probe", ruleListenerDXA52, pat.re.String())
+			assert.NotEmpty(t, listenerDXLineForbiddenTerms(pat.probe),
+				"%s: forbidden pattern %q is unreachable via the shared matcher", ruleListenerDXA52, pat.re.String())
+		}
+	})
 }
