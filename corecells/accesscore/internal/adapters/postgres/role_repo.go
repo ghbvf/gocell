@@ -230,14 +230,15 @@ func (r *PGRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, vis ten
 		return nil, err
 	}
 	// selectRolesByUserIDSQL binds $1=tenant_id, $2=user_id. The owner predicate
-	// appends $3=subject when pred.Apply (RowScopeSelf/Device). user_id is
-	// unambiguous in the WHERE clause: the roles table (aliased r) has no user_id
-	// column; only role_assignments (aliased ra) does. Subject is always a bound
-	// parameter — never interpolated.
+	// appends $3=subject when pred.Apply (RowScopeSelf/Device). The column is
+	// qualified as ra.user_id (role_assignments alias) to remove dependence on the
+	// implicit "roles has no user_id" invariant — SQLPredicate rejects dotted
+	// identifiers, so the qualified fragment is built directly here while still
+	// binding the subject as a bound parameter ($3), never interpolated.
 	sqlStr := selectRolesByUserIDSQL
 	args := []any{string(t), userID}
 	if pred.Apply {
-		sqlStr += pred.Prefix + "$3"
+		sqlStr += " AND ra.user_id = $3"
 		args = append(args, pred.Arg)
 	}
 	rows, err := r.db.Query(ctx, sqlStr, args...)

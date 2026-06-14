@@ -1576,6 +1576,12 @@ func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
 	t.Run("GetByUserID_RowScope_Self_Mismatch_IDOR_Collapse", func(t *testing.T) {
 		conformRoleGetByUserIDRowScopeSelfMismatch(t, factory)
 	})
+	t.Run("GetByUserID_RowScope_Device_Match", func(t *testing.T) {
+		conformRoleGetByUserIDRowScopeDeviceMatch(t, factory)
+	})
+	t.Run("GetByUserID_RowScope_Device_Mismatch_IDOR_Collapse", func(t *testing.T) {
+		conformRoleGetByUserIDRowScopeDeviceMismatch(t, factory)
+	})
 	t.Run("GetByUserID_RowScope_Tenant_NoFilter", func(t *testing.T) {
 		conformRoleGetByUserIDRowScopeTenant(t, factory)
 	})
@@ -1587,6 +1593,12 @@ func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
 	})
 	t.Run("ListByUserID_RowScope_Self_Mismatch_EmptyPage", func(t *testing.T) {
 		conformRoleListByUserIDRowScopeSelfMismatch(t, factory)
+	})
+	t.Run("ListByUserID_RowScope_Device_Match", func(t *testing.T) {
+		conformRoleListByUserIDRowScopeDeviceMatch(t, factory)
+	})
+	t.Run("ListByUserID_RowScope_Device_Mismatch_EmptyPage", func(t *testing.T) {
+		conformRoleListByUserIDRowScopeDeviceMismatch(t, factory)
 	})
 	t.Run("ListByUserID_RowScope_Tenant_NoFilter", func(t *testing.T) {
 		conformRoleListByUserIDRowScopeTenant(t, factory)
@@ -1839,7 +1851,9 @@ func conformGetByIDInTenantRowScopeSelfMismatch(t *testing.T, factory UserRepoFa
 }
 
 // conformGetByIDInTenantRowScopeDeviceMatch: Device obligation with matching
-// subject returns the user.
+// subject returns the user. The user owner column is the PK `id`, so the
+// device subject is set to the seeded u.ID so the owner predicate matches —
+// not a vacuous pass if the owner column semantics change.
 func conformGetByIDInTenantRowScopeDeviceMatch(t *testing.T, factory UserRepoFactory) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
@@ -2038,6 +2052,8 @@ func conformRoleListByUserIDRowScopeSelfMatch(t *testing.T, factory RoleRepoFact
 
 // conformRoleListByUserIDRowScopeSelfMismatch: Self obligation with non-matching
 // subject IDOR-collapses to empty page.
+//
+//nolint:dupl // mirrors conformRoleListByUserIDRowScopeDeviceMismatch; typed scope difference (Self vs Device) is the point of the test
 func conformRoleListByUserIDRowScopeSelfMismatch(t *testing.T, factory RoleRepoFactory) {
 	t.Helper()
 	roleRepo, userRepo, txRunner, cleanup := factory(t)
@@ -2109,5 +2125,111 @@ func conformRoleListByUserIDRowScopeAll(t *testing.T, factory RoleRepoFactory) {
 	}
 	if !isErrNotImplemented(err) {
 		t.Errorf("ListByUserID_RowScope_All: want KindNotImplemented, got %v", err)
+	}
+}
+
+// conformRoleGetByUserIDRowScopeDeviceMatch: Device obligation with matching
+// subject returns the user's roles (#1709 — mirrors Self_Match but for RowScopeDevice).
+// The owner column is role_assignments.user_id, so the device subject is set to
+// the seeded userID so the owner predicate matches.
+func conformRoleGetByUserIDRowScopeDeviceMatch(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "rowscope_dev_match_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	// Device obligation: subject == seeded userID → owner predicate matches.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, userID)
+	if err != nil {
+		t.Fatalf("GetByUserID_RowScope_Device_Match: build vis: %v", err)
+	}
+	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
+	if err != nil {
+		t.Fatalf("GetByUserID_RowScope_Device_Match: want roles, got err: %v", err)
+	}
+	if len(got) == 0 {
+		t.Error("GetByUserID_RowScope_Device_Match: want ≥1 role, got 0")
+	}
+}
+
+// conformRoleGetByUserIDRowScopeDeviceMismatch: Device obligation with non-matching
+// subject IDOR-collapses to an empty slice (#1709 — mirrors Self_Mismatch for Device).
+func conformRoleGetByUserIDRowScopeDeviceMismatch(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "rowscope_dev_mis_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	otherDevice := uuid.NewString() // different from seeded userID
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, otherDevice)
+	if err != nil {
+		t.Fatalf("GetByUserID_RowScope_Device_Mismatch: build vis: %v", err)
+	}
+	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
+	if err != nil {
+		t.Fatalf("GetByUserID_RowScope_Device_Mismatch: want empty result (no error), got err: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("GetByUserID_RowScope_Device_Mismatch: IDOR must collapse to empty slice, got %d roles", len(got))
+	}
+}
+
+// conformRoleListByUserIDRowScopeDeviceMatch: Device obligation with matching
+// subject returns the user's roles as a page (#1709 — mirrors Self_Match for Device).
+// The owner column is role_assignments.user_id; device subject == seeded userID so
+// the owner predicate matches and the assignment is returned.
+func conformRoleListByUserIDRowScopeDeviceMatch(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "list_rowscope_dev_match_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	// Device obligation: subject == seeded userID → owner predicate matches.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, userID)
+	if err != nil {
+		t.Fatalf("ListByUserID_RowScope_Device_Match: build vis: %v", err)
+	}
+	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}}
+	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
+	if err != nil {
+		t.Fatalf("ListByUserID_RowScope_Device_Match: want roles, got err: %v", err)
+	}
+	if len(got) == 0 {
+		t.Error("ListByUserID_RowScope_Device_Match: want ≥1 role, got 0")
+	}
+}
+
+// conformRoleListByUserIDRowScopeDeviceMismatch: Device obligation with non-matching
+// subject IDOR-collapses to an empty page (#1709 — mirrors Self_Mismatch for Device).
+//
+//nolint:dupl // mirrors conformRoleListByUserIDRowScopeSelfMismatch; typed scope difference (Device vs Self) is the point of the test
+func conformRoleListByUserIDRowScopeDeviceMismatch(t *testing.T, factory RoleRepoFactory) {
+	t.Helper()
+	roleRepo, userRepo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	roleID := "list_rowscope_dev_mis_" + uuid.NewString()
+	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+	otherDevice := uuid.NewString()
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, otherDevice)
+	if err != nil {
+		t.Fatalf("ListByUserID_RowScope_Device_Mismatch: build vis: %v", err)
+	}
+	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}}
+	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
+	if err != nil {
+		t.Fatalf("ListByUserID_RowScope_Device_Mismatch: want empty page (no error), got err: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ListByUserID_RowScope_Device_Mismatch: IDOR must collapse to empty page, got %d roles", len(got))
 	}
 }

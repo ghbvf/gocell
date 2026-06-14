@@ -2,8 +2,8 @@
 
 // rowscope_repo_param_funnel_test.go — guards that every row-scoped list/get
 // repo interface method carries a tenant.RowVisibility obligation positional
-// parameter. Enrolled repos: auditcore (runtime/audit/ledger.Store and the
-// narrow read-side ledger.QueryStore).
+// parameter. Enrolled repos: runtime/audit/ledger: Store, QueryStore and
+// corecells/accesscore/internal/ports: UserRepository, RoleRepository (#1709).
 //
 //   - INVARIANT: ROWSCOPE-REPO-PARAM-FUNNEL-01
 //

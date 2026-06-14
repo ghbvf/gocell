@@ -14,6 +14,12 @@ import "github.com/ghbvf/gocell/framework/pkg/errcode"
 // (ledger.RowScopeAllUnsupportedError). Opening a cross-tenant accesscore read
 // path is out of scope for #1709 and would need its own role-scoped pool + ADR.
 //
+// Callers (handlers) MUST surface this error as HTTP 501 Not Implemented
+// (KindNotImplemented → 501), distinct from HTTP 404 (row absent). The
+// diagnostic distinction matters: 501 signals "cross-tenant read is architecturally
+// unsupported on this endpoint", whereas 404 signals "the specific row does not
+// exist" — confusing them would mask super-admin misconfiguration (#1709).
+//
 // It is shared by the PG and mem implementations so the rejection is
 // byte-identical across backends and asserted uniformly by the conformance
 // suite. The FR-007 cross-tenant audit slog.Error is emitted upstream (inside

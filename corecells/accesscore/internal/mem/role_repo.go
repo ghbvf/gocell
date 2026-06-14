@@ -262,6 +262,9 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, t tenant.T
 func (r *RoleRepository) ListByUserID(
 	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string, params query.ListParams,
 ) ([]*domain.Role, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
+	}
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}

@@ -2249,3 +2249,45 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
 		"success log line must not fire when the tx publish step fails")
 }
+
+// TestService_GetByID_RowScope_SelfMatch (#1709): service threads vis correctly —
+// RowScopeSelf with subject==ownID returns the user.
+func TestService_GetByID_RowScope_SelfMatch(t *testing.T) {
+	svc := newTestService(t)
+	created, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "rowscope_svc_match", Email: "svc_match@rowscope.test", Password: "pass1234",
+	})
+	require.NoError(t, err)
+
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, created.ID)
+	require.NoError(t, err)
+
+	// Self obligation: subject == user's own ID → row returned.
+	got, err := svc.GetByID(adminCtxForService(), vis, created.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.ID, got.ID,
+		"RowScopeSelf matching own id must return the user")
+}
+
+// TestService_GetByID_RowScope_SelfMismatch_IDORCollapse (#1709): service threads
+// vis correctly — RowScopeSelf with subject≠ownID IDOR-collapses to
+// ErrAuthUserNotFound at the repo PEP.
+func TestService_GetByID_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
+	svc := newTestService(t)
+	created, err := svc.Create(adminCtxForService(), CreateInput{
+		Username: "rowscope_svc_victim", Email: "svc_victim@rowscope.test", Password: "pass1234",
+	})
+	require.NoError(t, err)
+
+	otherSubject := "attacker-" + created.ID
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, otherSubject)
+	require.NoError(t, err)
+
+	// Self obligation: subject ≠ created.ID → IDOR collapse → ErrAuthUserNotFound.
+	_, err = svc.GetByID(adminCtxForService(), vis, created.ID)
+	require.Error(t, err, "RowScopeSelf with non-matching subject must return error (IDOR collapse)")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
+		"IDOR collapse must surface as ErrAuthUserNotFound, not a different error")
+}

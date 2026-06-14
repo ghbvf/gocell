@@ -258,3 +258,74 @@ func TestHasRole_IsRLSScoped(t *testing.T) {
 	assert.Equal(t, testTenantID, cap.capturedScope,
 		"GetByUserID scope must equal the request tenant")
 }
+
+// TestService_HasRole_RowScope_SelfMatch (#1709): service threads vis correctly —
+// RowScopeSelf with subject==userID returns true when the role is held.
+func TestService_HasRole_RowScope_SelfMatch(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedUserRoleAssignment(testTenantID, "usr-self-match", "admin")
+
+	// Self obligation: subject == userID → owner predicate matches → role visible.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, "usr-self-match")
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	has, err := svc.HasRole(ctx, vis, "usr-self-match", "admin")
+	require.NoError(t, err)
+	assert.True(t, has, "RowScopeSelf matching own userID must find the seeded role")
+}
+
+// TestService_HasRole_RowScope_SelfMismatch_IDORCollapse (#1709): service threads
+// vis correctly — RowScopeSelf with subject≠userID IDOR-collapses to
+// hasRole=false (empty repo result for the mismatch subject).
+func TestService_HasRole_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedUserRoleAssignment(testTenantID, "usr-victim-role", "admin")
+
+	// Self obligation: subject ≠ userID → IDOR collapse → empty roles → hasRole=false.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, "attacker-subject")
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	has, err := svc.HasRole(ctx, vis, "usr-victim-role", "admin")
+	require.NoError(t, err)
+	assert.False(t, has,
+		"RowScopeSelf mismatch must IDOR-collapse: attacker must not see victim's role")
+}
+
+// TestService_ListRoles_RowScope_SelfMatch (#1709): service threads vis correctly —
+// RowScopeSelf with subject==userID returns the user's roles.
+func TestService_ListRoles_RowScope_SelfMatch(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedUserRoleAssignment(testTenantID, "usr-list-self-match", "admin")
+
+	// Self obligation: subject == userID → owner predicate matches → roles returned.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, "usr-list-self-match")
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	result, err := svc.ListRoles(ctx, vis, "usr-list-self-match", query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Items, "RowScopeSelf matching own userID must return the seeded role")
+}
+
+// TestService_ListRoles_RowScope_SelfMismatch_IDORCollapse (#1709): service threads
+// vis correctly — RowScopeSelf with subject≠userID IDOR-collapses to empty page.
+func TestService_ListRoles_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedUserRoleAssignment(testTenantID, "usr-list-victim", "admin")
+
+	// Self obligation: subject ≠ userID → IDOR collapse → empty page.
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, "attacker-list-subject")
+	require.NoError(t, err)
+
+	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+	result, err := svc.ListRoles(ctx, vis, "usr-list-victim", query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, result.Items,
+		"RowScopeSelf mismatch must IDOR-collapse to empty page for ListRoles")
+}

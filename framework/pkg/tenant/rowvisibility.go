@@ -130,13 +130,29 @@ func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
 // site — the name declares "this read is intentionally unfiltered within the
 // tenant", distinguishing a deliberate system read from a forgotten obligation.
 //
+// # FOOTGUN: never use on subject-scoped read paths
+//
+// Subject-self endpoints (e.g. GET /api/v1/access/users/{id}) and device-scoped
+// endpoints MUST derive the obligation from the authenticated principal via
+// runtime/auth.Principal.RowVisibility(ctx), NOT by calling SystemRowVisibility().
+// Calling SystemRowVisibility() on a subject-self or device read silently removes
+// the owner predicate and leaks every row in the tenant to ANY authenticated caller
+// who passes the coarse PDP route gate — the row-scope PEP (the only defense-in-
+// depth control on the data layer) is bypassed entirely.
+//
+// Legitimate SYSTEM callers (reads that are intentionally tenant-wide, not
+// subject-scoped): session login credential lookup, session refresh/validate
+// re-fetch, rbac enforcement (HasRole / ListRoles called by the auth middleware),
+// admin provisioning reads, and credential-mutation re-fetch paths
+// (ChangePassword, BumpAuthzEpoch). These reads are all performed by the framework
+// or privileged internal paths that carry no end-user subject dimension.
+//
 // It is NOT a privilege escalation: RowScopeTenant is already mintable via
 // NewRowVisibility, and the resulting obligation applies no owner predicate
 // (Allows is always true, SQLPredicate emits nothing) — identical to the
-// pre-obligation behavior of these tenant-scoped reads. Subject-self-facing reads
-// MUST derive the obligation from the principal (runtime/auth.Principal.RowVisibility),
-// never call this. The returned value is canonical-valid (RowScopeTenant with an
-// empty subject), so a PEP applies it unchanged.
+// pre-obligation behavior of these tenant-scoped reads. The returned value is
+// canonical-valid (RowScopeTenant with an empty subject), so a PEP applies it
+// unchanged.
 func SystemRowVisibility() RowVisibility {
 	return RowVisibility{scope: RowScopeTenant, subject: ""}
 }
