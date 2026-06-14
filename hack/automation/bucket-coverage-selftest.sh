@@ -12,7 +12,7 @@
 # Usage:  bash hack/automation/bucket-coverage-selftest.sh
 # Exit:   0 = all checks PASS; non-zero = at least one FAIL (or anti-vacuity)
 #
-# ref: hack/automation/codex-pr-router/router-selftest.sh — harness shape.
+# ref: hack/automation/pr-meta.sh selftest — harness shape.
 
 set -euo pipefail
 
