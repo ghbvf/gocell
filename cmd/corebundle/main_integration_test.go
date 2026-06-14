@@ -88,21 +88,22 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	assert.NotNil(t, app, "App must be non-nil after successful Build")
 }
 
-// TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that
-// verifyPGPreconditions returns an error (with schema guard message) when the
-// DB schema version does not match the binary.
+// TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that the schema guard
+// fires when the DB schema version does not match the binary.
 //
-// Schema verification has moved to provisionPostgres / verifyPGPreconditions;
-// this test calls verifyPGPreconditions directly so the guard is still covered
-// at integration level.
+// Schema verification moved into percellpg.Resolve (invoked by
+// provisionCapabilities) in #1964. This test drives the full
+// env→provisionCapabilities path on a lagged DB and asserts the guard error
+// surfaces fail-closed (percellpg owns the pool-open → verify sequence now, so
+// the guard can no longer be called directly from package main).
 func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	// Apply only migrations up to version 3 by applying all then deleting newer
-	// records from the tracking table — simulating a lagged DB.
+	// Apply all migrations, then simulate lag by removing entries for versions > 3
+	// so VerifyExpectedVersion (inside percellpg.Resolve) sees actual < expected.
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err, "pool for migration prep must succeed")
 
@@ -110,20 +111,24 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations initially")
 
-	// Simulate lag: remove entries for versions > 3 so VerifyExpectedVersion sees
-	// actual < expected and returns a schema mismatch error.
 	_, execErr := pool.DB().Exec(ctx,
 		"DELETE FROM schema_migrations_platform WHERE version_id > 3")
 	require.NoError(t, execErr, "deleting version records must succeed")
-
-	// Schema verification now lives in verifyPGPreconditions (provisionPostgres).
-	// Call it directly to assert the schema guard fires on a lagged DB.
-	err = verifyPGPreconditions(ctx, pool)
-
 	_ = pool.Close(ctx)
 
-	require.Error(t, err, "verifyPGPreconditions must return error when schema is lagged")
-	assert.Contains(t, err.Error(), "schema guard",
+	// Drive the full env→provision path on the lagged DB; percellpg.Resolve opens
+	// its own pool and runs verifyPGPreconditions, which must fail-closed.
+	setRealModeEnv(t, dsn)
+	shared, locals, err := LoadSharedDepsFromEnv(ctx)
+	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
+
+	provErr := provisionCapabilities(ctx, shared, locals)
+	if locals.poolMR != nil {
+		_ = locals.poolMR.Close(ctx)
+	}
+
+	require.Error(t, provErr, "provisionCapabilities must fail-closed when schema is lagged")
+	assert.Contains(t, provErr.Error(), "schema guard",
 		"error must mention schema guard")
 }
 
