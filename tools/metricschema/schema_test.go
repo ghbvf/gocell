@@ -22,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
-	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
@@ -143,10 +142,11 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 // promwrap export set for the funnel-enforcement side.
 func TestPrometheusConstructor_RecognizesPromwrapFunnel(t *testing.T) {
 	root := repoRoot(t)
-	// promwrap now lives in the adapters/prometheus go.work satellite module
-	// (#1558), invisible to a GOWORK=off ModeModule load from the repo root;
-	// ModeWorkspace resolves it as a workspace member.
-	pkgs, err := loadPackagesWithMode(t.Context(), root, false, packagesload.ModeWorkspace, promwrapPkg)
+	// promwrap lives in the adapters/prometheus go.work satellite module (#1558),
+	// invisible to a GOWORK=off ModeModule load from the repo root. The shared
+	// satellite-aware loadPackages resolves the import path to its owning member and
+	// loads it (#2147).
+	pkgs, err := loadPackages(t.Context(), root, promwrapPkg)
 	require.NoError(t, err)
 
 	var exported []string
@@ -940,7 +940,7 @@ func TestOBS01CoverageRequiresFramework_AntiVacuity(t *testing.T) {
 		"PatternTopLevels must not report framework covered when no framework pattern is present")
 }
 
-// TestOBS01CoverageRequiresSatellites is the #2147 satellite analogue of
+// TestOBS01CoverageRequiresSatellites is the #2147 satellite counterpart of
 // TestOBS01CoverageRequiresFramework: it asserts the independent, hardcoded fact
 // that the multi-member satellite parents (cmd/adapters/examples, each holding
 // several go.work member modules) MUST be OBS-01-covered, via two checks that do

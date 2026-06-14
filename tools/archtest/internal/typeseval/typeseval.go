@@ -30,8 +30,6 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/types"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -39,7 +37,6 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/packagesload"
-	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // EvaluateConstString returns the compile-time string constant value of expr,
@@ -123,38 +120,27 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 }
 
 // loadPackagesMode is the shared body of LoadPackages; mode selects the GOWORK
-// semantics (see tools/packagesload). ModeWorkspace is used only by the
-// cross-module workspace production scan.
+// semantics (see tools/packagesload). The ModeModule path routes through the shared
+// satellite-aware loader packagesload.LoadWorkspace, which expands multi-member
+// satellite parent-prefixes ("./cmd/...", "./adapters/...", "./examples/...") to
+// their go.work members so they are actually scanned (the grouping logic this used
+// to carry inline, consolidated into the single sanctioned loader — #2147).
+// ModeWorkspace is the cross-module production scan, loaded flat from the root
+// without parent-prefix expansion.
 func loadPackagesMode(
 	mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
-	if mode == packagesload.ModeModule {
-		if groups, rootPatterns, ok := workspacePatternGroups(dir, patterns); ok {
-			// A span across multiple member modules, OR a single group that IS the
-			// workspace root (parent-of-member / root-level patterns), must load
-			// from the root in ModeWorkspace using rootPatterns — where unanchored
-			// "./parent/..." patterns have been translated to import-path form
-			// (post-#1565 the root has no module to anchor a relative dir pattern).
-			if len(groups) > 1 || (len(groups) == 1 && groups[0].dir == dir) {
-				return loadPackageGroups(
-					packagesload.ModeWorkspace,
-					tests,
-					tags,
-					[]patternGroup{{dir: dir, patterns: rootPatterns}},
-				)
-			}
-			return loadPackageGroups(mode, tests, tags, groups)
-		}
-	}
-	cfg := &packages.Config{
-		Mode:  loadMode,
-		Dir:   dir,
-		Tests: tests,
-	}
+	cfg := packages.Config{Mode: loadMode, Tests: tests}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
 	}
-	pkgs, err := packagesload.Load(mode, cfg, patterns...)
+	if mode == packagesload.ModeModule {
+		return packagesload.LoadWorkspace(dir, cfg, patterns...)
+	}
+	// Explicit ModeWorkspace: the cross-module workspace production scan loads flat
+	// from the root (no satellite parent-prefix expansion).
+	cfg.Dir = dir
+	pkgs, err := packagesload.Load(mode, &cfg, patterns...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("packages.Load: %w", err)
 	}
@@ -166,187 +152,6 @@ func loadPackagesMode(
 		errs = append(errs, p.Errors...)
 	})
 	return pkgs, errs, nil
-}
-
-type patternGroup struct {
-	dir      string
-	patterns []string
-}
-
-func loadPackageGroups(
-	mode packagesload.Mode, tests bool, tags []string, groups []patternGroup,
-) ([]*packages.Package, []packages.Error, error) {
-	var all []*packages.Package
-	var allErrs []packages.Error
-	for _, g := range groups {
-		cfg := &packages.Config{
-			Mode:  loadMode,
-			Dir:   g.dir,
-			Tests: tests,
-		}
-		if len(tags) > 0 {
-			cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
-		}
-		pkgs, err := packagesload.Load(mode, cfg, g.patterns...)
-		if err != nil {
-			return nil, nil, fmt.Errorf("packages.Load: %w", err)
-		}
-		packages.Visit(pkgs, nil, func(p *packages.Package) {
-			for i := range p.Errors {
-				p.Errors[i].Msg = g.dir + ": " + p.Errors[i].Msg
-			}
-			allErrs = append(allErrs, p.Errors...)
-		})
-		all = append(all, pkgs...)
-	}
-	return all, allErrs, nil
-}
-
-// workspacePatternGroups returns, for a go.work workspace at root: (1) the
-// per-member pattern groups (each loaded in module mode), and (2) rootPatterns —
-// the equivalent flat pattern list for a single ModeWorkspace load FROM the root,
-// in which any "./parent/..." pattern that spans multiple members (no single
-// member owns it) is rewritten to its import-path form so workspace mode resolves
-// it without a root module to anchor the relative dir.
-func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []string, bool) {
-	if _, err := os.Stat(filepath.Join(root, "go.work")); err != nil {
-		return nil, nil, false
-	}
-	mods, err := workspace.Modules(root)
-	if err != nil {
-		return nil, nil, false
-	}
-	// Expand satellite parent-prefixes ("./cmd/...", "./adapters/...",
-	// "./examples/...") that span multiple members into their per-member patterns
-	// so the satellite packages are ACTUALLY scanned. Without this a pattern no
-	// single member owns hits splitWorkspacePattern's skip and match-zeroes —
-	// silently dropping the ./cmd/… ./adapters/… ./examples/… coverage that
-	// security/governance archtest rules declare over those satellites (#1565
-	// fidelity, F5). A prefix with zero members under it still falls through to
-	// the skip (genuine match-zero).
-	expanded := make([]string, 0, len(patterns))
-	for _, p := range patterns {
-		if parts, ok := workspace.ExpandParentPrefix(mods, p); ok {
-			expanded = append(expanded, parts...)
-		} else {
-			expanded = append(expanded, p)
-		}
-	}
-	patterns = expanded
-	groups := make([]patternGroup, 0, len(mods))
-	groupByDir := map[string]int{}
-	add := func(dir, pattern string) {
-		if i, ok := groupByDir[dir]; ok {
-			groups[i].patterns = append(groups[i].patterns, pattern)
-			return
-		}
-		groupByDir[dir] = len(groups)
-		groups = append(groups, patternGroup{dir: dir, patterns: []string{pattern}})
-	}
-	rootPatterns := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		moduleDir, modulePattern := splitWorkspacePattern(mods, pattern)
-		if moduleDir == skipPatternDir {
-			// Unmatched satellite parent-prefix ("./cmd/...", "./adapters/...") —
-			// drop it so it match-zeroes (see splitWorkspacePattern).
-			continue
-		}
-		add(filepath.Join(root, moduleDir), modulePattern)
-		if moduleDir == "." {
-			// No member owns the pattern: use the member-relative form for the
-			// root-anchored ModeWorkspace load.
-			rootPatterns = append(rootPatterns, modulePattern)
-		} else {
-			// Into-member relative pattern resolves from the root in workspace mode.
-			rootPatterns = append(rootPatterns, pattern)
-		}
-	}
-	return groups, rootPatterns, true
-}
-
-// frameworkModuleDir is the workspace-relative dir of the core framework module
-// (kernel/runtime/pkg) since the #1565 split — the successor to the pre-split root
-// module that "." / "./..." referred to.
-const frameworkModuleDir = "framework"
-
-// skipPatternDir is the sentinel member-dir splitWorkspacePattern returns for a
-// root-relative parent prefix that no workspace member owns AND that has no member
-// living under it — a genuine empty match (e.g. a typo "./nonexistent/..."). Real
-// multi-member satellite prefixes ("./cmd/...", "./adapters/...", "./examples/...")
-// are expanded to their members by workspacePatternGroups BEFORE split is called
-// (workspace.ExpandParentPrefix), so they are actually scanned, never silently
-// skipped (F5, SATELLITE-PARENT-PREFIX-SCAN-01). workspacePatternGroups drops a
-// skipPatternDir pattern so it match-zeroes. The NUL byte cannot occur in a real
-// dir, so it is unambiguous.
-const skipPatternDir = "\x00skip-no-member"
-
-func splitWorkspacePattern(mods []workspace.Module, pattern string) (string, string) {
-	// "." / "./..." referred to the pre-#1565 ROOT module — the platform CORE
-	// (kernel/runtime/pkg at the repo root). The core moved to ./framework, so map
-	// the bare-root patterns onto the framework member, preserving "scan the
-	// platform core" semantics.
-	if (pattern == "." || pattern == "./...") && hasFrameworkMember(mods) {
-		return frameworkModuleDir, pattern
-	}
-	if dir, modulePattern, ok := matchWorkspaceMember(mods, pattern); ok {
-		return dir, modulePattern
-	}
-	// No member matched a root-relative parent prefix. Multi-member satellite
-	// prefixes ("./cmd/...", "./adapters/...", "./examples/...") are already expanded
-	// to their owning members upstream in workspacePatternGroups
-	// (workspace.ExpandParentPrefix), so they are scanned, not skipped (F5). Reaching
-	// here means the prefix has NO member under it at all — a genuine empty match
-	// (e.g. a typo "./nonexistent/..."). Signal SKIP: workspacePatternGroups drops the
-	// pattern entirely (→ match-zero). A member that matched but whose subdir is
-	// missing (e.g. "./tools/.../nonexistent/...") took the matched branch above and is
-	// NOT skipped — it loads and surfaces a packages.Error, preserving typo
-	// diagnostics. Only skip when a framework core member exists (the real post-#1565
-	// workspace); a synthetic single-module set falls through to the root-anchored
-	// (".") form so its in-module subtrees still load.
-	if strings.HasPrefix(pattern, "./") && hasFrameworkMember(mods) {
-		return skipPatternDir, ""
-	}
-	return ".", pattern
-}
-
-// hasFrameworkMember reports whether the workspace contains the core framework
-// module (the post-#1565 successor to the root "." module).
-func hasFrameworkMember(mods []workspace.Module) bool {
-	for _, m := range mods {
-		if filepath.ToSlash(filepath.Clean(m.Dir)) == frameworkModuleDir {
-			return true
-		}
-	}
-	return false
-}
-
-// matchWorkspaceMember finds the workspace member that owns pattern (longest dir /
-// import-path prefix wins), returning (member-dir, member-relative pattern, true).
-// ok is false when no member owns the pattern.
-func matchWorkspaceMember(mods []workspace.Module, pattern string) (string, string, bool) {
-	bestDir, bestPattern, bestScore := "", "", -1
-	consider := func(score int, dir, modulePattern string) {
-		if score > bestScore {
-			bestScore, bestDir, bestPattern = score, dir, modulePattern
-		}
-	}
-	for _, m := range mods {
-		dir := filepath.ToSlash(filepath.Clean(m.Dir))
-		if dir == "." || dir == "" {
-			continue
-		}
-		prefix := "./" + dir
-		switch {
-		case pattern == prefix:
-			consider(len(dir), dir, ".")
-		case strings.HasPrefix(pattern, prefix+"/"):
-			consider(len(dir), dir, "."+strings.TrimPrefix(pattern, prefix))
-		}
-		if pattern == m.ImportPath || strings.HasPrefix(pattern, m.ImportPath+"/") {
-			consider(len(m.ImportPath), dir, pattern)
-		}
-	}
-	return bestDir, bestPattern, bestScore >= 0
 }
 
 var (
