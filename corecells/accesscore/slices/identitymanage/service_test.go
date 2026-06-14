@@ -194,12 +194,12 @@ func TestService_LockUnlock(t *testing.T) {
 
 	// Lock
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
-	locked, _ := svc.GetByID(adminCtxForService(), user.ID)
+	locked, _ := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	assert.True(t, locked.IsLocked())
 
 	// Unlock
 	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
-	unlocked, _ := svc.GetByID(adminCtxForService(), user.ID)
+	unlocked, _ := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	assert.False(t, unlocked.IsLocked())
 }
 
@@ -244,7 +244,7 @@ func TestService_Delete(t *testing.T) {
 	})
 
 	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
-	_, err := svc.GetByID(adminCtxForService(), user.ID)
+	_, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	assert.Error(t, err)
 }
 
@@ -298,7 +298,7 @@ func TestService_Delete_LastAdminProtected(t *testing.T) {
 	err = svc.Delete(adminCtxForService(), user.ID)
 
 	assertLastAdminProtected(t, err)
-	_, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+	_, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, getErr, "last-admin-protected delete must leave the user row intact")
 }
 
@@ -313,7 +313,7 @@ func TestService_Lock_LastAdminProtected(t *testing.T) {
 	err = svc.Lock(adminCtxForService(), user.ID)
 
 	assertLastAdminProtected(t, err)
-	persisted, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+	persisted, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, getErr)
 	assert.False(t, persisted.IsLocked(), "last-admin-protected lock must not update the user")
 }
@@ -330,7 +330,7 @@ func TestService_Update_LastAdminProtected_StatusDemotion(t *testing.T) {
 	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
 
 	assertLastAdminProtected(t, err)
-	persisted, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+	persisted, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, getErr)
 	assert.Equal(t, domain.StatusActive, persisted.Status(),
 		"last-admin-protected update must not change the user's status")
@@ -369,7 +369,7 @@ func TestService_Delete_LastAdminAllowedWhenAnotherAdminRemains(t *testing.T) {
 
 	require.NoError(t, svc.Delete(adminCtxForService(), first.ID))
 
-	_, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, first.ID)
+	_, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), first.ID)
 	require.Error(t, getErr)
 }
 
@@ -625,7 +625,7 @@ func TestService_UpdateProfile_DoesNotTouchAuthzFields(t *testing.T) {
 	require.NoError(t, err)
 
 	// Snapshot password-derived fields after a stable read.
-	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	pre, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	preHash := pre.PasswordHash
 	prePV := pre.PasswordVersion
@@ -690,7 +690,7 @@ func TestService_Lock_DoesNotTouchProfile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	pre, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	preName := pre.Username
 	preEmail := pre.Email
@@ -699,7 +699,7 @@ func TestService_Lock_DoesNotTouchProfile(t *testing.T) {
 
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 
-	post, err := svc.GetByID(adminCtxForService(), user.ID)
+	post, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, post.Status(), "Lock must persist status=Locked")
 	assert.Equal(t, preName, post.Username, "Lock must not change username")
@@ -718,7 +718,7 @@ func TestService_Update_RequirePasswordReset_DoesNotTouchProfile(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	pre, err := svc.GetByID(adminCtxForService(), user.ID)
+	pre, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	preName := pre.Username
 	preEmail := pre.Email
@@ -776,7 +776,7 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 	assert.Equal(t, "new-at", pair.AccessToken)
 
 	// Verify stored hash changed.
-	updated, _ := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-cp-ok")
+	updated, _ := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cp-ok")
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("newpass")))
 	assert.False(t, updated.PasswordResetRequired(), "flag must be cleared after password change")
 }
@@ -795,7 +795,7 @@ func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 	assert.Contains(t, err.Error(), "old password incorrect")
 
 	// No side effects: hash unchanged.
-	orig, _ := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-cp-bad")
+	orig, _ := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cp-bad")
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(orig.PasswordHash), []byte("correctpass")))
 }
 
@@ -834,7 +834,7 @@ func TestService_ChangePassword_InactiveUser_RejectsPreMutation(t *testing.T) {
 			assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
 
 			// Old hash NOT rewritten + version unchanged (UpdatePassword not committed).
-			after, gerr := repo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+			after, gerr := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 			require.NoError(t, gerr)
 			assert.Equal(t, beforeHash, after.PasswordHash,
 				"inactive account password hash must be unchanged")
@@ -866,8 +866,10 @@ type freezeAfterReadRepo struct {
 // GetByIDInTenant implements the freeze-after-read spy for the changePasswordInTx
 // path which uses GetByIDInTenant (F2). Freeze-after-read semantics:
 // the caller gets a stale active snapshot and the write guard rejects.
-func (r *freezeAfterReadRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	u, err := r.UserRepository.GetByIDInTenant(ctx, t, id)
+func (r *freezeAfterReadRepo) GetByIDInTenant(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*domain.User, error) {
+	u, err := r.UserRepository.GetByIDInTenant(ctx, t, vis, id)
 	if err == nil && id == r.target && !r.froze {
 		r.froze = true
 		_ = r.UpdateLockState(ctx, t, id, domain.StatusLocked, time.Now())
@@ -908,7 +910,7 @@ func TestService_ChangePassword_ConcurrentFreeze_RejectedAtWriteGuard(t *testing
 	require.True(t, errors.As(cpErr, &ce), "expected *errcode.Error, got %T", cpErr)
 	assert.Equal(t, errcode.ErrAuthUserNotActive, ce.Code)
 
-	after, gerr := memRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+	after, gerr := memRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, gerr)
 	assert.Equal(t, beforeHash, after.PasswordHash,
 		"credential must not be rewritten when a freeze committed before the write")
@@ -969,7 +971,7 @@ func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	updated, _ := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-cp-reset")
+	updated, _ := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cp-reset")
 	assert.False(t, updated.PasswordResetRequired(), "flag must be cleared after password change")
 }
 
@@ -1056,7 +1058,7 @@ type snapshotTxRunner struct {
 }
 
 func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	pre, getErr := s.repo.GetByIDInTenant(ctx, testTenantID, s.userID)
+	pre, getErr := s.repo.GetByIDInTenant(ctx, testTenantID, tenant.SystemRowVisibility(), s.userID)
 	if getErr != nil {
 		return fn(ctx)
 	}
@@ -1114,7 +1116,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 		"token issuer must not run after tx failure: otherwise stolen refresh tokens stay live while a fresh pair is handed out")
 
 	// (c) password rollback: the old password must still verify.
-	persisted, perr := userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-cp-tx-fail")
+	persisted, perr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cp-tx-fail")
 	require.NoError(t, perr)
 	assert.NoError(t,
 		bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("oldpass")),
@@ -1154,7 +1156,7 @@ func TestChangePassword_OldPasswordCorrect_BumpsVersion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-cas-bump")
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cas-bump")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.PasswordVersion,
 		"PasswordVersion must advance to 1 after the first successful change")
@@ -1304,7 +1306,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds(t *testing.T) {
 		"exactly %d concurrent ChangePassword goroutines must lose the race", concurrency-1)
 
 	// Exactly one mutation applied — version advances to exactly 1.
-	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-cas-race")
+	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-cas-race")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.PasswordVersion, "version must be exactly 1 after exactly one success")
 }
@@ -1548,9 +1550,11 @@ func (r *observingUserRepo) Create(ctx context.Context, t tenant.TenantID, user 
 	return r.UserRepository.Create(ctx, t, user)
 }
 
-func (r *observingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+func (r *observingUserRepo) GetByIDInTenant(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*domain.User, error) {
 	r.getInTx = r.runner.inTx
-	return r.UserRepository.GetByIDInTenant(ctx, t, id)
+	return r.UserRepository.GetByIDInTenant(ctx, t, vis, id)
 }
 
 func (r *observingUserRepo) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
@@ -1667,7 +1671,7 @@ func TestService_GetByID_RunsInsideTx(t *testing.T) {
 	require.NoError(t, err)
 	repo.getInTx, runner.runs = false, 0
 
-	got, err := svc.GetByID(adminCtxForService(), user.ID)
+	got, err := svc.GetByID(adminCtxForService(), tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, got.ID)
 	assert.Equal(t, 1, runner.runs, "GetByID must run inside exactly one tx")
@@ -2139,9 +2143,11 @@ type countingUserRepo struct {
 	getByIDCalls int
 }
 
-func (r *countingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+func (r *countingUserRepo) GetByIDInTenant(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*domain.User, error) {
 	r.getByIDCalls++
-	return r.UserRepository.GetByIDInTenant(ctx, t, id)
+	return r.UserRepository.GetByIDInTenant(ctx, t, vis, id)
 }
 
 // TestService_Update_RequirePasswordReset_NoExtraGetByIDOutsideTx verifies
@@ -2206,7 +2212,7 @@ func TestService_Update_RequirePasswordReset_AlreadySet_NoMutation(t *testing.T)
 	assert.True(t, updated.PasswordResetRequired(),
 		"flag must remain true after no-op idempotent call")
 	// Epoch should not have changed (no invalidation triggered).
-	after, err := repo.GetByIDInTenant(context.Background(), testTenantID, "usr-f2-already-set")
+	after, err := repo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-f2-already-set")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), after.AuthzEpoch(),
 		"F2: idempotent RequirePasswordReset=true must NOT bump authz_epoch "+

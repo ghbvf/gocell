@@ -48,15 +48,29 @@
 //     leave Query's obligation slot undefended on the interface auditquery binds
 //     to. Its sole method (Query) is a subject-owned row read → no carve-out.
 //
-// PR-4 scope is auditcore ONLY. accesscore (UserRepository / RoleRepository) and
-// configcore (ConfigRepository / FlagRepository) reads are auth-internal /
-// tenant-or-global SYSTEM reads with no roadmapped self/device consumer, so they
-// are deliberately NOT enrolled here (they would carry a permanently-dead
-// obligation param). They enroll when a subject-self read endpoint appears —
-// tracked at gh #1709.
+// accesscore ports (accesscorePortsPkg, #1709):
+//   - UserRepository — GetByIDInTenant is a subject-owned row read (owner column
+//     users.id) backing GET /api/v1/access/users/{id}; it carries the obligation.
+//     All other methods (writes, username-keyed / FOR UPDATE SYSTEM reads) are
+//     carved out below.
+//   - RoleRepository — GetByUserID + ListByUserID are subject-owned row reads
+//     (owner column role_assignments.user_id) backing GET /api/v1/access/roles/{userID};
+//     they carry the obligation. role-by-PK GetByID, writes, and aggregates are
+//     carved out below.
 //
-// # Carve-out allowlist (non-row reads on ledger.Store)
+// accesscore enrolled by #1709 once #1977 introduced the PDP-ownership subject-self
+// read endpoints: a tenant policy that widens the coarse route gate (grants a
+// non-admin role tenant-wide user:read / role:read) no longer over-reads, because
+// the principal-derived RowScope (identity-decided, policy-immutable; D3 in the
+// tenancy rule) collapses non-self rows at the repo PEP. configcore
+// (ConfigRepository / FlagRepository) and runtime/auth/session.Store reads remain
+// deliberately NOT enrolled: config rows have no subject-owner (self/device
+// structurally vacuous) and session.Get is credential-internal — their triggers
+// are independent and unmet (still tracked at gh #1709).
 //
+// # Carve-out allowlist (non-row reads)
+//
+// ledger.Store:
 //   - Store.Protocol — returns immutable protocol decisions; not a row read.
 //   - Store.Append — write path (persist an entry); not a row read.
 //   - Store.Tail — chain-tail snapshot (SeqNo/PrevHash/count); a chain-tail (the
@@ -67,7 +81,10 @@
 //   - Store.RepoReady — healthz relation probe; not a data read.
 //
 // Store.Query and Store.GetBySeq have NO carve-out: both return subject-owned
-// rows (owner column actor_id) and MUST carry the obligation.
+// rows (owner column actor_id) and MUST carry the obligation. accesscore
+// UserRepository / RoleRepository carve-outs (writes, by-PK / username SYSTEM
+// reads, aggregates) are enumerated in rowScopeParamCarveOut with per-method
+// rationale; only the three subject-owned reads above carry the obligation.
 //
 // # AI-robust ratings
 //
@@ -113,6 +130,14 @@ const (
 	// from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a module rename
 	// updates exactly one place.
 	ledgerStorePkg = PlatformFrameworkModulePath + "/runtime/audit/ledger"
+	// accesscorePortsPkg (the accesscore ports package, UserRepository /
+	// RoleRepository) is declared in tenant_repo_param_funnel_test.go (same archtest
+	// package) — reused here. Enrolled by #1709 once the subject-self read endpoints
+	// (GET /api/v1/access/users/{id}, GET /api/v1/access/roles/{userID}) landed via
+	// #1977: the row-visibility obligation became load-bearing (a non-admin who
+	// passes the coarse PDP route gate is still scoped to their own rows by the
+	// principal-derived RowScope), no longer a permanently-dead param.
+	//
 	// rowScopeRepoParamFixPkg is a relative load path for go/packages — NOT a
 	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	rowScopeRepoParamFixPkg = "./tools/archtest/internal/rowscoperepoparamfixture"
@@ -129,6 +154,13 @@ var rowScopedRepoIfaces = []string{
 	// to (Query only). Enrolled so the obligation slot is locked on the real
 	// read-side composition boundary, not just the wide Store.
 	"QueryStore",
+	// accesscore ports (accesscorePortsPkg, #1709). The composition boundary the
+	// accesscore services bind to IS the full interface, so the full interface is
+	// enrolled (not a narrow reader): it guards the real binding surface AND future
+	// row-read additions. Subject-owned reads carry the obligation; every other
+	// method is carved out below with rationale (no-stale check keeps the ledger honest).
+	"UserRepository",
+	"RoleRepository",
 }
 
 // rowScopeParamCarveOut is the non-row-read allowlist (see file godoc). Key is
@@ -139,12 +171,40 @@ var rowScopeParamCarveOut = map[string]string{
 	"Store.Tail":      "ctx-scoped per-tenant chain-tail snapshot (#1618); not a subject-owned row read",
 	"Store.Verify":    "HMAC chain integrity scan over [from,to]; not a subject-scoped read",
 	"Store.RepoReady": "healthz relation probe; not a data read",
+
+	// accesscore UserRepository (#1709). Only GetByIDInTenant is a subject-owned
+	// row read (owner column = users.id) and carries the obligation; the rest are
+	// writes or username-keyed / FOR UPDATE SYSTEM reads with no self/device consumer.
+	"UserRepository.Create":                  "write path (insert user); not a row read",
+	"UserRepository.GetByUsername":           "username-keyed SYSTEM login lookup; tenant-scoped, no self/device subject",
+	"UserRepository.GetByIDForUpdate":        "FOR UPDATE SYSTEM read in credential-mutation tx; no self/device consumer",
+	"UserRepository.GetByUsernameForUpdate":  "username-keyed FOR UPDATE SYSTEM read (sessionlogin); no self/device consumer",
+	"UserRepository.Delete":                  "write path (delete user); not a row read",
+	"UserRepository.UpdateProfile":           "narrow write (username/email); not a row read",
+	"UserRepository.UpdateLockState":         "narrow write (status + conditional lockout reset); not a row read",
+	"UserRepository.UpdatePasswordResetFlag": "narrow write (password_reset_required); not a row read",
+	"UserRepository.UpdatePassword":          "CAS write (password); not a row read",
+	"UserRepository.BumpAuthzEpoch":          "single-column atomic increment write; not a row read",
+	"UserRepository.UpdateLockoutFields":     "auto-lockout bookkeeping write; not a row read",
+
+	// accesscore RoleRepository (#1709). GetByUserID + ListByUserID are subject-owned
+	// row reads (owner column = role_assignments.user_id) and carry the obligation;
+	// the rest are role-by-PK reads (no owner/subject dimension), writes, or aggregates.
+	"RoleRepository.GetByID":                 "role-by-PK SYSTEM read (composite tenant,id); roles have no owner/subject dimension",
+	"RoleRepository.Create":                  "upsert role (seed/bootstrap); not a row read",
+	"RoleRepository.AssignToUser":            "write path (insert assignment); not a row read",
+	"RoleRepository.RemoveFromUser":          "write path (delete assignment); not a row read",
+	"RoleRepository.RemoveFromUserIfNotLast": "write path (guarded delete assignment); not a row read",
+	"RoleRepository.CountByRole":             "aggregate count for bootstrap idempotency; not a subject-owned row read",
+	"RoleRepository.CountEffectiveAdmins":    "invariant aggregate count (status+admin); not a subject-owned row read",
+	"RoleRepository.EffectiveAdminExists":    "existence aggregate (status+admin); not a subject-owned row read",
 }
 
 // enrolledRowScopePkgs is the closed set of ports packages whose repo interfaces
 // are enrolled in ROWSCOPE-REPO-PARAM-FUNNEL-01.
 var enrolledRowScopePkgs = map[string]struct{}{
-	ledgerStorePkg: {},
+	ledgerStorePkg:     {},
+	accesscorePortsPkg: {},
 }
 
 // isRowVisibilityType reports whether t is pkg/tenant.RowVisibility (alias-proof

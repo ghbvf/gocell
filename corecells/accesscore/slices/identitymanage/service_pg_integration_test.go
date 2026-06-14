@@ -255,7 +255,7 @@ func TestChangePassword_ConcurrentRequests_ExactlyOneSucceeds_PG(t *testing.T) {
 	assert.Equal(t, int32(1), versionConflicts, "exactly one concurrent ChangePassword must yield ErrVersionConflict (PG)")
 
 	// Version must have advanced exactly once.
-	got, err := repo.GetByIDInTenant(ctx, pgIntegTenantID, user.ID)
+	got, err := repo.GetByIDInTenant(ctx, pgIntegTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.PasswordVersion, "password_version must be exactly 1 after exactly one success (PG)")
 }

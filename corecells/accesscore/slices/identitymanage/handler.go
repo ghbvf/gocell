@@ -103,7 +103,15 @@ func (a CreateAdapter) Create(ctx context.Context, req *creategen.Request) (crea
 type GetAdapter struct{ S *Service }
 
 func (a GetAdapter) Get(ctx context.Context, req *getgen.Request) (getgen.GetResponseObject, error) {
-	user, err := a.S.GetByID(ctx, req.ID)
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing principal")
+	}
+	vis, err := p.RowVisibility(ctx)
+	if err != nil {
+		return nil, err
+	}
+	user, err := a.S.GetByID(ctx, vis, req.ID)
 	if err != nil {
 		return nil, err
 	}

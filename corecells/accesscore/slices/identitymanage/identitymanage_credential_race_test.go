@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -140,7 +141,7 @@ func TestIdentitymanageCredential_ConcurrentChangePasswordAndLock(t *testing.T) 
 	// Terminal assertions — evaluated after all goroutines complete.
 
 	// authz_epoch: at least one credential event must have committed.
-	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, userID)
+	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), userID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, finalUser.AuthzEpoch(), int64(1),
 		"authz_epoch must be ≥ 1 after concurrent credential events; got %d (successCount=%d)",
@@ -221,7 +222,7 @@ func TestIdentitymanageCredential_ConcurrentChangePassword_EpochPositive(t *test
 	}
 	wg.Wait()
 
-	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, userID)
+	finalUser, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), userID)
 	require.NoError(t, err)
 
 	// The epoch must reflect initial=1 plus the number of successful changes.

@@ -50,7 +50,7 @@ func (s *stubRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, _ string) (
 	panic("unused")
 }
 
-func (s *stubRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (s *stubRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return s.roles, s.err
 }
 
@@ -82,7 +82,9 @@ func (s *stubRoleRepo) EffectiveAdminExists(_ context.Context, _ tenant.TenantID
 	panic("unused")
 }
 
-func (s *stubRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
+func (s *stubRoleRepo) ListByUserID(
+	_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string, _ query.ListParams,
+) ([]*domain.Role, error) {
 	panic("unused")
 }
 

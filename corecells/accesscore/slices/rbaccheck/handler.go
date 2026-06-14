@@ -6,6 +6,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
 	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -19,11 +20,19 @@ type ListAdapter struct{ S *Service }
 // List implements listg.Service. The generated handler already validates and
 // decodes userID (UUID), cursor, and limit from the request.
 func (a ListAdapter) List(ctx context.Context, req *listg.Request) (listg.ListResponseObject, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing principal")
+	}
+	vis, err := p.RowVisibility(ctx)
+	if err != nil {
+		return nil, err
+	}
 	pageReq := query.PageParams{
 		Cursor: req.Cursor,
 		Limit:  int(req.Limit),
 	}
-	result, err := a.S.ListRoles(ctx, req.UserID, pageReq)
+	result, err := a.S.ListRoles(ctx, vis, req.UserID, pageReq)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +76,15 @@ type CheckAdapter struct{ S *Service }
 // Check implements checkg.Service. The generated handler already validates and
 // decodes userID (UUID) and roleName from the request.
 func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (checkg.CheckResponseObject, error) {
-	has, err := a.S.HasRole(ctx, req.UserID, req.RoleName)
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing principal")
+	}
+	vis, err := p.RowVisibility(ctx)
+	if err != nil {
+		return nil, err
+	}
+	has, err := a.S.HasRole(ctx, vis, req.UserID, req.RoleName)
 	if err != nil {
 		return nil, err
 	}

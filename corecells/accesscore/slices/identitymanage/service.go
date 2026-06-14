@@ -343,8 +343,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 	return user, nil
 }
 
-// GetByID retrieves a user by ID. Tenant-scoped: uses GetByIDInTenant so an
-// admin cannot read a user from a different tenant even if they know the UUID.
+// GetByID retrieves a user by ID. vis is the principal-derived row-visibility
+// obligation: the subject-self read endpoint passes the caller's RowVisibility so
+// a non-admin who passes the coarse route gate still only sees their own row (a
+// non-self id collapses to ErrAuthUserNotFound). SYSTEM callers must pass
+// tenant.SystemRowVisibility().
 //
 // The read runs inside txRunner.RunInTx (#1617 PR-3b review F1): users is under
 // FORCE ROW LEVEL SECURITY (migration 053), so a bare-pool SELECT would be
@@ -354,14 +357,14 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 // — the SAME tid GetByIDInTenant filters on, so GUC and predicate are consistent.
 // Every other identitymanage method already wraps its repo access this way;
 // GetByID was the lone read that bypassed it.
-func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) {
+func (s *Service) GetByID(ctx context.Context, vis tenant.RowVisibility, id string) (*domain.User, error) {
 	tid, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: get: tenant: %w", err)
 	}
 	var user *domain.User
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		u, gerr := s.repo.GetByIDInTenant(txCtx, tid, id)
+		u, gerr := s.repo.GetByIDInTenant(txCtx, tid, vis, id)
 		if gerr != nil {
 			return fmt.Errorf("identity-manage: get: %w", gerr)
 		}
@@ -538,7 +541,9 @@ func (s *Service) applyUserUpdateTx(
 		// row from another tenant cannot surface here. ForUpdate lock is not
 		// needed — the same-tx MVCC snapshot already sees the just-committed
 		// writes; FOR UPDATE row-lock semantics apply only to cross-tx concurrency.
-		refetched, err := s.repo.GetByIDInTenant(txCtx, tid, input.ID)
+		// SYSTEM read: the mutation already ran; we refetch the row for return,
+		// no owner-dimension filter needed.
+		refetched, err := s.repo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), input.ID)
 		if err != nil {
 			return nil, fmt.Errorf("identity-manage: update re-fetch after mutation: %w", err)
 		}
@@ -655,7 +660,8 @@ func (s *Service) deleteUserAndRevokeTokens(ctx context.Context, id, actor strin
 		// S4.0: fetch the user so the effective-admin guard can use the real
 		// status (active vs locked/suspended). Tenant-scoped: prevents a
 		// cross-tenant admin from deleting a user they merely know the UUID of.
-		user, err := s.repo.GetByIDInTenant(txCtx, tid, id)
+		// SYSTEM read: delete is an admin operation, no owner-dimension filter.
+		user, err := s.repo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), id)
 		if err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
 		}
@@ -734,8 +740,9 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 	now := s.clock.Now()
 	// Guard tx (tx1): check last-admin protection before applying the mutation.
 	// Tenant-scoped: admin cannot lock a user from another tenant.
+	// SYSTEM read: lock is an admin operation, no owner-dimension filter.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		user, err := s.repo.GetByIDInTenant(txCtx, tid, id)
+		user, err := s.repo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), id)
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock guard: %w", err)
 		}
@@ -773,7 +780,9 @@ func (s *Service) checkLastAdminRemoval(ctx context.Context, tid tenant.TenantID
 	// non-nil guard. The former `if s.lastAdminGuard == nil { return nil }`
 	// opt-out skip belonged to the deleted WithLastAdminProtection era and
 	// would silently bypass S4.0 — its removal is what makes the guard Hard.
-	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, tid, userID)
+	// SYSTEM read: last-admin guard is an internal safety check, no
+	// owner-dimension filter needed.
+	roles, err := s.lastAdminRoleRepo.GetByUserID(ctx, tid, tenant.SystemRowVisibility(), userID)
 	if err != nil {
 		return fmt.Errorf("identity-manage: last-admin roles: %w", err)
 	}
@@ -957,7 +966,9 @@ func (s *Service) changePasswordInTx(txCtx context.Context, input ChangePassword
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password: tenant: %w", err)
 	}
-	user, err := s.repo.GetByIDInTenant(txCtx, tid, input.UserID)
+	// SYSTEM read: change-password is a self-authenticated operation; the auth
+	// gate already verified identity. No owner-dimension filter needed here.
+	user, err := s.repo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), input.UserID)
 	if err != nil {
 		return "", fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}

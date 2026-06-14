@@ -58,8 +58,13 @@ var expectedUserRepoMethodSignatures = map[string]string{
 	// GetByID (tenant-less by-PK) deleted in PR-3b (#1617): every UserRepository
 	// method now carries tenant.TenantID; callers use GetByIDInTenant under scope.
 	"GetByIDForUpdate": "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
-	"GetByIDInTenant":  "(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)",
-	"GetByUsername":    "(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)",
+	// GetByIDInTenant gained a tenant.RowVisibility read obligation at param[2]
+	// (#1709, ROWSCOPE-REPO-PARAM-FUNNEL-01): it backs the subject-self read
+	// endpoint GET /api/v1/access/users/{id}, so the owner-dimension obligation is
+	// enforced at the repo PEP. The narrow-write-method threat model (this ADR's
+	// scope) is unchanged; see ADR 202605222309 amendment.
+	"GetByIDInTenant": "(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*domain.User, error)",
+	"GetByUsername":   "(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)",
 	"GetByUsernameForUpdate": "(ctx context.Context, t tenant.TenantID, username string)" +
 		" (*domain.User, error)",
 	"UpdateLockState": "(ctx context.Context, t tenant.TenantID, userID string," +

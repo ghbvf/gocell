@@ -102,12 +102,25 @@ func checkProfileUniqueLocked(tByName, tByEmail map[string]*domain.User, userID,
 	return nil
 }
 
-// GetByIDInTenant fetches a user by primary key and verifies it belongs to t.
-// Returns ErrAuthUserNotFound when the row is absent OR in a different tenant,
-// collapsing both cases to prevent cross-tenant existence enumeration.
-func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+// GetByIDInTenant fetches a user by primary key and verifies it belongs to t
+// and satisfies the row-visibility obligation vis (owner column = users.id).
+// Returns ErrAuthUserNotFound when the row is absent, in a different tenant, or
+// the owner obligation rejects it — all cases collapse to the same error to
+// prevent cross-tenant existence enumeration (IDOR-safe).
+func (r *UserRepository) GetByIDInTenant(
+	ctx context.Context,
+	t tenant.TenantID,
+	vis tenant.RowVisibility,
+	id string,
+) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ports.RowScopeAllUnsupportedError()
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -116,6 +129,13 @@ func (r *UserRepository) GetByIDInTenant(ctx context.Context, t tenant.TenantID,
 
 	existing, exists := r.store.userByIDInTenant(id, string(t))
 	if !exists {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
+	}
+	// Owner-dimension enforcement: collapse a non-self row to the identical
+	// not-found error — IDOR-safe, no cross-tenant existence leak.
+	if !vis.Allows(existing.ID) {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 			errcode.WithCategory(errcode.CategoryDomain),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(errMsgIDFmt, id))))
@@ -149,8 +169,10 @@ func (r *UserRepository) GetByUsername(ctx context.Context, t tenant.TenantID, u
 // PR-3b this delegates directly to GetByIDInTenant (the former GetByID
 // carve-out is removed). The mem store serializes via store.mu held in RunInTx
 // — for details see UserRepository lock contract.
+// Uses SystemRowVisibility because FOR UPDATE reads are system-internal (login /
+// credential operations); no owner-dimension filter applies on this write path.
 func (r *UserRepository) GetByIDForUpdate(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	return r.GetByIDInTenant(ctx, t, id)
+	return r.GetByIDInTenant(ctx, t, tenant.SystemRowVisibility(), id)
 }
 
 // GetByUsernameForUpdate (S4d): username-keyed counterpart to

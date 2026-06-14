@@ -794,7 +794,9 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	// pre-existing transaction boundary — read+mint were never in the persist tx.
 	sessionID := uuid.NewString()
 	read, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (issueForUserResult, error) {
-		user, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID)
+		// SYSTEM read: IssueForUser is an internal token-issuance path (called
+		// from identitymanage.ChangePassword), not a subject-self endpoint.
+		user, err := s.userRepo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), userID)
 		if err != nil {
 			return issueForUserResult{}, fmt.Errorf("sessionlogin:IssueForUser get user: %w", err)
 		}

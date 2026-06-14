@@ -253,3 +253,37 @@ backstop, runtime-active once the restricted app-serving pool lands (backlog #16
 - New mid-tx scope primitive `CellTxManager.ApplyTenantScope` + single accesscore
   WithScope funnel `cells/accesscore/internal/scopedtx` (TENANT-TXSCOPE-WRITE-CALLER-01
   allowlist +1). See `.claude/rules/gocell/tenancy.md` PR-3b row.
+
+## Amendment 2026-06-15 (#1709): `GetByIDInTenant` row-visibility read obligation
+
+`UserRepository.GetByIDInTenant` gains a `tenant.RowVisibility` obligation positional
+parameter at param[2] (`GetByIDInTenant(ctx, t tenant.TenantID, vis tenant.RowVisibility,
+id string)`), enrolling `UserRepository` (and `RoleRepository.GetByUserID` /
+`ListByUserID`) in `ROWSCOPE-REPO-PARAM-FUNNEL-01`. This is triggered by #1977, which
+introduced the PDP-ownership subject-self read endpoints (`GET /api/v1/access/users/{id}`,
+`GET /api/v1/access/roles/{userID}`): the obligation is now load-bearing (a non-admin who
+passes the coarse route gate is scoped to their own rows by the principal-derived
+`RowScope`), no longer the permanently-dead param that justified deferral in #1342.
+
+### Threat matrix re-evaluation (per ai-robust.md §"ADR amendment 落地必查")
+
+This ADR's scope is the **write-side** narrow-method contract; the #1709 change is a
+**read-side** owner-dimension obligation, orthogonal to write-column narrowing. No write
+threat row changes.
+
+| Threat | Pre-#1709 | Post-#1709 | Notes |
+|---|---|---|---|
+| Over-broad accesscore read when a tenant policy widens the coarse route gate (non-admin granted tenant-wide `user:read`/`role:read`) | ⚠️ no data-layer RowScope on accesscore reads — route gate sole control (D3 promised but unimplemented) | ✅ principal-derived `RowScope` collapses non-self rows at the repo PEP (IDOR-safe NotFound/empty); RowScopeAll fail-closes 501 | closes the accesscore D3 gap; auditcore already had it |
+| Generic `Update(*User)` regression (this ADR's subject) | 🛡️ Medium archtest (golden 12) | 🛡️ Medium archtest (golden 12, unchanged) | method set unchanged — only one signature widened |
+
+Method set is **unchanged** (still 12 methods); only `GetByIDInTenant`'s signature
+widened. No write-side row regresses.
+
+### Enforcement artifacts updated
+
+- `tools/archtest/userrepo_method_set_frozen_test.go` — `GetByIDInTenant` frozen
+  signature updated to carry `vis tenant.RowVisibility` at param[2] (golden count 12,
+  unchanged).
+- `tools/archtest/rowscope_repo_param_funnel_test.go` — `UserRepository` +
+  `RoleRepository` enrolled (`ROWSCOPE-REPO-PARAM-FUNNEL-01`); 18 non-read methods
+  carved out with per-method rationale. See `.claude/rules/gocell/tenancy.md` D3.

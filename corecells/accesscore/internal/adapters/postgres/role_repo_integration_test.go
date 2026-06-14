@@ -186,7 +186,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 		require.NoError(t, roleRepo.RemoveFromUser(ctx, testTenantID, user.ID, roleID))
 
 		// GetByUserID should show no roles.
-		roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
+		roles, err := roleRepo.GetByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), user.ID)
 		require.NoError(t, err)
 		assert.Empty(t, roles)
 	})
@@ -307,7 +307,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 
 	t.Run("GetByUserID_empty_returns_empty_slice", func(t *testing.T) {
 		user := createTestUserInDB(t, userRepo, "noroles")
-		roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
+		roles, err := roleRepo.GetByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), user.ID)
 		require.NoError(t, err)
 		assert.NotNil(t, roles, "empty result must be non-nil slice")
 		assert.Empty(t, roles)
@@ -329,7 +329,7 @@ func TestPGRoleRepo_Integration(t *testing.T) {
 			Limit: 10,
 			Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 		}
-		roles, err := roleRepo.ListByUserID(ctx, testTenantID, user.ID, params)
+		roles, err := roleRepo.ListByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), user.ID, params)
 		require.NoError(t, err)
 		require.Len(t, roles, 2)
 		assert.Equal(t, "Apple", roles[0].Name)
@@ -574,7 +574,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Rejected_PG(t *testing.T) {
 	assert.True(t, isLastAdminProtected(rawErr), "isLastAdminProtected must classify the trigger error")
 
 	// Confirm the status was NOT actually updated (trigger fired BEFORE UPDATE).
-	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, soloAdmin.ID)
+	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, tenant.SystemRowVisibility(), soloAdmin.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusActive, got.Status(), "trigger must reject UPDATE before row is changed")
 }
@@ -599,7 +599,7 @@ func TestEffectiveAdminTrigger_RawStatusUpdate_Allowed_WhenOtherActiveAdmin_PG(t
 		"UPDATE users SET status = 'locked' WHERE id = $1", target.ID)
 	require.NoError(t, rawErr, "DB trigger must allow status demotion when a peer effective admin remains")
 
-	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, target.ID)
+	got, err := userRepo.GetByIDInTenant(ctx, testTenantID, tenant.SystemRowVisibility(), target.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, got.Status(), "status must have been updated")
 }

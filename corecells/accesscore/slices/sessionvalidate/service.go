@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/scopedtx"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
@@ -214,8 +215,10 @@ func (s *Service) enforceSessionState(ctx context.Context, claims kauth.Claims) 
 	// view.TenantID is the tenant carrier from sessions.tenant_id (#1337 PR-3b).
 	// scopedtx.Do sets the tenant scope on the context so that the PG RLS
 	// policy on users/roles/role_assignments is satisfied (PR-3b Site 4).
+	// SYSTEM read: session-validate is an internal auth path, no owner-dimension
+	// filter applies.
 	user, err := scopedtx.Do(ctx, s.txRunner, view.TenantID, func(txCtx context.Context) (*domain.User, error) {
-		return s.userRepo.GetByIDInTenant(txCtx, view.TenantID, claims.Subject)
+		return s.userRepo.GetByIDInTenant(txCtx, view.TenantID, tenant.SystemRowVisibility(), claims.Subject)
 	})
 	if err != nil {
 		if errcode.IsInfraError(err) {

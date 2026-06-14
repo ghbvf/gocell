@@ -246,7 +246,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.Equal(t, "root", payload["username"])
 
 	// Verify persisted user does NOT have PasswordResetRequired
-	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, out.ID)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), out.ID)
 	require.NoError(t, err)
 	assert.False(t, persisted.PasswordResetRequired(), "setup path creates with operator-chosen password")
 	// Verify password was hashed with bcrypt
@@ -679,7 +679,7 @@ func TestService_CreateAdmin_DuplicateUsername_Returns409WithoutTakeover(t *test
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 
-	refreshed, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-existing-prior")
+	refreshed, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-existing-prior")
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash,
 		"existing user hash must be untouched")
@@ -816,7 +816,7 @@ func (r *countErrRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ s
 	return 0, r.err
 }
 
-func (r *countErrRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (r *countErrRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -832,7 +832,9 @@ func (r *countErrRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, _ strin
 	return &domain.Role{ID: auth.RoleAdmin}, nil
 }
 
-func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
+func (r *countErrRoleRepo) ListByUserID(
+	_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string, _ query.ListParams,
+) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -942,8 +944,10 @@ func (r *scopeCapturingUserRepo) Create(ctx context.Context, t tenant.TenantID, 
 	return r.inner.Create(ctx, t, u)
 }
 
-func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	return r.inner.GetByIDInTenant(ctx, t, id)
+func (r *scopeCapturingUserRepo) GetByIDInTenant(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*domain.User, error) {
+	return r.inner.GetByIDInTenant(ctx, t, vis, id)
 }
 
 func (r *scopeCapturingUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {

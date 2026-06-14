@@ -122,6 +122,25 @@ func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
 	return v, nil
 }
 
+// SystemRowVisibility returns the tenant-wide (no owner predicate) obligation for
+// trusted SYSTEM reads: auth-internal credential / identity lookups (login,
+// refresh, validate, rbac enforcement, admin provisioning) that are scoped by
+// tenant but carry NO subject-owner dimension. It is the named, greppable
+// alternative to inlining NewRowVisibility(RowScopeTenant, "") at every such call
+// site — the name declares "this read is intentionally unfiltered within the
+// tenant", distinguishing a deliberate system read from a forgotten obligation.
+//
+// It is NOT a privilege escalation: RowScopeTenant is already mintable via
+// NewRowVisibility, and the resulting obligation applies no owner predicate
+// (Allows is always true, SQLPredicate emits nothing) — identical to the
+// pre-obligation behavior of these tenant-scoped reads. Subject-self-facing reads
+// MUST derive the obligation from the principal (runtime/auth.Principal.RowVisibility),
+// never call this. The returned value is canonical-valid (RowScopeTenant with an
+// empty subject), so a PEP applies it unchanged.
+func SystemRowVisibility() RowVisibility {
+	return RowVisibility{scope: RowScopeTenant, subject: ""}
+}
+
 // CrossTenantVisibility is the sealed carrier of the cross-tenant (RowScopeAll)
 // row-visibility obligation. Its single field is unexported and its sole
 // constructor is NewCrossTenantVisibility, so a POPULATED value is not

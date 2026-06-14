@@ -156,7 +156,7 @@ func (r *fakeUserRepo) GetByUsername(_ context.Context, _ tenant.TenantID, usern
 	return nil, errors.New("not found")
 }
 
-func (r *fakeUserRepo) GetByIDInTenant(ctx context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
+func (r *fakeUserRepo) GetByIDInTenant(ctx context.Context, _ tenant.TenantID, _ tenant.RowVisibility, id string) (*domain.User, error) {
 	return r.GetByID(ctx, id)
 }
 

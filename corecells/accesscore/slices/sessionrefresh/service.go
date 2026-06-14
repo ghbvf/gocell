@@ -666,8 +666,10 @@ func (s *Service) rejectIfStaleEpoch(ctx context.Context, rowEpoch, userEpoch in
 // scope the user lookup via GetByIDInTenant (RLS-safe path).
 // Fail-closed: any error returns ErrAuthRefreshFailed so the caller aborts
 // refresh rather than signing a token from stale or unknown user state.
+// SYSTEM read: refresh is an unauthenticated (no JWT) path; no owner-dimension
+// filter applies.
 func (s *Service) fetchUserForRefresh(ctx context.Context, sessionID, userID string, tenantID tenant.TenantID) (*domain.User, error) {
-	user, err := s.userRepo.GetByIDInTenant(ctx, tenantID, userID)
+	user, err := s.userRepo.GetByIDInTenant(ctx, tenantID, tenant.SystemRowVisibility(), userID)
 	if err != nil {
 		s.logger.Error("session-refresh: failed to fetch user for refresh predicates (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))

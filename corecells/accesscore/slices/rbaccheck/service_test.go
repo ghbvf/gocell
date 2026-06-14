@@ -94,7 +94,7 @@ func TestService_HasRole(t *testing.T) {
 			svc, repo := newTestService(t)
 			tt.setup(repo)
 
-			has, err := svc.HasRole(tenantCtx(), tt.userID, tt.roleName)
+			has, err := svc.HasRole(tenantCtx(), tenant.SystemRowVisibility(), tt.userID, tt.roleName)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -115,13 +115,13 @@ func TestService_ListRoles(t *testing.T) {
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "operator")
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "viewer")
 
-	result, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{Limit: 2})
+	result, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.True(t, result.HasMore)
 	require.NotEmpty(t, result.NextCursor)
 
-	next, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
+	next, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{
 		Limit:  2,
 		Cursor: result.NextCursor,
 	})
@@ -133,7 +133,7 @@ func TestService_ListRoles(t *testing.T) {
 
 func TestService_ListRolesEmptyInput(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.ListRoles(tenantCtx(), "", query.PageParams{})
+	_, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "", query.PageParams{})
 	assert.Error(t, err)
 }
 
@@ -142,7 +142,7 @@ func TestService_ListRoles_ProdMode_BadCursor_ReturnsError(t *testing.T) {
 	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
 
-	_, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
+	_, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{
 		Limit:  50,
 		Cursor: "not-a-valid-cursor",
 	})
@@ -168,14 +168,16 @@ func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID,
 	return r.inner.GetByID(ctx, t, id)
 }
 
-func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+func (r *scopeCapturingRoleRepo) GetByUserID(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string,
+) ([]*domain.Role, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
-	return r.inner.GetByUserID(ctx, t, userID)
+	return r.inner.GetByUserID(ctx, t, vis, userID)
 }
 
-func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
-	return r.inner.ListByUserID(ctx, t, userID, params)
+	return r.inner.ListByUserID(ctx, t, vis, userID, params)
 }
 
 func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
@@ -220,7 +222,7 @@ func TestListRoles_IsRLSScoped(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
-	result, err := svc.ListRoles(ctx, "usr-rls-list", query.PageParams{Limit: 10})
+	result, err := svc.ListRoles(ctx, tenant.SystemRowVisibility(), "usr-rls-list", query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 1)
 
@@ -247,7 +249,7 @@ func TestHasRole_IsRLSScoped(t *testing.T) {
 
 	// Use a context that carries ctxkeys.TenantID (post-auth path).
 	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
-	has, err := svc.HasRole(ctx, "usr-rls", "admin")
+	has, err := svc.HasRole(ctx, tenant.SystemRowVisibility(), "usr-rls", "admin")
 	require.NoError(t, err)
 	assert.True(t, has)
 

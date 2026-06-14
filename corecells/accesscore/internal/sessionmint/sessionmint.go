@@ -121,8 +121,11 @@ func MintAccess(ctx context.Context, clk clock.Clock, deps Deps, req Request) (R
 // fetchRoleNames resolves role names for userID within the given tenant.
 // A nil slice (user has no roles) is a valid state; MintAccess signs a token
 // with empty roles. Only a repo error triggers fail-closed.
+// SYSTEM read: sessionmint is an internal token-issuance path (login / refresh /
+// IssueForUser). No owner-dimension filter applies; all roles in the tenant are
+// accessible.
 func fetchRoleNames(ctx context.Context, repo ports.RoleRepository, tid tenant.TenantID, userID string) ([]string, error) {
-	roles, err := repo.GetByUserID(ctx, tid, userID)
+	roles, err := repo.GetByUserID(ctx, tid, tenant.SystemRowVisibility(), userID)
 	if err != nil {
 		return nil, err
 	}

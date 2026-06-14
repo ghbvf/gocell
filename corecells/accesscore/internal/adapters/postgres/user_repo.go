@@ -262,26 +262,47 @@ func (r *PGUserRepo) Create(ctx context.Context, t tenant.TenantID, user *domain
 	return nil
 }
 
-// GetByIDInTenant fetches a user by primary key within tenant t. Returns
-// ErrAuthUserNotFound when the row is absent OR belongs to a different tenant —
-// both cases produce pgx.ErrNoRows from `WHERE id=$1 AND tenant_id=$2`.
-func (r *PGUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
+// GetByIDInTenant fetches a user by primary key within tenant t and enforces
+// the row-visibility obligation vis (owner column = users.id). Returns
+// ErrAuthUserNotFound when the row is absent, belongs to a different tenant, or
+// the owner predicate rejects it — all three cases collapse to ErrAuthUserNotFound
+// to prevent cross-tenant existence enumeration (IDOR-safe).
+func (r *PGUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*domain.User, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgUserInvalidTenant, err)
 	}
-	row := r.db.QueryRow(ctx, selectUserByIDInTenantSQL, id, string(t))
-	u, err := scanUser(row)
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ports.RowScopeAllUnsupportedError()
+	}
+	pred, err := vis.SQLPredicate("id")
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	// selectUserByIDInTenantSQL binds $1=id, $2=tenant_id. The owner predicate
+	// appends $3=subject when pred.Apply (RowScopeSelf/Device). The subject is
+	// always a bound parameter — never interpolated into the SQL fragment.
+	sqlStr := selectUserByIDInTenantSQL
+	args := []any{id, string(t)}
+	if pred.Apply {
+		sqlStr += pred.Prefix + "$3"
+		args = append(args, pred.Arg)
+	}
+	row := r.db.QueryRow(ctx, sqlStr, args...)
+	u, scanErr := scanUser(row)
+	if scanErr != nil {
+		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, msgUserNotFound,
 				errcode.WithCategory(errcode.CategoryDomain),
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%s", id))))
 		}
 		var ec *errcode.Error
-		if errors.As(err, &ec) && ec.Code == errcode.ErrPGSchemaShape {
-			return nil, err
+		if errors.As(scanErr, &ec) && ec.Code == errcode.ErrPGSchemaShape {
+			return nil, scanErr
 		}
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-in-tenant", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "user_repo: get-by-id-in-tenant", scanErr)
 	}
 	return u, nil
 }
@@ -721,7 +742,7 @@ func (r *PGUserRepo) UpdatePassword(
 			// ErrAuthUserNotFound (IDOR-safe), not leak a version conflict — the
 			// tenant-less GetByID would find the foreign-tenant row and misreport
 			// a CAS conflict.
-			cur, gerr := r.GetByIDInTenant(ctx, t, userID)
+			cur, gerr := r.GetByIDInTenant(ctx, t, tenant.SystemRowVisibility(), userID)
 			if gerr != nil {
 				return 0, gerr // user absent in this tenant (or infra error)
 			}

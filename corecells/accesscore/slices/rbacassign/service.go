@@ -234,7 +234,9 @@ func (s *Service) Revoke(ctx context.Context, tenantID tenant.TenantID, userID, 
 		// (ErrAuthUserNotFound), mirroring the Assign path's repo-level user guard
 		// (PG composite FK / mem userByIDInTenant). A user that DOES exist here but
 		// does not hold the role still revokes idempotently (no-op success below).
-		if _, err := s.userRepo.GetByIDInTenant(txCtx, tid, userID); err != nil {
+		// SYSTEM read: rbacassign is an internal listener operation (service-token),
+		// not a subject-self endpoint; no owner-dimension filter needed.
+		if _, err := s.userRepo.GetByIDInTenant(txCtx, tid, tenant.SystemRowVisibility(), userID); err != nil {
 			return false, fmt.Errorf("rbac-assign: revoke: %w", err)
 		}
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.
