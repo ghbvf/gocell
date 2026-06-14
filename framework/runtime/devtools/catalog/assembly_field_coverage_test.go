@@ -1,11 +1,13 @@
 package catalog_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
@@ -57,10 +59,18 @@ func TestAssemblySpec_OwnerAndMaxConsistencyLevelRoundTrip(t *testing.T) {
 	assert.Equal(t, "L2", asmSpec.MaxConsistencyLevel)
 	assert.Equal(t, []string{"alpha"}, asmSpec.Cells)
 	assert.Equal(t, "k8s", asmSpec.Build.DeployTemplate)
-	// mainbundle declares no topology → mapAssemblyTopology returns the zero
-	// AssemblySpecTopology (both slices nil), omitted on the wire via omitempty.
-	assert.Nil(t, asmSpec.Topology.Colocated)
-	assert.Nil(t, asmSpec.Topology.Remote)
+	// mainbundle declares no topology → mapAssemblyTopology returns nil so the
+	// optional topology field is omitted from the wire entirely (not `{}`).
+	assert.Nil(t, asmSpec.Topology)
+
+	// Wire shape: a topology-less assembly must NOT emit a `topology` key in
+	// either marshal format (a value struct + omitempty would emit `{}`).
+	jsonBytes, err := json.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.NotContains(t, string(jsonBytes), "topology", "empty topology must be omitted from JSON wire")
+	yamlBytes, err := yaml.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.NotContains(t, string(yamlBytes), "topology", "empty topology must be omitted from YAML wire")
 }
 
 // TestAssemblySpec_TopologyRoundTrip exercises the metadata.TopologyMeta →
@@ -106,8 +116,15 @@ func TestAssemblySpec_TopologyRoundTrip(t *testing.T) {
 			break
 		}
 	}
+	require.NotNil(t, asmSpec.Topology)
 	assert.Equal(t, []string{"alpha"}, asmSpec.Topology.Colocated)
 	require.Len(t, asmSpec.Topology.Remote, 1)
 	assert.Equal(t, "beta", asmSpec.Topology.Remote[0].CellID)
 	assert.Equal(t, "beta.svc:8080", asmSpec.Topology.Remote[0].Endpoint)
+
+	// Wire shape: a topology-bearing assembly emits the field with its values.
+	jsonBytes, err := json.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), `"topology"`)
+	assert.Contains(t, string(jsonBytes), "beta.svc:8080")
 }

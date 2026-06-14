@@ -270,11 +270,11 @@ type JourneyPassCrit struct {
 
 // AssemblySpec is Document.Entities[Kind=="Assembly"].Spec.
 type AssemblySpec struct {
-	Cells               []string             `json:"cells,omitempty"               yaml:"cells,omitempty"`
-	Owner               CellSpecOwner        `json:"owner"                         yaml:"owner"`
-	MaxConsistencyLevel string               `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
-	Build               AssemblySpecBuild    `json:"build"                         yaml:"build"`
-	Topology            AssemblySpecTopology `json:"topology,omitempty"            yaml:"topology,omitempty"`
+	Cells               []string              `json:"cells,omitempty"               yaml:"cells,omitempty"`
+	Owner               CellSpecOwner         `json:"owner"                         yaml:"owner"`
+	MaxConsistencyLevel string                `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
+	Build               AssemblySpecBuild     `json:"build"                         yaml:"build"`
+	Topology            *AssemblySpecTopology `json:"topology,omitempty"            yaml:"topology,omitempty"`
 }
 
 // AssemblySpecBuild mirrors AssemblyBuildMeta on the wire.
@@ -287,6 +287,11 @@ type AssemblySpecBuild struct {
 // AssemblySpecTopology mirrors metadata.TopologyMeta on the wire: the deployment
 // placement of the assembly's cells (colocated in-process vs reachable as remote
 // services). Empty => all cells co-located (zero-migration default).
+//
+// AssemblySpec references it as an OPTIONAL POINTER (nil => omitted): omitempty
+// on a value struct does NOT drop a struct whose fields are all zero (encoding/json
+// only treats false/0/nil-ptr/empty-len as empty), so a value field would emit
+// `"topology":{}` for every topology-less assembly. A nil pointer omits the field.
 type AssemblySpecTopology struct {
 	Colocated []string                     `json:"colocated,omitempty" yaml:"colocated,omitempty"`
 	Remote    []AssemblySpecTopologyRemote `json:"remote,omitempty"    yaml:"remote,omitempty"`
