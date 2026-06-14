@@ -37,8 +37,15 @@ package authz
 // immutable to every external package. This makes the "sealed value" claim true
 // by the type system (compile error to reassign), not merely by convention.
 //
-// Growth: PR-10a seeds only PermAuditRead (the #914 / auditquery target). PR-10b
-// adds one perm* var + accessor per migrated endpoint; the closed set grows only here.
+// Growth: each PR in the #1348/#1894 migration series adds one perm* var +
+// accessor per resource:action class — PR-10a (audit:read), PR-10b (5 config/flag
+// perms), PR-10c (5 accesscore perms), PR-10d (8 iotdevice + todoorder perms).
+// The accessor-function-over-private-singleton shape (not exported var) ensures
+// the registry value is immutable to external packages: reassigning a func is a
+// compile error, so the "sealed value" claim is enforced by the type system, not
+// convention. The closed set grows only here — a new permission cannot be
+// introduced without adding a perm* var + accessor in this file (which the
+// registry test pins via allPermissions).
 type Permission struct {
 	s string
 }

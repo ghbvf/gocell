@@ -110,6 +110,14 @@ func TestDeviceAuthorizer(t *testing.T) {
 			wantAllow: true,
 		},
 		{
+			name:      "read: admin → allow",
+			ctx:       auth.TestContext(adminID, []string{dto.RoleAdmin}),
+			subject:   adminID,
+			resource:  deviceA,
+			action:    authz.PermDeviceRead().String(),
+			wantAllow: true,
+		},
+		{
 			name:      "read: operator → allow",
 			ctx:       auth.TestContext(operID, []string{dto.RoleOperator}),
 			subject:   operID,

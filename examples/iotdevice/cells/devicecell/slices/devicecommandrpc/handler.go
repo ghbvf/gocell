@@ -114,6 +114,13 @@ func (s *Server) IssueCommand(
 // drain. Authorization mirrors IssueCommand (device:command via example PDP).
 // Migrated from authorizeCommandRole (role-literal gate) to PDP Authorize per
 // PR-10d.
+//
+// Note on permission reuse: WatchCommands and IssueCommand intentionally share
+// device:command (admin/operator coarse gate), replicating the pre-migration
+// authorizeCommandRole baseline that applied uniformly to both RPC methods.
+// Granting devices the ability to watch their own command queue via gRPC
+// (device:consume semantic, analogous to the HTTP dequeue gate) is a distinct
+// enhancement not in scope for PR-10d.
 func (s *Server) WatchCommands(
 	req *commandv1.WatchCommandsRequest,
 	stream commandv1.DeviceCommandService_WatchCommandsServer,
@@ -171,8 +178,20 @@ func (s *Server) authorize(ctx context.Context, deviceID string) error {
 		return err
 	}
 	if !dec.IsAllow() {
+		slog.WarnContext(ctx, "devicecommandrpc: authorization denied",
+			slog.String("subject", p.Subject),
+			slog.String("device_id", deviceID),
+			slog.String("action", authz.PermDeviceCommand().String()),
+			slog.String("reason", dec.Reason()))
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			"device-command: insufficient permissions")
+	}
+	if obl := dec.Obligations(); !obl.IsZero() {
+		slog.WarnContext(ctx, "devicecommandrpc: authorization carries unenforceable obligations",
+			slog.String("subject", p.Subject),
+			slog.String("device_id", deviceID))
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"device-command: authorization carries unenforceable obligations")
 	}
 	return nil
 }

@@ -88,8 +88,10 @@ func (a orderAuthorizer) Authorize(ctx context.Context, subject, resource, actio
 			// DENIES rather than surfacing a 5xx — for this self-contained example a
 			// missing/unresolvable resource means ownership cannot be established, so
 			// the gate must close, not fault. Intentional: returns a Deny verdict, not
-			// the error.
-			return authz.Deny("order-authz: order not found"), nil //nolint:nilerr // fail-closed: PIP lookup failure → deny
+			// the error. The deny reason is intentionally the same string as the
+			// insufficient-permissions branch below to avoid leaking whether the order
+			// exists (existence side-channel).
+			return authz.Deny("order-authz: insufficient permissions"), nil //nolint:nilerr // fail-closed: ownership cannot be established → deny
 		}
 		if order.Owner != "" && order.Owner == subject {
 			return allow()

@@ -23,7 +23,9 @@ func TestOrderAuthorizer(t *testing.T) {
 		orderID   = "ord-test-001"
 	)
 
-	// Seed a repo with one order whose owner is customerA.
+	const orderEmptyOwner = "ord-empty-owner-001"
+
+	// Seed a repo with one order whose owner is customerA and one with empty owner.
 	repo := mem.NewOrderRepository()
 	err := repo.Create(context.Background(), &domain.Order{
 		ID:     orderID,
@@ -32,7 +34,19 @@ func TestOrderAuthorizer(t *testing.T) {
 		Owner:  customerA,
 	})
 	if err != nil {
-		t.Fatalf("seed repo: %v", err)
+		t.Fatalf("seed repo (customerA order): %v", err)
+	}
+	// An order with an empty Owner must never be accessible to any subject —
+	// fail-closed: if Owner=="" the ownership condition (Owner != "" && Owner == subject)
+	// is never satisfied.
+	err = repo.Create(context.Background(), &domain.Order{
+		ID:     orderEmptyOwner,
+		Item:   "orphan",
+		Status: "pending",
+		Owner:  "",
+	})
+	if err != nil {
+		t.Fatalf("seed repo (empty-owner order): %v", err)
 	}
 
 	cases := []struct {
@@ -159,6 +173,27 @@ func TestOrderAuthorizer(t *testing.T) {
 			ctx:       context.Background(),
 			subject:   "",
 			resource:  orderID,
+			action:    authz.PermOrderUpdate().String(),
+			wantAllow: false,
+		},
+
+		// ── order:read / order:update — empty Owner guard ────────────────────────────
+		// An order with Owner=="" must never be accessible to ANY subject.
+		// The authorizer's ownership condition is (order.Owner != "" && order.Owner == subject),
+		// so an empty Owner is fail-closed regardless of who is asking.
+		{
+			name:      "read: order with empty Owner → deny (fail-closed for any subject)",
+			ctx:       auth.TestContext(customerA, []string{dto.RoleCustomer}),
+			subject:   customerA,
+			resource:  orderEmptyOwner,
+			action:    authz.PermOrderRead().String(),
+			wantAllow: false,
+		},
+		{
+			name:      "update: order with empty Owner → deny (fail-closed for any subject)",
+			ctx:       auth.TestContext(customerA, []string{dto.RoleCustomer}),
+			subject:   customerA,
+			resource:  orderEmptyOwner,
 			action:    authz.PermOrderUpdate().String(),
 			wantAllow: false,
 		},

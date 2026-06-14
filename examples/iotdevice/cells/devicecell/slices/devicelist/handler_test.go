@@ -11,10 +11,32 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 )
+
+// testListAuthorizer is a test-local PDP for devicelist handler unit tests.
+// It mirrors the device:list baseline in cells/devicecell/authorizer.go;
+// deviceAuthorizer is package-private to devicecell, so this package
+// implements an equivalent locally.
+type testListAuthorizer struct{}
+
+func (testListAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
+	p, ok := auth.FromContext(ctx)
+	if (ok && p != nil) && action == authz.PermDeviceList().String() && p.HasRole("admin") {
+		return authz.Allow(authz.Obligations{})
+	}
+	return authz.Deny("test-list-authz: denied"), nil
+}
+
+// withListTestAuth builds a context carrying both a Principal and the list test
+// PDP. device:list is a coarse role gate (subject-independent), so the subject is
+// a fixed placeholder — only the roles drive the decision.
+func withListTestAuth(roles []string) context.Context {
+	return auth.WithAuthorizer(auth.TestContext("user-1", roles), testListAuthorizer{})
+}
 
 func newHandlerForTest(t *testing.T) *listcontract.Handler {
 	t.Helper()
@@ -26,14 +48,14 @@ func newHandlerForTest(t *testing.T) *listcontract.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return listcontract.NewHandler(svc, auth.AnyRole("admin"))
+	return listcontract.NewHandler(svc, auth.RequirePermission(authz.PermDeviceList()))
 }
 
 func TestHandleList_OK(t *testing.T) {
 	h := newHandlerForTest(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r = r.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	r = r.WithContext(withListTestAuth([]string{"admin"}))
 
 	h.ServeHTTP(w, r)
 
@@ -56,7 +78,7 @@ func TestHandleList_InvalidLimit(t *testing.T) {
 	h := newHandlerForTest(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/?limit=abc", nil)
-	r = r.WithContext(auth.TestContext("user-1", nil))
+	r = r.WithContext(withListTestAuth([]string{"admin"}))
 
 	h.ServeHTTP(w, r)
 
@@ -69,7 +91,7 @@ func TestHandleList_LimitExceedsMax(t *testing.T) {
 	h := newHandlerForTest(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/?limit=9999", nil)
-	r = r.WithContext(auth.TestContext("user-1", nil))
+	r = r.WithContext(withListTestAuth([]string{"admin"}))
 
 	h.ServeHTTP(w, r)
 

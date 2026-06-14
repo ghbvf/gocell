@@ -66,6 +66,11 @@ func (deviceAuthorizer) Authorize(ctx context.Context, subject, resource, action
 		return authz.Deny("device-authz: insufficient permissions"), nil
 
 	case authz.PermDeviceConsume().String(), authz.PermDeviceRead().String():
+		// device:consume and device:read share the same ownership baseline:
+		// admin/operator can access any device; the device itself (subject == resource)
+		// can access its own queue/status. The cases are intentionally merged because
+		// the baseline rules are identical; if future policy needs to differentiate
+		// them (e.g. restricting status reads further), split into separate cases.
 		if opOrAdmin || (subject != "" && subject == resource) {
 			return allow()
 		}

@@ -13,9 +13,18 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// withTestPrincipal attaches a test principal to the given request's context so
+// that ordercreate.Service.Create can derive the order Owner. The Create gate
+// normally guarantees a principal is present; contract tests bypass the gate via
+// allowAllContractPolicy, so we must inject the principal manually.
+func withTestPrincipal(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("contract-test-user", []string{"role:customer"}))
+}
 
 var allowAllContractPolicy = func(*http.Request) error { return nil }
 
@@ -39,9 +48,11 @@ func TestHttpOrderCreateV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"item":"x","extra":"bad"}`))
 
 	// No path params — direct ServeHTTP works without a chi router context.
+	// Inject a test principal so Create can derive Owner (defense-in-depth check).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = withTestPrincipal(req)
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -55,6 +66,7 @@ func TestEventOrderCreatedV1Publish(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(httpContract.HTTP.Method, httpContract.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = withTestPrincipal(req)
 	h.ServeHTTP(rec, req)
 	httpContract.ValidateHTTPResponseRecorder(t, rec)
 

@@ -79,16 +79,36 @@ Docker mode here only starts surrounding infrastructure. The example still runs 
 
 ### Authentication (demo mode)
 
-PR-CFG-C made `RoleCustomer` mandatory for every `/api/v1/orders/*` route, so
-the example expects an RS256 access token carrying `role:customer`. The
-Quick Start's `localtoken` helper issues one from `GOCELL_JWT_PRIVATE_KEY`,
-`GOCELL_JWT_ISSUER`, and `GOCELL_JWT_AUDIENCE`; reuse `$TODOORDER_TOKEN` in
-every curl invocation below.
+This example uses **permission-based authorization** with a self-contained
+lightweight PDP (`cells/ordercell/authorizer.go`). All routes require a valid
+RS256 JWT. Authorization rules:
+
+| Endpoint | Required permission | Who is allowed |
+|----------|---------------------|----------------|
+| `POST /orders/` | `order:create` | role:customer |
+| `GET /orders/` | `order:list` | role:customer |
+| `GET /orders/{id}` | `order:read` | order creator only (JWT subject == order.Owner) |
+| `PATCH /orders/{id}/status` | `order:update` | order creator only (JWT subject == order.Owner) |
+| `GET /orders/projection/summary` | `order:list` | role:customer |
+
+`get/{id}` and `confirm/{id}` are owner-scoped: only the JWT subject that created
+the order (`order.Owner`) may access it. A cross-owner request receives `403
+Forbidden`. Row-level owner filtering on `list` and `projection/summary` (so each
+customer sees only their own orders) is a data-layer concern (RowScope PEP) tracked
+for PR-11/12 — those endpoints currently return all orders to any `role:customer`.
+
+> **Note**: this example ships a self-contained lightweight PDP (no dependency on
+> the platform `accesscore` cell). Production deployments should wire `accesscore`'s
+> ABAC engine for tenant-policy-driven authorization.
+
+The Quick Start's `localtoken` helper issues a token carrying `role:customer` from
+`GOCELL_JWT_PRIVATE_KEY`, `GOCELL_JWT_ISSUER`, and `GOCELL_JWT_AUDIENCE`; reuse
+`$TODOORDER_TOKEN` in every curl invocation below.
 
 Anonymous calls (no `Authorization: Bearer ...` header) receive `401 Unauthorized`;
-calls with a different token receive `401`; valid tokens missing `role:customer`
-receive `403 Forbidden`. To exercise the 403 path locally, mint a token with a
-different role:
+valid tokens missing `role:customer` receive `403 Forbidden`; valid `role:customer`
+tokens trying to access another user's order also receive `403`. To exercise the
+403 path locally, mint a token with a different role:
 
 ```bash
 export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken -roles role:viewer)"
@@ -185,12 +205,6 @@ The loop has four parts, all inside `ordercell`:
    allowlist) — the admin listener is wired **only when** `GOCELL_OPERATOR_ADMIN_USERNAME`
    / `GOCELL_OPERATOR_ADMIN_PASSWORD` are set (otherwise rebuild stays
    programmatic-only).
-
-> **Security note (demo simplification)**: this demo's `Order` has no
-> `ownerID`; `projection/summary` exposes all `orderIds` and `orderconfirm`
-> does not validate the caller's ownership. Production use requires adding
-> `ownerID` to `Order` and enforcing per-user filtering / IDOR guard at the
-> service layer (see the `accesscore` session owner-guard pattern).
 
 > **Demo mode — NoopWriter does not deliver events to the projection**: `run.go`
 > uses `outbox.NoopWriter{}`, so events are validated then discarded; there is

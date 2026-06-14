@@ -16,8 +16,16 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 )
+
+// testCtx returns a context with an authenticated principal (subject "test-user").
+// Create requires a non-empty principal subject so that the created order has a
+// non-empty Owner (fail-fast defense-in-depth added in PR-10d Fix-2).
+func testCtx() context.Context {
+	return auth.TestContext("test-user", []string{"role:customer"})
+}
 
 // --- test doubles ---
 
@@ -81,7 +89,7 @@ func TestService_Create(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: tt.item})
+			resp, createErr := svc.Create(testCtx(), &createv1.Request{Item: tt.item})
 			if tt.wantErr {
 				require.Error(t, createErr)
 				var ecErr *errcode.Error
@@ -110,7 +118,7 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
-	resp, err := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
+	resp, err := svc.Create(testCtx(), &createv1.Request{Item: "outbox-item"})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	r, ok := resp.(createv1.Create201JSONResponse)
@@ -134,7 +142,7 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 		WithTxManager(persistence.WrapForCell(txRunner)))
 	require.NoError(t, err)
 
-	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
+	resp, createErr := svc.Create(testCtx(), &createv1.Request{Item: "outbox-item"})
 	require.Error(t, createErr)
 	assert.Nil(t, resp)
 	assert.Equal(t, 1, txRunner.calls)
@@ -158,7 +166,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "demo-item"})
+	resp, createErr := svc.Create(testCtx(), &createv1.Request{Item: "demo-item"})
 	require.NoError(t, createErr)
 	require.NotNil(t, resp)
 	rDemo, ok := resp.(createv1.Create201JSONResponse)
@@ -175,7 +183,7 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "persisted"})
+	resp, createErr := svc.Create(testCtx(), &createv1.Request{Item: "persisted"})
 	require.NoError(t, createErr)
 	require.NotNil(t, resp)
 	rPersist, ok := resp.(createv1.Create201JSONResponse)
@@ -204,10 +212,29 @@ func TestService_Create_RepoFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "item"})
+	resp, createErr := svc.Create(testCtx(), &createv1.Request{Item: "item"})
 	require.Error(t, createErr)
 	assert.Nil(t, resp)
 	assert.Contains(t, createErr.Error(), "persist")
+}
+
+// TestService_Create_NoPrincipal verifies that Create returns ErrAuthUnauthorized
+// when the context carries no authenticated principal (defense-in-depth: the
+// create gate guarantees a principal in production, but a missing-principal
+// context must not produce an orphaned order with Owner="").
+func TestService_Create_NoPrincipal(t *testing.T) {
+	svc, err := NewService(clock.Real(), mem.NewOrderRepository(), slog.Default(),
+		WithEmitter(outbox.DemoCellEmitter()),
+		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
+	)
+	require.NoError(t, err)
+
+	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "item"})
+	require.Error(t, createErr)
+	assert.Nil(t, resp)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, createErr, &ecErr)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
 }
 
 // TestNewService_NilDep is a table-driven test verifying that NewService rejects

@@ -379,7 +379,7 @@ func TestDeviceCell_RouteGetStatus(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Now get status. Status requires RoleOperator or RoleDevice (Policy: auth.AnyRole(dto.RoleOperator, dto.RoleDevice)).
+	// Now get status. Status requires device:read permission (RequirePermissionForResource + deviceAuthorizer: owner or admin/operator).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
 	req = req.WithContext(testCtx(deviceID, []string{dto.RoleDevice}))

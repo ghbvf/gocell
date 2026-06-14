@@ -251,9 +251,13 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 // bootstrap.PrimaryAuthorizerOption can discover and wire the PDP into the
 // primary listener's request context without importing this package directly.
 //
-// Note: returns nil before initInternal completes (i.e. before Init is called).
-// This is consistent with the lazyAuthorizer pattern used by bootstrap — it
-// defers the actual Authorizer() lookup to ResolveAuthorizer (after Init).
+// The lazy construction pattern (c.authorizer is nil before Init) is intentional:
+// the authorizer depends on c.repo, which is resolved inside initInternal (called
+// by Init). Bootstrap's ResolveAuthorizer is invoked after Init completes — never
+// before — so by the time ResolveAuthorizer calls Authorizer(), c.authorizer is
+// always non-nil. There is therefore no fail-open window: Init is a precondition
+// of serve, and a nil return here would be caught by ResolveAuthorizer's nil check
+// which causes a startup-time failure rather than a per-request silent deny.
 func (c *OrderCell) Authorizer() auth.Authorizer {
 	return c.authorizer
 }

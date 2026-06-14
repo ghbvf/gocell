@@ -110,7 +110,7 @@ func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
 		t.Fatalf("async enqueue must emit exactly one command, got %d", n)
 	}
 
-	// auth boundary: policy is AnyRole(admin,operator) → device/no-role denied (403).
+	// auth boundary: RequirePermission(PermDeviceCommand()) → PDP deny for non-admin/operator.
 	for _, tc := range []struct {
 		name  string
 		roles []string

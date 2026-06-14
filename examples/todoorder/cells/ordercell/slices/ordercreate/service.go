@@ -99,13 +99,15 @@ func NewService(clk clock.Clock, repo domain.OrderRepository, logger *slog.Logge
 // It implements createv1.Service.
 func (s *Service) Create(ctx context.Context, req *createv1.Request) (createv1.CreateResponseObject, error) {
 	// Derive the owner from the authenticated principal. The create gate
-	// (RequirePermission(PermOrderCreate())) guarantees a principal is present;
-	// defensive empty-string fallback means an order with no owner simply won't
-	// match any ownership rule (fail-closed for the resource gate).
-	owner := ""
-	if p, ok := auth.FromContext(ctx); ok && p != nil {
-		owner = p.Subject
+	// (RequirePermission(PermOrderCreate())) guarantees a principal is present,
+	// but we fail-fast here as defense-in-depth: an order with an empty Owner
+	// would be permanently inaccessible (no subject can ever satisfy the ownership
+	// rule), creating an orphaned record. Unauthenticated context → 401.
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil || p.Subject == "" {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "order-create: authenticated subject required")
 	}
+	owner := p.Subject
 	order, err := s.createInternal(ctx, req.Item, owner)
 	if err != nil {
 		return nil, err
