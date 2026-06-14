@@ -2342,14 +2342,15 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 				return nil
 			}
 			top := strings.Split(rel, "/")[0]
-			// A top-level dir that is its own go.work satellite module root (carries
-			// go.mod, e.g. cellmodules/ #1559) is unaddressable by the ModeModule
-			// (GOWORK=off) production scan that prodscan.Patterns drives, so it must
-			// not be required by this coverage guard either — symmetric with
-			// prodscan.Patterns skipping it (shared prodscan.IsModuleRoot is the
-			// single source). Full coverage of satellites is the ModeWorkspace
-			// migration tracked by gh #1590.
-			if rel == top && prodscan.IsModuleRoot(path) {
+			// A top-level dir that prodscan.Patterns prunes is not required by this
+			// coverage guard either — symmetric with the scan, sharing the same
+			// prodscan single source. Two cases, both deferred to the ModeWorkspace
+			// migration gh #1590: a go.work satellite MODULE ROOT (own go.mod, e.g.
+			// cellmodules/ #1559 — IsModuleRoot), and a MULTI-MEMBER PARENT
+			// (cmd/adapters/examples holding member modules one level deeper —
+			// HasNestedModuleRoot), unaddressable by a root-relative ModeModule
+			// "./<dir>/..." post-#1565.
+			if rel == top && (prodscan.IsModuleRoot(path) || prodscan.HasNestedModuleRoot(path)) {
 				return filepath.SkipDir
 			}
 			if strings.HasPrefix(d.Name(), ".") || obs01CoverageExcludedTop(top) || d.Name() == "testdata" {

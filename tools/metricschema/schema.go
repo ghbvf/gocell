@@ -31,7 +31,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
-	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 const (
@@ -285,48 +284,29 @@ func patternLoadMode(root, pattern string) packagesload.Mode {
 	// Strip the leading "./" and trailing "/..." to get the directory segment.
 	rel := strings.TrimPrefix(pattern, "./")
 	rel = strings.TrimSuffix(rel, "/...")
+	// Use only the top-level directory component to find the module root.
+	if idx := strings.IndexByte(rel, '/'); idx >= 0 {
+		rel = rel[:idx]
+	}
 	if rel == "" || rel == "." {
 		return packagesload.ModeModule
 	}
-	// A pattern addressing a go.work member at ANY depth (e.g. "./cmd/gocell/..."
-	// after parent-prefix expansion, or "./framework/kernel/...") must load in
-	// ModeWorkspace so that member is visible. Walk every dir prefix: only a
-	// pattern with no module-root prefix at all stays ModeModule (single-module
-	// fixture / root assembly). Keying on just the top-level component would miss
-	// nested members like cmd/gocell and route them to a ModeModule load that
-	// hard-errors post-#1565.
-	parts := strings.Split(rel, "/")
-	for i := len(parts); i >= 1; i-- {
-		if prodscan.IsModuleRoot(filepath.Join(root, filepath.Join(parts[:i]...))) {
-			return packagesload.ModeWorkspace
-		}
+	if prodscan.IsModuleRoot(filepath.Join(root, rel)) {
+		return packagesload.ModeWorkspace
 	}
 	return packagesload.ModeModule
 }
 
 func loadPatternScopedPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
-	// Expand satellite parent-prefixes ("./cmd/...", "./adapters/...",
-	// "./examples/...") into their go.work members so the OBS-01 production scan
-	// loads each in ModeWorkspace instead of erroring under ModeModule — post-#1565
-	// there is no root module to anchor "./cmd/..." (F4). A failing workspace probe
-	// (e.g. a single-module fixture with no go.work) yields no members, leaving the
-	// pattern verbatim for its in-module ModeModule load.
-	mods, _ := workspace.Modules(root)
 	byPath := map[string]*packages.Package{}
 	var paths []string
 	for _, pattern := range patterns {
-		toLoad := []string{pattern}
-		if expanded, ok := workspace.ExpandParentPrefix(mods, pattern); ok {
-			toLoad = expanded
+		mode := patternLoadMode(root, pattern)
+		pkgs, err := loadPackagesWithMode(ctx, root, false, mode, pattern)
+		if err != nil {
+			return nil, err
 		}
-		for _, p := range toLoad {
-			mode := patternLoadMode(root, p)
-			pkgs, err := loadPackagesWithMode(ctx, root, false, mode, p)
-			if err != nil {
-				return nil, err
-			}
-			paths = mergeLoadedPackages(byPath, paths, pkgs)
-		}
+		paths = mergeLoadedPackages(byPath, paths, pkgs)
 	}
 	sort.Strings(paths)
 	out := make([]*packages.Package, 0, len(paths))

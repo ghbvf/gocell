@@ -21,11 +21,12 @@ import (
 //     framework/{kernel,runtime,pkg} match (loaded ModeWorkspace — framework is a
 //     sibling go.work member); the bare kernel/runtime/pkg no longer exist at the
 //     root and are pruned; cmd/adapters/examples each hold SEVERAL go.work member
-//     modules, so their "./<dir>/…" pattern is owned by no single member — the typed
-//     loaders (tools/archtest/internal/typeseval + tools/metricschema) expand it to
-//     those members via workspace.ExpandParentPrefix and load each in ModeWorkspace,
-//     so the satellites ARE scanned (the cross-module coverage once deferred to gh
-//     #1590). cellmodules/corecells are module roots → pruned by IsModuleRoot.
+//     modules (multi-member parents), so their "./<dir>/…" pattern is owned by no
+//     single member and is pruned by HasNestedModuleRoot — this broad production
+//     scan defers their coverage to gh #1590 (rules that need satellite coverage
+//     today hardcode the patterns + rely on the loader's workspace expansion, see
+//     the Patterns godoc). cellmodules/corecells are module roots → pruned by
+//     IsModuleRoot.
 //   - Single-module fixture: framework/<layer> doesn't exist (pruned); the bare
 //     cmd/pkg/kernel/runtime the fixture writes ARE part of the one module, so their
 //     "./<dir>/…" pattern matches under ModeModule and is actually scanned.
@@ -47,17 +48,30 @@ var topLevelDirs = []string{
 // governance scanners. Missing top-level directories are skipped so temp-module
 // fixtures can exercise the production entrypoints without synthetic dirs.
 //
-// A top-level dir that is itself a go.work satellite MODULE ROOT (carries its own
-// go.mod — e.g. cellmodules/ after #1559) is skipped: it is a single module
-// addressed by its own member pattern, not a multi-member parent prefix. cmd/,
-// adapters/, and examples/ are NOT module roots (their go.mod live one level deeper
-// in cmd/gocell, adapters/postgres, examples/<id>, …), so they stay as "./<dir>/..."
-// parent prefixes. Each such prefix spans several members; the typed loaders expand
-// it to its real members (workspace.ExpandParentPrefix) and load them in
-// ModeWorkspace, so the satellite packages are actually scanned — anti-vacuity
-// guarded by SATELLITE-PARENT-PREFIX-SCAN-01. (Pre-#1565 these prefixes match-zeroed
-// under the root module; post-#1565, with no root module, an un-expanded "./cmd/..."
-// would hard-error under ModeModule or be silently skipped.)
+// Two kinds of top-level dir are skipped, both deferred to the ModeWorkspace
+// cross-module migration gh #1590:
+//
+//   - A go.work satellite MODULE ROOT (carries its own go.mod — e.g. cellmodules/
+//     after #1559, corecells/): a single module addressed by its own member
+//     pattern, unaddressable by a root-relative ModeModule "./<dir>/..." (IsModuleRoot).
+//   - A MULTI-MEMBER PARENT (cmd/, adapters/, examples/): not a module root itself,
+//     but holding several go.work member modules one level deeper (cmd/gocell +
+//     cmd/corebundle; adapters/postgres …; examples/<id> …). "./cmd/..." is owned by
+//     no single member, so post-#1565 (no root module to anchor it) it would
+//     hard-error or silently match-zero (HasNestedModuleRoot).
+//
+// Both are pruned so this PRODUCTION scan (OBS-01 + the typed governance rules that
+// consume Patterns / PatternsExtended) stays loadable and does not silently drag
+// in satellite packages whose coverage is still gh #1590. A single-module fixture
+// writes cmd/pkg/... as part of its ONE module (no nested go.mod), so neither
+// predicate fires there and the fixture's "./cmd/..." is kept and scanned.
+//
+// Security/governance rules that DO require satellite coverage today hardcode the
+// satellite patterns ("./cmd/...", "./adapters/...") at their call sites; the typed
+// loader expands those to real members via workspace.ExpandParentPrefix (kept honest
+// by SATELLITE-PARENT-PREFIX-SCAN-01). That opt-in path is independent of this scan
+// list — Patterns deliberately does NOT emit the satellite prefixes for the broad
+// production scan.
 func Patterns(root string) []string {
 	var patterns []string
 	if dirHasNonTestGoFiles(root) {
@@ -65,7 +79,7 @@ func Patterns(root string) []string {
 	}
 	for _, dir := range topLevelDirs {
 		full := filepath.Join(root, dir)
-		if !dirExists(full) || IsModuleRoot(full) {
+		if !dirExists(full) || IsModuleRoot(full) || HasNestedModuleRoot(full) {
 			continue
 		}
 		patterns = append(patterns, "./"+dir+"/...")
@@ -120,6 +134,30 @@ func dirExists(path string) bool {
 func IsModuleRoot(dir string) bool {
 	info, err := os.Stat(filepath.Join(dir, "go.mod"))
 	return err == nil && !info.IsDir()
+}
+
+// HasNestedModuleRoot reports whether dir is a MULTI-MEMBER PARENT: it is not
+// itself a module root, but at least one immediate subdirectory carries a go.mod
+// (a go.work member). cmd/ (over cmd/gocell, cmd/corebundle), adapters/ (over
+// adapters/postgres …), and examples/ (over examples/<id> …) are the post-#1565
+// instances. A root-relative "./<dir>/..." pattern over such a parent is owned by
+// no single member and cannot be loaded as a ModeModule pattern (no root module to
+// anchor it); its production-scan coverage is deferred to gh #1590. Patterns skips
+// these dirs and the OBS-01 coverage guard (metricschema's productionGoTopLevels)
+// must skip them symmetrically — exported so both share this single source rather
+// than re-deriving the nested-go.mod check. A single-module fixture has no nested
+// go.mod under cmd/pkg/…, so this is false there and the fixture dir is kept.
+func HasNestedModuleRoot(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && IsModuleRoot(filepath.Join(dir, entry.Name())) {
+			return true
+		}
+	}
+	return false
 }
 
 func dirHasNonTestGoFiles(path string) bool {
