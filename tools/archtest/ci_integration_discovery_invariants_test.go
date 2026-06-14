@@ -413,9 +413,14 @@ type integrationShardFilter struct {
 
 // readIntegrationShardFilters decodes the integration-test job's
 // strategy.matrix.include[] and returns the (shard, filter) pairs that carry
-// run_main_integration: true with a non-empty filter. The adapters-race leg
-// (empty filter, run_main_integration: false) is excluded by construction: it
-// re-spins curated -run race steps and routes none of the discovered set.
+// run_main_integration: true with a non-empty filter. A shard is excluded when
+// either condition fails, on principle: run_main_integration:false means the leg
+// runs no main integration step at all, and an empty filter means the leg does
+// not route by import-path prefix (the Test step rejects an empty SHARD_FILTER) —
+// so the exactly-one-shard partition assertion is meaningless for it. The
+// adapters-race leg (empty filter + run_main_integration:false) is the sole
+// current instance of both, but the predicate is written against the semantics,
+// not that one shard.
 //
 // The local YAML shape is decoupled from ci_pinning_test.go's workflowStep
 // (mirrors archtest_ci_shard_count_test.go's archtestWorkflowConfig rationale)
@@ -450,6 +455,37 @@ func readIntegrationShardFilters(t *testing.T, root string) []integrationShardFi
 		}
 	}
 	return out
+}
+
+// shardRouteFilter is a compiled run_main_integration shard filter.
+type shardRouteFilter struct {
+	shard string
+	re    *regexp.Regexp
+}
+
+// compileShardFilters compiles each parsed shard filter into its regex. A
+// malformed filter panics via MustCompile — a bad YAML regex should fail loud.
+func compileShardFilters(filters []integrationShardFilter) []shardRouteFilter {
+	out := make([]shardRouteFilter, 0, len(filters))
+	for _, f := range filters {
+		out = append(out, shardRouteFilter{shard: f.shard, re: regexp.MustCompile(f.filter)})
+	}
+	return out
+}
+
+// routeShards returns the name of every shard whose filter regex matches
+// importPath. The partition invariant requires exactly one. It is the pure
+// routing core shared by TestArchtest_CIIntegrationShardPartition_01 and its
+// synthetic FixtureMetaTest, so the 0-match (silent drop) and >1-match
+// (double-run) failure modes are provably caught, not just assumed.
+func routeShards(importPath string, shards []shardRouteFilter) []string {
+	var hits []string
+	for _, sf := range shards {
+		if sf.re.MatchString(importPath) {
+			hits = append(hits, sf.shard)
+		}
+	}
+	return hits
 }
 
 // TestArchtest_CIIntegrationShardPartition_01 — INVARIANT: CI-INTEGRATION-SHARD-PARTITION-01
@@ -492,14 +528,7 @@ func TestArchtest_CIIntegrationShardPartition_01(t *testing.T) {
 		"no run_main_integration:true shard filters parsed from the integration-test "+
 			"matrix — the strategy.matrix.include shape changed; update this archtest")
 
-	type compiledShard struct {
-		shard string
-		re    *regexp.Regexp
-	}
-	compiled := make([]compiledShard, 0, len(filters))
-	for _, f := range filters {
-		compiled = append(compiled, compiledShard{shard: f.shard, re: regexp.MustCompile(f.filter)})
-	}
+	shards := compileShardFilters(filters)
 
 	pkgs, err := discoverPackagesUnderTag(root, "integration")
 	require.NoError(t, err)
@@ -509,18 +538,68 @@ func TestArchtest_CIIntegrationShardPartition_01(t *testing.T) {
 	// (never a bare "github.com/ghbvf/gocell" literal) per ARCHTEST-MODULE-PATH-FUNNEL-01.
 	for _, pkg := range pkgs {
 		importPath := PlatformModulePath + "/" + filepath.ToSlash(pkg)
-		var hits []string
-		for _, sf := range compiled {
-			if sf.re.MatchString(importPath) {
-				hits = append(hits, sf.shard)
-			}
-		}
+		hits := routeShards(importPath, shards)
 		assert.Lenf(t, hits, 1,
 			"integration package %q must route to exactly one run_main_integration shard "+
 				"filter, got shards %v; 0 = silently dropped (no leg runs it — the F9 / #1565 "+
 				"framework double-slash regression class), >1 = double-run/double-billed across "+
 				"shards. See CI-INTEGRATION-SHARD-PARTITION-01.", importPath, hits)
 	}
+}
+
+// TestArchtest_CIIntegrationShardPartition_FixtureMetaTest is the synthetic
+// red/green companion to TestArchtest_CIIntegrationShardPartition_01
+// (ai-robust.md: a content-scan rule needs a synthetic red case alongside
+// anti-vacuity). It drives routeShards — the routing core of the live assertion
+// — with hand-built filters, so the partition failure modes are proven caught
+// independent of the current codebase, including the exact F9 buggy
+// double-slash form. Filter regexes are built from PlatformModulePath (never a
+// bare org/repo literal) per ARCHTEST-MODULE-PATH-FUNNEL-01.
+func TestArchtest_CIIntegrationShardPartition_FixtureMetaTest(t *testing.T) {
+	t.Parallel()
+
+	mp := regexp.QuoteMeta(PlatformModulePath)
+	good := []shardRouteFilter{
+		{shard: "tests", re: regexp.MustCompile(`^` + mp + `/(tests|framework|tools)/`)},
+		{shard: "adapters", re: regexp.MustCompile(`^` + mp + `/adapters/`)},
+	}
+
+	// GREEN: each package routes to exactly one shard. red_zero_match is the
+	// silent-drop case (no shard claims it) the exhaustive (≥1) check must catch.
+	cases := []struct {
+		name string
+		path string
+		want []string
+	}{
+		{"green_tests", PlatformModulePath + "/tests/integration", []string{"tests"}},
+		{"green_framework", PlatformModulePath + "/framework/kernel/governance", []string{"tests"}},
+		{"green_adapters", PlatformModulePath + "/adapters/postgres", []string{"adapters"}},
+		{"red_zero_match", PlatformModulePath + "/cellmodules/foo", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, routeShards(c.path, good), "routeShards(%q)", c.path)
+		})
+	}
+
+	// RED 1 — the exact F9 regression: the buggy double-slash `framework/`
+	// alternative plus the regex's trailing `/` requires `framework//`, routing
+	// framework packages to NO shard. routeShards must report zero so the live
+	// assertion's exhaustive (≥1) check fires.
+	buggy := []shardRouteFilter{
+		{shard: "tests", re: regexp.MustCompile(`^` + mp + `/(tests|framework/|tools)/`)},
+	}
+	assert.Empty(t, routeShards(PlatformModulePath+"/framework/kernel/governance", buggy),
+		"buggy double-slash filter must drop framework packages — exactly the F9 / #1565 regression")
+
+	// RED 2 — two overlapping filters route one package to two shards.
+	// routeShards must report both so the disjoint (≤1) check fires.
+	overlap := []shardRouteFilter{
+		{shard: "x", re: regexp.MustCompile(`^` + mp + `/tests/`)},
+		{shard: "y", re: regexp.MustCompile(`^` + mp + `/(tests|adapters)/`)},
+	}
+	assert.Len(t, routeShards(PlatformModulePath+"/tests/integration", overlap), 2,
+		"two matching filters must both be reported so the disjoint (≤1) assertion can fire")
 }
 
 // TestArchtest_CIRaceLaneSubset_01 — INVARIANT: CI-RACE-LANE-SUBSET-01
