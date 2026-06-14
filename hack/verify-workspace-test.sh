@@ -10,8 +10,9 @@
 # added to go.work is automatically covered with zero hand-maintained list.
 #
 # GOWORK=off so each satellite resolves against its OWN pinned go.mod (the local
-# `replace github.com/ghbvf/gocell => ../../` redirects the unpublished core to
-# the repo root), matching the release-consistency build in verify-workspace.sh.
+# `replace github.com/ghbvf/gocell/framework => ../../framework` redirects the
+# unpublished core to the framework module), matching the release-consistency
+# build in verify-workspace.sh.
 # Only untagged tests run here — integration / examples_smoke / archtest tagged
 # tests have their own lanes (_build-lint.yml integration-test + examples-smoke;
 # hack/verify-archtest.sh + archtest-nightly.yml), which iterate this same

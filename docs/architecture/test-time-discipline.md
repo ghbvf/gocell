@@ -46,7 +46,7 @@ The static guard lives at `tools/archtest/test_time_literal_test.go`. The
 ```go
 import (
     "github.com/stretchr/testify/require"
-    "github.com/ghbvf/gocell/pkg/testutil/testtime"
+    "github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 require.Eventually(t, func() bool {

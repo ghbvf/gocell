@@ -1,7 +1,7 @@
 # GoCell
 
 [![CI](https://github.com/ghbvf/gocell/actions/workflows/ci.yml/badge.svg)](https://github.com/ghbvf/gocell/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/ghbvf/gocell.svg)](https://pkg.go.dev/github.com/ghbvf/gocell)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ghbvf/gocell/framework.svg)](https://pkg.go.dev/github.com/ghbvf/gocell/framework)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ghbvf/gocell)](https://github.com/ghbvf/gocell/releases/latest)
 

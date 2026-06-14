@@ -1110,7 +1110,10 @@ jobs:
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
           # build-test profiles: kernel, tools, runtime, corecells, adapters,
-          #   others-light (the `adapters` shard runs the import-path pattern
+          #   others-light. Post-#1565 the framework-layer shards scan the
+          #   framework/ module: coverage-shard-kernel.out <- ./framework/kernel/...;
+          #   coverage-shard-runtime.out <- ./framework/runtime/... + ./framework/pkg/....
+          #   (the `adapters` shard runs the import-path pattern
           #   github.com/ghbvf/gocell/adapters/... across all 14 adapter modules
           #   and writes one combined coverage-shard-adapters.out, see #1558).
           # integration-test profiles: adapters (main leg), corecells, corebundle,

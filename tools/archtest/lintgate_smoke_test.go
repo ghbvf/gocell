@@ -127,26 +127,26 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "depguard_kernel_imports_runtime",
 			files: map[string]string{
-				"kernel/foo.go":   "package kernel\n\nimport _ \"github.com/ghbvf/gocell/runtime\"\n",
-				"runtime/stub.go": stub("runtime"),
+				"framework/kernel/foo.go":   "package kernel\n\nimport _ \"github.com/ghbvf/gocell/framework/runtime\"\n",
+				"framework/runtime/stub.go": stub("runtime"),
 			},
-			expectFindings: []lintGateFinding{{linter: "depguard", file: "kernel/foo.go"}},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "framework/kernel/foo.go"}},
 		},
 		{
 			name: "depguard_kernel_imports_tools",
 			files: map[string]string{
-				"kernel/foo.go":          "package kernel\n\nimport _ \"github.com/ghbvf/gocell/tools/archtest\"\n",
-				"tools/archtest/stub.go": stub("archtest"),
+				"framework/kernel/foo.go": "package kernel\n\nimport _ \"github.com/ghbvf/gocell/tools/archtest\"\n",
+				"tools/archtest/stub.go":  stub("archtest"),
 			},
-			expectFindings: []lintGateFinding{{linter: "depguard", file: "kernel/foo.go"}},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "framework/kernel/foo.go"}},
 		},
 		{
 			name: "depguard_pkg_imports_runtime",
 			files: map[string]string{
-				"pkg/util/foo.go": "package util\n\nimport _ \"github.com/ghbvf/gocell/runtime\"\n",
-				"runtime/stub.go": stub("runtime"),
+				"framework/pkg/util/foo.go": "package util\n\nimport _ \"github.com/ghbvf/gocell/framework/runtime\"\n",
+				"framework/runtime/stub.go": stub("runtime"),
 			},
-			expectFindings: []lintGateFinding{{linter: "depguard", file: "pkg/util/foo.go"}},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "framework/pkg/util/foo.go"}},
 		},
 		{
 			name: "depguard_cells_imports_adapters",
@@ -159,10 +159,10 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "depguard_runtime_imports_cells",
 			files: map[string]string{
-				"runtime/r.go":  "package runtime\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
-				"cells/stub.go": stub("cells"),
+				"framework/runtime/r.go": "package runtime\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
+				"cells/stub.go":          stub("cells"),
 			},
-			expectFindings: []lintGateFinding{{linter: "depguard", file: "runtime/r.go"}},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "framework/runtime/r.go"}},
 		},
 		{
 			name: "depguard_adapters_imports_cells",
@@ -175,16 +175,16 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "forbidigo_log_printf_in_runtime",
 			files: map[string]string{
-				"runtime/r.go": "package runtime\n\nimport \"log\"\n\nfunc F() { log.Printf(\"oops\") }\n",
+				"framework/runtime/r.go": "package runtime\n\nimport \"log\"\n\nfunc F() { log.Printf(\"oops\") }\n",
 			},
-			expectFindings: []lintGateFinding{{linter: "forbidigo", file: "runtime/r.go"}},
+			expectFindings: []lintGateFinding{{linter: "forbidigo", file: "framework/runtime/r.go"}},
 		},
 		{
 			name: "forbidigo_fmt_println_in_runtime",
 			files: map[string]string{
-				"runtime/r.go": "package runtime\n\nimport \"fmt\"\n\nfunc F() { fmt.Println(\"oops\") }\n",
+				"framework/runtime/r.go": "package runtime\n\nimport \"fmt\"\n\nfunc F() { fmt.Println(\"oops\") }\n",
 			},
-			expectFindings: []lintGateFinding{{linter: "forbidigo", file: "runtime/r.go"}},
+			expectFindings: []lintGateFinding{{linter: "forbidigo", file: "framework/runtime/r.go"}},
 		},
 		{
 			// Negative: cmd/ exemption MUST hold — `fmt.Println` in cmd/ is
@@ -207,9 +207,9 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "revive_dot_import_in_runtime",
 			files: map[string]string{
-				"runtime/r.go": "package runtime\n\nimport . \"strings\"\n\nvar _ = ToUpper(\"x\")\n",
+				"framework/runtime/r.go": "package runtime\n\nimport . \"strings\"\n\nvar _ = ToUpper(\"x\")\n",
 			},
-			expectFindings: []lintGateFinding{{linter: "revive", file: "runtime/r.go"}},
+			expectFindings: []lintGateFinding{{linter: "revive", file: "framework/runtime/r.go"}},
 		},
 		{
 			// Examples are public-facing demos and must follow the SAME cell
@@ -262,7 +262,7 @@ func buildLintGateCases() []lintGateCase {
 			// behavior-level test catching them. This fixture pins the funnel.
 			name: "nilerr_swallows_error_in_nonnil_branch",
 			files: map[string]string{
-				"runtime/r.go": "package runtime\n\nimport \"os\"\n\n" +
+				"framework/runtime/r.go": "package runtime\n\nimport \"os\"\n\n" +
 					"func F() ([]byte, error) {\n" +
 					"\tdata, err := os.ReadFile(\"/x\")\n" +
 					"\tif err != nil {\n" +
@@ -271,7 +271,7 @@ func buildLintGateCases() []lintGateCase {
 					"\treturn data, nil\n" +
 					"}\n",
 			},
-			expectFindings: []lintGateFinding{{linter: "nilerr", file: "runtime/r.go"}},
+			expectFindings: []lintGateFinding{{linter: "nilerr", file: "framework/runtime/r.go"}},
 		},
 	}
 }
