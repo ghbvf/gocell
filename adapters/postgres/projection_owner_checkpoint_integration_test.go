@@ -15,7 +15,16 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/projection"
 	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
+
+// txHoldDuration is the max time tokenA may wait for tokenB to release the
+// SELECT FOR UPDATE row lock in the concurrent leader-handoff test.
+const txHoldDuration = testtime.D2s
+
+// blockAssertTimeout is the polling deadline used to assert that tokenA is
+// blocked on the row lock before tokenB commits.
+const blockAssertTimeout = testtime.D200ms
 
 // TestPGOwnerCheckpointStore_Conformance enrolls the concrete
 // *ProjectionCheckpointStore in the shared OwnerCheckpointStore conformance
@@ -110,11 +119,6 @@ func TestPGOwnerCheckpointStore_Concurrent_LeaderHandoff(t *testing.T) {
 
 	const cellID = "cell-concurrent-handoff"
 	const projID = "proj-concurrent-handoff"
-
-	// Warm-path timeout: max time tokenA may wait for tokenB to release the lock.
-	// Extracted per TEST-TIME-LITERAL-01.
-	const txHoldDuration = 2 * time.Second
-	const blockAssertTimeout = 200 * time.Millisecond
 
 	// Seed: tokenA claims the checkpoint at offset 10.
 	const tokenA = "leader-A-established"

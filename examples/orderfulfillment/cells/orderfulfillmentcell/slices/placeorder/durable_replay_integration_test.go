@@ -58,6 +58,12 @@ import (
 	of "github.com/ghbvf/gocell/generated/contracts/saga/orderfulfillment/v1"
 )
 
+// tailerBStabilityWindow is the sleep duration that lets Tailer B tick a few
+// times before asserting no-regression on the terminal status read model. It is
+// intentionally 3 × FastPoll so that any spurious re-process of journal events
+// has time to surface before the assertion.
+const tailerBStabilityWindow = 3 * testtime.FastPoll
+
 // applyOrderfulfillmentMigration applies the orderfulfillment example migration
 // (creates the order_saga_status table) to pool. The platform schema (obtained
 // from the pgtest template clone) is already present.
@@ -428,7 +434,7 @@ func TestDurableReplay_PGProjectionSurvivesRestart(t *testing.T) {
 	//     anything else).
 	// We give Tailer B 3 × FastPoll ticks to re-process any journal events it
 	// might replay, then verify the status is still terminal.
-	time.Sleep(3 * testtime.FastPoll) //archtest:allow:test-sleep stability window: lets Tailer B tick a few times before asserting no-regression; no completion channel to wait on
+	time.Sleep(tailerBStabilityWindow) //archtest:allow:test-sleep no completion channel to wait on
 	pgStatus3, found3, err := pgRM2.Get(ctx, orderID)
 	if err != nil {
 		t.Fatalf("durable_replay: pgRM2.Get (stability check): %v", err)

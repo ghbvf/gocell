@@ -47,9 +47,14 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger/storetest"
 )
+
+// ctDelta4s is a 4-second row timestamp delta used in cross-tenant seed data.
+// No exact mechanical alias exists in testtime for 4s.
+const ctDelta4s = 4 * time.Second
 
 // auditAdminPass is the password used when creating gocell_audit_admin in
 // these tests. Must match the value used in schema_guard_integration_test.go
@@ -210,11 +215,11 @@ func TestAuditCrossTenantStore_PG_ReadsAcrossTenants(t *testing.T) {
 		// auditcore namespace — tenant B
 		{"ct-b1-ac", ctNSAuditcore, "ev-b1-ac", "actor-b", ctTenantB, 1, time.Second},
 		// bootstrap namespace — tenant A
-		{"ct-a1-bs", ctNSBootstrap, "ev-a1-bs", "actor-a", ctTenantA, 1, 2 * time.Second},
+		{"ct-a1-bs", ctNSBootstrap, "ev-a1-bs", "actor-a", ctTenantA, 1, testtime.D2s},
 		// bootstrap namespace — tenant B
-		{"ct-b1-bs", ctNSBootstrap, "ev-b1-bs", "actor-b", ctTenantB, 1, 3 * time.Second},
+		{"ct-b1-bs", ctNSBootstrap, "ev-b1-bs", "actor-b", ctTenantB, 1, testtime.D3s},
 		// system row — tenant_id='', bootstrap namespace, no GUC needed (owner insert)
-		{"ct-sys-bs", ctNSBootstrap, "ev-sys-bs", "actor-sys", "", 1, 4 * time.Second},
+		{"ct-sys-bs", ctNSBootstrap, "ev-sys-bs", "actor-sys", "", 1, ctDelta4s},
 	}
 	for _, r := range rows {
 		insertAuditRowAsOwner(t, ownerPool, r.id, r.ns, r.eventID, r.actorID, r.tenantID, r.seqNo, base.Add(r.delta))

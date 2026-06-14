@@ -24,7 +24,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimecommand "github.com/ghbvf/gocell/framework/runtime/command"
 	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
@@ -90,8 +90,8 @@ func newAsyncRelay(t *testing.T, store *outboxtest.FakeStore, reg *runtimecomman
 	t.Helper()
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{
-			PollInterval:   5 * time.Millisecond,
-			BaseRetryDelay: 5 * time.Millisecond,
+			PollInterval:   testtime.FastPoll,
+			BaseRetryDelay: testtime.FastPoll,
 		}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[runtimecommand.CommandID]runtimecommand.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
@@ -130,7 +130,7 @@ func TestCrossCell_HTTPAsyncEnqueue_SameSlotDedup(t *testing.T) {
 	assert.NotEqual(t, rows[0].Entry.ID(), rows[1].Entry.ID(), "store ids must differ (two writes)")
 
 	relay := newAsyncRelay(t, store, reg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 
@@ -173,7 +173,7 @@ func TestCrossCell_HTTPAsyncEnqueue_DifferentPayloadNotFolded(t *testing.T) {
 		"#1610 F1: same key + DIFFERENT payload must NOT fold to the same dedup slot")
 
 	relay := newAsyncRelay(t, store, reg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 

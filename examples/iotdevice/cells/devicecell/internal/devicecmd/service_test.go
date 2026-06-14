@@ -23,6 +23,12 @@ import (
 	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
 )
 
+// Uniqueness / sweep duration constants used in enqueue tests.
+const (
+	testDeadlineTTL = 36 * time.Hour
+	testSweepFarOut = 365 * 24 * time.Hour
+)
+
 func testCodec() *query.CursorCodec {
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	return codec
@@ -590,7 +596,7 @@ func TestEnqueue_WithDispatchedUniqueness_SetsIdempotencyKeyAndOverallDeadline(t
 	require.NoError(t, err)
 
 	const idemKey = "test-uniqueness-key-1"
-	deadline := base.Add(36 * time.Hour)
+	deadline := base.Add(testDeadlineTTL)
 
 	// Inject (key, deadline) as the relay would on dispatch.
 	uCtx := rtcommand.WithDispatchedUniqueness(ctx, idemKey, deadline)
@@ -614,7 +620,7 @@ func TestEnqueue_WithDispatchedUniqueness_SetsIdempotencyKeyAndOverallDeadline(t
 	// OverallDeadline: the stored entry must carry the OverallDeadline derived
 	// from deadline.Sub(now). We can verify indirectly via SweepOnce: advancing
 	// past the deadline and sweeping must expire the command.
-	fc.Advance(36*time.Hour + time.Second) // past OverallDeadline
+	fc.Advance(testDeadlineTTL + time.Second) // past OverallDeadline
 	transitions := command.SweepOnce(active, fc.Now())
 	require.Len(t, transitions, 1, "the command must be expired after advancing past OverallDeadline")
 	assert.Equal(t, command.StatusExpired, transitions[0].To)
@@ -658,6 +664,6 @@ func TestEnqueue_BareCtx_NoIdempotencyKeyNoDeadline(t *testing.T) {
 
 	// No OverallDeadline: sweeping at any time within the lease should not expire
 	// the command. (Zero deadline means the Sweeper never triggers PhaseOverall.)
-	transitions := command.SweepOnce(active, time.Now().Add(365*24*time.Hour))
+	transitions := command.SweepOnce(active, time.Now().Add(testSweepFarOut))
 	assert.Empty(t, transitions, "bare-ctx commands have no OverallDeadline — Sweeper must not expire them")
 }

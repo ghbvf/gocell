@@ -46,6 +46,14 @@ import (
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 )
 
+// cert renewal e2e duration constants.
+const (
+	// certRenewalThreshold7d is the renewal threshold for F1 (offline device test).
+	certRenewalThreshold7d = 7 * 24 * time.Hour
+	// certNearExpiry24h is the near-expiry window seeded in test device cert fields.
+	certNearExpiry24h = 24 * time.Hour
+)
+
 // deviceSelfCtx returns ctx with a device-self principal (PrincipalUser, Subject
 // == deviceID) — the identity a device presents when acking its OWN rotate-cert.
 // The completion hook (devicecertcompletion.OnCommandResolved) emits the
@@ -104,9 +112,6 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	const attemptTTL = 36 * time.Hour
-	const threshold = 7 * 24 * time.Hour
-
 	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(base)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -115,15 +120,15 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	require.NoError(t, repo.Create(ctx, &domain.Device{
 		ID: "dev-offline", Name: "offline-sensor", Status: "online", LastSeen: base,
-		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+		CertEpoch: 1, CertExpiresAt: base.Add(certNearExpiry24h),
 	}))
 
 	// Producer: cert-renewal reconciler emitting into the Recorder.
 	rec := outboxtest.NewRecorder()
 	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
 		devicecertrenewal.Policy{
-			Threshold:  threshold,
-			AttemptTTL: attemptTTL,
+			Threshold:  certRenewalThreshold7d,
+			AttemptTTL: certRenewalAttemptTTL,
 		}, logger)
 	require.NoError(t, err)
 
@@ -160,7 +165,7 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	firstCmdID := active0[0].ID
 
 	// --- Phase 2: Advance clock past AttemptTTL + run Sweeper → Expired. ---
-	fc.Advance(attemptTTL + time.Second) // now > OverallDeadline of first command
+	fc.Advance(certRenewalAttemptTTL + time.Second) // now > OverallDeadline of first command
 
 	sweeper, err := kcommand.NewSweeper(queue, queue, fc)
 	require.NoError(t, err)
@@ -202,11 +207,9 @@ func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	const attemptTTL = 36 * time.Hour
 	// Threshold 30d, CertValidity 90d (> threshold): a renewed cert is far from
 	// expiry, so the device drops out of the candidate set. This mirrors the
 	// cell's live co-tuning that buildCertRenewalSweeper asserts at startup.
-	const threshold = 30 * 24 * time.Hour
 
 	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(base)
@@ -216,13 +219,13 @@ func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	require.NoError(t, repo.Create(ctx, &domain.Device{
 		ID: "dev-online", Name: "online-sensor", Status: "online", LastSeen: base,
-		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+		CertEpoch: 1, CertExpiresAt: base.Add(certNearExpiry24h),
 	}))
 
 	// Producer: cert-renewal reconciler emitting into rec.
 	rec := outboxtest.NewRecorder()
 	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
-		devicecertrenewal.Policy{Threshold: threshold, AttemptTTL: attemptTTL}, logger)
+		devicecertrenewal.Policy{Threshold: certRenewalThreshold, AttemptTTL: certRenewalAttemptTTL}, logger)
 	require.NoError(t, err)
 
 	// Completion consumer: publishes rotation-resolved into rec2 and advances cert
@@ -309,9 +312,6 @@ func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	const attemptTTL = 36 * time.Hour
-	const threshold = 30 * 24 * time.Hour
-
 	base := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(base)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -320,13 +320,13 @@ func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	require.NoError(t, repo.Create(ctx, &domain.Device{
 		ID: "dev-failemit", Name: "fail-emit-sensor", Status: "online", LastSeen: base,
-		CertEpoch: 1, CertExpiresAt: base.Add(24 * time.Hour),
+		CertEpoch: 1, CertExpiresAt: base.Add(certNearExpiry24h),
 	}))
 
 	// Producer: cert-renewal reconciler emitting into rec.
 	rec := outboxtest.NewRecorder()
 	reconciler, err := devicecertrenewal.NewReconciler(fc, repo, rec.CellEmitter(),
-		devicecertrenewal.Policy{Threshold: threshold, AttemptTTL: attemptTTL}, logger)
+		devicecertrenewal.Policy{Threshold: certRenewalThreshold, AttemptTTL: certRenewalAttemptTTL}, logger)
 	require.NoError(t, err)
 
 	// Completion service with a FAILING emitter — Emit always errors.
@@ -370,7 +370,7 @@ func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), got.CertEpoch,
 		"cert state must NOT be advanced when emit fails (no resolved event delivered)")
-	assert.True(t, got.CertExpiresAt.Equal(base.Add(24*time.Hour)),
+	assert.True(t, got.CertExpiresAt.Equal(base.Add(certNearExpiry24h)),
 		"cert expiry must be unchanged when emit fails")
 
 	// --- Tick 2: device is still near-expiry → reconciler must re-emit. ---

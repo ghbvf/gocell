@@ -22,6 +22,9 @@ import (
 
 var testBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 
+// certLifetime1y is the far-future cert lifetime used to seed already-advanced devices in tests.
+const certLifetime1y = 365 * 24 * time.Hour
+
 // selfCtx returns a context carrying a device-self principal (PrincipalUser with
 // Subject == deviceID) — the identity a device presents when acking its OWN
 // rotate-cert command. OnCommandResolved emits the completion event only for
@@ -263,7 +266,7 @@ func TestHandleRotationResolved_Succeeded_AdvancesCert(t *testing.T) {
 
 func TestHandleRotationResolved_StaleEpoch_AckNoOp(t *testing.T) {
 	repo := mem.NewDeviceRepository()
-	seedDevice(t, repo, "dev-1", 3, testBase.Add(365*24*time.Hour)) // already advanced
+	seedDevice(t, repo, "dev-1", 3, testBase.Add(certLifetime1y)) // already advanced
 	svc, _ := newTestService(t, repo)
 
 	// Replay a resolve for the now-stale epoch 2.
