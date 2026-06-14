@@ -28,9 +28,7 @@ func run(ctx context.Context) error {
 	// before run(), which does not log, so this is the first log-relevant action.
 	slog.SetDefault(slog.New(logging.NewHandler(logging.Options{Format: logging.FormatJSON})))
 
-	return {{.HelperName}}(ctx, {{printf "%q" .AssemblyID}}, []string{
-{{- range .Cells}}
-		{{printf "%q" .}},
-{{- end}}
+	return runDemo(ctx, "demo", []string{
+		"democell",
 	})
 }

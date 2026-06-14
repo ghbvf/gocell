@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
@@ -59,8 +60,8 @@ func newDedupRelay(t *testing.T, store *outboxtest.FakeStore, reg *command.Regis
 		// command entries claimed in one batch before the first commits) re-claims
 		// quickly within the test deadline; the default 5s would exceed it.
 		outbox.RelayConfig{
-			PollInterval:   5 * time.Millisecond,
-			BaseRetryDelay: 5 * time.Millisecond,
+			PollInterval:   testtime.FastPoll,
+			BaseRetryDelay: testtime.FastPoll,
 		}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
@@ -128,7 +129,7 @@ func TestCommandRelay_DedupOnEventRedelivery(t *testing.T) {
 	assert.NotEqual(t, rows[0].Entry.ID(), rows[1].Entry.ID(), "store ids must differ")
 
 	relay := newDedupRelay(t, store, reg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 
@@ -172,7 +173,7 @@ func TestCommandRelay_FailClosedOnMissingIdentity(t *testing.T) {
 	store.Seed(outbox.ClaimedEntry{Entry: bad})
 
 	relay := newDedupRelay(t, store, reg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 
@@ -200,7 +201,7 @@ func TestCommandRelay_NormalCommitDispatch(t *testing.T) {
 		svc.HandleDeviceRegistered(context.Background(), sourceEvent(t, "d2", "evt-single")).Disposition)
 
 	relay := newDedupRelay(t, store, reg)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 

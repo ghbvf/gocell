@@ -22,6 +22,13 @@ import (
 // fmtListErr is the t.Fatalf format string for List errors (3 sites).
 const fmtListErr = "List: %v"
 
+// Cert-lifetime constants used across conformance sub-tests.
+const (
+	conf30Days  = 30 * 24 * time.Hour
+	conf90Days  = 90 * 24 * time.Hour
+	conf365Days = 365 * 24 * time.Hour
+)
+
 // DeviceRepoFactory builds a fresh DeviceRepository and its matching TxRunner.
 // cleanup MUST be idempotent and safe to call even if no resources were
 // acquired. now returns the suite's clock — implementations using wall time
@@ -382,7 +389,7 @@ func runCertRenewalCandidatesNearExpiry(t *testing.T, factory DeviceRepoFactory,
 	defer cleanup()
 	ctx := context.Background()
 	base := now()
-	cutoff := base.Add(30 * 24 * time.Hour)
+	cutoff := base.Add(conf30Days)
 
 	mk := func(id string, epoch int64, expiresAt time.Time) *domain.Device {
 		return &domain.Device{
@@ -430,7 +437,7 @@ func runCertRenewalCandidatesReturnsAllNearExpiry(t *testing.T, factory DeviceRe
 	defer cleanup()
 	ctx := context.Background()
 	base := now()
-	cutoff := base.Add(30 * 24 * time.Hour)
+	cutoff := base.Add(conf30Days)
 
 	const totalDevices = 5
 	// Seed 5 near-expiry devices with distinct ascending expiries.
@@ -483,7 +490,7 @@ func runAdvanceCertAfterRotationSuccess(t *testing.T, factory DeviceRepoFactory,
 		CertEpoch: 2, CertExpiresAt: nearExpiry,
 	})
 
-	newExpiry := base.Add(90 * 24 * time.Hour).Truncate(time.Second)
+	newExpiry := base.Add(conf90Days).Truncate(time.Second)
 	advanced := advanceCert(t, ctx, repo, tx, features, "adv-1", 2, newExpiry)
 	if !advanced {
 		t.Fatal("AdvanceCertAfterRotation(adv-1, epoch 2): advanced=false, want true")
@@ -500,7 +507,7 @@ func runAdvanceCertAfterRotationSuccess(t *testing.T, factory DeviceRepoFactory,
 		t.Fatalf("CertExpiresAt = %v, want %v (new expiry)", got.CertExpiresAt, newExpiry)
 	}
 	// Loop-closing: a far-future expiry means the device is no longer a candidate.
-	cands, err := repo.ListCertificateRenewalCandidates(ctx, base.Add(30*24*time.Hour))
+	cands, err := repo.ListCertificateRenewalCandidates(ctx, base.Add(conf30Days))
 	if err != nil {
 		t.Fatalf("ListCertificateRenewalCandidates: %v", err)
 	}
@@ -527,13 +534,13 @@ func runAdvanceCertAfterRotationStaleEpochNoOp(t *testing.T, factory DeviceRepoF
 		CertEpoch: 2, CertExpiresAt: base.Add(time.Hour),
 	})
 
-	firstExpiry := base.Add(90 * 24 * time.Hour).Truncate(time.Second)
+	firstExpiry := base.Add(conf90Days).Truncate(time.Second)
 	if !advanceCert(t, ctx, repo, tx, features, "adv-stale", 2, firstExpiry) {
 		t.Fatal("first advance: advanced=false, want true")
 	}
 
 	// Replay the SAME resolve (rotatedEpoch=2) — device is now at epoch 3.
-	staleExpiry := base.Add(365 * 24 * time.Hour).Truncate(time.Second)
+	staleExpiry := base.Add(conf365Days).Truncate(time.Second)
 	if advanceCert(t, ctx, repo, tx, features, "adv-stale", 2, staleExpiry) {
 		t.Fatal("stale-epoch replay: advanced=true, want false (idempotent no-op)")
 	}
@@ -559,7 +566,7 @@ func runAdvanceCertAfterRotationUnknownDevice(t *testing.T, factory DeviceRepoFa
 	defer cleanup()
 	ctx := context.Background()
 
-	if advanceCert(t, ctx, repo, tx, features, "ghost", 1, now().Add(90*24*time.Hour)) {
+	if advanceCert(t, ctx, repo, tx, features, "ghost", 1, now().Add(conf90Days)) {
 		t.Fatal("unknown device: advanced=true, want false (idempotent no-op)")
 	}
 }
