@@ -6,6 +6,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 
 ## 工作方式
 
+- 与用户的所有沟通默认使用中文（对话回复、方案讨论、PR / review 说明）
 - 修改前先查看 README.md 与 docs/
 - 提交信息遵循 Conventional Commits
 - 涉及功能或行为变更时，同步更新对应文档

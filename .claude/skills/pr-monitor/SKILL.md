@@ -3,7 +3,6 @@ name: pr-monitor
 description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（ship/fix 收尾自动启动；每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
-disable-model-invocation: true
 ---
 
 # pr-monitor — PR 状态单 tick 检查器（fix 侧）

@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
@@ -14,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/framework/pkg/pgquery"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
@@ -25,9 +25,6 @@ var _ ports.PolicyRepository = (*PGPolicyRepo)(nil)
 // msgPolicyInvalidTenant is the single-source error message shared via the
 // ports package (#6). Unexported local alias for conciseness.
 const msgPolicyInvalidTenant = ports.MsgInvalidTenant
-
-// pgConflictCode is the PostgreSQL SQLSTATE for unique-constraint violations.
-const pgConflictCode = "23505"
 
 // PGPolicyRepo is the cell-private PostgreSQL implementation of
 // ports.PolicyRepository (#1346 PR-8, #1347 PR-9). It reads/writes the
@@ -167,8 +164,7 @@ func (r *PGPolicyRepo) Create(ctx context.Context, t tenant.TenantID, p *abac.Po
 	}
 	now := r.clock.Now()
 	if _, err := r.db.Exec(ctx, insertPolicySQL, string(t), p.ID, p.Name, p.Description, rulesJSON, now); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgConflictCode {
+		if pgquery.IsUniqueViolation(err) {
 			return nil, errcode.New(errcode.KindConflict, errcode.ErrAuthPolicyDuplicate, "policy already exists",
 				errcode.WithInternal(errcode.InternalAttr("policy_id", p.ID)))
 		}
