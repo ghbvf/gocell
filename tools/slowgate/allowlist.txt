@@ -270,3 +270,13 @@ github.com/ghbvf/gocell/tools/archtest	TestFixtureCellIDTypedBuilder
 # SCOPE-01 have per-test Elapsed under 1s after R3 scope-narrowing (A2 single
 # package, A5 single package, A4 file I/O only, A3 single fixture pkg, import
 # scope AST-only Run); they do not need slowgate allowlist entries.
+
+# type-graph-load: OBS-01 #2147 satellite coverage load-witness — loadPackages
+# over ./cmd/... ./adapters/... ./examples/... which the satellite-aware loader
+# expands to ~22 go.work member modules (the per-satellite anti-vacuity witness
+# that the SoR satellite prefixes load non-empty, not a silent match-zero).
+# Cold-cache packages.Load of ~22 member modules with type info is inherently
+# >20s on ubuntu-latest 2-CPU runners (21.03s on PR #2163); the per-run cost is
+# removed once OBS-01 loader caching lands (#2165). Same type-graph-load class
+# as the entries above. First tools/metricschema entry (others are tools/archtest).
+github.com/ghbvf/gocell/tools/metricschema	TestOBS01CoverageRequiresSatellites
