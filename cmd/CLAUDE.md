@@ -120,7 +120,7 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `JWTDeps` | issuer + verifier（JWT 签发/验证） |
 | `InternalHMACRing` | /internal/v1/* service-token HMAC ring（#1410 起独立字段，原 `internalGuard` 已 dissolve） |
 | `NonceStore` | /internal/v1/* 服务令牌防重放 store；control-plane 校验经 `Kind()` 拒 noop / 多 pod in-memory（#1410） |
-| `SharedPGPool` | postgres 连接池（跨 Cell 共享） |
+| `PG` | sealed `capability.PGProvider`，由 `cellmodules/percellpg.Resolve` 在 postgres 拓扑下注入；memory 拓扑下为 nil，cell module 走 in-memory 路径 |
 | `ConsumerClaimer` | outbox 消费幂等键声明者；`Kind()` 自报 in_memory/distributed（#1410，CP8 fail-closed） |
 | `Publisher` / `Subscriber` | outbox 事件传输（relay 发布 sink + consumer 订阅源）；接口型，经 `cellmodules/eventtransport.Resolve` 按 Topology 选型——demo=in-memory，postgres=真实 broker（RabbitMQ），缺 broker fail-closed（#1940） |
 | `PrimaryHTTPAddr` / `InternalHTTPAddr` / `HealthHTTPAddr` | 三 listener 绑定地址 |

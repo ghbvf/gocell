@@ -39,8 +39,8 @@
 // connection, i.e. the single GOCELL_AMQP_URL. Per-cell publisher/subscriber
 // fan-out within one broker connection (e.g. per-cell exchange or routing-key
 // namespacing) is a separate concern coupled to per-cell outbox relay fan-out;
-// both are tracked in the per-cell infra fan-out backlog issue (issue #1964 /
-// Epic #1423 US6) and are not implemented here.
+// both are tracked in the per-cell infra fan-out backlog (#2152) and are not
+// implemented here.
 //
 // ref: kernel/outbox.ResolveEmitter — the symmetric durability-gated funnel.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.

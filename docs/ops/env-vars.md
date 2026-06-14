@@ -124,9 +124,9 @@ DSN fails closed (split-pool topology not yet supported; see #1963).
 | `GOCELL_CONFIGCORE_DATABASE_URL` | PostgreSQL DSN for configcore; role must be `gocell_app` (restricted, NOSUPERUSER NOBYPASSRLS) so that `FORCE ROW LEVEL SECURITY` is enforced at runtime | — | **postgres mode** |
 | `GOCELL_AUDITCORE_DATABASE_URL` | PostgreSQL DSN for auditcore; same role requirement as configcore | — | **postgres mode** |
 | `GOCELL_ACCESSCORE_DATABASE_URL` | PostgreSQL DSN for accesscore; same role requirement as configcore | — | **postgres mode** |
-| `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` | Max open connections (applies to the shared pool) | 10 | No |
-| `GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout (e.g. `5m`) | `5m` | No |
-| `GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime (e.g. `1h`) | `1h` | No |
+| `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` | Max open connections for the shared pool. **Pool knobs are read from the alphabetically-first postgres cell** (`accesscore` today, since `a < au < c`). In colocated/dedup mode all postgres cells share ONE pool, so operators MUST set pool knobs identically across all cells — only the knobs from the first sorted cell (`GOCELL_ACCESSCORE_DATABASE_*`) are actually applied to the shared pool. `GOCELL_AUDITCORE_DATABASE_MAX_CONNS` and `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` are read but ignored in colocated mode; per-cell pool-knob isolation requires split topology (#2152). | 10 | No |
+| `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout for the shared pool (same ordering rule as `MAX_CONNS` above; set identically across all postgres cells) | `5m` | No |
+| `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime for the shared pool (same ordering rule as `MAX_CONNS` above; set identically across all postgres cells) | `1h` | No |
 
 ### Restricted serving-role credential
 
@@ -251,14 +251,23 @@ Set `GOCELL_STATE_DIR` to override the platform default for all stateful files.
 
 ## Migration from pre-T6 env names
 
-The old global PostgreSQL env names have been removed. Operators must update environment configuration before upgrading.
+The old global PostgreSQL env names for the **serving pool** (`cmd/corebundle`) have been removed. Operators must update environment configuration before upgrading.
 
-| Old name (pre-T6, removed) | New name |
+> **Note:** `GOCELL_PG_DSN` is NOT fully removed from the codebase. It is still
+> the conventional DSN variable for the **`tools/pg-migrate` migration-admin tool**
+> (owner/superuser role, distinct from the restricted `gocell_app` serving role).
+> `tools/pg-migrate` and the associated `pg-migrate` service in
+> `docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml` continue to
+> use `GOCELL_PG_DSN`. The migration-admin tool and the `cmd/corebundle` serving
+> pool may point at the **same database** but with **different roles** (superuser vs
+> restricted `gocell_app`).
+
+| Old name (pre-T6, removed from serving pool) | New name |
 |---|---|
-| `GOCELL_PG_DSN` | `GOCELL_CONFIGCORE_DATABASE_URL` + `GOCELL_AUDITCORE_DATABASE_URL` + `GOCELL_ACCESSCORE_DATABASE_URL` (same value, per-cell seam #1964) |
-| `GOCELL_PG_MAX_CONNS` | `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` |
-| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT` |
-| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME` |
+| `GOCELL_PG_DSN` (**serving pool only — removed**; migration tool still uses it) | `GOCELL_CONFIGCORE_DATABASE_URL` + `GOCELL_AUDITCORE_DATABASE_URL` + `GOCELL_ACCESSCORE_DATABASE_URL` (same value, per-cell seam #1964) |
+| `GOCELL_PG_MAX_CONNS` | `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` (pool knobs read from alphabetically-first cell; see §Per-cell database DSNs) |
+| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` |
+| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` |
 | `GOCELL_MASTER_KEY` | `GOCELL_CONFIGCORE_MASTER_KEY` |
 | `GOCELL_MASTER_KEY_PREVIOUS` | `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` |
 | `GOCELL_KEY_PROVIDER` | `GOCELL_CONFIGCORE_KEY_PROVIDER` |

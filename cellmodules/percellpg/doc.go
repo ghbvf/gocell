@@ -25,6 +25,17 @@
 // by strings.TrimSpace(DSN) and opens exactly ONE pool, preserving today's
 // shared-pool behavior while introducing per-cell DSN injection.
 //
+// # Pool knobs in colocated mode
+//
+// In colocated/dedup mode (all cells share the same DSN) the shared pool's
+// connection knobs (MaxConns / IdleTimeout / MaxLifetime) are taken from
+// cellIDs[0] — the alphabetically-first postgres cell after sort.Strings. With
+// the current platform cells (accesscore / auditcore / configcore) that is
+// always accesscore (a < au < c). Operators MUST set the pool knobs identically
+// across all postgres cells' DATABASE_* vars; only the accesscore knobs are
+// applied to the shared pool and the others are silently ignored in colocated
+// mode. Per-cell pool-knob isolation is split-topology territory (#2152).
+//
 // # Fail-closed invariants
 //
 //   - A postgres-requiring cell whose DSN is empty (or whitespace-only) is a

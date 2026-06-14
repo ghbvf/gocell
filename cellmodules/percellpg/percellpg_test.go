@@ -89,11 +89,14 @@ func TestResolveAgreedConfig_DistinctDSNs(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolveAgreedConfig(distinct DSNs) = nil error, want fail-closed startup error")
 	}
-	if !strings.Contains(err.Error(), "distinct") {
-		t.Errorf("error = %q, want mention of 'distinct'", err)
+	// Error() shows WithInternal attrs (distinct_dsn_count, cell_ids) instead of the
+	// message when internal details are attached. Check that the diagnostic context is
+	// present and the error code is correct.
+	if !strings.Contains(err.Error(), "distinct_dsn_count") {
+		t.Errorf("error = %q, want internal diagnostic 'distinct_dsn_count'", err)
 	}
-	if !strings.Contains(err.Error(), "#1963") {
-		t.Errorf("error = %q, want mention of US4 #1963", err)
+	if !strings.Contains(err.Error(), "ERR_VALIDATION_FAILED") {
+		t.Errorf("error = %q, want ERR_VALIDATION_FAILED code", err)
 	}
 }
 
@@ -188,14 +191,67 @@ func TestResolveAgreedConfig_SingleCell(t *testing.T) {
 	}
 }
 
+// TestResolveAgreedConfig_RequireRestrictedRoleOverride verifies that the caller's
+// Config.RequireRestrictedRole value always wins over the individual cell's
+// adapterpg.Config.RequireRestrictedRole (percellpg.go:145: agreed.RequireRestrictedRole
+// = cfg.RequireRestrictedRole). The caller (composition root) controls this flag for
+// the shared pool; per-cell values are intentionally overridden.
+func TestResolveAgreedConfig_RequireRestrictedRoleOverride(t *testing.T) {
+	t.Parallel()
+	topo := mkTopo(t, "real", "postgres", true)
+	const dsn = "postgres://host/db"
+
+	tests := []struct {
+		name           string
+		cellRole       bool // adapterpg.Config.RequireRestrictedRole for the cell
+		cfgRole        bool // Config.RequireRestrictedRole (caller override)
+		wantAgreedRole bool
+	}{
+		{
+			name:           "cell=true cfg=false: caller false wins",
+			cellRole:       true,
+			cfgRole:        false,
+			wantAgreedRole: false,
+		},
+		{
+			name:           "cell=false cfg=true: caller true wins",
+			cellRole:       false,
+			cfgRole:        true,
+			wantAgreedRole: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{
+				Cells: map[string]adapterpg.Config{
+					"accesscore": {DSN: dsn, RequireRestrictedRole: tc.cellRole},
+				},
+				RequireRestrictedRole: tc.cfgRole,
+			}
+			agreed, ok, err := resolveAgreedConfig(topo, cfg)
+			if err != nil {
+				t.Fatalf("resolveAgreedConfig: unexpected error: %v", err)
+			}
+			if !ok {
+				t.Fatal("resolveAgreedConfig: want ok=true")
+			}
+			if agreed.RequireRestrictedRole != tc.wantAgreedRole {
+				t.Errorf("agreed.RequireRestrictedRole = %v, want %v", agreed.RequireRestrictedRole, tc.wantAgreedRole)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Resolve — top-level, impure (newPool override required for unit tests)
 // ---------------------------------------------------------------------------
 
 // TestResolve_MemoryTopology verifies that Resolve returns empty Deps (no
 // Provider, no Resources) for memory topology without calling newPool.
+// NOT parallel: mutates the package-level newPool seam.
 func TestResolve_MemoryTopology(t *testing.T) {
-	t.Parallel()
 	// Override newPool to fail if called — it must NOT be called in memory topology.
 	orig := newPool
 	t.Cleanup(func() { newPool = orig })

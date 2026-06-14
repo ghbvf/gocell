@@ -132,9 +132,10 @@ func resolveAgreedConfig(topo bootstrap.Topology, cfg Config) (adapterpg.Config,
 	if len(seen) > 1 {
 		return adapterpg.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"percellpg: per-cell distinct database credentials require split topology "+
-				"with per-cell outbox relay fan-out (US4 #1963; tracked in the per-cell infra "+
-				"fan-out backlog); colocated assemblies must configure an identical "+
+				"with per-cell outbox relay fan-out (US4 #1963 / #2152); colocated assemblies must configure an identical "+
 				"GOCELL_<CELLID>_DATABASE_URL for every postgres cell",
+			errcode.WithInternal(errcode.InternalAttr("distinct_dsn_count", len(seen))),
+			errcode.WithInternal(errcode.InternalAttr("cell_ids", strings.Join(cellIDs, ","))),
 		)
 	}
 
