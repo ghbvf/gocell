@@ -91,17 +91,15 @@ func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, loca
 		cells[cellID] = pgCfg
 	}
 
-	agreed, ok, err := percellpg.Resolve(shared.Topology, percellpg.Config{
+	// Topology is gated above, so percellpg.Resolve always returns ok=true here
+	// (ok=false is the memory-topology signal only). A contract drift that returned
+	// an empty agreed config would still fail-closed at NewPool ("DSN is empty").
+	agreed, _, err := percellpg.Resolve(shared.Topology, percellpg.Config{
 		Cells:                 cells,
 		RequireRestrictedRole: true,
 	})
 	if err != nil {
 		return err
-	}
-	if !ok {
-		// Defensive: topology was already gated above, so postgres topology always
-		// yields ok=true here. Belt-and-suspenders against a future gate drift.
-		return nil
 	}
 
 	pool, err := adapterpg.NewPool(ctx, agreed)

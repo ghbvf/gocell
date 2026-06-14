@@ -52,3 +52,19 @@ func TestProvisionPostgres_BadPoolKnob(t *testing.T) {
 	require.Error(t, err, "an invalid per-cell pool knob must fail at config load")
 	require.Contains(t, err.Error(), "load PG config for cell configcore")
 }
+
+// TestProvisionPostgres_PoolOpenError: a malformed (but non-empty) DSN passes the
+// percellpg gates and fails fast at NewPool's DSN parse (no connection attempt),
+// exercising the pool-open error branch without a live database.
+func TestProvisionPostgres_PoolOpenError(t *testing.T) {
+	const dsn = "postgres://host/db?sslmode=bogus" // rejected by ParseConfig, no dial
+	t.Setenv("GOCELL_ACCESSCORE_DATABASE_URL", dsn)
+	t.Setenv("GOCELL_AUDITCORE_DATABASE_URL", dsn)
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", dsn)
+	shared, locals := newValidatedSharedDepsAndLocals(t, mkTopo("real", "postgres", false))
+
+	err := provisionPostgres(context.Background(), shared, locals)
+	require.Error(t, err, "a malformed DSN must fail-closed at pool open")
+	require.Contains(t, err.Error(), "open assembly PG pool")
+	require.Nil(t, shared.PG, "no provider on pool-open failure")
+}
