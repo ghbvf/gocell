@@ -162,7 +162,7 @@ jobs:
       # first and goreleaser would only fail afterwards, leaving an orphan tag.
       - name: Install goreleaser
         if: steps.resolve.outputs.skip != 'true'
-        uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
+        uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
         with:
           version: 'v2.16.0' # pinned (F6); bump via dependabot
           install-only: true
@@ -368,7 +368,7 @@ jobs:
 
       - name: Install goreleaser (stable only)
         if: needs.verify.outputs.prerelease != 'true'
-        uses: goreleaser/goreleaser-action@9c156ee8a17a598b3a9b32eca9d83de83de9050d # v6.3.0
+        uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
         with:
           version: 'v2.16.0' # pinned (F6); bump via dependabot
           install-only: true
