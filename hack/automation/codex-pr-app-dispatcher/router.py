@@ -342,7 +342,7 @@ class AppServerClient:
             [self.cfg.codex_bin, "app-server", "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None,
             text=True,
             bufsize=1,
         )
@@ -386,10 +386,7 @@ class AppServerClient:
             while True:
                 line = self.proc.stdout.readline()
                 if line == "":
-                    stderr = ""
-                    if self.proc.stderr:
-                        stderr = self.proc.stderr.read().strip()
-                    raise DispatchError(f"app-server exited before {method} response: {stderr}")
+                    raise DispatchError(f"app-server exited before {method} response")
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
