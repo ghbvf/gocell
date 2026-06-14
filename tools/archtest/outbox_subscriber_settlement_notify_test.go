@@ -69,7 +69,14 @@ func scanOutboxSubscriberSettlement(t *testing.T) (implPkgSet, notifyPkgSet map[
 	t.Helper()
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./framework/kernel/outbox/..."}, prodPatterns...)
+	// prodscan.Patterns prunes multi-member parents (adapters/ holds per-adapter
+	// go.work members post-#1565), so the terminal Subscriber impls in
+	// adapters/rabbitmq + adapters/mqtt would be invisible to this scan — leaving
+	// the rule vacuous for everything but the in-process eventbus. Hardcode the
+	// satellite parent prefix (the sanctioned opt-in: the typed loader expands it
+	// via workspace.ExpandParentPrefix, kept honest by SATELLITE-PARENT-PREFIX-SCAN-01;
+	// mirrors health_aggregation_test.go) so all three terminal packages are scanned.
+	ifacePatterns := append([]string{"./framework/kernel/outbox/...", "./adapters/..."}, prodPatterns...)
 
 	var subIface *types.Interface
 	var allPkgs []*types.Package
@@ -119,7 +126,7 @@ func scanOutboxSubscriberSettlement(t *testing.T) (implPkgSet, notifyPkgSet map[
 	require.NotEmpty(t, implSet,
 		"OUTBOX-SUBSCRIBER-SETTLEMENT-NOTIFY-01: zero outbox.Subscriber implementations collected — "+
 			"likely a type-universe regression. Expect adapters/rabbitmq.Subscriber, "+
-			"adapters/mqtt.Subscriber, runtime/eventbus.InMemoryEventBus.")
+			"adapters/mqtt.Subscriber, framework/runtime/eventbus.InMemoryEventBus.")
 	return implPkgSet, notifyPkgSet
 }
 
