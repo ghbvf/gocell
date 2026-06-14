@@ -4,22 +4,25 @@ package saga
 //   - TestIntegration_HappyPath1Step (§220 scenario 1)
 //   - TestIntegration_StepRunError (§220 scenario 2)
 //   - TestIntegration_TotalSagaTimeout (§220 scenario 4)
+//   - TestIntegration_Compensation_MultiStepReverseWalk_Compensated /
+//     _CompensationFailed (§220 scenario 5 — multi-step compensation walk)
 //   - TestIntegration_ClaimContention (§220 scenario 6)
 //   - TestIntegration_ResumeAfterRestart (§220 scenario 7)
 //   - TestIntegration_PanicRecovery (§220 scenario 8)
 //   - TestIntegration_Compensation_LeaseLost_ResumesOnReclaim (#1210 C3 — compensation-phase lease-lost recovery)
 //
-// §220 scenarios 3 (retry budget) and 5 (multi-step compensation walk)
-// are covered by white-box unit tests in coordinator_test.go and
-// executor_test.go; the integration tier focuses on cross-coordinator
-// goroutine paths.
+// §220 scenario 3 (retry budget) is covered by white-box unit tests in
+// coordinator_test.go and executor_test.go; the integration tier focuses on
+// full-lifecycle (Start/Stop + tickLoop) and cross-coordinator goroutine paths.
 //
 // Fake helpers live in testfakes_test.go (same package, test-only).
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1045,4 +1048,223 @@ func assertPhase3RecoveryFinal(t *testing.T, j *journal.MemJournal, instID iduti
 	if got := step1CompensateCalls.Load(); got != 1 {
 		t.Errorf("step1CompensateCalls = %d, want 1 (c1 attempted; c2 recovery skips already-attempted)", got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5 — Multi-step reverse compensation walk (full Coordinator lifecycle)
+// ---------------------------------------------------------------------------
+
+// scenario5Def builds a 3-step saga that exercises the multi-step reverse
+// compensation walk through the full Coordinator tickLoop:
+//   - step1, step2: Run succeeds and each owns a Compensate handler, so both
+//     commit and become eligible for the reverse walk.
+//   - step3: Run deliberately fails. Because committed steps with Compensate
+//     handlers exist, routeOutcome routes to runCompensation (not the plain
+//     StatusFailed path). step3 itself never commits, so it stays outside the
+//     reverse walk and needs no Compensate.
+//
+// step2CompensateErr selects the terminal outcome:
+//   - nil → both compensations succeed → StatusCompensated (KindSagaCompensated)
+//   - err → step2's Compensate fails; the walk continues to step1 (best-effort)
+//     → StatusCompensationFailed (KindSagaCompensationFailed)
+func scenario5Def(defID idutil.SafeID, step2CompensateErr error) *ksaga.Definition {
+	return &ksaga.Definition{
+		ID: defID,
+		Steps: []ksaga.Step{
+			{
+				Name:       "step1",
+				Run:        func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) { return []byte(`{"s":1}`), nil },
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error { return nil },
+			},
+			{
+				Name:       "step2",
+				Run:        func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) { return []byte(`{"s":2}`), nil },
+				Compensate: func(_ context.Context, _ *ksaga.Instance, _ []byte) error { return step2CompensateErr },
+			},
+			{
+				Name: "step3",
+				Run: func(_ context.Context, _ *ksaga.Instance, _ []byte) ([]byte, error) {
+					return nil, errors.New("step3 deliberately fails to trigger compensation")
+				},
+			},
+		},
+	}
+}
+
+// driveScenario5ToTerminal enqueues inst and drives the 3-step saga to a terminal
+// journal event through the running tickLoop: one tick per forward step, advancing
+// the clock past the 60s lease between claims so each subsequent tick can re-claim.
+// step3's tick runs the entire reverse compensation walk inside a single driveOne,
+// so the saga reaches its terminal event on that final tick.
+func driveScenario5ToTerminal(t *testing.T, h *testHarness, inst ksaga.Instance) {
+	t.Helper()
+	if err := h.j.Enqueue(context.Background(), inst); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	// step1 commits — the initial claim needs no lease expiry.
+	tickOnceAndWait(t, h.clk, func() bool {
+		evs, err := h.j.Load(context.Background(), inst.ID)
+		return err == nil && len(evs) >= 1
+	})
+
+	// step2 commits — expire step1's lease first so the next tick re-claims.
+	h.clk.Advance(testLeaseAdvance)
+	tickOnceAndWait(t, h.clk, func() bool {
+		evs, err := h.j.Load(context.Background(), inst.ID)
+		return err == nil && len(evs) >= 2
+	})
+
+	// step3 fails → reverse compensation walk → terminal, all within one driveOne.
+	h.clk.Advance(testLeaseAdvance)
+	tickOnceAndWait(t, h.clk, func() bool {
+		evs, err := h.j.Load(context.Background(), inst.ID)
+		return err == nil && len(evs) > 0 && evs[len(evs)-1].Kind.IsTerminal()
+	})
+}
+
+// scenario5JournalShape is the expected journal event sequence for a scenario-5
+// run, parameterized by the two compensation-step kinds and the terminal kind so
+// the same shape covers both the clean-rollback and compensation-failed paths.
+type scenario5JournalShape struct {
+	step2Comp journal.EventKind // KindStepCompensated or KindStepCompensationFailed (reverse walk: step2 first)
+	step1Comp journal.EventKind // KindStepCompensated (step1 always compensates cleanly here)
+	terminal  journal.EventKind // KindSagaCompensated or KindSagaCompensationFailed
+}
+
+// assertScenario5Journal verifies the full forward+compensation event sequence:
+// two forward KindStepCompleted, KindCompensationStarted, then the reverse walk
+// (step2 before step1) and the terminal kind. Version is the per-instance
+// position (1..6); StepName must match for the step-scoped kinds and be empty for
+// the saga-scoped CompensationStarted / terminal kinds.
+func assertScenario5Journal(t *testing.T, evs []journal.Event, shape scenario5JournalShape) {
+	t.Helper()
+	expected := []struct {
+		kind journal.EventKind
+		step idutil.SafeID // "" → saga-scoped (no StepName)
+		desc string
+	}{
+		{journal.KindStepCompleted, "step1", "forward step1 completed"},
+		{journal.KindStepCompleted, "step2", "forward step2 completed"},
+		{journal.KindCompensationStarted, "", "compensation started"},
+		{shape.step2Comp, "step2", "reverse walk: step2 (first)"},
+		{shape.step1Comp, "step1", "reverse walk: step1 (second)"},
+		{shape.terminal, "", "terminal"},
+	}
+	if len(evs) != len(expected) {
+		t.Fatalf("journal event count = %d, want %d; events: %v", len(evs), len(expected), evs)
+	}
+	for i, want := range expected {
+		if evs[i].Kind != want.kind {
+			t.Errorf("evs[%d].Kind = %s, want %s (%s)", i, evs[i].Kind, want.kind, want.desc)
+		}
+		if evs[i].Version != int64(i+1) {
+			t.Errorf("evs[%d].Version = %d, want %d (%s)", i, evs[i].Version, i+1, want.desc)
+		}
+		if evs[i].StepName != want.step {
+			t.Errorf("evs[%d].StepName = %q, want %q (%s)", i, evs[i].StepName, want.step, want.desc)
+		}
+	}
+	if !evs[len(evs)-1].Kind.IsTerminal() {
+		t.Errorf("last event %s is not terminal", evs[len(evs)-1].Kind)
+	}
+}
+
+// assertScenario5ForwardEmitsOnly pins the compensation-path outbox contract
+// (#1949 (c)): the reverse compensation walk emits NOTHING to the outbox. Only
+// the two committed forward steps produce step-completed events, so the emitter
+// holds exactly two entries — both on the step-completed topic, for step1 then
+// step2. A future regression that emits during compensation pushes the count
+// past two. The dispatcher Kick count is likewise 2: compensation commits use
+// txRunner.RunInTx directly and never register the AfterCommit Kick hook that
+// only commitStepInTx (forward path) installs.
+func assertScenario5ForwardEmitsOnly(t *testing.T, h *testHarness, defID idutil.SafeID) {
+	t.Helper()
+	entries := h.emitter.Snapshot()
+	if len(entries) != 2 {
+		t.Fatalf("emitter entries = %d, want 2 (forward step1+step2 only; compensation emits nothing)", len(entries))
+	}
+	wantTopic := stepCompletedTopic(defID)
+	gotSteps := make([]string, 0, len(entries))
+	for i, e := range entries {
+		// RoutingTopic() is the routing identity a consumer subscribes against
+		// (== Entry.Stream()); koutbox.Emit stamps the dotted name as eventType,
+		// so RoutingTopic falls back to it (the bare topic field is empty).
+		if e.RoutingTopic() != wantTopic {
+			t.Errorf("entry[%d].RoutingTopic = %q, want %q", i, e.RoutingTopic(), wantTopic)
+		}
+		var ev StepCompletedEvent
+		if err := json.Unmarshal(e.Payload(), &ev); err != nil {
+			t.Fatalf("entry[%d] payload unmarshal: %v", i, err)
+		}
+		gotSteps = append(gotSteps, string(ev.Step))
+	}
+	if !reflect.DeepEqual(gotSteps, []string{"step1", "step2"}) {
+		t.Errorf("emitted step-completed steps = %v, want [step1 step2]", gotSteps)
+	}
+	if got := h.disp.KickCount(); got != 2 {
+		t.Errorf("KickCount = %d, want 2 (one per forward commit; compensation path does not Kick)", got)
+	}
+}
+
+// TestIntegration_Compensation_MultiStepReverseWalk_Compensated drives a 3-step
+// saga through the full Coordinator lifecycle (Start/Stop + tickLoop): step1 and
+// step2 commit, step3's Run fails and triggers the reverse compensation walk, and
+// both compensations succeed → terminal StatusCompensated.
+//
+// This is the §220 scenario-5 integration tier — previously only covered white-box
+// in coordinator_test.go via direct driveOne calls. It exercises (a) the reverse
+// walk under the executor's RunWithHeartbeat goroutine fan-out, (b) the
+// StatusCompensated terminal end to end, and (c) the compensation-path outbox
+// contract (the walk emits nothing; only the two forward step-completed events
+// reach the emitter).
+func TestIntegration_Compensation_MultiStepReverseWalk_Compensated(t *testing.T) {
+	const defID idutil.SafeID = "scenario5compensated"
+
+	h := newTestHarness(t, scenario5Def(defID, nil))
+	cancel := startCoord(t, h.coord)
+	defer cancel()
+
+	inst := newInstance(t, defID, h.clk.Now())
+	driveScenario5ToTerminal(t, h, inst)
+
+	evs, err := h.j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	assertScenario5Journal(t, evs, scenario5JournalShape{
+		step2Comp: journal.KindStepCompensated,
+		step1Comp: journal.KindStepCompensated,
+		terminal:  journal.KindSagaCompensated,
+	})
+	assertScenario5ForwardEmitsOnly(t, h, defID)
+}
+
+// TestIntegration_Compensation_MultiStepReverseWalk_CompensationFailed is the
+// §220 scenario-5 integration tier for the failed-rollback terminal: same 3-step
+// saga driven through the full tickLoop, but step2's Compensate returns an error.
+// The reverse walk records KindStepCompensationFailed for step2, continues
+// best-effort to step1 (which compensates cleanly), and terminates as
+// StatusCompensationFailed — distinct from StatusFailed (forward failure with no
+// rollback). The compensation path still emits nothing to the outbox.
+func TestIntegration_Compensation_MultiStepReverseWalk_CompensationFailed(t *testing.T) {
+	const defID idutil.SafeID = "scenario5compfailed"
+
+	h := newTestHarness(t, scenario5Def(defID, errors.New("step2 compensation deliberately fails")))
+	cancel := startCoord(t, h.coord)
+	defer cancel()
+
+	inst := newInstance(t, defID, h.clk.Now())
+	driveScenario5ToTerminal(t, h, inst)
+
+	evs, err := h.j.Load(context.Background(), inst.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	assertScenario5Journal(t, evs, scenario5JournalShape{
+		step2Comp: journal.KindStepCompensationFailed,
+		step1Comp: journal.KindStepCompensated,
+		terminal:  journal.KindSagaCompensationFailed,
+	})
+	assertScenario5ForwardEmitsOnly(t, h, defID)
 }
