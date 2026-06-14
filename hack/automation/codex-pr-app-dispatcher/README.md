@@ -77,6 +77,14 @@ That means one GitHub PR information pull every 5 minutes. A normal empty poll p
 
 The long-lived router supports an immediate poll without restarting app-server. Send `SIGUSR1` to the running router process:
 
+From Codex, use the repository skill:
+
+```text
+codex-pr-dispatcher
+```
+
+From a shell, run:
+
 ```bash
 bash hack/automation/codex-pr-app-dispatcher/trigger.sh
 ```
