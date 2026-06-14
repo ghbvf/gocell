@@ -2250,44 +2250,52 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 		"success log line must not fire when the tx publish step fails")
 }
 
-// TestService_GetByID_RowScope_SelfMatch (#1709): service threads vis correctly —
-// RowScopeSelf with subject==ownID returns the user.
-func TestService_GetByID_RowScope_SelfMatch(t *testing.T) {
-	svc := newTestService(t)
-	created, err := svc.Create(adminCtxForService(), CreateInput{
-		Username: "rowscope_svc_match", Email: "svc_match@rowscope.test", Password: "pass1234",
-	})
-	require.NoError(t, err)
-
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, created.ID)
-	require.NoError(t, err)
-
-	// Self obligation: subject == user's own ID → row returned.
-	got, err := svc.GetByID(adminCtxForService(), vis, created.ID)
-	require.NoError(t, err)
-	assert.Equal(t, created.ID, got.ID,
-		"RowScopeSelf matching own id must return the user")
+// getByIDRowScopeCase describes one cell of the GetByID × RowScopeSelf matrix.
+type getByIDRowScopeCase struct {
+	name         string
+	buildSubject func(ownID string) string // returns the vis subject
+	wantFound    bool                      // true → expect user returned; false → IDOR collapse
 }
 
-// TestService_GetByID_RowScope_SelfMismatch_IDORCollapse (#1709): service threads
-// vis correctly — RowScopeSelf with subject≠ownID IDOR-collapses to
-// ErrAuthUserNotFound at the repo PEP.
-func TestService_GetByID_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
-	svc := newTestService(t)
-	created, err := svc.Create(adminCtxForService(), CreateInput{
-		Username: "rowscope_svc_victim", Email: "svc_victim@rowscope.test", Password: "pass1234",
-	})
-	require.NoError(t, err)
+// TestService_GetByID_RowScope (#1709): table-driven proof that service threads
+// RowVisibility correctly to the repo PEP for GetByID.
+func TestService_GetByID_RowScope(t *testing.T) {
+	cases := []getByIDRowScopeCase{
+		{
+			name:         "SelfMatch",
+			buildSubject: func(ownID string) string { return ownID },
+			wantFound:    true,
+		},
+		{
+			name:         "SelfMismatch_IDORCollapse",
+			buildSubject: func(ownID string) string { return "attacker-" + ownID },
+			wantFound:    false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newTestService(t)
+			created, err := svc.Create(adminCtxForService(), CreateInput{
+				Username: "rowscope_svc_" + tc.name,
+				Email:    "svc_" + tc.name + "@rowscope.test",
+				Password: "pass1234",
+			})
+			require.NoError(t, err)
 
-	otherSubject := "attacker-" + created.ID
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, otherSubject)
-	require.NoError(t, err)
+			vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, tc.buildSubject(created.ID))
+			require.NoError(t, err)
 
-	// Self obligation: subject ≠ created.ID → IDOR collapse → ErrAuthUserNotFound.
-	_, err = svc.GetByID(adminCtxForService(), vis, created.ID)
-	require.Error(t, err, "RowScopeSelf with non-matching subject must return error (IDOR collapse)")
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
-		"IDOR collapse must surface as ErrAuthUserNotFound, not a different error")
+			got, callErr := svc.GetByID(adminCtxForService(), vis, created.ID)
+			if tc.wantFound {
+				require.NoError(t, callErr, "RowScopeSelf matching own id must return the user")
+				assert.Equal(t, created.ID, got.ID)
+			} else {
+				require.Error(t, callErr, "RowScopeSelf mismatch must IDOR-collapse")
+				var ec *errcode.Error
+				require.ErrorAs(t, callErr, &ec)
+				assert.Equal(t, errcode.ErrAuthUserNotFound, ec.Code,
+					"IDOR collapse must surface as ErrAuthUserNotFound, not a different error")
+			}
+		})
+	}
 }

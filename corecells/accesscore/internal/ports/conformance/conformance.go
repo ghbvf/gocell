@@ -188,25 +188,8 @@ func RunUserRepoConformance(t *testing.T, factory UserRepoFactory, features Feat
 	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
 		conformUserInvalidTenantRejected(t, factory, features)
 	})
-	// #1709 RowVisibility obligation: GetByIDInTenant 4-scope matrix.
-	t.Run("GetByIDInTenant_RowScope_Self_Match", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeSelfMatch(t, factory)
-	})
-	t.Run("GetByIDInTenant_RowScope_Self_Mismatch_IDOR_Collapse", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeSelfMismatch(t, factory)
-	})
-	t.Run("GetByIDInTenant_RowScope_Device_Match", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeDeviceMatch(t, factory)
-	})
-	t.Run("GetByIDInTenant_RowScope_Device_Mismatch_IDOR_Collapse", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeDeviceMismatch(t, factory)
-	})
-	t.Run("GetByIDInTenant_RowScope_Tenant_NoFilter", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeTenant(t, factory)
-	})
-	t.Run("GetByIDInTenant_RowScope_All_FailClosed", func(t *testing.T) {
-		conformGetByIDInTenantRowScopeAll(t, factory)
-	})
+	// #1709 RowVisibility obligation: GetByIDInTenant 4-scope matrix (table-driven).
+	conformGetByIDInTenantRowScopeMatrix(t, factory)
 	runNarrowWriteSurfaceConformance(t, factory)
 }
 
@@ -1569,43 +1552,9 @@ func RunRoleRepoConformance(t *testing.T, factory RoleRepoFactory) {
 	t.Run("InvalidTenant_Rejected", func(t *testing.T) {
 		conformRoleInvalidTenantRejected(t, factory)
 	})
-	// #1709 RowVisibility obligation: GetByUserID + ListByUserID 4-scope matrix.
-	t.Run("GetByUserID_RowScope_Self_Match", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeSelfMatch(t, factory)
-	})
-	t.Run("GetByUserID_RowScope_Self_Mismatch_IDOR_Collapse", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeSelfMismatch(t, factory)
-	})
-	t.Run("GetByUserID_RowScope_Device_Match", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeDeviceMatch(t, factory)
-	})
-	t.Run("GetByUserID_RowScope_Device_Mismatch_IDOR_Collapse", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeDeviceMismatch(t, factory)
-	})
-	t.Run("GetByUserID_RowScope_Tenant_NoFilter", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeTenant(t, factory)
-	})
-	t.Run("GetByUserID_RowScope_All_FailClosed", func(t *testing.T) {
-		conformRoleGetByUserIDRowScopeAll(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_Self_Match", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeSelfMatch(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_Self_Mismatch_EmptyPage", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeSelfMismatch(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_Device_Match", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeDeviceMatch(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_Device_Mismatch_EmptyPage", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeDeviceMismatch(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_Tenant_NoFilter", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeTenant(t, factory)
-	})
-	t.Run("ListByUserID_RowScope_All_FailClosed", func(t *testing.T) {
-		conformRoleListByUserIDRowScopeAll(t, factory)
-	})
+	// #1709 RowVisibility obligation: GetByUserID + ListByUserID 4-scope matrices (table-driven).
+	conformRoleGetByUserIDRowScopeMatrix(t, factory)
+	conformRoleListByUserIDRowScopeMatrix(t, factory)
 }
 
 // conformRoleInvalidTenantRejected (F4): every tenant-scoped read method must
@@ -1805,431 +1754,254 @@ func rowScopeAllVisibility() tenant.RowVisibility {
 	return tenant.NewCrossTenantVisibility().Visibility()
 }
 
-// conformGetByIDInTenantRowScopeSelfMatch: Self obligation with matching subject
-// returns the user (#1709 ROWSCOPE-REPO-PARAM-FUNNEL-01).
-func conformGetByIDInTenantRowScopeSelfMatch(t *testing.T, factory UserRepoFactory) {
-	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
+// roleListParams is the standard sort used by all ListByUserID row-scope cases.
+var roleListParams = query.ListParams{
+	Limit: 50,
+	Sort: []query.SortColumn{
+		{Name: "name", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	},
+}
 
-	id := uuid.NewString()
-	u := seedActive(t, txRunner, repo, id, "rowscope_self_match_"+uuid.NewString())
-	// Self obligation: subject == seeded user's id.
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, u.ID)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Self_Match: build vis: %v", err)
-	}
-	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Self_Match: want user, got err: %v", err)
-	}
-	if got.ID != u.ID {
-		t.Errorf("GetByIDInTenant_RowScope_Self_Match: got id %q, want %q", got.ID, u.ID)
+// userGetByIDRowScopeCase describes one cell of the GetByIDInTenant × RowScope matrix.
+type userGetByIDRowScopeCase struct {
+	name string
+	// buildVis builds the RowVisibility; receives the seeded user so match cases
+	// can use u.ID as the subject.
+	buildVis    func(u *domain.User) (tenant.RowVisibility, error)
+	wantFound   bool // true → expect user returned; false → expect ErrAuthUserNotFound
+	wantNotImpl bool // true → expect KindNotImplemented (RowScopeAll)
+}
+
+// userGetByIDRowScopeCases returns the canonical 6-case RowScope matrix for
+// UserRepository.GetByIDInTenant (#1709 ROWSCOPE-REPO-PARAM-FUNNEL-01).
+// Owner column is the user PK `id`; F9 owner-col note is preserved in the Device case.
+func userGetByIDRowScopeCases() []userGetByIDRowScopeCase {
+	return []userGetByIDRowScopeCase{
+		{
+			name: "GetByIDInTenant_RowScope_Self_Match",
+			buildVis: func(u *domain.User) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeSelf, u.ID)
+			},
+			wantFound: true,
+		},
+		{
+			name: "GetByIDInTenant_RowScope_Self_Mismatch_IDOR_Collapse",
+			buildVis: func(_ *domain.User) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeSelf, uuid.NewString())
+			},
+			wantFound: false,
+		},
+		{
+			// F9: owner column for users is the PK `id`; device subject == u.ID matches.
+			name: "GetByIDInTenant_RowScope_Device_Match",
+			buildVis: func(u *domain.User) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeDevice, u.ID)
+			},
+			wantFound: true,
+		},
+		{
+			name: "GetByIDInTenant_RowScope_Device_Mismatch_IDOR_Collapse",
+			buildVis: func(_ *domain.User) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeDevice, uuid.NewString())
+			},
+			wantFound: false,
+		},
+		{
+			name: "GetByIDInTenant_RowScope_Tenant_NoFilter",
+			buildVis: func(_ *domain.User) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+			},
+			wantFound: true,
+		},
+		{
+			name: "GetByIDInTenant_RowScope_All_FailClosed",
+			buildVis: func(_ *domain.User) (tenant.RowVisibility, error) {
+				return rowScopeAllVisibility(), nil
+			},
+			wantNotImpl: true,
+		},
 	}
 }
 
-// conformGetByIDInTenantRowScopeSelfMismatch: Self obligation with non-matching
-// subject IDOR-collapses to ErrAuthUserNotFound (#1709).
-func conformGetByIDInTenantRowScopeSelfMismatch(t *testing.T, factory UserRepoFactory) {
+// assertUserRowScopeResult checks the outcome of a single GetByIDInTenant row-scope
+// sub-test. Extracted to keep conformGetByIDInTenantRowScopeMatrix within the
+// cognitive-complexity budget (≤15).
+func assertUserRowScopeResult(t *testing.T, tc userGetByIDRowScopeCase, got *domain.User, wantID string, callErr error) {
 	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "rowscope_self_mis_"+uuid.NewString())
-	otherSubject := uuid.NewString() // different from u.ID
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, otherSubject)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Self_Mismatch: build vis: %v", err)
-	}
-	_, err = repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err == nil {
-		t.Fatal("GetByIDInTenant_RowScope_Self_Mismatch: want ErrAuthUserNotFound (IDOR collapse), got nil")
-	}
-	if !isErrAuthUserNotFound(err) {
-		t.Errorf("GetByIDInTenant_RowScope_Self_Mismatch: IDOR must collapse to ErrAuthUserNotFound, got %v", err)
+	switch {
+	case tc.wantNotImpl:
+		if callErr == nil {
+			t.Fatalf("%s: want RowScopeAllUnsupportedError, got nil", tc.name)
+		}
+		if !isErrNotImplemented(callErr) {
+			t.Errorf("%s: want KindNotImplemented, got %v", tc.name, callErr)
+		}
+	case tc.wantFound:
+		if callErr != nil {
+			t.Fatalf("%s: want user, got err: %v", tc.name, callErr)
+		}
+		if got.ID != wantID {
+			t.Errorf("%s: got id %q, want %q", tc.name, got.ID, wantID)
+		}
+	default:
+		if callErr == nil {
+			t.Fatalf("%s: want ErrAuthUserNotFound (IDOR collapse), got nil", tc.name)
+		}
+		if !isErrAuthUserNotFound(callErr) {
+			t.Errorf("%s: IDOR must collapse to ErrAuthUserNotFound, got %v", tc.name, callErr)
+		}
 	}
 }
 
-// conformGetByIDInTenantRowScopeDeviceMatch: Device obligation with matching
-// subject returns the user. The user owner column is the PK `id`, so the
-// device subject is set to the seeded u.ID so the owner predicate matches —
-// not a vacuous pass if the owner column semantics change.
-func conformGetByIDInTenantRowScopeDeviceMatch(t *testing.T, factory UserRepoFactory) {
+// conformGetByIDInTenantRowScopeMatrix runs the complete 6-case RowScope matrix for
+// UserRepository.GetByIDInTenant (#1709 ROWSCOPE-REPO-PARAM-FUNNEL-01).
+func conformGetByIDInTenantRowScopeMatrix(t *testing.T, factory UserRepoFactory) {
 	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "rowscope_dev_match_"+uuid.NewString())
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, u.ID)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Device_Match: build vis: %v", err)
-	}
-	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Device_Match: want user, got err: %v", err)
-	}
-	if got.ID != u.ID {
-		t.Errorf("GetByIDInTenant_RowScope_Device_Match: got id %q, want %q", got.ID, u.ID)
-	}
-}
-
-// conformGetByIDInTenantRowScopeDeviceMismatch: Device obligation with
-// non-matching subject IDOR-collapses to ErrAuthUserNotFound.
-func conformGetByIDInTenantRowScopeDeviceMismatch(t *testing.T, factory UserRepoFactory) {
-	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "rowscope_dev_mis_"+uuid.NewString())
-	otherDevice := uuid.NewString()
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, otherDevice)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Device_Mismatch: build vis: %v", err)
-	}
-	_, err = repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err == nil {
-		t.Fatal("GetByIDInTenant_RowScope_Device_Mismatch: want ErrAuthUserNotFound (IDOR collapse), got nil")
-	}
-	if !isErrAuthUserNotFound(err) {
-		t.Errorf("GetByIDInTenant_RowScope_Device_Mismatch: IDOR must collapse to ErrAuthUserNotFound, got %v", err)
-	}
-}
-
-// conformGetByIDInTenantRowScopeTenant: Tenant scope (no owner filter) returns
-// any row in the tenant regardless of subject.
-func conformGetByIDInTenantRowScopeTenant(t *testing.T, factory UserRepoFactory) {
-	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "rowscope_tenant_"+uuid.NewString())
-	// RowScopeTenant requires empty subject.
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Tenant: build vis: %v", err)
-	}
-	got, err := repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err != nil {
-		t.Fatalf("GetByIDInTenant_RowScope_Tenant: want user, got err: %v", err)
-	}
-	if got.ID != u.ID {
-		t.Errorf("GetByIDInTenant_RowScope_Tenant: got id %q, want %q", got.ID, u.ID)
-	}
-}
-
-// conformGetByIDInTenantRowScopeAll: RowScopeAll fail-closes with
-// ports.RowScopeAllUnsupportedError (KindNotImplemented) — accesscore has no
-// cross-tenant admin pool (#1709).
-func conformGetByIDInTenantRowScopeAll(t *testing.T, factory UserRepoFactory) {
-	t.Helper()
-	repo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	u := seedActive(t, txRunner, repo, uuid.NewString(), "rowscope_all_"+uuid.NewString())
-	vis := rowScopeAllVisibility()
-	_, err := repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
-	if err == nil {
-		t.Fatal("GetByIDInTenant_RowScope_All: want RowScopeAllUnsupportedError, got nil")
-	}
-	if !isErrNotImplemented(err) {
-		t.Errorf("GetByIDInTenant_RowScope_All: want KindNotImplemented, got %v", err)
+	for _, tc := range userGetByIDRowScopeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, txRunner, cleanup := factory(t)
+			t.Cleanup(cleanup)
+			u := seedActive(t, txRunner, repo, uuid.NewString(), "rsmat_"+uuid.NewString())
+			vis, err := tc.buildVis(u)
+			if err != nil {
+				t.Fatalf("%s: build vis: %v", tc.name, err)
+			}
+			got, callErr := repo.GetByIDInTenant(context.Background(), testTenantID, vis, u.ID)
+			assertUserRowScopeResult(t, tc, got, u.ID, callErr)
+		})
 	}
 }
 
 // ─── RoleRepo RowVisibility conformance ───────────────────────────────────────
 
-// conformRoleGetByUserIDRowScopeSelfMatch: Self obligation with matching subject
-// returns the user's roles.
-func conformRoleGetByUserIDRowScopeSelfMatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
+// roleRowScopeCase is a shared case descriptor for GetByUserID and ListByUserID
+// RowScope matrices (#1709). Both methods share the same 6-case scope × outcome
+// pattern; the method under test is the only difference.
+type roleRowScopeCase struct {
+	// name is the t.Run sub-test name. Callers must set a method-specific prefix
+	// (e.g. "GetByUserID_" vs "ListByUserID_") on the fixed scope suffixes.
+	name        string
+	buildVis    func(userID string) (tenant.RowVisibility, error)
+	wantRoles   bool // true → expect ≥1 role; false → expect empty slice/page
+	wantNotImpl bool // true → expect KindNotImplemented (RowScopeAll)
+}
 
-	roleID := "rowscope_self_match_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Self_Match: build vis: %v", err)
-	}
-	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Self_Match: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("GetByUserID_RowScope_Self_Match: want ≥1 role, got 0")
+// roleRowScopeCases returns the canonical 6-case RowScope matrix shared by
+// GetByUserID and ListByUserID (#1709). Owner column is role_assignments.user_id.
+// F9: device subject == userID matches the owner predicate.
+func roleRowScopeCases(prefix string) []roleRowScopeCase {
+	return []roleRowScopeCase{
+		{
+			name: prefix + "_Self_Match",
+			buildVis: func(userID string) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeSelf, userID)
+			},
+			wantRoles: true,
+		},
+		{
+			name: prefix + "_Self_Mismatch_IDOR_Collapse",
+			buildVis: func(_ string) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeSelf, uuid.NewString())
+			},
+		},
+		{
+			// F9: owner column is role_assignments.user_id; device subject == userID matches.
+			name: prefix + "_Device_Match",
+			buildVis: func(userID string) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeDevice, userID)
+			},
+			wantRoles: true,
+		},
+		{
+			name: prefix + "_Device_Mismatch_IDOR_Collapse",
+			buildVis: func(_ string) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeDevice, uuid.NewString())
+			},
+		},
+		{
+			name: prefix + "_Tenant_NoFilter",
+			buildVis: func(_ string) (tenant.RowVisibility, error) {
+				return tenant.NewRowVisibility(tenant.RowScopeTenant, "")
+			},
+			wantRoles: true,
+		},
+		{
+			name: prefix + "_All_FailClosed",
+			buildVis: func(_ string) (tenant.RowVisibility, error) {
+				return rowScopeAllVisibility(), nil
+			},
+			wantNotImpl: true,
+		},
 	}
 }
 
-// conformRoleGetByUserIDRowScopeSelfMismatch: Self obligation with non-matching
-// subject IDOR-collapses to empty slice.
-func conformRoleGetByUserIDRowScopeSelfMismatch(t *testing.T, factory RoleRepoFactory) {
+// assertRoleRowScopeResult checks the outcome of a single role repo row-scope
+// sub-test. Extracted so both matrix runners share the assertion logic and stay
+// within the cognitive-complexity budget (≤15).
+func assertRoleRowScopeResult(t *testing.T, tc roleRowScopeCase, got []*domain.Role, callErr error) {
 	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "rowscope_self_mis_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	otherSubject := uuid.NewString() // different from seeded userID
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, otherSubject)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Self_Mismatch: build vis: %v", err)
-	}
-	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Self_Mismatch: want empty result (no error), got err: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("GetByUserID_RowScope_Self_Mismatch: IDOR must collapse to empty slice, got %d roles", len(got))
+	switch {
+	case tc.wantNotImpl:
+		if callErr == nil {
+			t.Fatalf("%s: want RowScopeAllUnsupportedError, got nil", tc.name)
+		}
+		if !isErrNotImplemented(callErr) {
+			t.Errorf("%s: want KindNotImplemented, got %v", tc.name, callErr)
+		}
+	case tc.wantRoles:
+		if callErr != nil {
+			t.Fatalf("%s: want roles, got err: %v", tc.name, callErr)
+		}
+		if len(got) == 0 {
+			t.Errorf("%s: want ≥1 role, got 0", tc.name)
+		}
+	default:
+		if callErr != nil {
+			t.Fatalf("%s: want empty result (no error), got err: %v", tc.name, callErr)
+		}
+		if len(got) != 0 {
+			t.Errorf("%s: IDOR must collapse to empty slice/page, got %d roles", tc.name, len(got))
+		}
 	}
 }
 
-// conformRoleGetByUserIDRowScopeTenant: Tenant scope returns the user's roles
-// without any subject filter.
-func conformRoleGetByUserIDRowScopeTenant(t *testing.T, factory RoleRepoFactory) {
+// conformRoleGetByUserIDRowScopeMatrix runs the complete 6-case RowScope matrix for
+// RoleRepository.GetByUserID (#1709). Owner column is role_assignments.user_id.
+func conformRoleGetByUserIDRowScopeMatrix(t *testing.T, factory RoleRepoFactory) {
 	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "rowscope_tenant_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Tenant: build vis: %v", err)
-	}
-	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Tenant: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("GetByUserID_RowScope_Tenant: want ≥1 role, got 0")
+	for _, tc := range roleRowScopeCases("GetByUserID_RowScope") {
+		t.Run(tc.name, func(t *testing.T) {
+			roleRepo, userRepo, txRunner, cleanup := factory(t)
+			t.Cleanup(cleanup)
+			roleID := "rsgbuid_" + uuid.NewString()
+			userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+			vis, err := tc.buildVis(userID)
+			if err != nil {
+				t.Fatalf("%s: build vis: %v", tc.name, err)
+			}
+			got, callErr := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
+			assertRoleRowScopeResult(t, tc, got, callErr)
+		})
 	}
 }
 
-// conformRoleGetByUserIDRowScopeAll: RowScopeAll fail-closes with
-// RowScopeAllUnsupportedError (KindNotImplemented).
-func conformRoleGetByUserIDRowScopeAll(t *testing.T, factory RoleRepoFactory) {
+// conformRoleListByUserIDRowScopeMatrix runs the complete 6-case RowScope matrix for
+// RoleRepository.ListByUserID (#1709). Owner column is role_assignments.user_id.
+func conformRoleListByUserIDRowScopeMatrix(t *testing.T, factory RoleRepoFactory) {
 	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "rowscope_all_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis := rowScopeAllVisibility()
-	_, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err == nil {
-		t.Fatal("GetByUserID_RowScope_All: want RowScopeAllUnsupportedError, got nil")
-	}
-	if !isErrNotImplemented(err) {
-		t.Errorf("GetByUserID_RowScope_All: want KindNotImplemented, got %v", err)
-	}
-}
-
-// conformRoleListByUserIDRowScopeSelfMatch: Self obligation with matching subject
-// returns the user's roles as a page.
-func conformRoleListByUserIDRowScopeSelfMatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_self_match_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, userID)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Self_Match: build vis: %v", err)
-	}
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Self_Match: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("ListByUserID_RowScope_Self_Match: want ≥1 role, got 0")
-	}
-}
-
-// conformRoleListByUserIDRowScopeSelfMismatch: Self obligation with non-matching
-// subject IDOR-collapses to empty page.
-//
-//nolint:dupl // mirrors conformRoleListByUserIDRowScopeDeviceMismatch; typed scope difference (Self vs Device) is the point of the test
-func conformRoleListByUserIDRowScopeSelfMismatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_self_mis_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	otherSubject := uuid.NewString()
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, otherSubject)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Self_Mismatch: build vis: %v", err)
-	}
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Self_Mismatch: want empty page (no error), got err: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("ListByUserID_RowScope_Self_Mismatch: IDOR must collapse to empty page, got %d roles", len(got))
-	}
-}
-
-// conformRoleListByUserIDRowScopeTenant: Tenant scope returns the user's roles
-// as a page with no subject filter.
-func conformRoleListByUserIDRowScopeTenant(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_tenant_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeTenant, "")
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Tenant: build vis: %v", err)
-	}
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Tenant: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("ListByUserID_RowScope_Tenant: want ≥1 role, got 0")
-	}
-}
-
-// conformRoleListByUserIDRowScopeAll: RowScopeAll fail-closes with
-// RowScopeAllUnsupportedError (KindNotImplemented).
-func conformRoleListByUserIDRowScopeAll(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_all_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	vis := rowScopeAllVisibility()
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	_, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err == nil {
-		t.Fatal("ListByUserID_RowScope_All: want RowScopeAllUnsupportedError, got nil")
-	}
-	if !isErrNotImplemented(err) {
-		t.Errorf("ListByUserID_RowScope_All: want KindNotImplemented, got %v", err)
-	}
-}
-
-// conformRoleGetByUserIDRowScopeDeviceMatch: Device obligation with matching
-// subject returns the user's roles (#1709 — mirrors Self_Match but for RowScopeDevice).
-// The owner column is role_assignments.user_id, so the device subject is set to
-// the seeded userID so the owner predicate matches.
-func conformRoleGetByUserIDRowScopeDeviceMatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "rowscope_dev_match_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	// Device obligation: subject == seeded userID → owner predicate matches.
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Device_Match: build vis: %v", err)
-	}
-	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Device_Match: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("GetByUserID_RowScope_Device_Match: want ≥1 role, got 0")
-	}
-}
-
-// conformRoleGetByUserIDRowScopeDeviceMismatch: Device obligation with non-matching
-// subject IDOR-collapses to an empty slice (#1709 — mirrors Self_Mismatch for Device).
-func conformRoleGetByUserIDRowScopeDeviceMismatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "rowscope_dev_mis_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	otherDevice := uuid.NewString() // different from seeded userID
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, otherDevice)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Device_Mismatch: build vis: %v", err)
-	}
-	got, err := roleRepo.GetByUserID(context.Background(), testTenantID, vis, userID)
-	if err != nil {
-		t.Fatalf("GetByUserID_RowScope_Device_Mismatch: want empty result (no error), got err: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("GetByUserID_RowScope_Device_Mismatch: IDOR must collapse to empty slice, got %d roles", len(got))
-	}
-}
-
-// conformRoleListByUserIDRowScopeDeviceMatch: Device obligation with matching
-// subject returns the user's roles as a page (#1709 — mirrors Self_Match for Device).
-// The owner column is role_assignments.user_id; device subject == seeded userID so
-// the owner predicate matches and the assignment is returned.
-func conformRoleListByUserIDRowScopeDeviceMatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_dev_match_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	// Device obligation: subject == seeded userID → owner predicate matches.
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, userID)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Device_Match: build vis: %v", err)
-	}
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Device_Match: want roles, got err: %v", err)
-	}
-	if len(got) == 0 {
-		t.Error("ListByUserID_RowScope_Device_Match: want ≥1 role, got 0")
-	}
-}
-
-// conformRoleListByUserIDRowScopeDeviceMismatch: Device obligation with non-matching
-// subject IDOR-collapses to an empty page (#1709 — mirrors Self_Mismatch for Device).
-//
-//nolint:dupl // mirrors conformRoleListByUserIDRowScopeSelfMismatch; typed scope difference (Device vs Self) is the point of the test
-func conformRoleListByUserIDRowScopeDeviceMismatch(t *testing.T, factory RoleRepoFactory) {
-	t.Helper()
-	roleRepo, userRepo, txRunner, cleanup := factory(t)
-	t.Cleanup(cleanup)
-
-	roleID := "list_rowscope_dev_mis_" + uuid.NewString()
-	userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
-	otherDevice := uuid.NewString()
-	vis, err := tenant.NewRowVisibility(tenant.RowScopeDevice, otherDevice)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Device_Mismatch: build vis: %v", err)
-	}
-	params := query.ListParams{Limit: 50, Sort: []query.SortColumn{
-		{Name: "name", Direction: query.SortASC},
-		{Name: "id", Direction: query.SortASC},
-	}}
-	got, err := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, params)
-	if err != nil {
-		t.Fatalf("ListByUserID_RowScope_Device_Mismatch: want empty page (no error), got err: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("ListByUserID_RowScope_Device_Mismatch: IDOR must collapse to empty page, got %d roles", len(got))
+	for _, tc := range roleRowScopeCases("ListByUserID_RowScope") {
+		t.Run(tc.name, func(t *testing.T) {
+			roleRepo, userRepo, txRunner, cleanup := factory(t)
+			t.Cleanup(cleanup)
+			roleID := "rslbuid_" + uuid.NewString()
+			userID := seedRoleAssignment(t, roleRepo, userRepo, txRunner, testTenantID, roleID)
+			vis, err := tc.buildVis(userID)
+			if err != nil {
+				t.Fatalf("%s: build vis: %v", tc.name, err)
+			}
+			got, callErr := roleRepo.ListByUserID(context.Background(), testTenantID, vis, userID, roleListParams)
+			assertRoleRowScopeResult(t, tc, got, callErr)
+		})
 	}
 }

@@ -72,188 +72,147 @@ func setupRowScopeRbac(t *testing.T, userID, roleID string) http.Handler {
 // uniqueRoleID returns a unique role id string safe for test isolation.
 func uniqueRoleID() string { return "rs-role-" + uuid.NewString()[:8] }
 
-// TestHandler_ListRoles_RowScope_SelfMatch: normal user listing OWN id
-// (subject==id, RowScopeSelf) → 200 with the seeded role.
-func TestHandler_ListRoles_RowScope_SelfMatch(t *testing.T) {
-	userID := testutil.TestID("rs-list-self-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, userID, roleID)
+// rbacRowScopeCase describes one scenario for a single RBAC endpoint × RowScope test.
+type rbacRowScopeCase struct {
+	name string
+	// buildPrincipalID returns the auth-context subject for this scenario.
+	// It receives the targetUserID so self-match cases can use it directly.
+	buildPrincipalID func(targetUserID string) string
+	buildRoles       func() []string
+	wantStatus       int
+}
 
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+userID, nil)
-	ctx := withAllowAuthorizer(testAuthContext(userID, nil))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"RowScopeSelf matching own id must return 200")
-	var resp struct {
-		Data []json.RawMessage `json:"data"`
+// listRolesRowScopeCases defines the 4 RowScope scenarios for GET /roles/{userID}.
+func listRolesRowScopeCases() []rbacRowScopeCase {
+	return []rbacRowScopeCase{
+		{
+			name:             "SelfMatch",
+			buildPrincipalID: func(targetID string) string { return targetID },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "SelfMismatch_IDORCollapse",
+			buildPrincipalID: func(_ string) string { return testutil.TestID("rs-list-attacker-" + uuid.NewString()[:8]) },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "Admin_CrossUser",
+			buildPrincipalID: func(_ string) string { return "admin-rs" },
+			buildRoles:       func() []string { return []string{auth.RoleAdmin} },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "SuperAdmin_FailClosed",
+			buildPrincipalID: func(_ string) string { return "superadmin-rs" },
+			buildRoles:       func() []string { return []string{auth.RoleSuperAdmin} },
+			wantStatus:       http.StatusNotImplemented,
+		},
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp.Data, "must return the seeded role")
 }
 
-// TestHandler_ListRoles_RowScope_SelfMismatch_IDORCollapse: normal user listing
-// ANOTHER user's id (subject≠id, RowScopeSelf) → 200 but empty list (IDOR collapse).
-func TestHandler_ListRoles_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
-	victimID := testutil.TestID("rs-list-victim-" + uuid.NewString()[:8])
-	attackerID := testutil.TestID("rs-list-attacker-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, victimID, roleID)
+// TestHandler_ListRoles_RowScope runs all 4 RowScope scenarios for GET /roles/{userID}
+// in a single table-driven test (#1709).
+func TestHandler_ListRoles_RowScope(t *testing.T) {
+	for _, tc := range listRolesRowScopeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			targetID := testutil.TestID("rs-list-" + uuid.NewString()[:8])
+			roleID := uniqueRoleID()
+			r := setupRowScopeRbac(t, targetID, roleID)
 
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+victimID, nil)
-	// attacker (subject≠victimID) → RowScopeSelf mismatch → IDOR collapse to empty.
-	ctx := withAllowAuthorizer(testAuthContext(attackerID, nil))
-	req = req.WithContext(ctx)
+			req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID, nil)
+			var roles []string
+			if tc.buildRoles != nil {
+				roles = tc.buildRoles()
+			}
+			ctx := withAllowAuthorizer(testAuthContext(tc.buildPrincipalID(targetID), roles))
+			req = req.WithContext(ctx)
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code,
-		"RowScopeSelf mismatch must return 200 (not 403/404) with empty data")
-	var resp struct {
-		Data []json.RawMessage `json:"data"`
+			assert.Equal(t, tc.wantStatus, w.Code, "unexpected status for case %s", tc.name)
+			if tc.wantStatus == http.StatusOK {
+				var resp struct {
+					Data []json.RawMessage `json:"data"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				switch tc.name {
+				case "SelfMatch", "Admin_CrossUser":
+					assert.NotEmpty(t, resp.Data, "case %s: must return the seeded role", tc.name)
+				case "SelfMismatch_IDORCollapse":
+					assert.Empty(t, resp.Data,
+						"RowScopeSelf mismatch must IDOR-collapse to empty list")
+				}
+			}
+		})
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Empty(t, resp.Data,
-		"RowScopeSelf mismatch must IDOR-collapse to empty list, not expose victim's roles")
 }
 
-// TestHandler_ListRoles_RowScope_Admin_CrossUser: admin principal (RowScopeTenant)
-// can list any user's roles → 200 with roles present.
-func TestHandler_ListRoles_RowScope_Admin_CrossUser(t *testing.T) {
-	targetID := testutil.TestID("rs-list-target-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, targetID, roleID)
-
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID, nil)
-	// admin → RowScopeTenant → no owner filter → roles returned.
-	ctx := withAllowAuthorizer(testAuthContext("admin-rs", []string{auth.RoleAdmin}))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"admin (RowScopeTenant) reading another user's roles must return 200")
-	var resp struct {
-		Data []json.RawMessage `json:"data"`
+// checkRoleRowScopeCases defines the 4 RowScope scenarios for GET /roles/{userID}/{roleName}.
+func checkRoleRowScopeCases() []rbacRowScopeCase {
+	return []rbacRowScopeCase{
+		{
+			name:             "SelfMatch",
+			buildPrincipalID: func(targetID string) string { return targetID },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "SelfMismatch_IDORCollapse",
+			buildPrincipalID: func(_ string) string { return testutil.TestID("rs-check-attacker-" + uuid.NewString()[:8]) },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "Admin_CrossUser",
+			buildPrincipalID: func(_ string) string { return "admin-check-rs" },
+			buildRoles:       func() []string { return []string{auth.RoleAdmin} },
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name:             "SuperAdmin_FailClosed",
+			buildPrincipalID: func(_ string) string { return "superadmin-check-rs" },
+			buildRoles:       func() []string { return []string{auth.RoleSuperAdmin} },
+			wantStatus:       http.StatusNotImplemented,
+		},
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp.Data,
-		"admin (RowScopeTenant) must receive the seeded role, not an empty list")
 }
 
-// TestHandler_ListRoles_RowScope_SuperAdmin_FailClosed: super-admin derives
-// RowScopeAll which is unsupported → 501.
-func TestHandler_ListRoles_RowScope_SuperAdmin_FailClosed(t *testing.T) {
-	targetID := testutil.TestID("rs-list-sa-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, targetID, roleID)
+// TestHandler_CheckRole_RowScope runs all 4 RowScope scenarios for GET /roles/{userID}/{roleName}
+// in a single table-driven test (#1709).
+func TestHandler_CheckRole_RowScope(t *testing.T) {
+	for _, tc := range checkRoleRowScopeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			targetID := testutil.TestID("rs-check-" + uuid.NewString()[:8])
+			roleID := uniqueRoleID()
+			r := setupRowScopeRbac(t, targetID, roleID)
 
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID, nil)
-	ctx := withAllowAuthorizer(testAuthContext("superadmin-rs", []string{auth.RoleSuperAdmin}))
-	req = req.WithContext(ctx)
+			req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID+"/"+roleID, nil)
+			var roles []string
+			if tc.buildRoles != nil {
+				roles = tc.buildRoles()
+			}
+			ctx := withAllowAuthorizer(testAuthContext(tc.buildPrincipalID(targetID), roles))
+			req = req.WithContext(ctx)
 
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotImplemented, w.Code,
-		"super-admin (RowScopeAll) must fail-closed with 501 on accesscore role list")
-}
-
-// TestHandler_CheckRole_RowScope_SelfMatch: normal user checking own role
-// (subject==id, RowScopeSelf) → 200 hasRole=true.
-func TestHandler_CheckRole_RowScope_SelfMatch(t *testing.T) {
-	userID := testutil.TestID("rs-check-self-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, userID, roleID)
-
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+userID+"/"+roleID, nil)
-	ctx := withAllowAuthorizer(testAuthContext(userID, nil))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Data struct {
-			HasRole bool `json:"hasRole"`
-		} `json:"data"`
+			assert.Equal(t, tc.wantStatus, w.Code, "unexpected status for case %s", tc.name)
+			if tc.wantStatus == http.StatusOK {
+				var resp struct {
+					Data struct {
+						HasRole bool `json:"hasRole"`
+					} `json:"data"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				switch tc.name {
+				case "SelfMatch", "Admin_CrossUser":
+					assert.True(t, resp.Data.HasRole,
+						"case %s: must see the seeded role", tc.name)
+				case "SelfMismatch_IDORCollapse":
+					assert.False(t, resp.Data.HasRole,
+						"RowScopeSelf mismatch must IDOR-collapse: attacker must not see victim's role")
+				}
+			}
+		})
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, resp.Data.HasRole,
-		"RowScopeSelf matching own id must return hasRole=true for the seeded role")
-}
-
-// TestHandler_CheckRole_RowScope_SelfMismatch_IDORCollapse: attacker checking
-// victim's role (subject≠id, RowScopeSelf) → 200 hasRole=false (IDOR collapse).
-func TestHandler_CheckRole_RowScope_SelfMismatch_IDORCollapse(t *testing.T) {
-	victimID := testutil.TestID("rs-check-victim-" + uuid.NewString()[:8])
-	attackerID := testutil.TestID("rs-check-attacker-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, victimID, roleID)
-
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+victimID+"/"+roleID, nil)
-	ctx := withAllowAuthorizer(testAuthContext(attackerID, nil))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Data struct {
-			HasRole bool `json:"hasRole"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.False(t, resp.Data.HasRole,
-		"RowScopeSelf mismatch must IDOR-collapse: attacker must not see victim's role")
-}
-
-// TestHandler_CheckRole_RowScope_Admin_CrossUser: admin (RowScopeTenant) can
-// check another user's role → 200 hasRole=true.
-func TestHandler_CheckRole_RowScope_Admin_CrossUser(t *testing.T) {
-	targetID := testutil.TestID("rs-check-target-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, targetID, roleID)
-
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID+"/"+roleID, nil)
-	ctx := withAllowAuthorizer(testAuthContext("admin-check-rs", []string{auth.RoleAdmin}))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp struct {
-		Data struct {
-			HasRole bool `json:"hasRole"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(t, resp.Data.HasRole,
-		"admin (RowScopeTenant) must see the seeded role for any user in tenant")
-}
-
-// TestHandler_CheckRole_RowScope_SuperAdmin_FailClosed: super-admin derives
-// RowScopeAll → 501.
-func TestHandler_CheckRole_RowScope_SuperAdmin_FailClosed(t *testing.T) {
-	targetID := testutil.TestID("rs-check-sa-" + uuid.NewString()[:8])
-	roleID := uniqueRoleID()
-	r := setupRowScopeRbac(t, targetID, roleID)
-
-	req := httptest.NewRequest(http.MethodGet, rbacRolesPrefix+"/"+targetID+"/"+roleID, nil)
-	ctx := withAllowAuthorizer(testAuthContext("superadmin-check-rs", []string{auth.RoleSuperAdmin}))
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotImplemented, w.Code,
-		"super-admin (RowScopeAll) must fail-closed with 501 on accesscore role check")
 }
