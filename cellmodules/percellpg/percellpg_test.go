@@ -2,6 +2,7 @@ package percellpg
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +219,36 @@ func TestResolve_MemoryTopology(t *testing.T) {
 	}
 	if len(deps.Resources) != 0 {
 		t.Errorf("Resolve(memory): Resources must be empty, got %d", len(deps.Resources))
+	}
+}
+
+// TestResolve_OpenPoolError verifies that a pool-open failure (unreachable DB,
+// bad credentials) surfaces as a wrapped fail-closed error and no partial Deps —
+// not a silent degrade. NOT parallel: it mutates the package-level newPool seam.
+//
+// The success path (open → verifyPGPreconditions → wrap into capability.PGProvider)
+// requires a live postgres (adapterpg.NewPool pings eagerly; *adapterpg.Pool cannot
+// be faked), so it is covered by the real-PG integration test
+// cmd/corebundle/corebundle_pg_env_integration_test.go — the same coverage the
+// relocated verify* helpers had while they lived in cap_wiring.go.
+func TestResolve_OpenPoolError(t *testing.T) {
+	orig := newPool
+	t.Cleanup(func() { newPool = orig })
+	wantErr := errors.New("dial tcp 127.0.0.1:1: connection refused")
+	newPool = func(_ context.Context, _ adapterpg.Config) (*adapterpg.Pool, error) {
+		return nil, wantErr
+	}
+
+	topo := mkTopo(t, "real", "postgres", true)
+	cfg := Config{Cells: map[string]adapterpg.Config{"configcore": {DSN: "postgres://host/db"}}}
+	deps, err := Resolve(context.Background(), newClk(), topo, cfg)
+	if err == nil {
+		t.Fatal("Resolve(open error) = nil error, want wrapped fail-closed error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("error = %v, want it to wrap %v", err, wantErr)
+	}
+	if deps.Provider != nil || len(deps.Resources) != 0 {
+		t.Error("Resolve(open error): Deps must be zero-valued, no partial wiring")
 	}
 }
