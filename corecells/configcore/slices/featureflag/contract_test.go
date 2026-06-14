@@ -108,21 +108,21 @@ func TestFeatureFlag_Anonymous_Returns401(t *testing.T) {
 	handler, _ := setupHandler()
 
 	endpoints := []struct {
-		name       string
-		contractID string
-		method     string
-		path       string
+		name   string
+		c      *contracttest.Contract
+		method string
+		path   string
 	}{
-		{"list", "http.config.flags.list.v1", http.MethodGet, flagsBasePath + "/"},
-		{"get", "http.config.flags.get.v1", http.MethodGet, flagsBasePath + "/some-key"},
-		{"evaluate", "http.config.flags.evaluate.v1", http.MethodPost, flagsBasePath + "/some-key/evaluate"},
+		{"list", contracttest.LoadByID(t, root, "http.config.flags.list.v1"), http.MethodGet, flagsBasePath + "/"},
+		{"get", contracttest.LoadByID(t, root, "http.config.flags.get.v1"), http.MethodGet, flagsBasePath + "/some-key"},
+		{"evaluate", contracttest.LoadByID(t, root, "http.config.flags.evaluate.v1"), http.MethodPost, flagsBasePath + "/some-key/evaluate"},
 	}
 
 	for _, ep := range endpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			c := contracttest.LoadByID(t, root, ep.contractID)
+			c := ep.c
 			_, has401 := c.HTTP.Responses[401]
-			assert.True(t, has401, "%s must declare 401 in contract.yaml", ep.contractID)
+			assert.True(t, has401, "%s must declare 401 in contract.yaml", c.ID)
 
 			rec := httptest.NewRecorder()
 			// No principal injected — anonymous request.

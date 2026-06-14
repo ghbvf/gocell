@@ -25,6 +25,7 @@ endpoints:
       responses:
         - 503
     noContent: false
+    responseProjection: true
     responses:
       400:
         description: "Bad request — invalid cursor or limit parameter"
