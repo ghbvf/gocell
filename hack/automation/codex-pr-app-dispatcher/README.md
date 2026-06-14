@@ -39,6 +39,8 @@ export GOCELL_APP_ROUTER_REPO_ROOT="/Users/shengming/Documents/code/gocell"
 export GOCELL_APP_ROUTER_HOME="${HOME}/.local/gocell-pr-app-router"
 export GOCELL_APP_ROUTER_INTERVAL=600
 export GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS=1800
+export GOCELL_APP_ROUTER_GH_TIMEOUT=30
+export GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT=30
 export GOCELL_APP_ROUTER_REPO="ghbvf/gocell"
 export CODEX_BIN="codex"
 export GH_BIN="gh"
@@ -286,7 +288,21 @@ Per candidate:
 - Author must be in `GOCELL_APP_ROUTER_AUTHORS`.
 - Same poll uses a per-PR lock.
 - A PR with both trigger labels is skipped and logged as an error condition.
-- Live head SHA is checked immediately before dispatch.
+- Live head SHA, draft state, and trigger labels are checked immediately before dispatch.
+- If the trigger label disappeared, the PR became draft, or the opposite trigger label appeared between list and dispatch, the PR is skipped.
+
+## Runtime Recovery
+
+External calls are bounded:
+
+```bash
+export GOCELL_APP_ROUTER_GH_TIMEOUT=30
+export GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT=30
+```
+
+If `gh` hangs or fails, only that poll/candidate fails and the daemon keeps running. If app-server closes stdin/stdout, exits, or misses the request deadline before `turn/start` succeeds, the router tears down that app-server child, waits a short backoff, starts a fresh one, and continues polling.
+
+Per-PR lock directories with a missing or malformed `pid` file are treated as stale and reclaimed.
 
 ## App-Server Calls
 
@@ -317,6 +333,7 @@ Use this today:
 - Router logs:
   - `$GOCELL_APP_ROUTER_HOME/logs/router.log`
   - `$GOCELL_APP_ROUTER_HOME/logs/router.err.log`
+  - These paths are produced by LaunchAgent or another supervisor redirecting stdout/stderr. When running `router.py` directly, use that terminal output.
 - Dispatch ledger:
   - `$GOCELL_APP_ROUTER_HOME/state/dispatched`
 - PR truth:

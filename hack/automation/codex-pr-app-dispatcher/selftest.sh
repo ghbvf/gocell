@@ -84,7 +84,25 @@ if args[:2] == ["pr", "view"]:
     pr = args[2]
     with open(oid_file, encoding="utf-8") as fh:
         oid_map = json.load(fh)
-    print(oid_map.get(pr, ""))
+    if "--jq" in args:
+        print(oid_map.get(pr, ""))
+        sys.exit(0)
+    labels = []
+    is_draft = False
+    for src, label in (
+        (review_file, "pr-status/needs-review-again"),
+        (check_file, "pr-status/needs-check-fix"),
+    ):
+        with open(src, encoding="utf-8") as fh:
+            for item in json.load(fh):
+                if str(item.get("number")) == pr:
+                    labels.append({"name": label})
+                    is_draft = bool(item.get("isDraft", False))
+    print(json.dumps({
+        "headRefOid": oid_map.get(pr, ""),
+        "isDraft": is_draft,
+        "labels": labels,
+    }))
     sys.exit(0)
 
 print("unexpected gh args: " + " ".join(args), file=sys.stderr)
@@ -145,6 +163,8 @@ run_router() {
         GOCELL_APP_ROUTER_REPO="ghbvf/gocell" \
         GOCELL_APP_ROUTER_AUTHORS="alice bot" \
         GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS="${ROUTER_COOLDOWN:-1800}" \
+        GOCELL_APP_ROUTER_GH_TIMEOUT=5 \
+        GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT=5 \
         CODEX_BIN="${STUB_BIN}/codex" \
         GH_BIN="${STUB_BIN}/gh" \
         GH_REVIEW_LIST_FILE="${REVIEW_LIST}" \
@@ -211,6 +231,13 @@ write_json "${OID_MAP}" '{"3":"'"${OID3}"'"}'
 run_router
 rm -f "${CODEX_FAIL_FLAG}"
 assert_not_contains "S4-no-ledger-on-failure" "${ROUTER_HOME}/state/dispatched" "3@${OID3}:review"
+
+echo ""
+echo "=== Scenario 4b: pidless lock is reclaimed ==="
+mkdir -p "${ROUTER_HOME}/locks/3.lock"
+run_router
+assert_line_count "S4b-one-extra-turn" "${CALLS_LOG}" "turn/start" "4"
+assert_contains "S4b-ledger-after-lock-reclaim" "${ROUTER_HOME}/state/dispatched" "3@${OID3}:review"
 
 echo ""
 echo "=== Scenario 5: conflicting labels skip dispatch ==="

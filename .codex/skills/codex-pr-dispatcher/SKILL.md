@@ -16,7 +16,7 @@ Run:
 bash hack/automation/codex-pr-app-dispatcher/trigger.sh
 ```
 
-Then confirm from the router log:
+Then confirm from the router log when the dispatcher runs under LaunchAgent or another supervisor that redirects stdout:
 
 ```bash
 tail -30 "${GOCELL_APP_ROUTER_HOME:-$HOME/.local/gocell-pr-app-router}/logs/router.log"
@@ -27,5 +27,7 @@ Expected signal:
 ```text
 active poll trigger received
 ```
+
+When running `router.py` directly, confirm from that terminal's stdout instead.
 
 This only wakes one `poll_once`. It must not wait for `turn/completed`, inspect Codex session results, or move PR labels directly.

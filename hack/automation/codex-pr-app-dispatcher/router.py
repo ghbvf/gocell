@@ -17,6 +17,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -30,10 +31,15 @@ from typing import Any
 REVIEW_LABEL = "pr-status/needs-review-again"
 CHECK_LABEL = "pr-status/needs-check-fix"
 REPO_DEFAULT = "ghbvf/gocell"
+ACTIVE_CONFIG: Config | None = None
 
 
 class DispatchError(Exception):
     """A recoverable per-PR dispatch failure."""
+
+
+class AppServerUnavailable(DispatchError):
+    """The app-server connection must be recreated before dispatch can continue."""
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,8 @@ class Config:
     gh_bin: str
     dry_run: bool
     pr_cooldown_seconds: int
+    gh_timeout: int
+    app_server_request_timeout: int
 
     @property
     def state_dir(self) -> Path:
@@ -104,15 +112,30 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def parse_positive_int_env(name: str, default: str) -> int:
+    raw = os.environ.get(name, default)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise SystemExit(f"router: invalid {name}={raw!r}") from exc
+    if value <= 0:
+        fail(f"{name} must be positive")
+    return value
+
+
 def run_json(args: list[str], *, input_text: str | None = None) -> Any:
-    proc = subprocess.run(
-        args,
-        input=input_text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            args,
+            input=input_text,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=ACTIVE_CONFIG.gh_timeout if ACTIVE_CONFIG else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DispatchError(f"{' '.join(args)} timed out after {exc.timeout}s") from exc
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
         raise DispatchError(f"{' '.join(args)} failed ({proc.returncode}): {stderr}")
@@ -126,13 +149,17 @@ def run_json(args: list[str], *, input_text: str | None = None) -> Any:
 
 
 def run_text(args: list[str]) -> str:
-    proc = subprocess.run(
-        args,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            args,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=ACTIVE_CONFIG.gh_timeout if ACTIVE_CONFIG else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DispatchError(f"{' '.join(args)} timed out after {exc.timeout}s") from exc
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
         raise DispatchError(f"{' '.join(args)} failed ({proc.returncode}): {stderr}")
@@ -148,6 +175,7 @@ def parse_bool(value: Any) -> bool:
 
 
 def load_config(args: argparse.Namespace) -> Config:
+    global ACTIVE_CONFIG
     repo_root = Path(
         os.environ.get("GOCELL_APP_ROUTER_REPO_ROOT", Path.cwd())
     ).resolve()
@@ -180,6 +208,11 @@ def load_config(args: argparse.Namespace) -> Config:
     if pr_cooldown_seconds < 0:
         fail("GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS must be non-negative")
 
+    gh_timeout = parse_positive_int_env("GOCELL_APP_ROUTER_GH_TIMEOUT", "30")
+    app_server_request_timeout = parse_positive_int_env(
+        "GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT", "30"
+    )
+
     cfg = Config(
         repo_root=repo_root,
         router_home=router_home,
@@ -190,6 +223,8 @@ def load_config(args: argparse.Namespace) -> Config:
         gh_bin=os.environ.get("GH_BIN", "gh"),
         dry_run=args.dry_run,
         pr_cooldown_seconds=pr_cooldown_seconds,
+        gh_timeout=gh_timeout,
+        app_server_request_timeout=app_server_request_timeout,
     )
     for path in (cfg.state_dir, cfg.locks_dir, cfg.logs_dir):
         path.mkdir(parents=True, exist_ok=True)
@@ -197,6 +232,7 @@ def load_config(args: argparse.Namespace) -> Config:
         fail(f"pr-review skill not found: {cfg.skill_path}")
     cfg.ledger_file.touch(exist_ok=True)
     cfg.dispatch_events_file.touch(exist_ok=True)
+    ACTIVE_CONFIG = cfg
     return cfg
 
 
@@ -237,6 +273,35 @@ def gh_live_head(cfg: Config, pr: int) -> str:
             ".headRefOid",
         ]
     )
+
+
+def gh_live_pr(cfg: Config, pr: int) -> dict[str, Any]:
+    data = run_json(
+        [
+            cfg.gh_bin,
+            "pr",
+            "view",
+            str(pr),
+            "--repo",
+            cfg.repo,
+            "--json",
+            "headRefOid,isDraft,labels",
+        ]
+    )
+    if not isinstance(data, dict):
+        raise DispatchError(f"gh pr view for #{pr} returned non-object JSON")
+    return data
+
+
+def live_trigger_labels(raw: dict[str, Any]) -> set[str]:
+    labels = raw.get("labels", [])
+    out: set[str] = set()
+    if not isinstance(labels, list):
+        return out
+    for label in labels:
+        if isinstance(label, dict) and isinstance(label.get("name"), str):
+            out.add(label["name"])
+    return out
 
 
 def candidate_from_json(raw: dict[str, Any], kind: str) -> Candidate:
@@ -388,13 +453,20 @@ class PrLock:
             raw = self.pid_file.read_text(encoding="utf-8").strip()
             pid = int(raw)
         except (FileNotFoundError, ValueError):
+            self._remove_stale_dir()
             return
         if not pid_alive(pid):
-            try:
-                self.pid_file.unlink()
-                self.path.rmdir()
-            except OSError:
-                pass
+            self._remove_stale_dir()
+
+    def _remove_stale_dir(self) -> None:
+        try:
+            self.pid_file.unlink()
+        except FileNotFoundError:
+            pass
+        try:
+            self.path.rmdir()
+        except OSError:
+            pass
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         if not self.acquired:
@@ -453,8 +525,10 @@ class AppServerClient:
 
     def request(self, method: str, params: dict[str, Any]) -> Any:
         if self.proc is None or self.proc.stdin is None or self.proc.stdout is None:
-            raise DispatchError("app-server is not running")
+            raise AppServerUnavailable("app-server is not running")
         with self.lock:
+            if self.proc.poll() is not None:
+                raise AppServerUnavailable("app-server process has exited")
             req_id = self.next_id
             self.next_id += 1
             payload = {"id": req_id, "method": method, "params": params}
@@ -462,12 +536,20 @@ class AppServerClient:
                 self.proc.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
                 self.proc.stdin.flush()
             except BrokenPipeError as exc:
-                raise DispatchError("app-server closed stdin") from exc
+                raise AppServerUnavailable("app-server closed stdin") from exc
 
             while True:
+                ready, _, _ = select.select(
+                    [self.proc.stdout], [], [], self.cfg.app_server_request_timeout
+                )
+                if not ready:
+                    raise AppServerUnavailable(
+                        f"app-server did not answer {method} within "
+                        f"{self.cfg.app_server_request_timeout}s"
+                    )
                 line = self.proc.stdout.readline()
                 if line == "":
-                    raise DispatchError(f"app-server exited before {method} response")
+                    raise AppServerUnavailable(f"app-server exited before {method} response")
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
@@ -480,14 +562,14 @@ class AppServerClient:
 
     def notify(self, method: str, params: dict[str, Any]) -> None:
         if self.proc is None or self.proc.stdin is None:
-            raise DispatchError("app-server is not running")
+            raise AppServerUnavailable("app-server is not running")
         with self.lock:
             payload = {"method": method, "params": params}
             try:
                 self.proc.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
                 self.proc.stdin.flush()
             except BrokenPipeError as exc:
-                raise DispatchError("app-server closed stdin") from exc
+                raise AppServerUnavailable("app-server closed stdin") from exc
 
 
 def initialize_app_server(client: AppServerClient) -> None:
@@ -566,6 +648,24 @@ def should_skip(cfg: Config, cand: Candidate) -> str | None:
     return None
 
 
+def live_gate_skip(cfg: Config, cand: Candidate) -> str | None:
+    live = gh_live_pr(cfg, cand.number)
+    live_head = str(live.get("headRefOid", ""))
+    if live_head != cand.head_sha:
+        return f"head moved (listed={cand.head_sha[:12]} live={live_head[:12]})"
+    if parse_bool(live.get("isDraft", False)):
+        return "draft PR"
+
+    labels = live_trigger_labels(live)
+    want = REVIEW_LABEL if cand.kind == "review" else CHECK_LABEL
+    other = CHECK_LABEL if cand.kind == "review" else REVIEW_LABEL
+    if want not in labels:
+        return f"trigger label {want!r} no longer present"
+    if other in labels:
+        return "both review and check trigger labels are present"
+    return None
+
+
 def dispatch_one(cfg: Config, client: AppServerClient | None, cand: Candidate) -> bool:
     with PrLock(cfg, cand.number) as lock:
         if not lock.acquired:
@@ -582,12 +682,9 @@ def dispatch_one(cfg: Config, client: AppServerClient | None, cand: Candidate) -
             log(f"PR #{cand.number}: skip - {cooldown}")
             return False
 
-        live_head = gh_live_head(cfg, cand.number)
-        if live_head != cand.head_sha:
-            log(
-                f"PR #{cand.number}: skip - head moved "
-                f"(listed={cand.head_sha[:12]} live={live_head[:12]})"
-            )
+        live_skip = live_gate_skip(cfg, cand)
+        if live_skip:
+            log(f"PR #{cand.number}: skip - {live_skip}")
             return False
 
         if cfg.dry_run:
@@ -615,6 +712,7 @@ def poll_once(cfg: Config, client: AppServerClient | None) -> int:
         return 0
 
     dispatched = 0
+    app_server_error: AppServerUnavailable | None = None
     workers = len(candidates)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(dispatch_one, cfg, client, cand): cand for cand in candidates}
@@ -623,9 +721,14 @@ def poll_once(cfg: Config, client: AppServerClient | None) -> int:
             try:
                 if future.result():
                     dispatched += 1
+            except AppServerUnavailable as exc:
+                log(f"PR #{cand.number}: dispatch failed - {exc}")
+                app_server_error = exc
             except Exception as exc:  # noqa: BLE001 - daemon logs per-PR failures and continues.
                 log(f"PR #{cand.number}: dispatch failed - {exc}")
     log(f"poll_once: done candidates={len(candidates)} dispatched={dispatched}")
+    if app_server_error is not None:
+        raise app_server_error
     return dispatched
 
 
@@ -658,25 +761,40 @@ def main(argv: list[str]) -> int:
     if cfg.dry_run:
         poll_once(cfg, None)
         return 0
-    with AppServerClient(cfg) as client:
-        initialize_app_server(client)
-        if args.once:
+
+    while True:
+        try:
+            with AppServerClient(cfg) as client:
+                initialize_app_server(client)
+                if args.once:
+                    log(
+                        "--once will exit after dispatch and close app-server; "
+                        "production dispatch should run without --once"
+                    )
+                    poll_once(cfg, client)
+                    return 0
+                run_poll_loop(cfg, client)
+        except AppServerUnavailable as exc:
             log(
-                "--once will exit after dispatch and close app-server; "
-                "production dispatch should run without --once"
+                "app-server unavailable; restarting after short backoff "
+                f"({exc})"
             )
+            time.sleep(2)
+
+
+def run_poll_loop(cfg: Config, client: AppServerClient) -> None:
+    wake_event = threading.Event()
+    install_wake_signal(wake_event)
+    while True:
+        try:
             poll_once(cfg, client)
-            return 0
-        wake_event = threading.Event()
-        install_wake_signal(wake_event)
-        while True:
-            try:
-                poll_once(cfg, client)
-            except Exception as exc:  # noqa: BLE001 - daemon should keep polling.
-                log(f"poll failed - {exc}")
-            if wake_event.wait(cfg.interval):
-                wake_event.clear()
-                log("active poll trigger received")
+        except AppServerUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001 - daemon should keep polling.
+            log(f"poll failed - {exc}")
+        if wake_event.wait(cfg.interval):
+            wake_event.clear()
+            log("active poll trigger received")
 
 
 if __name__ == "__main__":
