@@ -16,13 +16,11 @@ package policymanage
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesspgrepo "github.com/ghbvf/gocell/corecells/accesscore/internal/adapters/postgres"
@@ -31,7 +29,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/framework/pkg/migration"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -46,57 +43,26 @@ func integAdminCtx() context.Context {
 	return ctxkeys.WithTenantID(auth.TestContext("integ-admin", []string{"admin"}), integTestTenantStr)
 }
 
-func pgIntegMigrationsFS(t testing.TB) fs.FS {
-	t.Helper()
-	fsys, err := adapterpg.MigrationsFS()
-	require.NoError(t, err)
-	return fsys
-}
-
 type policyIntegBundle struct {
 	pool  *adapterpg.Pool
 	repo  *accesspgrepo.PGPolicyRepo
 	txMgr *adapterpg.TxManager
 }
 
-// setupPolicyIntegPG starts a testcontainers PostgreSQL instance, applies all
-// migrations, and returns a PGPolicyRepo + TxManager wired on the real pool.
+// setupPolicyIntegPG clones the package-shared pre-migrated template database
+// into a fresh per-test database and returns a PGPolicyRepo + TxManager wired on
+// the real pool. Pool + per-test DB lifecycle is owned by t.Cleanup registered
+// inside sharedPG.NewPerTestPool (see testmain_integration_test.go); the shared
+// container + migration are routed through the sanctioned pgclone funnel
+// (PG-TESTCONTAINER-FUNNEL-01) rather than a per-test tcpostgres.Run.
 func setupPolicyIntegPG(t *testing.T) policyIntegBundle {
 	t.Helper()
 	globaltestutil.RequireDocker(t)
 
-	ctx := context.Background()
-	container, err := tcpostgres.Run(
-		ctx, globaltestutil.PostgresImage,
-		tcpostgres.WithDatabase("test"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err, "start postgres container")
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
-	require.NoError(t, err)
-
-	migrator, err := adapterpg.NewMigrator(pool, pgIntegMigrationsFS(t), migration.PlatformNamespace)
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
+	pool := sharedPG.NewPerTestPool(t)
 	txMgr := adapterpg.NewTxManager(pool)
 	repo, err := accesspgrepo.NewPGPolicyRepo(pool.DB(), txMgr, clock.Real())
 	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		if cerr := pool.Close(ctx); cerr != nil {
-			t.Logf("WARN: pool close: %v", cerr)
-		}
-		if cerr := container.Terminate(ctx); cerr != nil {
-			t.Logf("WARN: terminate container: %v", cerr)
-		}
-	})
 
 	return policyIntegBundle{pool: pool, repo: repo, txMgr: txMgr}
 }
@@ -130,8 +96,6 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 		"Create error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// Policy row must NOT exist (transaction rolled back atomically).
-	_, getErr := bundle.repo.ListByTenant(context.Background(), integTestTenant)
-	require.NoError(t, getErr)
 	// ListByTenant returns empty slice when tenant has no policies; the rollback
 	// proof is that we see zero rows, not a not-found error.
 	policies, listErr := bundle.repo.ListByTenant(context.Background(), integTestTenant)
