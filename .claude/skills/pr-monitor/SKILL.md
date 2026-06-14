@@ -118,7 +118,7 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 | 未熔断 | §3.3 通过 |
 | **Cx1/Cx2 window** | block `findings.byCx`：cx3 == 0 ∧ cx4 == 0 ∧ (cx1 + cx2) > 0 |
 
-> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 dispatch 后的执行体强制：Claude `Skill("fix")` 侧靠 fix §3.4 [AUTO-FIX]（`IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义`，越界 surface + 转人工）。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ 执行体侧文件级门**，缺一不放行。
+> **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 dispatch 后的执行体自限：Claude `Skill("fix")` 侧靠 fix §3.4 [AUTO-FIX]（`IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义`，越界 surface + 转人工）。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ 执行体侧文件级 instruction-level 自限**（后者非机器强制门，越界靠 fix skill 自觉转人工），缺一不放行。
 
 **dispatch 门全部成立** → host LLM in-session 调用：
 
@@ -126,7 +126,7 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 Skill("fix", args="<N>")
 ```
 
-> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级门双重收窄 + 3 轮熔断 + 约 2 次无进展转人工。
+> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级 instruction-level 自限双重收窄 + 3 轮熔断 + 约 2 次无进展转人工。
 
 fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
