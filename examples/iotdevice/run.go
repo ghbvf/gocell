@@ -46,6 +46,18 @@ import (
 
 const envDurableSinglePod = "GOCELL_IOTDEVICE_DURABLE_SINGLE_POD"
 
+// readyzVerboseHealthOpts gates /readyz?verbose (PR-A35 + PR269 round-3): the
+// health handler enforces a strict X-Readyz-Token check. When the operator sets
+// GOCELL_READYZ_VERBOSE_TOKEN, plumb it via WithReadyzVerboseToken; otherwise
+// waive the verbose endpoint via WithReadyzVerboseDisabled so the demo binary
+// keeps starting out of the box without exposing internal topology anonymously.
+func readyzVerboseHealthOpts() []bootstrap.HealthRouteGroupOption {
+	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
+		return []bootstrap.HealthRouteGroupOption{bootstrap.WithReadyzVerboseToken(tok)}
+	}
+	return []bootstrap.HealthRouteGroupOption{bootstrap.WithReadyzVerboseDisabled()}
+}
+
 // runIotdevice is the hand-written runtime helper for the iotdevice assembly.
 // It is called by the generated main.go and owns environment loading +
 // bootstrap wiring.
@@ -154,18 +166,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		return fmt.Errorf("register devicecell: %w", err)
 	}
 
-	// PR-A35 + PR269 round-3: /readyz?verbose is gated by the health handler's
-	// strict X-Readyz-Token check. When the operator sets
-	// GOCELL_READYZ_VERBOSE_TOKEN, plumb it via WithReadyzVerboseToken;
-	// otherwise waive the verbose endpoint via WithReadyzVerboseDisabled so the
-	// demo binary keeps starting out of the box without exposing internal
-	// topology anonymously.
-	healthOpts := []bootstrap.HealthRouteGroupOption{}
-	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseToken(tok))
-	} else {
-		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
-	}
+	healthOpts := readyzVerboseHealthOpts()
 
 	jwtPlan, err := auth.NewAuthJWT(jwtVerifier)
 	if err != nil {
@@ -235,6 +236,15 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	}
+	// Wire the iotdevice example PDP (deviceAuthorizer) into the primary listener's
+	// request context. DeviceCell.Authorizer() satisfies bootstrap.authorizerProvider;
+	// PrimaryAuthorizerOption discovers exactly one provider in the cell list and
+	// returns a WithPrimaryAuthorizer option. Fail-fast: zero or multiple providers → error.
+	authzOpt, err := bootstrap.PrimaryAuthorizerOption([]cell.Cell{dc})
+	if err != nil {
+		return fmt.Errorf("primary authorizer wiring: %w", err)
+	}
+	opts = append(opts, authzOpt)
 	// MQTT channel options (health probe + managed closer) when enabled.
 	opts = append(opts, mqttBootstrapOpts...)
 	// Command-relay subsystem wiring (#1698): ConsumerBase is required because the

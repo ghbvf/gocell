@@ -33,7 +33,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimecommand "github.com/ghbvf/gocell/framework/runtime/command"
 	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
@@ -79,7 +78,7 @@ func postAsyncBody(t *testing.T, pod http.Handler, deviceID, idemKey, body strin
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", idemKey)
-	req = req.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+	req = req.WithContext(withTestAuth("admin-user", []string{dto.RoleAdmin}))
 	pod.ServeHTTP(w, req)
 	require.Equal(t, http.StatusAccepted, w.Code, "async enqueue should be accepted (202)")
 }

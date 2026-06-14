@@ -21,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/framework/pkg/query"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -77,7 +76,7 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot","commandType":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
+	req = req.WithContext(withTestAuth("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -104,7 +103,7 @@ func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(reqIDCtx(t, auth.TestContext("operator-1", []string{dto.RoleOperator}), "operator-1", "idem-contract-1"))
+	req = req.WithContext(reqIDCtx(t, withTestAuth("operator-1", []string{dto.RoleOperator}), "operator-1", "idem-contract-1"))
 	handler.ServeHTTP(w, req)
 	c.ValidateHTTPResponseRecorder(t, w) // 202 + response schema
 	if n := len(rec.Entries()); n != 1 {
@@ -123,7 +122,7 @@ func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
 			ww := httptest.NewRecorder()
 			rr := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
 			rr.Header.Set("Content-Type", "application/json")
-			rr = rr.WithContext(reqIDCtx(t, auth.TestContext("sub", tc.roles), "sub", "idem-deny"))
+			rr = rr.WithContext(reqIDCtx(t, withTestAuth("sub", tc.roles), "sub", "idem-deny"))
 			handler.ServeHTTP(ww, rr)
 			if ww.Code != http.StatusForbidden {
 				t.Errorf("want 403, got %d", ww.Code)
@@ -137,7 +136,7 @@ func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
 		longPath := strings.Replace(c.HTTP.Path, "{id}", strings.Repeat("d", 257), 1)
 		rr := httptest.NewRequest(c.HTTP.Method, longPath, strings.NewReader(`{"payload":"reboot"}`))
 		rr.Header.Set("Content-Type", "application/json")
-		rr = rr.WithContext(reqIDCtx(t, auth.TestContext("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-long"))
+		rr = rr.WithContext(reqIDCtx(t, withTestAuth("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-long"))
 		handler.ServeHTTP(ww, rr)
 		if ww.Code != http.StatusBadRequest {
 			t.Errorf("want 400 for overlong id, got %d", ww.Code)
@@ -149,7 +148,7 @@ func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {
 		ww := httptest.NewRecorder()
 		rr := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
 		rr.Header.Set("Content-Type", "application/json")
-		rr = rr.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+		rr = rr.WithContext(withTestAuth("admin-user", []string{dto.RoleAdmin}))
 		handler.ServeHTTP(ww, rr)
 		if ww.Code != http.StatusBadRequest {
 			t.Errorf("want 400 for missing Idempotency-Key, got %d", ww.Code)
@@ -172,7 +171,7 @@ func TestHttpDeviceCommandDequeueV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
-	req = req.WithContext(auth.TestContext("dev-1", nil))
+	req = req.WithContext(withTestAuth("dev-1", nil))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -195,7 +194,7 @@ func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
 	path = strings.Replace(path, "{cmdId}", "cmd-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"reason":"success"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("dev-1", nil))
+	req = req.WithContext(withTestAuth("dev-1", nil))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -223,7 +222,7 @@ func TestHttpDeviceCommandReportV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
 	path = strings.Replace(path, "{cmdId}", "cmd-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
-	req = req.WithContext(auth.TestContext("dev-1", nil))
+	req = req.WithContext(withTestAuth("dev-1", nil))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -251,7 +250,7 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 	path = strings.Replace(path, "{cmdId}", "cmd-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"extensionSeconds":60}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("dev-1", nil))
+	req = req.WithContext(withTestAuth("dev-1", nil))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }

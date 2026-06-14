@@ -7,19 +7,13 @@ package devicecell
 // auth.TestContext (principal injection). No JWT middleware is required because
 // policy checks run on the injected principal, not on a JWT token.
 //
-// RED state (before B2 fix):
-//   - TestEnqueue_NonAdmin_ShouldBe403 expects 403 but nil policy returns 201
-//   - TestStatus_NoRole_ShouldBe403 expects 403 but nil policy returns 200
-//   - TestRegister_NoAuth_ShouldBe201 already passes (register has no policy
-//     today), but after the B2 fix the contract must declare Public:true so
-//     that the JWT middleware doesn't require a token in production.
-//
-// GREEN state (after B2 fix):
-//   - register contract marks Public:true → NewHandler(svc) (no policy arg)
-//   - command endpoints → auth.AnyRole(RoleAdmin, RoleOperator)
-//   - status endpoint → auth.AnyRole(RoleAdmin, RoleOperator, RoleDevice)
+// PR-10d: gates migrated from auth.AnyRole / auth.SelfOr to
+// auth.RequirePermission / auth.RequirePermissionForResource. These policies
+// now read the Authorizer from context (set by bootstrap.WithPrimaryAuthorizer
+// in production; injected via auth.WithAuthorizer in tests).
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +22,13 @@ import (
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
+
+// testCtx creates a request context carrying both a Principal (for authn) and
+// the iotdevice example PDP (for authz). RequirePermission / RequirePermissionForResource
+// require both to be present; this helper satisfies that contract for handler tests.
+func testCtx(subject string, roles []string) context.Context {
+	return auth.WithAuthorizer(auth.TestContext(subject, roles), deviceAuthorizer{})
+}
 
 // TestRegister_NoAuth_Returns201 verifies that device registration requires no
 // authentication (public endpoint). This test passes even before the B2 fix
@@ -71,7 +72,7 @@ func TestEnqueue_NonAdmin_ShouldBe403(t *testing.T) {
 	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("viewer-1", []string{"viewer"}))
+	req = req.WithContext(testCtx("viewer-1", []string{"viewer"}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -99,7 +100,7 @@ func TestEnqueue_Admin_Returns201(t *testing.T) {
 	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-1", []string{dto.RoleAdmin}))
+	req = req.WithContext(testCtx("admin-1", []string{dto.RoleAdmin}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
@@ -124,7 +125,7 @@ func TestEnqueue_Operator_Returns201(t *testing.T) {
 	cmdBody := `{"payload":"ping","commandType":"ping"}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("op-1", []string{dto.RoleOperator}))
+	req = req.WithContext(testCtx("op-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
@@ -153,7 +154,7 @@ func TestStatus_NoRole_ShouldBe403(t *testing.T) {
 	// Caller has no recognized role — must be rejected.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext("intruder-1", []string{"viewer"}))
+	req = req.WithContext(testCtx("intruder-1", []string{"viewer"}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -177,7 +178,7 @@ func TestStatus_DeviceRole_Returns200(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext(deviceID, []string{dto.RoleDevice}))
+	req = req.WithContext(testCtx(deviceID, []string{dto.RoleDevice}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -200,7 +201,7 @@ func TestStatus_OperatorRole_Returns200(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext("operator-x", []string{dto.RoleOperator}))
+	req = req.WithContext(testCtx("operator-x", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -225,7 +226,7 @@ func TestDequeue_DeviceSelf_Returns200(t *testing.T) {
 	// Device subject == path {id} → SelfOr passes regardless of role.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
-	req = req.WithContext(auth.TestContext(deviceID, nil))
+	req = req.WithContext(testCtx(deviceID, nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -252,7 +253,7 @@ func TestDequeue_NonOwner_ShouldBe403(t *testing.T) {
 	// Caller is "intruder-1", not the device and not admin/operator.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
-	req = req.WithContext(auth.TestContext("intruder-1", []string{"viewer"}))
+	req = req.WithContext(testCtx("intruder-1", []string{"viewer"}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -282,7 +283,7 @@ func TestStatus_DeviceCrossRead_403(t *testing.T) {
 	// device-a token (subject="device-a") reads device-b's status — must be 403.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceBID+"/status", nil)
-	req = req.WithContext(auth.TestContext("device-a", []string{dto.RoleDevice}))
+	req = req.WithContext(testCtx("device-a", []string{dto.RoleDevice}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -310,7 +311,7 @@ func TestStatus_DeviceSelf_200(t *testing.T) {
 	// device-a reads its own status — subject == path {id}, must be 200.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceAID+"/status", nil)
-	req = req.WithContext(auth.TestContext(deviceAID, []string{dto.RoleDevice}))
+	req = req.WithContext(testCtx(deviceAID, []string{dto.RoleDevice}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -336,7 +337,7 @@ func TestStatus_Admin_AnyDevice_200(t *testing.T) {
 	// Admin reads any device's status — must be 200 regardless of subject.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+	req = req.WithContext(testCtx("admin-user", []string{dto.RoleAdmin}))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
