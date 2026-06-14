@@ -17,7 +17,11 @@ const (
 
 // Order represents a todoorder aggregate.
 type Order struct {
-	ID        string
+	ID string
+	// Owner is the JWT subject of the user who created this order.
+	// Consumed by the PDP ownership rule (orderAuthorizer); server-derived and
+	// intentionally off-wire (not included in HTTP responses or event payloads).
+	Owner     string
 	Item      string
 	Status    string // pending, confirmed
 	CreatedAt time.Time
