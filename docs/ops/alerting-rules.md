@@ -1639,7 +1639,7 @@ probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的
       serving PostgreSQL role is a superuser or has BYPASSRLS — RLS policies are
       defined on all seven tenant tables (incl. policies, migration 059) but bypassed at runtime (cross-tenant leak).
       Remediation for postgres_app_role_restricted_ready:
-        1. Point GOCELL_CONFIGCORE_DATABASE_URL at role gocell_app (NOSUPERUSER NOBYPASSRLS).
+        1. Point the per-cell DSNs (GOCELL_CONFIGCORE_DATABASE_URL, GOCELL_AUDITCORE_DATABASE_URL, GOCELL_ACCESSCORE_DATABASE_URL) at role gocell_app (NOSUPERUSER NOBYPASSRLS). In colocated deployments all three share the same DSN.
         2. Ensure deploy/postgres/init/10-restricted-role.sh ran on the target DB
            (role must exist before corebundle connects).
         3. Restart corebundle; the probe turns green within the first readyz cycle.

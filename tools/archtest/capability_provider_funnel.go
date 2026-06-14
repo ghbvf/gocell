@@ -40,6 +40,19 @@
 // They are the legitimate downstream of the provider (CLAUDE.md observability
 // §"per-cell 资源：cell 直接构造 NewCache(client, …)") and stay in module files.
 //
+// # Primary shared-pool construction site
+//
+// As of #1964 (per-cell infra seam, Part A), the primary shared-pool construction
+// for corebundle now lives in cellmodules/percellpg (a trusted cellmodules resolver,
+// same class as the auditcore admin pool and sagaprojectiondeps' NewTxManager).
+// Cellmodules is the Composition Root layer and is intentionally outside this
+// rule's cmd/-only scan scope. The upstream Hard guard remains the sealed
+// capability.PGProvider (unexported marker isPGProvider + sole NewPGProvider
+// constructor in runtime/capability), which makes the provider unforgeable outside
+// package capability. The cmd/-only ban (capWiringRel sanctioned site) serves as
+// defense-in-depth against any residual or future direct construction in cmd/
+// files.
+//
 // # AI-robust: upstream Hard + downstream Medium (transition form)
 //
 // Upstream is Hard (sealed construction, type system). Downstream is Medium:
@@ -50,7 +63,7 @@
 // (cmd/corebundle module files moved out of `package main` so the banned
 // constructors are import-unreachable) is tracked at gh issue #988.
 //
-// The sole sanctioned provisioning site (capWiringRel) is matched by
+// The sole sanctioned cmd/ provisioning site (capWiringRel) is matched by
 // isCapWiringSanctionedSite, which binds the exemption to PLATFORM PACKAGE
 // IDENTITY (isGoCellPlatformPkgPath) — not a bare repo-relative path. This rule
 // is importable: an external Cell repo can wire it via cfg.ExtraRules, and a

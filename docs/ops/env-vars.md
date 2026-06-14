@@ -111,12 +111,20 @@ Both variables are **required, persistent operator Basic Auth credentials** prot
 
 Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 
-### configcore cell database
+### Per-cell database DSNs (#1964)
+
+Each postgres-requiring cell reads its own DSN via `GOCELL_<CELLID>_DATABASE_URL`.
+In colocated deployments (all cells on one server) all three cells are set to the same
+DSN; `percellpg.Resolve` deduplicates to one shared pool. A missing DSN for any cell
+fails fast at startup naming the cell and the expected env var. More than one distinct
+DSN fails closed (split-pool topology not yet supported; see #1963).
 
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `GOCELL_CONFIGCORE_DATABASE_URL` | PostgreSQL DSN for configcore; role must be `gocell_app` (restricted, NOSUPERUSER NOBYPASSRLS) so that `FORCE ROW LEVEL SECURITY` is enforced at runtime | — | **postgres mode** |
-| `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` | Max open connections | 10 | No |
+| `GOCELL_AUDITCORE_DATABASE_URL` | PostgreSQL DSN for auditcore; same role requirement as configcore | — | **postgres mode** |
+| `GOCELL_ACCESSCORE_DATABASE_URL` | PostgreSQL DSN for accesscore; same role requirement as configcore | — | **postgres mode** |
+| `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` | Max open connections (applies to the shared pool) | 10 | No |
 | `GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout (e.g. `5m`) | `5m` | No |
 | `GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime (e.g. `1h`) | `1h` | No |
 
@@ -124,7 +132,7 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
-| `GOCELL_APP_PASSWORD` | Password for the restricted PostgreSQL role `gocell_app` (NOSUPERUSER, NOBYPASSRLS, non-owner). Used by `GOCELL_CONFIGCORE_DATABASE_URL` and by `deploy/postgres/init/10-restricted-role.sh` which creates the role on first data-dir init. Must be URL-safe — RFC 3986 unreserved characters only (`A-Za-z0-9._~-`); it is interpolated into a SQL heredoc AND the serving DSN userinfo, so `'` `/` `+` `=` `@` and spaces would break init or connection. Recommended: `openssl rand -hex 16`. | — | **postgres mode** |
+| `GOCELL_APP_PASSWORD` | Password for the restricted PostgreSQL role `gocell_app` (NOSUPERUSER, NOBYPASSRLS, non-owner). Used by per-cell `GOCELL_*_DATABASE_URL` vars and by `deploy/postgres/init/10-restricted-role.sh` which creates the role on first data-dir init. Must be URL-safe — RFC 3986 unreserved characters only (`A-Za-z0-9._~-`); it is interpolated into a SQL heredoc AND the serving DSN userinfo, so `'` `/` `+` `=` `@` and spaces would break init or connection. Recommended: `openssl rand -hex 16`. | — | **postgres mode** |
 
 See `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL for first-time setup steps.
 Probe `postgres_app_role_restricted_ready` verifies at runtime that the serving role is not a superuser / `BYPASSRLS`.
@@ -221,7 +229,7 @@ All three addresses must be non-empty and distinct; startup fails fast otherwise
 | `GOCELL_ADAPTER_MODE` | Selects secret-loading and fail-fast behaviour | `""` (dev/in-memory) | `""` (dev), `"real"` |
 | `GOCELL_CELL_ADAPTER_MODE` | Selects the storage backend for Cell repositories | `""` (in-memory) | `""`, `"memory"`, `"postgres"` |
 
-Note: the per-cell `GOCELL_<CELLID>_DATABASE_URL` variables (e.g. `GOCELL_CONFIGCORE_DATABASE_URL`) replace the old global `GOCELL_PG_DSN`. Each cell reads its own DSN at startup.
+Note: the per-cell `GOCELL_<CELLID>_DATABASE_URL` variables replace the old global `GOCELL_PG_DSN`. Each postgres cell reads its own DSN at startup. In colocated deployments all three DSNs are identical; `percellpg.Resolve` deduplicates to one pool (#1964).
 
 ## State
 
@@ -247,7 +255,7 @@ The old global PostgreSQL env names have been removed. Operators must update env
 
 | Old name (pre-T6, removed) | New name |
 |---|---|
-| `GOCELL_PG_DSN` | `GOCELL_CONFIGCORE_DATABASE_URL` |
+| `GOCELL_PG_DSN` | `GOCELL_CONFIGCORE_DATABASE_URL` + `GOCELL_AUDITCORE_DATABASE_URL` + `GOCELL_ACCESSCORE_DATABASE_URL` (same value, per-cell seam #1964) |
 | `GOCELL_PG_MAX_CONNS` | `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` |
 | `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT` |
 | `GOCELL_PG_MAX_LIFETIME` | `GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME` |

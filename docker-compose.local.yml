@@ -87,8 +87,12 @@ services:
       GOCELL_HTTP_HEALTH_ADDR: "127.0.0.1:9091"
       GOCELL_HTTP_HEALTH_LOCAL_ONLY: "1"
 
-      # PostgreSQL DSN (shared-netns DNS resolution still uses container names)
+      # PostgreSQL DSN — per-cell (#1964 per-cell PG seam). All three cells share
+      # the same DSN in colocated deployments; percellpg.Resolve deduplicates to one
+      # pool at startup (a missing DSN or >1 distinct DSN fails fast).
       GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?}@postgres:5432/gocell?sslmode=disable
+      GOCELL_AUDITCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?}@postgres:5432/gocell?sslmode=disable
+      GOCELL_ACCESSCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?}@postgres:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
 
       # Redis loopback via shared netns (see network_mode above)

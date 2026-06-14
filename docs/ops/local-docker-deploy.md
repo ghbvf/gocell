@@ -223,7 +223,7 @@ To enforce RLS end-to-end, the stack uses **two required PostgreSQL roles** plus
 | Role | Used by | Privileges | Required? |
 |------|---------|-----------|-----------|
 | `gocell` | `migrate` service (pg-migrate tool) | Superuser / table owner; runs DDL | Yes |
-| `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL`) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges | Yes |
+| `gocell_app` | `corebundle` serving pool (`GOCELL_CONFIGCORE_DATABASE_URL` / `GOCELL_AUDITCORE_DATABASE_URL` / `GOCELL_ACCESSCORE_DATABASE_URL`; per-cell seam #1964, dedup to one pool) | NOSUPERUSER, NOBYPASSRLS, non-owner; DML only via default privileges | Yes |
 | `gocell_audit_admin` | `corebundle` admin read pool (`GOCELL_AUDIT_ADMIN_DSN`) — for super-admin cross-tenant audit reads (#1810) | NOSUPERUSER, NOBYPASSRLS; SELECT-only on `audit_entries` via role-scoped RLS policy `audit_admin_read_all` (migration 065) | **Optional** — skipped when `GOCELL_AUDIT_ADMIN_PASSWORD` is unset |
 
 `gocell_app` is created by `deploy/postgres/init/10-restricted-role.sh`, which

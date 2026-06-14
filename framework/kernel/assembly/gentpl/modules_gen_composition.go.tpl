@@ -60,6 +60,25 @@ func generatedProjectionSourceTopics() []string {
 {{- end}}
 }
 
+// generatedPostgresCells is the sorted list of cell IDs whose cell.yaml declares
+// `requires: [postgres]` (or a superset). Single-sourced from cell.yaml metadata;
+// consumed by the composition root's per-cell PG resolution
+// (cellmodules/percellpg.Resolve) to iterate cells and look up their per-cell DSN.
+// ALWAYS emitted (nil when no postgres cells) so the composition root can call it
+// unconditionally. Derived by `gocell generate assembly`; `--verify` red-flags stale
+// output (#1964 per-cell infra seam).
+func generatedPostgresCells() []string {
+{{- if .PostgresCells}}
+	return []string{
+{{- range .PostgresCells}}
+		{{printf "%q" .}},
+{{- end}}
+	}
+{{- else}}
+	return nil
+{{- end}}
+}
+
 // generatedDeploymentTopology returns the assembly's codegen-derived deployment
 // placement spec (single-sourced from assembly.yaml topology, derived by
 // `gocell generate assembly`). Empty topology => all cells co-located (zero-

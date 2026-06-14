@@ -235,8 +235,8 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | 缺口 / 威胁 | split 下风险 | 当前补偿 / 约束 | 归属 |
 |---|---|---|---|
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966（spec FR-006，安全 obligation）|
-| **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | 当前全 cell 共享 keyring + `RequireCallerCell` allowlist——可信网络/monolith 足够，**跨信任边界拆分不足** | US6 #1964 |
-| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证 | US6 #1964 |
+| **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 per-cell 身份 / keyring 后续 backlog issue 中。 | US6 #1964（评估 + 登记；实现在 per-cell 身份 / keyring backlog issue）|
+| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964 不实现 mTLS**，追踪在 per-cell 身份 / keyring backlog issue 中 | US6 #1964（登记；实现在 per-cell 身份 / keyring backlog issue）|
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966（spec T043）|
 
@@ -245,6 +245,27 @@ signed/sealed envelope**（经单一 sealed propagation funnel 注入 + 专用 c
 handler 不得自构 principal header——**不得假定现有 service-token 栈已覆盖业务 principal**（它只认证
 callerCell）；(2) in-proc 与 remote 同样经 `RequireCallerCell`（D4）；(3) 缺口非本 ADR 解，但 MUST
 在下游 issue 落地前不被静默放过——上表即其 backlog 账。
+
+### #1964 Amendment — per-cell 基础设施 seam 落地记录
+
+**#1964（US6）实际落地内容**：
+
+**per-cell DB 凭据 / 连接注入 seam**（`cellmodules/percellpg`）已在本 PR 落地：composition root
+可为每个 cell 注入独立的 `GOCELL_<CELLID>_DATABASE_URL`，seam 以 DSN 去重——同一 DSN 的 cell
+共享连接池（monolith 常见形态），不同 DSN 的 cell 持有独立连接池（split / per-cell DB 形态）。
+若某 cellID 缺少对应的 `DATABASE_URL` 配置，启动期 fail-closed（非静默降级回全局 pool）。注意：
+**split 拓扑下 per-cell outbox relay 扇出** 尚未实现（每条 outbox entry 需由所属 cell 的连接池读取并
+relay 到 broker），此部分追踪在 per-cell 基础设施扇出 backlog issue 中；在该 issue 落地前，多个 DSN
+（即真正 split 的 per-cell DB）的组合在启动期以「多于 1 个不同 DSN」作为 fail-closed 边界。
+
+**broker 连接为 assembly 级（非 per-cell seam）的设计论据**：broker（RabbitMQ，`GOCELL_AMQP_URL`）
+是跨 cell 事件总线的传输介质——其天然语义是「跨 cell 共享」，而非「per-cell 独立」。若为每个 cell
+引入独立 broker 连接甚至独立 broker 实例，跨 cell 的 publish/subscribe 链路将被切断（cell A 发布到自己
+的 broker，cell B 订阅自己的 broker，事件永远无法跨越）。因此 **per-cell 独立 broker 连接不是一个有意义
+的 per-cell-DB 式 seam**——正确的单元是 per-进程（assembly 级）连接，即现有的 `GOCELL_AMQP_URL`。
+进程内 per-cell publisher/subscriber 扇出（即在同一 broker 连接上为每个 cell 派生独立的 exchange /
+routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB relay 一起追踪在 per-cell 基础设施
+扇出 backlog issue 中。
 
 ## Rejected alternatives
 

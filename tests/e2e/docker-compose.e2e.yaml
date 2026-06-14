@@ -97,9 +97,12 @@ services:
       # Single-pod deployment: in-memory nonce store is sufficient.
       GOCELL_SINGLE_POD: "1"
 
-      # configcore cell: PG DSN + AES-256 envelope encryption. Loopback host
-      # under the host-network compose topology (see file header).
+      # PostgreSQL DSN — per-cell (#1964 per-cell PG seam). All three cells share
+      # the same DSN in this colocated deployment; percellpg.Resolve deduplicates
+      # to one pool (a missing DSN or >1 distinct DSN fails fast at startup).
       GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
+      GOCELL_AUDITCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
+      GOCELL_ACCESSCORE_DATABASE_URL: postgres://gocell_app:${GOCELL_APP_PASSWORD:?GOCELL_APP_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
       # 64-hex-char = 32 bytes. E2e-only; never reuse in production.
       GOCELL_CONFIGCORE_MASTER_KEY: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899

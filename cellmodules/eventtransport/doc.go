@@ -25,6 +25,23 @@
 // configured: a missing GOCELL_AMQP_URL is a startup error, never a silent
 // degrade back to in-memory.
 //
+// # Broker connection is intentionally assembly-level (not per-cell)
+//
+// The broker (RabbitMQ, GOCELL_AMQP_URL) is the cross-cell event bus: its
+// defining semantic is cross-cell sharing, not per-cell isolation. Distinct
+// per-cell broker connections — or distinct broker instances per cell — would
+// sever the publish/subscribe chain between cells (cell A publishes to its own
+// broker, cell B subscribes to its own broker, events never cross). Therefore,
+// a per-cell broker connection seam analogous to the per-cell DB connection
+// seam (cellmodules/percellpg) is intentionally not modeled here.
+//
+// The correct unit of broker ownership is the per-process (assembly-level)
+// connection, i.e. the single GOCELL_AMQP_URL. Per-cell publisher/subscriber
+// fan-out within one broker connection (e.g. per-cell exchange or routing-key
+// namespacing) is a separate concern coupled to per-cell outbox relay fan-out;
+// both are tracked in the per-cell infra fan-out backlog issue (issue #1964 /
+// Epic #1423 US6) and are not implemented here.
+//
 // ref: kernel/outbox.ResolveEmitter — the symmetric durability-gated funnel.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.
 package eventtransport

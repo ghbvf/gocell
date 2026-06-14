@@ -134,4 +134,5 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `GOCELL_ACCESSCORE_IP_HASH_SALT` | bootstrap-failed 事件 client-IP keyed-hash salt（≥32 字节，#1488） | real 模式 fail-fast（缺失/demo key/<32B） |
 | `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
 | `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |
+| `GOCELL_<CELLID>_DATABASE_URL` | 每个 postgres cell 的 DSN（#1964 per-cell PG seam）。postgres 拓扑下 `generatedPostgresCells()` 中的每个 cell（accesscore / auditcore / configcore）均须设置；缺失任一 → fail-fast 报告 cell 名 + 期望的 env var。共址部署时三个 cell 设同一 DSN，`percellpg.Resolve` dedup 后只开一个 pool；>1 个不同 DSN → fail-closed（仅支持共址，拆分部署见 #1963） | postgres 拓扑 fail-fast |
 | `GOCELL_AMQP_URL` | postgres 拓扑的 RabbitMQ broker URL（事件传输 publisher/subscriber，#1940）；demo 拓扑不读 | postgres 拓扑 fail-fast（缺即启动期报错，不静默降级回 in-memory） |
