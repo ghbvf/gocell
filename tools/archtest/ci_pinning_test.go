@@ -361,6 +361,66 @@ updates:
 		"a typo in the asserted `groups` field must red the guard, not pass silently")
 }
 
+// TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList locks the guard's
+// support for dependabot's plural `directories:` list form. dependabot natively
+// supports both singular `directory:` (one dir) and plural `directories:` (a
+// list / glob); the real .github/dependabot.yml uses the plural form for its
+// gomod block to cover the workspace's many sub-modules. The guard must detect
+// root ("/") coverage in EITHER form — modeling only `directory:` made the
+// gomod root check silently fail (#2113). Anti-vacuity companion below proves
+// the plural path is not a tautology.
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories list form.
+func TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/tools"
+    schedule:
+      interval: "weekly"
+`)
+	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body),
+		"plural `directories:` list containing / must satisfy the root gomod coverage check")
+}
+
+// TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot is the
+// anti-vacuity red case for the plural form: a `directories:` list that omits
+// "/" must NOT satisfy the root gomod coverage check, proving the plural-path
+// check tests membership of "/" rather than mere presence of the field.
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories without root.
+func TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directories:
+      - "/tools"
+      - "/cmd/gocell"
+    schedule:
+      interval: "weekly"
+`)
+	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+		"a plural `directories:` list without / must not satisfy the root gomod coverage check")
+}
+
 // dependabotConfig models only the fields validateDependabotCoversCIAndGolangCILint
 // asserts on. The decode is intentionally tolerant (no KnownFields(true)):
 // dependabot.yml legitimately grows orchestration fields (ignore /
