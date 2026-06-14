@@ -3,7 +3,7 @@
 // pkg.Sel SelectorExpr) must be flagged by the forward scan's Ident branch.
 package red_dot_import_call
 
-import . "github.com/ghbvf/gocell/pkg/pathsafe"
+import . "github.com/ghbvf/gocell/framework/pkg/pathsafe"
 
 // call invokes the dot-imported DerivedOverwrite directly (bare-identifier form).
 func call() PlannedFile {

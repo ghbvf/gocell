@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 func TestNew_Identity(t *testing.T) {

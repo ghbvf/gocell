@@ -5,8 +5,8 @@
 package violates
 
 import (
-	"github.com/ghbvf/gocell/kernel/clock"
-	clk "github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	clk "github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // directCall — standard form: pkg.Real() with the canonical import name.

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 	"github.com/ghbvf/gocell/tools/generatedcatalog"
 )
 

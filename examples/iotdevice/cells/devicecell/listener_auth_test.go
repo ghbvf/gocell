@@ -26,7 +26,7 @@ import (
 	"testing"
 
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // TestRegister_NoAuth_Returns201 verifies that device registration requires no

@@ -29,7 +29,7 @@ import (
 const ruleTestPollingExternalReasonLiteral01 = "TEST-POLLING-EXTERNAL-REASON-LITERAL-01"
 
 // testwaitPkgPath is the canonical import path of the testwait package.
-const testwaitPkgPath = PlatformModulePath + "/pkg/testutil/testwait"
+const testwaitPkgPath = PlatformFrameworkModulePath + "/pkg/testutil/testwait"
 
 // testwaitExternalFunc is the name of the typed-marker function whose callsites
 // this archtest locks.

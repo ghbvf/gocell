@@ -54,9 +54,9 @@ func TestExternalModuleSmoke(t *testing.T) {
 	writeSmokeFile(t, tmp, "go.mod",
 		"module gocell.example/extsmoke\n\ngo 1.25\n\n"+
 			"require github.com/ghbvf/gocell/tools v0.0.0\n"+
-			"require github.com/ghbvf/gocell v0.0.0 // indirect\n\n"+
+			"require github.com/ghbvf/gocell/framework v0.0.0 // indirect\n\n"+
 			"replace github.com/ghbvf/gocell/tools => "+filepath.Join(root, "tools")+"\n"+
-			"replace github.com/ghbvf/gocell => "+root+"\n")
+			"replace github.com/ghbvf/gocell/framework => "+filepath.Join(root, "framework")+"\n")
 
 	cmd := exec.Command(goBin, "test", "./...") //nolint:gosec // G204: const args; cwd is t.TempDir()
 	cmd.Dir = tmp

@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 )
 
 // DefaultCertEpoch is the epoch a device's certificate starts at on first issue.

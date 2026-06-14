@@ -8,7 +8,7 @@
 // mandatory typed Fix). Expected: 1 violation from the funnel scan path.
 package struct_lit_missing_fix_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // violateStructLit constructs a raw ValidationResult composite literal — the
 // forbidden bypass shape.

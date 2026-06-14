@@ -109,7 +109,7 @@ var netErrorAllowlist = map[string]map[string]struct{}{
 	// errcode.IsTransient   — umbrella predicate's Tier 2 raw-error branch
 	//                         keeps Timeout()-only semantics intentionally
 	//                         conservative for unclassified errors.
-	"/pkg/errcode": {
+	"/framework/pkg/errcode": {
 		"IsTransientNet": {},
 		"IsTransient":    {},
 	},
@@ -144,7 +144,7 @@ const helperFormFuncName = "IsTransientNet"
 
 // helperFormPkgSuffix is the package-path suffix that contains the funnel
 // helper.
-const helperFormPkgSuffix = "/pkg/errcode"
+const helperFormPkgSuffix = "/framework/pkg/errcode"
 
 func TestADAPTER_NET_TRANSIENT_FUNNEL_01(t *testing.T) {
 	t.Parallel()

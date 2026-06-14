@@ -58,8 +58,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
 	"github.com/ghbvf/gocell/tools/codegen/sagacoveragegen"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
@@ -492,7 +492,7 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 	// scanHeartbeatSelectors but collect into a plain counter rather than
 	// reporting violations — these are expected and sanctioned callsites.
 	var executorCallsites []Diagnostic
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -525,7 +525,8 @@ func TestSagaCoordinatorNoHeartbeatLoop_B1_ExecutorSubpkgCallsitesAllowed(t *tes
 	// Run A1's actual scanner (including its executor exclude filter) over
 	// the executor package and assert that no violations are reported — the
 	// path filter in A1 is what prevents executor callsites from being flagged.
-	a1ViolationsInExecutor := Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/executor/..."}), func(p *Pass) []Diagnostic {
+	executorScope := Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/executor/..."})
+	a1ViolationsInExecutor := Run(t, executorScope, func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -665,7 +666,7 @@ func TestSagaExecutorRandInjected_A1_NoGlobalRandInExecutor(t *testing.T) {
 func TestSagaExecutorRandInjected_BlindSpot_B2_NoDotImportRandInExecutor(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga/executor"})
+	scope := DirsScope(root, []string{"framework/runtime/saga/executor"})
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
 		for _, file := range p.Files {
@@ -821,7 +822,7 @@ func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
 
 	var iface *types.Interface
 	var implPkgs []*types.Package
@@ -1016,7 +1017,7 @@ func TestSagaGlobalReaderConformanceEnrollment_REDFixture(t *testing.T) {
 
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./kernel/saga/journal/..."}, prodPatterns...)
+	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
 
 	var iface *types.Interface
 	var implPkgs []*types.Package
@@ -1191,7 +1192,7 @@ func TestSagaTailerCheckpointAdvancerCaller(t *testing.T) {
 func TestSagaTailerCheckpointAdvancerCaller_NonVacuity(t *testing.T) {
 	t.Parallel()
 	var advanceCalls int
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != sagaTailerPkg {
 			return nil
 		}
@@ -1246,7 +1247,7 @@ func TestSagaTailerCheckpointAdvancerCaller_REDFixture(t *testing.T) {
 	// OwnerCheckpointStore.AdvanceIfOwner; the fixture pkg is not in the exempt
 	// set and not _test.go, so the real scanner flags (*badCaller).illegalAdvance.
 	var diags []Diagnostic
-	Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg, "./kernel/projection/..."}),
+	Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg, "./framework/kernel/projection/..."}),
 		func(p *Pass) []Diagnostic {
 			diags = append(diags, scanSagaTailerAdvancerCallers(p)...)
 			return nil
@@ -1340,7 +1341,7 @@ func TestSagaOwnerCheckpointConformanceEnrollment_REDFixture(t *testing.T) {
 	unenrolledKey := fixturePkgPath + "." + unenrolledTypeName
 
 	loadPatterns := []string{
-		"./kernel/projection/...",
+		"./framework/kernel/projection/...",
 		"./tools/archtest/internal/sagaownercheckpointenrollfixture/...",
 	}
 
@@ -1662,7 +1663,7 @@ func TestSagaJournalHolderSeal_BlindSpot_B1_NoAliasInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
+	scope := DirsScope(root, []string{"framework/runtime/saga"})
 
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var out []Diagnostic
@@ -1986,7 +1987,7 @@ func TestSagaJournalHolderSeal_A1_HeartbeatFuncFieldFlagged(t *testing.T) {
 func TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
+	scope := DirsScope(root, []string{"framework/runtime/saga"})
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
@@ -2009,7 +2010,7 @@ func TestSagaLeaderGate_A1_DriveOneOnlyInTickOnce(t *testing.T) {
 func TestSagaLeaderGate_A2_TickOnceCallsAcquireLead(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
+	scope := DirsScope(root, []string{"framework/runtime/saga"})
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
@@ -2035,7 +2036,7 @@ func TestSagaLeaderGate_A2_TickOnceCallsAcquireLead(t *testing.T) {
 func TestSagaLeaderGate_A3_LeadGatesDriveOne(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{"runtime/saga"})
+	scope := DirsScope(root, []string{"framework/runtime/saga"})
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, file := range p.Files {
@@ -2225,8 +2226,8 @@ func TestSagaLeaderGate_Detector_RedTickIgnoresLead(t *testing.T) {
 // ref: .claude/rules/gocell/contract-fanout.md (the fanout obligation this guards)
 
 const (
-	sfcStatusPkgPath  = PlatformModulePath + "/kernel/saga"
-	sfcJournalPkgPath = PlatformModulePath + "/kernel/saga/journal"
+	sfcStatusPkgPath  = PlatformFrameworkModulePath + "/kernel/saga"
+	sfcJournalPkgPath = PlatformFrameworkModulePath + "/kernel/saga/journal"
 	sfcStatusTypeName = "Status"
 	sfcKindTypeName   = "EventKind"
 	sfcReadyzDocRel   = "docs/ops/readyz.md"
@@ -2504,7 +2505,9 @@ func sfcMarkerLine(content []byte, marker string) int {
 
 func sfcReadFile(t *testing.T, root, dir, rel, ext string) []byte {
 	t.Helper()
-	sc := DirsScope(root, []string{dir}, MatchRels(func(r string) bool { return r == rel }))
+	sc := DirsScope(root, []string{dir}, MatchRels(func(r string) bool {
+		return strings.TrimPrefix(r, frameworkSubdir+"/") == rel
+	}))
 	files, err := loadContentFiles(sc, []string{ext})
 	require.NoError(t, err, "load %s", rel)
 	require.Len(t, files, 1, "expected exactly one file at %s", rel)
@@ -2541,7 +2544,7 @@ func TestSagaStatusFanoutCoverageC4(t *testing.T) {
 	var tekLine int
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/saga/..."}),
+		[]string{"./framework/kernel/saga/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -2591,7 +2594,7 @@ func TestSagaStatusFanoutCoverageC5(t *testing.T) {
 	var statusValidLine, kindValidLine int
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./kernel/saga/..."}),
+		[]string{"./framework/kernel/saga/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -2637,7 +2640,7 @@ func TestSagaCoverageGolden(t *testing.T) {
 	art, err := sagacoveragegen.Render()
 	require.NoError(t, err, "render saga coverage artifacts")
 
-	gen := sfcReadFile(t, root, "kernel/saga/sagajournaltest", sfcGenFileRel, ".go")
+	gen := sfcReadFile(t, root, "framework/kernel/saga/sagajournaltest", sfcGenFileRel, ".go")
 	docs := sfcLoadDocs(t, root)
 	require.NotEmpty(t, docs[sfcReadyzDocRel], "load %s", sfcReadyzDocRel)
 	require.NotEmpty(t, docs[sfcAlertingDocRel], "load %s", sfcAlertingDocRel)
@@ -2848,7 +2851,7 @@ func TestSagaCoverageDiagnosticLocations(t *testing.T) {
 // file-level INVARIANT threat matrix (gh #1997).
 func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -2884,7 +2887,7 @@ func TestSagaStepRunOutsideTx_A1_StepFuncCallsiteUniqueness(t *testing.T) {
 // go/ssa). Documented in the file-level INVARIANT godoc.
 func TestSagaStepRunOutsideTx_A2_SafeRunNotReachedInsideRunInTxClosure(t *testing.T) {
 	t.Parallel()
-	units := collectSagaUnits(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), true)
+	units := collectSagaUnits(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), true)
 	diags := checkA2Transitive(units)
 
 	Report(t, sagaStepRunOutsideTxRule+"-A2", diags)
@@ -3039,13 +3042,13 @@ func TestSagaStepRunOutsideTx_Detector_RedCrossPkgWrapperFixture(t *testing.T) {
 // # Scope
 //
 // Packages under scan:
-//   - github.com/ghbvf/gocell/runtime/saga
-//   - github.com/ghbvf/gocell/runtime/saga/executor
+//   - github.com/ghbvf/gocell/framework/runtime/saga
+//   - github.com/ghbvf/gocell/framework/runtime/saga/executor
 //
 // # Guard set (resolved by types.Func pkg path + name)
 //
-//   - pkg: github.com/ghbvf/gocell/pkg/validation  name: IsNilInterface
-//   - pkg: github.com/ghbvf/gocell/kernel/clock     name: MustHaveClock
+//   - pkg: github.com/ghbvf/gocell/framework/pkg/validation  name: IsNilInterface
+//   - pkg: github.com/ghbvf/gocell/framework/kernel/clock     name: MustHaveClock
 //
 // # AI-robust grading: Medium
 //
@@ -3294,7 +3297,7 @@ func TestSagaConstructorNilGuard_BlindSpot_B2_NoParamReassignment(t *testing.T) 
 // across all of runtime/saga/.
 func TestSagaSlogInstanceFieldsCaller_A1_GuardedKeysOnlyInCarrier(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -3374,7 +3377,7 @@ func TestSagaSlogInstanceFieldsCaller_Detector_RedAttrLiteralFixture(t *testing.
 func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testing.T) {
 	t.Parallel()
 	var decls []string
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			rel := filepath.ToSlash(p.Rel(file))
 			if !isRuntimeSagaProductionFile(rel) {
@@ -3402,7 +3405,7 @@ func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testi
 
 func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing.T) {
 	t.Parallel()
-	diags := Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	diags := Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -3426,7 +3429,7 @@ func TestSagaSlogInstanceFieldsCaller_B4_NoIdentityAttrStructLiterals(t *testing
 func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.T) {
 	t.Parallel()
 	found := map[string]bool{}
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/internal/sagalog/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/internal/sagalog/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}
@@ -3459,7 +3462,7 @@ func TestSagaSlogInstanceFieldsCaller_B1_CarrierEmitsBothGuardedKeys(t *testing.
 func TestSagaSlogInstanceFieldsCaller_B2_CarrierReferencedByProductionSites(t *testing.T) {
 	t.Parallel()
 	var refs int
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.TypesInfo == nil {
 			return nil
 		}

@@ -154,7 +154,7 @@ jobs:
 
       - name: Unit smoke (kernel, docker-free)
         if: steps.resolve.outputs.skip != 'true'
-        run: go test ./kernel/... -count=1
+        run: go test ./framework/kernel/... -count=1
 
       # F1/C1: validate the goreleaser config BEFORE the release job pushes any
       # tag. A broken .goreleaser.yaml caught here fails the run with zero side

@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 func TestEmitFileDeterministicGo(t *testing.T) {

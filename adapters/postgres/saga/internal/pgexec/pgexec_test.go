@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // fakeTx is a minimal stub satisfying pgx.Tx for ambient-tx dispatch tests.

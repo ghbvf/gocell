@@ -44,6 +44,11 @@ run_smoke() {
     # `go build ./cmd/${ASM_ID}/...` invoked from repo root drops a binary
     # named ${ASM_ID} in the working directory; remove it too.
     rm -f "${ASM_ID}"
+    # The smoke materializes a transient root consumer module (see below) to
+    # build the scaffolded cmd; drop it and restore the workspace file so a
+    # --local run leaves no trace.
+    rm -f go.mod go.sum
+    git checkout -- go.work 2>/dev/null || true
   }
   cleanup_smoke_artifacts
   trap cleanup_smoke_artifacts RETURN
@@ -73,6 +78,19 @@ run_smoke() {
     --team=scaffoldsmoke \
     --role=maintainer \
     --deploy=k8s
+
+  # Post-#1565 the gocell repo has no root module: kernel/runtime/pkg live in the
+  # `framework` submodule and the workspace root carries only go.work. The scaffold
+  # templates emit consumer code under the org module path github.com/ghbvf/gocell
+  # (resolved from framework/go.mod, stripped of /framework), so the just-scaffolded
+  # cells/<id> + cmd/<id> belong to no workspace module and `go build` errors
+  # "directory prefix … does not contain modules listed in go.work". Materialize a
+  # transient root consumer module at that org path and register it in the workspace;
+  # framework/ and generated/ resolve as sibling workspace modules, so no requires are
+  # needed. cleanup_smoke_artifacts removes go.mod + restores go.work (sandbox mode
+  # discards the whole worktree regardless).
+  go mod init github.com/ghbvf/gocell
+  go work use .
 
   # Auto-generate ran inside `scaffold assembly`; verify the result builds.
   go build -o /dev/null "./cmd/${ASM_ID}/..."

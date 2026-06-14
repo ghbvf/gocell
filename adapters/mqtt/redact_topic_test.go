@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // TestSafeTopicForLog verifies that safeTopicForLog strips control characters

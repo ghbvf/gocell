@@ -17,10 +17,10 @@ import (
 	"github.com/ghbvf/gocell/corecells/configcore/slices/configwrite"
 	"github.com/ghbvf/gocell/corecells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/corecells/configcore/slices/flagwrite"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 )
 
 // initInternal is the K#04 codegen escape hatch: business init that cannot

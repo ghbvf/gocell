@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 )
 
 // UseSanctionedRedirect redirects the default logger via the single sanctioned

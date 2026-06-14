@@ -48,13 +48,13 @@ import (
 const (
 	stateConstTypeName     = "State"
 	stateTransitionsVarN   = "stateTransitions"
-	relayMarkSettlementPkg = "runtime/outbox"
+	relayMarkSettlementPkg = "framework/runtime/outbox"
 
 	// kernelOutboxImportSuffix is the module-relative suffix for the kernel/outbox
 	// package. Used by the typed TRANSITION-GUARD to confirm a Transition call
 	// resolves to the real kernel/outbox.Transition, not a same-named method in
 	// another package. Combined with the module path at test time.
-	kernelOutboxImportSuffix = "/kernel/outbox"
+	kernelOutboxImportSuffix = "/framework/kernel/outbox"
 	// kernelOutboxTransitionFunc is the expected function name within kernel/outbox.
 	kernelOutboxTransitionFunc = "Transition"
 )
@@ -98,7 +98,7 @@ func containsQuotedStatusLiteral(s string) (string, bool) {
 func TestOutboxStateTransitionCompleteness(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	diags := Run(t, AST(DirsScope(root, []string{"kernel/outbox"})), func(p *Pass) []Diagnostic {
+	diags := Run(t, AST(DirsScope(root, []string{"framework/kernel/outbox"})), func(p *Pass) []Diagnostic {
 		declared := map[string]token.Pos{}
 		covered := map[string]struct{}{}
 		var declFile *ast.File
@@ -570,7 +570,7 @@ func TestOutboxStateLiteralBan_ReverseSelfCheck(t *testing.T) {
 func TestOutboxStateTransitionCompleteness_BlindSpotShape(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	_ = Run(t, AST(DirsScope(root, []string{"kernel/outbox"})), func(p *Pass) []Diagnostic {
+	_ = Run(t, AST(DirsScope(root, []string{"framework/kernel/outbox"})), func(p *Pass) []Diagnostic {
 		var sawMapComposite bool
 		for _, f := range p.Files {
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
@@ -603,7 +603,7 @@ func TestOutboxStateTransitionGuard_ReverseSelfCheck(t *testing.T) {
 	t.Parallel()
 
 	const src = `package p
-import kout "github.com/ghbvf/gocell/kernel/outbox"
+import kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 func bothFunc() {
 	kout.Transition(kout.StateClaiming, kout.StatePublished)

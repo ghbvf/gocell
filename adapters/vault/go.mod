@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/adapters/vault
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
@@ -29,6 +28,8 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -82,4 +83,6 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-replace github.com/ghbvf/gocell => ../../
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

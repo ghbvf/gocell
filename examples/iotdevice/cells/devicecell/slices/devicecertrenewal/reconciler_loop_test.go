@@ -12,11 +12,11 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/kernel/reconcile"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	rtcommand "github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
 )
 
 // stopLoop stops a reconcile.Loop and fails the test if it does not stop within

@@ -250,7 +250,7 @@ func TestBlankImportNoViolation(t *testing.T) {
 	// must not trigger the scanner (which operates on the AST, not raw text).
 	src := `package p
 // _.ContractSpec is mentioned here only as documentation.
-import _ "github.com/ghbvf/gocell/kernel/contractspec"
+import _ "github.com/ghbvf/gocell/framework/kernel/contractspec"
 `
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "blank_import.go", src, parser.SkipObjectResolution)
@@ -299,17 +299,17 @@ func TestContractspecLocalAlias_TableDriven(t *testing.T) {
 		},
 		{
 			name: "default_name",
-			src:  `package p; import "github.com/ghbvf/gocell/kernel/contractspec"; var _ = contractspec.ContractSpec{}`,
+			src:  `package p; import "github.com/ghbvf/gocell/framework/kernel/contractspec"; var _ = contractspec.ContractSpec{}`,
 			want: "contractspec",
 		},
 		{
 			name: "explicit_alias_cs",
-			src:  `package p; import cs "github.com/ghbvf/gocell/kernel/contractspec"; var _ = cs.ContractSpec{}`,
+			src:  `package p; import cs "github.com/ghbvf/gocell/framework/kernel/contractspec"; var _ = cs.ContractSpec{}`,
 			want: "cs",
 		},
 		{
 			name: "underscore_blank",
-			src:  `package p; import _ "github.com/ghbvf/gocell/kernel/contractspec"`,
+			src:  `package p; import _ "github.com/ghbvf/gocell/framework/kernel/contractspec"`,
 			want: "_",
 		},
 	}

@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // TestWebhookdemoBootSmoke boots the real webhookdemo wiring on ephemeral

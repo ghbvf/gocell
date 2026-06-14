@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadEndpointsSlices uses bare string literals as elements of
 // EndpointsMeta slice fields (Clients, Invokers, Readers) — each

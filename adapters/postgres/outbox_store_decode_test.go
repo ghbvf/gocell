@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // TestDecodeOversizeGuardedJSONB exercises the five outcomes of the shared

@@ -23,7 +23,7 @@ import (
 
 // commandPkgPath is the canonical import path for the runtime/command package
 // containing the *Registry type that both invariants guard.
-const commandPkgPath = PlatformModulePath + "/runtime/command"
+const commandPkgPath = PlatformFrameworkModulePath + "/runtime/command"
 
 // commandGeneratedPrefix is the module-relative path prefix that is the SOLE
 // sanctioned caller namespace for RegisterHandler and LookupHandler.
@@ -38,7 +38,7 @@ const commandRegistryTypeName = "Registry"
 // (*outbox.Relay).WithCommandDispatch sink that COMMAND-ASYNC-DISPATCH-CALLER-01
 // locks to generated DispatchAsync values.
 const (
-	cmdRelayPkgPath           = PlatformModulePath + "/runtime/outbox"
+	cmdRelayPkgPath           = PlatformFrameworkModulePath + "/runtime/outbox"
 	relayTypeName             = "Relay"
 	withCommandDispatchMethod = "WithCommandDispatch"
 	dispatchAsyncFuncName     = "DispatchAsync"
@@ -256,7 +256,7 @@ func isCommandRegistryCaller(rel string) bool {
 // We use ResolveMethodCall which resolves via types.Info.Selections — this
 // handles pointer/value/promoted/alias receivers and method-value forms.
 // Only methods on the exact *types.Named "Registry" in package
-// "github.com/ghbvf/gocell/runtime/command" are matched; a same-named method
+// "github.com/ghbvf/gocell/framework/runtime/command" are matched; a same-named method
 // on an unrelated type is not a false positive.
 func isCommandRegistryMethod(info *types.Info, sel *ast.SelectorExpr) bool {
 	if sel.Sel == nil {

@@ -4,8 +4,8 @@
 package payload_type_valid_green
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 )
 
 func WithAssertionCall() {

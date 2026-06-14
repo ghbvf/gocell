@@ -3,7 +3,7 @@
 // 拆开以单独证明每个 value-shape 子分支可被 scanner 命中）。
 package value_shape_uppercase_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // VIOLATION A1/value-shape: uppercase letters fail lowercase regex.
 const UppercaseProbe healthz.ProbeName = "BadCase_ready"

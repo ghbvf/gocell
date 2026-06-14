@@ -51,7 +51,7 @@ import (
 // clockKernelClockPkgPath is the import path of kernel/clock.
 // Derived from PlatformModulePath so a module rename / /v2 bump updates exactly
 // one place.
-const clockKernelClockPkgPath = PlatformModulePath + "/kernel/clock"
+const clockKernelClockPkgPath = PlatformFrameworkModulePath + "/kernel/clock"
 
 // clockMustHaveClockFuncName is the function name in clockKernelClockPkgPath
 // that enforces the positional injection contract.

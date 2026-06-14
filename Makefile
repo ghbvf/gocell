@@ -247,7 +247,7 @@ test-integration:
 		./tests/e2e/internal/... \
 		github.com/ghbvf/gocell/cmd/corebundle/... \
 		github.com/ghbvf/gocell/examples/ssobff/... \
-		./runtime/bootstrap/... \
+		./framework/runtime/bootstrap/... \
 		-count=1 -timeout 15m -v
 	GOCELL_TEST_DOCKER_REQUIRED=1 go -C corecells test -tags=integration,e2e \
 		./accesscore/... \

@@ -7,15 +7,15 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
 	accesscoremem "github.com/ghbvf/gocell/corecells/accesscore/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	sessiontest "github.com/ghbvf/gocell/runtime/auth/session/sessiontest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/framework/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	sessiontest "github.com/ghbvf/gocell/framework/runtime/auth/session/sessiontest"
 )
 
 // UserStatus is the public mirror of domain.UserStatus used by SeededUserView

@@ -10,7 +10,7 @@ package pgrepoambienttxfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	"github.com/ghbvf/gocell/framework/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/tools/archtest/internal/pgrepoambienttxfixture/internal/pgexec"
 )
 

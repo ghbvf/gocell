@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // TestMQTTChannelWiring_RegistersPublisherDrainAndConnection locks the PR #1364

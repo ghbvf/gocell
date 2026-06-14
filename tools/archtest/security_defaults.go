@@ -67,17 +67,17 @@ import (
 // Named without a "sec" prefix so that code in this file (listenerRefsInPass,
 // dotImportKernelCellHits) and the standalone tests in security_defaults_test.go
 // can reference it with a single shared name.
-const kernelCellPkgPath = PlatformModulePath + "/kernel/cell"
+const kernelCellPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 
 // secSecutilImportLiteral is the Go quoted import literal for pkg/secutil, used
 // in text-based source scan (SEC-03). Derived from PlatformModulePath to
 // remain module-path-agnostic.
-const secSecutilImportLiteral = `"` + PlatformModulePath + `/pkg/secutil"`
+const secSecutilImportLiteral = `"` + PlatformFrameworkModulePath + `/pkg/secutil"`
 
 // secWebsocketImportLiteral is the Go quoted import literal for
 // runtime/websocket, used in text-based source scan (SEC-08). Derived from
 // PlatformModulePath to remain module-path-agnostic.
-const secWebsocketImportLiteral = `"` + PlatformModulePath + `/runtime/websocket"`
+const secWebsocketImportLiteral = `"` + PlatformFrameworkModulePath + `/runtime/websocket"`
 
 // ---------------------------------------------------------------------------
 // SEC rule ID string constants
@@ -800,7 +800,7 @@ var allowedConnsMutationFuncs = map[string]bool{
 
 func secCheckSEC09(t *testing.T, root string) []Diagnostic {
 	t.Helper()
-	path := filepath.Join(root, "runtime", "websocket", "hub.go")
+	path := filepath.Join(root, "framework", "runtime", "websocket", "hub.go")
 	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("%s: reading hub.go: %v", secFailClosed09, err)

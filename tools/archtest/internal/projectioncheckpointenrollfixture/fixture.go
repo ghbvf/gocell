@@ -23,7 +23,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // enrolledStore is a correct in-memory CheckpointStore that the fixture _test.go

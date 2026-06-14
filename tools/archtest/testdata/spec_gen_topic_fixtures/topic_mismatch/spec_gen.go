@@ -9,7 +9,7 @@
 
 package broken
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 
 var spec = contractspec.ContractSpec{
 	ID:        "event.demo.broken.v1",

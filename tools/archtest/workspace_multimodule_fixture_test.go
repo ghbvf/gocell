@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 const (

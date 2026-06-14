@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"os"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/composition"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 type sharedMetricsDeps struct {

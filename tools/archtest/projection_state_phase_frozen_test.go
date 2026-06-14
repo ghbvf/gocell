@@ -80,7 +80,7 @@ var wantPhaseStrings = map[string]string{
 func TestProjectionStatePhaseFrozen01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	phasePath := filepath.Clean(filepath.Join(root, "kernel", "projection", "phase.go"))
+	phasePath := filepath.Clean(filepath.Join(root, "framework", "kernel", "projection", "phase.go"))
 	src, err := os.ReadFile(phasePath)
 	if err != nil {
 		t.Fatalf("PROJECTION-STATE-PHASE-FROZEN-01: read phase.go: %v", err)

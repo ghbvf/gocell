@@ -14,7 +14,7 @@ package topicns
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Topic-namespace validation error codes. Defined here (co-located with the

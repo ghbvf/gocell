@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func TestEncrypt_UsesDataKeyPath(t *testing.T) {

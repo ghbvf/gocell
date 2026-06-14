@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadEndpointsServer uses bare string literals in EndpointsMeta direct
 // fields (Server, Publisher, Handler, Provider) — each must be flagged

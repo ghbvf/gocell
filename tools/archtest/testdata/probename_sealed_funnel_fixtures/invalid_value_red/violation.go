@@ -7,7 +7,7 @@
 // 分支断言。
 package invalid_value_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // VIOLATION A1/value-shape: hyphen fails ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$.
 const HyphenProbe healthz.ProbeName = "bad-hyphen_ready"

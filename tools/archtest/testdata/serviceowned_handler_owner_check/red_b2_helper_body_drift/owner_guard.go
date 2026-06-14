@@ -6,7 +6,7 @@
 // any non-empty caller through. B2b catches the AST shape drift.
 package red_b2_helper_body_drift
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // BUG: && instead of || — semantic flip, IDOR-unsafe.
 func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {

@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh/storetest"
 )
 
 var errTypedNilRefreshReaderUsed = errors.New("typed nil refresh reader should have been defaulted")

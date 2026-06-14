@@ -1,0 +1,811 @@
+package schemas
+
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+)
+
+func TestContractSchemaAllowsParamConstraintFacets(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.test.v1",
+		"kind": "http",
+		"ownerCell": "testcell",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "testcell",
+			"clients": [],
+			"http": {
+				"method": "GET",
+				"path": "/api/v1/test/{key}",
+				"pathParams": {
+					"key": {
+						"type": "string",
+						"minLength": 1,
+						"maxLength": 128
+					}
+				},
+				"queryParams": {
+					"limit": {
+						"type": "integer",
+						"required": false,
+						"minimum": 1,
+						"maximum": 500
+					}
+				},
+				"successStatus": 200,
+				"noContent": false
+			}
+		},
+		"schemaRefs": {
+			"request": "request.schema.json"
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc))
+}
+
+// compileContractSchema compiles the embedded contract.schema.json for a test.
+func compileContractSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+	return schema
+}
+
+// contractWithCursorMinLength builds a minimal HTTP contract doc whose cursor
+// query param carries the given minLength snippet (e.g. `"minLength": 0,` or "").
+func contractWithCursorMinLength(t *testing.T, minLengthLine string) any {
+	t.Helper()
+	var doc any
+	require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{
+		"id": "http.test.v1", "kind": "http", "ownerCell": "testcell",
+		"consistencyLevel": "L1", "lifecycle": "active",
+		"endpoints": {"server": "testcell", "clients": [], "http": {
+			"method": "GET", "path": "/api/v1/test",
+			"queryParams": {"cursor": {"type": "string", %s "maxLength": 4096, "required": false}},
+			"successStatus": 200, "noContent": false
+		}},
+		"schemaRefs": {"request": "request.schema.json"}
+	}`, minLengthLine)), &doc))
+	return doc
+}
+
+// TestContractSchemaRejectsNoopMinLengthZero pins the meta-schema author surface
+// to the narrowed FMT-25: a declared minLength must be >= 1 (an explicit no-op 0
+// is rejected), while omitting minLength entirely is accepted (it is optional —
+// only maxLength is required). Defense-in-depth with the FMT-25 governance rule.
+func TestContractSchemaRejectsNoopMinLengthZero(t *testing.T) {
+	schema := compileContractSchema(t)
+
+	// minLength: 0 — rejected (no-op lower bound; string length is always >= 0).
+	assert.Error(t, schema.Validate(contractWithCursorMinLength(t, `"minLength": 0,`)),
+		"meta-schema must reject a no-op minLength: 0")
+
+	// minLength omitted — accepted (optional lower bound, maxLength present).
+	assert.NoError(t, schema.Validate(contractWithCursorMinLength(t, ``)),
+		"meta-schema must accept an omitted minLength (optional)")
+
+	// minLength: 1 — accepted (meaningful lower bound).
+	assert.NoError(t, schema.Validate(contractWithCursorMinLength(t, `"minLength": 1,`)),
+		"meta-schema must accept a meaningful minLength >= 1")
+}
+
+func TestContractSchemaAllowsHeaders(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.login.v1",
+		"kind": "http",
+		"ownerCell": "accesscore",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/access/sessions/login",
+				"headers": {
+					"X-Tenant-ID": {
+						"type": "string",
+						"format": "uuid",
+						"required": true
+					}
+				},
+				"successStatus": 201,
+				"noContent": false
+			}
+		},
+		"schemaRefs": {
+			"request": "request.schema.json"
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with endpoints.http.headers must pass strict validation")
+}
+
+func TestContractSchemaAllowsAuthPublic(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.login.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/auth/sessions",
+				"successStatus": 201,
+				"noContent": false,
+				"auth": {
+					"public": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.public:true must pass strict validation")
+}
+
+func TestContractSchemaAllowsAuthPasswordResetExempt(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.session.delete.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "DELETE",
+				"path": "/api/v1/auth/sessions/{sessionId}",
+				"pathParams": {
+					"sessionId": {
+						"type": "string",
+						"format": "uuid"
+					}
+				},
+				"successStatus": 204,
+				"noContent": true,
+				"auth": {
+					"passwordResetExempt": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.passwordResetExempt:true must pass strict validation")
+}
+
+func TestContractSchemaAllowsAuthServiceOwnedWithPasswordResetExempt(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.session.delete.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "DELETE",
+				"path": "/api/v1/auth/sessions/{sessionId}",
+				"pathParams": {
+					"sessionId": {
+						"type": "string",
+						"format": "uuid"
+					}
+				},
+				"successStatus": 204,
+				"noContent": true,
+				"auth": {
+					"serviceOwned": true,
+					"passwordResetExempt": true
+				},
+				"ownership": {
+					"subjectPath": "ctx.userID",
+					"resourcePath": "path.sessionId.ownerID"
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc),
+		"auth.serviceOwned:true must be allowed to combine with auth.passwordResetExempt:true")
+}
+
+func TestContractSchemaAllowsAuthBootstrapWithResponses(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.setup.admin.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/access/setup/admin",
+				"successStatus": 201,
+				"noContent": false,
+				"auth": {
+					"bootstrap": true,
+					"responses": [401, 429]
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc),
+		"contract with auth.bootstrap:true and auth.responses must pass strict validation")
+}
+
+func compileContractSchemaForTest(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+	return schema
+}
+
+func TestContractSchemaAllowsAuthClientsOnly(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.internal.sample.list.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "testcell",
+			"clients": ["testcell"],
+			"http": {
+				"method": "GET",
+				"path": "/internal/v1/sample/list",
+				"successStatus": 200,
+				"noContent": false,
+				"auth": {
+					"clientsOnly": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc),
+		"contract with auth.clientsOnly:true must pass strict validation")
+}
+
+// TestContractSchemaAllowsIdempotencyExempt verifies that
+// endpoints.http.idempotency.exempt is a first-class sibling of auth (#1469
+// review F7): it can appear alone or alongside any auth mode without triggering
+// the FMT-27 mutex rules that guard the 5 core auth-mode flags.
+func TestContractSchemaAllowsIdempotencyExempt(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	cases := []struct {
+		name  string
+		extra string // extra sibling block under http, alongside idempotency
+	}{
+		{"idempotency.exempt alone", ""},
+		{"idempotency.exempt with auth.public", `, "auth": {"public": true}`},
+		{"idempotency.exempt with auth.passwordResetExempt", `, "auth": {"passwordResetExempt": true}`},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var contractDoc any
+			doc := fmt.Sprintf(`{
+				"id": "http.test.idempotencyexempt.v1",
+				"kind": "http",
+				"consistencyLevel": "L1",
+				"lifecycle": "active",
+				"endpoints": {
+					"server": "testcell",
+					"clients": ["edge-bff"],
+					"http": {
+						"method": "POST",
+						"path": "/api/v1/sample/test",
+						"successStatus": 200,
+						"noContent": false,
+						"idempotency": {"exempt": true}%s
+					}
+				}
+			}`, tc.extra)
+			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
+			assert.NoError(t, schema.Validate(contractDoc),
+				"idempotency.exempt is orthogonal to FMT-27 auth mutex: %q must be valid", tc.name)
+		})
+	}
+}
+
+// TestContractSchemaOwnershipRequired verifies the schema if/then rule:
+// when auth.serviceOwned=true the ownership block is required; when
+// auth.serviceOwned=false or absent the ownership block is optional.
+//
+// The four cases exercise:
+//  1. serviceOwned=true + complete ownership block → accept
+//  2. serviceOwned=true + no ownership block → reject
+//  3. serviceOwned=true + ownership block missing subjectPath → reject
+//  4. serviceOwned=false + no ownership block → accept
+//
+// This test is an independent oracle of the schema if/then; it does NOT call
+// metadata.OwnershipPathValid (that is FMT-32's domain). The validator used
+// here is the raw JSON Schema so schema structural correctness is proven
+// separately from governance rule correctness.
+func TestContractSchemaOwnershipRequired(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	baseHTTP := func(authExtra, httpExtra string) string {
+		return `{
+			"id": "http.ownership.test.v1",
+			"kind": "http",
+			"consistencyLevel": "L1",
+			"lifecycle": "active",
+			"endpoints": {
+				"server": "testcell",
+				"clients": [],
+				"http": {
+					"method": "GET",
+					"path": "/api/v1/ownership/test",
+					"successStatus": 200,
+					"noContent": false` + authExtra + httpExtra + `
+				}
+			}
+		}`
+	}
+
+	tests := []struct {
+		name        string
+		doc         string
+		expectValid bool
+	}{
+		{
+			name: "serviceOwned=true with complete ownership block",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": true}`,
+				`, "ownership": {"subjectPath": "ctx.userID", "resourcePath": "path.id.ownerID"}`,
+			),
+			expectValid: true,
+		},
+		{
+			name: "serviceOwned=true without ownership block",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": true}`,
+				``,
+			),
+			expectValid: false,
+		},
+		{
+			name: "serviceOwned=true with ownership block missing subjectPath",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": true}`,
+				`, "ownership": {"resourcePath": "path.id.ownerID"}`,
+			),
+			expectValid: false,
+		},
+		{
+			name: "serviceOwned=false without ownership block",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": false}`,
+				``,
+			),
+			expectValid: true,
+		},
+		{
+			// Schema only enforces structural presence (minLength on subjectPath /
+			// resourcePath) and the if/then ownership-required constraint. DSL
+			// validity (ctx.* / path.* prefix, camelCase segments, pathParams
+			// referential integrity) is NOT enforced by the JSON Schema — that is
+			// solely FMT-32's responsibility (single-source governance rule). This
+			// two-layer design is intentional: schema guards structure, FMT-32
+			// guards semantics. If both validated DSL, any DSL change would require
+			// updating two independent validators.
+			name: "serviceOwned=true with DSL-invalid path — schema accepts (minLength only), FMT-32 rejects",
+			doc: baseHTTP(
+				`, "auth": {"serviceOwned": true}`,
+				`, "ownership": {"subjectPath": "foo.bar", "resourcePath": "ctx.userID"}`,
+			),
+			expectValid: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(tc.doc), &contractDoc), "JSON parse failed")
+			err := schema.Validate(contractDoc)
+			if tc.expectValid && err != nil {
+				t.Errorf("expected valid but schema rejected: %v", err)
+			}
+			if !tc.expectValid && err == nil {
+				t.Errorf("expected schema rejection but was accepted")
+			}
+		})
+	}
+}
+
+// TestContractSchemaAuthBoolMatrix enumerates all 64 combinations of the
+// 6 auth bool fields and asserts schema validation matches metadata.AuthComboLegal
+// (the single oracle shared with kernel/governance/rules_fmt.go validateFMT27).
+//
+// Every contract document explicitly declares every bool field (true or false)
+// to guard the "explicit false vs omission" semantic: under the original
+// not/required mutex implementation, declaring all keys would trigger the
+// key-presence rules and reject all cases. Under the if/then const:true
+// implementation, only the value-true conflicts are rejected.
+//
+// HTTP-idempotency exemption is NOT part of this matrix — it moved to the
+// sibling endpoints.http.idempotency block (#1469 review F7), so the matrix is
+// 2^5 = 32 with 7 legal combos.
+//
+// INVARIANT: AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01.
+func TestContractSchemaAuthBoolMatrix(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	metadata.IterateAuthBoolCombos(func(auth metadata.HTTPAuthMeta, name string) {
+		t.Run(name, func(t *testing.T) {
+			// When serviceOwned=true the schema if/then requires the ownership
+			// block to be present. Include a minimal valid ownership block in all
+			// serviceOwned=true cases so this test focuses on auth-field mutex
+			// semantics rather than the ownership requirement (which is tested
+			// separately by TestContractSchemaOwnershipRequired).
+			ownershipFragment := ""
+			if auth.ServiceOwned {
+				ownershipFragment = `, "ownership": {"subjectPath": "ctx.userID", "resourcePath": "ctx.tenantID"}`
+			}
+			doc := fmt.Sprintf(`{
+				"id": "http.matrix.test.v1",
+				"kind": "http",
+				"consistencyLevel": "L1",
+				"lifecycle": "active",
+				"endpoints": {
+					"server": "testcell",
+					"clients": ["testcell"],
+					"http": {
+						"method": "POST",
+						"path": "/internal/v1/matrix/test",
+						"successStatus": 200,
+						"noContent": false,
+						"auth": {
+							"public": %t,
+							"passwordResetExempt": %t,
+							"serviceOwned": %t,
+							"bootstrap": %t,
+							"clientsOnly": %t
+						}%s
+					}
+				}
+			}`,
+				auth.Public, auth.PasswordResetExempt, auth.ServiceOwned,
+				auth.Bootstrap, auth.ClientsOnly,
+				ownershipFragment)
+
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(doc), &contractDoc))
+
+			err := schema.Validate(contractDoc)
+			_, expectedLegal := metadata.LegalAuthComboNames[name]
+			if expectedLegal && err != nil {
+				t.Errorf("schema rejected legal combo %s: %v", name, err)
+			}
+			if !expectedLegal && err == nil {
+				t.Errorf("schema accepted illegal combo %s; expected reject per LegalAuthComboNames", name)
+			}
+		})
+	})
+}
+
+// TestProjectionConsistencyLevelSchemaEnum verifies the PROJECTION-CONSISTENCY-01
+// schema gate: the contract.schema.json projection if/then block restricts
+// consistencyLevel to ["L3","L4"].
+//
+// AI-robust evaluation: schema enum is a documentation + test-layer constraint
+// only — the metadata parser does not run jsonschema.Validate at load time. The
+// real Hard gate is the contractgen codegen funnel (gh #960): for codegen=true
+// projection contracts, contractgen emits a compile-time guard
+// `const _ = uint(cellvocab.<level> - cellvocab.L3)` into types_gen.go that
+// fails to compile below L3 (see tools/codegen/contractgen TestProjection*).
+// The governance rule PROJECTION-CONSISTENCY-01 is the Medium backstop for
+// codegen=false contracts and in-memory fixtures that bypass codegen. This test
+// pins the schema enum that documents the same constraint.
+//
+// INVARIANT: PROJECTION-CONSISTENCY-01 (schema enum gate, documentation layer — Hard gate is the contractgen codegen funnel, gh #960).
+func TestProjectionConsistencyLevelSchemaEnum(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	projectionBase := func(level string) string {
+		return `{
+			"id": "projection.test.summary.v1",
+			"kind": "projection",
+			"ownerCell": "testcell",
+			"consistencyLevel": "` + level + `",
+			"lifecycle": "active",
+			"replayable": true,
+			"endpoints": {
+				"provider": "testcell",
+				"readers": ["edge-bff"]
+			}
+		}`
+	}
+
+	tests := []struct {
+		name        string
+		level       string
+		expectValid bool
+	}{
+		{"L3 accepted", "L3", true},
+		{"L4 accepted", "L4", true},
+		{"L2 rejected", "L2", false},
+		{"L1 rejected", "L1", false},
+		{"L0 rejected", "L0", false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var doc any
+			require.NoError(t, json.Unmarshal([]byte(projectionBase(tc.level)), &doc))
+			err := schema.Validate(doc)
+			if tc.expectValid && err != nil {
+				t.Errorf("schema rejected valid projection with %s: %v", tc.level, err)
+			}
+			if !tc.expectValid && err == nil {
+				t.Errorf("schema accepted invalid projection with %s (expected reject per enum L3|L4)", tc.level)
+			}
+		})
+	}
+}
+
+// TestContractSchemaGRPCKind verifies the kind=grpc if/then block: endpoints
+// require server/clients/grpc and the nested grpc block requires service/proto
+// with proto rooted under contracts/grpc/ (method/streamingType removed in
+// #1655; auth removed as additional property — per-method auth deferred to
+// #1675). gRPC mirrors http endpoints.
+func TestContractSchemaGRPCKind(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	grpcDoc := func(grpcBlock string) string {
+		return `{
+			"id": "grpc.device.command.v1",
+			"kind": "grpc",
+			"ownerCell": "iotdevice",
+			"consistencyLevel": "L1",
+			"lifecycle": "active",
+			"endpoints": {
+				"server": "iotdevice",
+				"clients": [],
+				"grpc": ` + grpcBlock + `
+			}
+		}`
+	}
+
+	tests := []struct {
+		name        string
+		grpcBlock   string
+		expectValid bool
+	}{
+		{
+			name: "minimal grpc block accepted",
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto"
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "auth block rejected as additional property (#1675 — service-level auth removed)",
+			// The service-level grpc auth block was removed: a single bool could
+			// not express per-method auth once a service owns multiple RPCs, and
+			// nothing consumed it. additionalProperties: false now rejects it;
+			// per-method auth is deferred to #1675.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"auth": {"public": true}
+			}`,
+			expectValid: false,
+		},
+		{
+			name:        "missing service rejected",
+			grpcBlock:   `{"proto": "contracts/grpc/x/v1/x.proto"}`,
+			expectValid: false,
+		},
+		{
+			name: "service+proto only accepted (method field removed in #1655)",
+			// method is no longer a required field; service+proto is sufficient.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto"}`,
+			expectValid: true,
+		},
+		{
+			name:        "missing proto rejected",
+			grpcBlock:   `{"service": "x.v1.S"}`,
+			expectValid: false,
+		},
+		{
+			name:        "proto outside contracts/grpc rejected",
+			grpcBlock:   `{"service": "x.v1.S", "proto": "proto/x.proto"}`,
+			expectValid: false,
+		},
+		{
+			name: "method field rejected as additional property (#1655)",
+			// method was removed in #1655; additionalProperties: false rejects it.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "method": "M"}`,
+			expectValid: false,
+		},
+		{
+			name: "streamingType field rejected as additional property (#1655)",
+			// streamingType was removed in #1655; additionalProperties: false rejects it.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "streamingType": "duplex"}`,
+			expectValid: false,
+		},
+		{
+			name: "methods overlay with public accepted (#1675)",
+			// Per-method public auth overlay: sparse, only methods needing the
+			// non-default (public:true) appear; the .proto remains the method-set
+			// single source.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"methods": [{"name": "Check", "public": true}]
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "method entry missing name rejected (#1675)",
+			// name is required on every overlay entry (item required:["name"]).
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name:        "method entry empty name rejected (#1675, minLength)",
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "", "public": true}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry unknown property rejected (#1675, item additionalProperties — forward-protects #2008 ABAC fields)",
+			// The item-level additionalProperties:false seals the overlay shape so a
+			// typo'd or premature ABAC field (#2008) cannot slip in silently. public:true
+			// is present so the rejection is specifically the unknown authz property.
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "public": true, "authz": {"permission": "x:read"}}]
+			}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry missing public rejected (#1675, required public — vacuous-entry guard)",
+			// public is required: an entry exists iff it asserts public:true. A
+			// name-only entry is vacuous (omission ≡ authed), rejected at the schema
+			// surface in lockstep with governance FMT-41.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check"}]}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry public:false rejected (#1675, const:true — vacuous-entry guard)",
+			// public:false ≡ omission (authed). const:true rejects it so the overlay
+			// carries only meaningful entries; #2008 relaxes when ABAC fields land.
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "public": false}]}`,
+			expectValid: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var doc any
+			require.NoError(t, json.Unmarshal([]byte(grpcDoc(tc.grpcBlock)), &doc))
+			err := schema.Validate(doc)
+			if tc.expectValid && err != nil {
+				t.Errorf("schema rejected valid grpc contract: %v", err)
+			}
+			if !tc.expectValid && err == nil {
+				t.Errorf("schema accepted invalid grpc contract (case %q)", tc.name)
+			}
+		})
+	}
+}

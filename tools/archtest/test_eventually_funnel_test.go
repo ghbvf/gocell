@@ -141,7 +141,7 @@ func scanFileForEventuallyFunnelViolations(
 			Reason: fmt.Sprintf(
 				"bare %s.%s call — use testwait.External(t, reason, ...) for "+
 					"synchronous polling or testwait.Deterministic(t, ch, ...) for "+
-					"channel waits (see github.com/ghbvf/gocell/pkg/testutil/testwait "+
+					"channel waits (see github.com/ghbvf/gocell/framework/pkg/testutil/testwait "+
 					"or run: go doc ./pkg/testutil/testwait)",
 				lastPathSegment(sym.PkgPath), sym.Name,
 			),
@@ -798,7 +798,7 @@ func TestEventuallyFunnel_DeterministicNoTimeoutParam(t *testing.T) {
 	// testwait import path from the single sanctioned PlatformModulePath const
 	// (external.go) instead of hard-coding "github.com/ghbvf/gocell/..." so an
 	// external Cell repo can run this rule against its own module.
-	testwaitPkgPath := PlatformModulePath + "/pkg/testutil/testwait"
+	testwaitPkgPath := PlatformFrameworkModulePath + "/pkg/testutil/testwait"
 
 	var (
 		sigFound         bool

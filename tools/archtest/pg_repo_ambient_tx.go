@@ -37,7 +37,7 @@ const (
 	pgExecutorInterfaceName  = "PGExecutor"
 	pgExecutorImplName       = "pgExecutor"
 	execDirectName           = "ExecDirect"
-	approvedMarkerImportPath = PlatformModulePath + "/pkg/pgrepoapproved"
+	approvedMarkerImportPath = PlatformFrameworkModulePath + "/pkg/pgrepoapproved"
 	approveFuncName          = "Approve"
 	approvalReasonTypeName   = "ApprovalReason"
 )
@@ -78,7 +78,7 @@ func CheckPGRepoApprovedSealed(t *testing.T, _ ConfigForExternalCell) []Diagnost
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	root := findModuleRoot(t)
-	const approvedPkg = PlatformModulePath + "/pkg/pgrepoapproved"
+	const approvedPkg = PlatformFrameworkModulePath + "/pkg/pgrepoapproved"
 	var diags []Diagnostic
 	found := false
 	_ = Run(t, Typed(TypedOpts{}, []string{approvedPkg}), func(p *Pass) []Diagnostic {

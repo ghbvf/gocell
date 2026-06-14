@@ -27,7 +27,7 @@ package applyscopefixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // badMidTxScope writes a mid-tx RLS scope by calling CellTxManager.ApplyTenantScope

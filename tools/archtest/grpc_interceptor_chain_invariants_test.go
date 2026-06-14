@@ -173,7 +173,7 @@ import (
 // grpcInterceptorPkgPath is the import path of the package that owns the unary
 // interceptor constructors and the newUnaryChain composition site. Anchored to
 // [PlatformModulePath] so a module rename updates exactly one place.
-const grpcInterceptorPkgPath = PlatformModulePath + "/runtime/grpc/interceptor"
+const grpcInterceptorPkgPath = PlatformFrameworkModulePath + "/runtime/grpc/interceptor"
 
 // grpcPkgPath is the third-party gRPC package owning ChainUnaryInterceptor.
 const grpcPkgPath = "google.golang.org/grpc"
@@ -473,7 +473,7 @@ func TestArchtest_GRPCChainUnaryInterceptorCaller01(t *testing.T) {
 
 // grpcRuntimePkgPath is the import path of the runtime/grpc package that owns the
 // shared ServiceRegistrar and DrainSignal.
-const grpcRuntimePkgPath = PlatformModulePath + "/runtime/grpc"
+const grpcRuntimePkgPath = PlatformFrameworkModulePath + "/runtime/grpc"
 
 // grpcStreamChainExpectedOrder is the required argument order of the
 // grpc.ChainStreamInterceptor call in newStreamChain. The streaming chain mirrors

@@ -30,14 +30,14 @@ import (
 	"net"
 
 	hooks "github.com/ghbvf/gocell/examples/webhookdemo/cells/hooks"
-	"github.com/ghbvf/gocell/kernel/assembly"
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 const (

@@ -10,7 +10,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // ── A1 violation: direct http.HandleFunc registration of "/healthz" ──────────

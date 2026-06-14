@@ -8,7 +8,7 @@
 // DO NOT use this package in production code.
 package newprobename_dynamic_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // buildNameDynamically demonstrates the A4 violation: calling
 // healthz.NewProbeName from outside the sanctioned allowlist.

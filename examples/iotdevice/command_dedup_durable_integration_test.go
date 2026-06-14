@@ -40,13 +40,13 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/migration"
+	"github.com/ghbvf/gocell/framework/runtime/command"
+	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/migration"
-	"github.com/ghbvf/gocell/runtime/command"
-	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 

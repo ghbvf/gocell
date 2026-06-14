@@ -1,0 +1,531 @@
+package verify
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+)
+
+// TestResult represents the outcome of a single test target.
+type TestResult struct {
+	Name        string
+	Passed      bool
+	Output      string
+	ZeroMatch   bool // true when -run pattern matched no tests
+	SkippedOnly bool // true when matched tests all skipped
+}
+
+// VerifyResult represents the outcome of verifying a slice, cell, or journey.
+type VerifyResult struct {
+	TargetID      string
+	Passed        bool
+	Results       []TestResult
+	Errors        []error
+	ManualPending []string // text of manual criteria not yet verified
+}
+
+// Ref prefix and criteria mode constants.
+const (
+	PrefixJourney  = "journey"
+	PrefixSmoke    = "smoke"
+	PrefixUnit     = "unit"
+	PrefixContract = "contract"
+
+	ModeAuto   = "auto"
+	ModeManual = "manual"
+)
+
+// fmtSlicePkgPath is the format string for constructing a Go package path
+// relative to the module root when resolving a slice's test package.
+// Used in resolveSlicePkg; extracted as a const to satisfy go:S1192.
+const fmtSlicePkgPath = "./%s/%s/..."
+
+// Runner executes metadata-driven verification tests.
+type Runner struct {
+	project   *metadata.ProjectMeta
+	root      string // Go module root (where go.mod lives)
+	goTest    goTestRunner
+	goTestErr error
+}
+
+// NewRunner creates a Runner for executing verification tests.
+func NewRunner(project *metadata.ProjectMeta, root string) *Runner {
+	goTest, err := newGoTestRunner()
+	return &Runner{project: project, root: root, goTest: goTest, goTestErr: err}
+}
+
+func (r *Runner) runGoTest(ctx context.Context, dir string, args []string) goTestResult {
+	if r.goTestErr != nil {
+		return goTestResult{Err: r.goTestErr}
+	}
+	return r.goTest.run(ctx, dir, args)
+}
+
+// VerifySlice runs tests for a slice driven by metadata verify.unit and
+// verify.contract declarations. If neither is declared, falls back to
+// running all tests in the slice package.
+func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResult, error) {
+	cellID, sliceID, err := parseSliceKey(sliceKey)
+	if err != nil {
+		return nil, err
+	}
+
+	sm := r.project.Slices[sliceKey]
+	if sm == nil {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSliceNotFound,
+			"slice not found in project metadata",
+			errcode.WithDetails(errcode.PublicString("slice", sliceKey)))
+	}
+
+	// Try metadata-style dir first; if it doesn't exist as a Go package,
+	// fall back to the hyphen-stripped variant (e.g., session-login → sessionlogin).
+	pkg := resolveSlicePkg(r.root, sm.File, cellID, sliceID)
+	result := &VerifyResult{TargetID: sliceKey, Passed: true}
+
+	unitRefs := sm.Verify.Unit
+	contractRefs := sm.Verify.Contract
+
+	// If metadata declares specific refs, use them.
+	if len(unitRefs) > 0 || len(contractRefs) > 0 {
+		r.runRefs(ctx, result, pkg, unitRefs)
+		r.runRefs(ctx, result, pkg, contractRefs)
+		return result, nil
+	}
+
+	// Fallback: no metadata refs, run all tests in the slice package.
+	res := r.runGoTest(ctx, r.root, []string{pkg, "-v"})
+	recordResult(result, sliceKey, res, pkg, "")
+	return result, nil
+}
+
+// VerifyCell runs smoke tests for a cell driven by metadata verify.smoke.
+// If no smoke refs are declared, logs a warning and returns passed.
+func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, error) {
+	cm := r.project.Cells[cellID]
+	if cm == nil {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
+			"cell not found in project metadata",
+			errcode.WithDetails(errcode.PublicString("cell", cellID)))
+	}
+
+	result := &VerifyResult{TargetID: cellID, Passed: true}
+
+	smokeRefs := cm.Verify.Smoke
+	if len(smokeRefs) == 0 {
+		slog.Warn("cell has no verify.smoke declarations", slog.String("cell", cellID))
+		result.Results = append(result.Results, TestResult{
+			Name:   cellID,
+			Passed: true,
+			Output: "warning: no verify.smoke declarations — zero verification performed",
+		})
+		return result, nil
+	}
+
+	cellPkg := cellPackagePath(cm.File, cellID)
+	for _, ref := range smokeRefs {
+		resolved, err := resolveRef(ref)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+			result.Passed = false
+			continue
+		}
+		pkg := resolved.Pkg
+		if pkg == "" {
+			pkg = cellPkg
+		}
+		res := r.runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		recordResult(result, ref, res, pkg, resolved.RunPattern)
+	}
+	return result, nil
+}
+
+// RunJourney runs auto-mode pass criteria for a journey and collects
+// manual criteria into ManualPending.
+func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResult, error) {
+	j := r.project.Journeys[journeyID]
+	if j == nil {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrJourneyNotFound,
+			"journey not found in project metadata",
+			errcode.WithDetails(errcode.PublicString("journey", journeyID)))
+	}
+
+	result := &VerifyResult{TargetID: journeyID, Passed: true}
+
+	// Single pass: classify criteria into manual / auto-runnable / auto-incomplete.
+	var autoRefs []string
+	for _, pc := range j.PassCriteria {
+		switch {
+		case pc.Mode == ModeManual:
+			result.ManualPending = append(result.ManualPending, pc.Text)
+		case pc.Mode == ModeAuto && pc.CheckRef != "":
+			autoRefs = append(autoRefs, pc.CheckRef)
+		case pc.Mode == ModeAuto && pc.CheckRef == "":
+			result.Results = append(result.Results, TestResult{
+				Name:   pc.Text,
+				Passed: false,
+				Output: "auto criterion has no checkRef — cannot verify automatically",
+			})
+			result.Passed = false
+		}
+	}
+
+	if len(autoRefs) == 0 {
+		if len(result.ManualPending) > 0 && result.Passed {
+			result.Results = append(result.Results, TestResult{
+				Name:   journeyID,
+				Passed: true,
+				Output: "warning: only manual criteria — automated verification not possible",
+			})
+		}
+		return result, nil
+	}
+
+	for _, ref := range autoRefs {
+		tr, errs := r.RunJourneyCheckRef(ctx, j, ref)
+		result.Results = append(result.Results, tr)
+		result.Errors = append(result.Errors, errs...)
+		if !tr.Passed || len(errs) > 0 {
+			result.Passed = false
+		}
+	}
+	return result, nil
+}
+
+// RunActiveJourneys runs every active journey in the parsed project. A
+// non-nil project with zero active journeys is treated as a fail-fast
+// condition (K-02 (b)): without this guard, RunActiveJourneys would
+// silently pass on a project whose journeys are all stuck at experimental
+// — exactly the failure mode the K-02 closure is meant to detect.
+//
+// nil project is preserved as a pass path: CLI startup invokes
+// RunActiveJourneys before metadata is parsed in some flows, and "no
+// project loaded" is a different defect class (already surfaced by the
+// caller) from "project loaded, no active journey".
+func (r *Runner) RunActiveJourneys(ctx context.Context) (*VerifyResult, error) {
+	result := &VerifyResult{TargetID: "active journeys", Passed: true}
+	if r.project == nil {
+		return result, nil
+	}
+	activeCount := 0
+	for _, id := range sortedJourneyIDs(r.project.Journeys) {
+		j := r.project.Journeys[id]
+		if j.Lifecycle != "active" {
+			continue
+		}
+		activeCount++
+		jr, err := r.RunJourney(ctx, j.ID)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: j.ID, Passed: false})
+			result.Passed = false
+			continue
+		}
+		result.Results = append(result.Results, jr.Results...)
+		result.Errors = append(result.Errors, jr.Errors...)
+		result.ManualPending = append(result.ManualPending, jr.ManualPending...)
+		if !hasAutoCheckRef(j) {
+			result.Results = append(result.Results, TestResult{
+				Name:   j.ID,
+				Passed: false,
+				Output: "active journey has no auto checkRef — automated verification required",
+			})
+			result.Passed = false
+		}
+		if !jr.Passed || len(jr.Errors) > 0 {
+			result.Passed = false
+		}
+	}
+	if activeCount == 0 {
+		result.Passed = false
+		result.Results = append(result.Results, TestResult{
+			Name:   "active journeys",
+			Passed: false,
+			Output: "no active journey present — RunActiveJourneys would silently pass" +
+				" without verifying anything;" +
+				" fix: promote at least one journey to lifecycle: active (with an" +
+				" auto checkRef that resolves to an executable test target), or" +
+				" remove the --active gate from CI if the project has no active" +
+				" journeys yet",
+		})
+	}
+	return result, nil
+}
+
+func hasAutoCheckRef(j *metadata.JourneyMeta) bool {
+	for _, pc := range j.PassCriteria {
+		if pc.Mode == ModeAuto && strings.TrimSpace(pc.CheckRef) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedJourneyIDs(journeys map[string]*metadata.JourneyMeta) []string {
+	ids := make([]string, 0, len(journeys))
+	for id := range journeys {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// RunJourneyCheckRef executes one journey checkRef using the same resolver as
+// RunJourney. Governance strict mode calls this so promotion gates and runtime
+// verification share the exact same target binding.
+func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta, ref string) (TestResult, []error) {
+	targetID := ref
+	if j != nil {
+		targetID = j.ID
+	}
+	result := &VerifyResult{TargetID: targetID, Passed: true}
+	resolved, err := resolveRef(ref)
+	if err != nil {
+		return TestResult{Name: ref, Passed: false}, []error{err}
+	}
+	if resolved.Kind != PrefixJourney {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
+			"journey checkRef must use journey prefix",
+			errcode.WithDetails(errcode.PublicString("ref", ref)))}
+	}
+	if j != nil && resolved.Scope != j.ID {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
+			"journey checkRef belongs to a different journey",
+			errcode.WithDetails(
+				errcode.PublicString("ref", ref),
+				errcode.PublicString("scope", resolved.Scope),
+				errcode.PublicString("journey", j.ID),
+			))}
+	}
+	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
+	args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
+	res := r.runGoTest(ctx, r.root, args)
+	recordResult(result, ref, res, pkg, resolved.RunPattern)
+	if len(result.Results) == 0 {
+		return TestResult{Name: ref, Passed: false}, result.Errors
+	}
+	return result.Results[0], result.Errors
+}
+
+// runRefs resolves each ref independently and runs go test per-ref.
+// Individual execution ensures a stale or misspelled ref cannot hide
+// behind a passing sibling pattern.
+func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg string, refs []string) {
+	for _, ref := range refs {
+		resolved, err := resolveRef(ref)
+		if err != nil {
+			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+			result.Passed = false
+			continue
+		}
+		pkg := fallbackPkg
+		if resolved.Pkg != "" {
+			pkg = resolved.Pkg
+		}
+		res := r.runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		recordResult(result, ref, res, pkg, resolved.RunPattern)
+	}
+}
+
+// recordResult appends a goTestResult to the VerifyResult, handling ZeroMatch
+// and error propagation in a single place.
+func recordResult(result *VerifyResult, name string, res goTestResult, pkg, pattern string) {
+	tr := TestResult{
+		Name:        name,
+		Passed:      res.Passed,
+		Output:      res.Output,
+		ZeroMatch:   res.ZeroMatch,
+		SkippedOnly: res.SkippedOnly,
+	}
+	if res.ZeroMatch {
+		tr.Passed = false
+		if pattern != "" {
+			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
+				"pattern matched no tests — check your YAML ref",
+				errcode.WithDetails(errcode.PublicString("pattern", pattern), errcode.PublicString("pkg", pkg))))
+		} else {
+			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
+				"matched no tests",
+				errcode.WithDetails(errcode.PublicString("pkg", pkg))))
+		}
+	}
+	if res.SkippedOnly {
+		tr.Passed = false
+		if pattern != "" {
+			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
+				"pattern matched only skipped tests — replace stubs with executable checks",
+				errcode.WithDetails(errcode.PublicString("pattern", pattern), errcode.PublicString("pkg", pkg))))
+		} else {
+			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
+				"matched only skipped tests",
+				errcode.WithDetails(errcode.PublicString("pkg", pkg))))
+		}
+	}
+	result.Results = append(result.Results, tr)
+	if !tr.Passed {
+		result.Passed = false
+	}
+	if res.Err != nil {
+		result.Errors = append(result.Errors, res.Err)
+	}
+}
+
+// resolveJourneyPkg determines the Go test package and extra args for a journey
+// ref. Example-local journey files run against their owning example tree;
+// project-level journeys still prefer the tests/integration satellite module
+// with integration tags, then ./journeys/..., then ./... as last resort.
+func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pkg string, extraArgs []string) {
+	if ref.Pkg != "" {
+		return ref.Pkg, nil
+	}
+	if j != nil {
+		if exampleName, ok := exampleNameFromJourneyFile(j.File); ok {
+			if dirExists(filepath.Join(r.root, "examples", exampleName)) {
+				return fmt.Sprintf("./examples/%s/...", exampleName), nil
+			}
+		}
+	}
+	if pkgPath, ok := integrationJourneyPkgPath(r.root); ok {
+		return pkgPath, []string{"-tags=integration"}
+	}
+	if dirExists(filepath.Join(r.root, "journeys")) {
+		return "./journeys/...", nil
+	}
+	return "./...", nil
+}
+
+func integrationJourneyPkgPath(root string) (string, bool) {
+	dir := filepath.Join(root, "tests", "integration")
+	if !dirExists(dir) {
+		return "", false
+	}
+	modulePath, err := readGoModModulePath(filepath.Join(dir, "go.mod"))
+	if err != nil || modulePath == "" {
+		return "./tests/integration/...", true
+	}
+	return modulePath + "/...", true
+}
+
+func readGoModModulePath(path string) (string, error) {
+	//nolint:gosec // R2-approved: path is the fixed repo-local tests/integration/go.mod assembled from Runner.root.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+	return "", nil
+}
+
+func exampleNameFromJourneyFile(file string) (string, bool) {
+	parts := strings.Split(filepath.ToSlash(file), "/")
+	if len(parts) < 4 {
+		return "", false
+	}
+	if parts[0] != "examples" || parts[1] == "" || parts[2] != "journeys" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+// resolveSlicePkg determines the Go test package path for a slice. The slice's
+// ".../slices" parent and metadata dir name are derived from sliceFile (the
+// slice.yaml path), so it is layout-agnostic: platform slices live under
+// corecells/<cell>/slices/<slice>/ (flat module), example slices under
+// examples/<id>/cells/<cell>/slices/<slice>/. This mirrors cellPackagePath,
+// which derives a cell's package from its metadata File rather than a hardcoded
+// "cells/" literal (the #1560 fail-open: a literal "cells/" stops resolving once
+// platform cells move to the corecells module).
+//
+// In this repo, metadata dirs (session-login/) may contain only slice.yaml while
+// the Go package lives in a hyphen-stripped sibling (sessionlogin/), so we prefer
+// whichever dir actually contains Go source files.
+//
+// When sliceFile is empty (synthetic/in-memory metadata), it falls back to the
+// conventional platform layout ./cells/<cellID>/slices/<sliceID>/.
+//
+// Precondition: cellID and sliceID must have passed parseSliceKey validation.
+func resolveSlicePkg(root, sliceFile, cellID, sliceID string) string {
+	base := path.Join("cells", cellID, "slices")
+	leaf := sliceID
+	if sliceFile != "" {
+		metaDir := path.Dir(filepath.ToSlash(sliceFile)) // .../slices/<slice>
+		base = path.Dir(metaDir)
+		leaf = path.Base(metaDir)
+	}
+	// Prefer the dir that actually contains Go files.
+	stripped := strings.ReplaceAll(leaf, "-", "")
+	if hasGoFiles(filepath.Join(root, filepath.FromSlash(base), stripped)) {
+		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
+	}
+	if hasGoFiles(filepath.Join(root, filepath.FromSlash(base), leaf)) {
+		return fmt.Sprintf(fmtSlicePkgPath, base, leaf)
+	}
+	// Fallback: try stripped dir existence (may have Go files in subdirs).
+	if dirExists(filepath.Join(root, filepath.FromSlash(base), stripped)) {
+		return fmt.Sprintf(fmtSlicePkgPath, base, stripped)
+	}
+	// Last resort: metadata-style path (go test will give clear error).
+	return fmt.Sprintf(fmtSlicePkgPath, base, leaf)
+}
+
+// cellPackagePath derives the Go test package path for a cell from its
+// metadata File field. If File is set (e.g. "corecells/accesscore/cell.yaml"
+// or "examples/demo/cells/democell/cell.yaml"), the path is constructed from
+// the directory containing cell.yaml. When File is empty, it falls back to the
+// conventional platform layout "./cells/{cellID}/...".
+func cellPackagePath(cellFile, cellID string) string {
+	if cellFile == "" {
+		return fmt.Sprintf("./cells/%s/...", cellID)
+	}
+	dir := path.Dir(strings.ReplaceAll(cellFile, "\\", "/"))
+	return "./" + dir + "/..."
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+func hasGoFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
+			return true
+		}
+	}
+	return false
+}
+
+// parseSliceKey splits "cellID/sliceID" into its parts.
+func parseSliceKey(key string) (cellID, sliceID string, err error) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid slice key: expected format \"cellID/sliceID\"",
+			errcode.WithDetails(errcode.PublicString("key", key)))
+	}
+	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid cellID: contains path separator or traversal")
+	}
+	if strings.Contains(parts[1], "..") || strings.ContainsAny(parts[1], `/\`) {
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid sliceID: contains path separator or traversal")
+	}
+	return parts[0], parts[1], nil
+}

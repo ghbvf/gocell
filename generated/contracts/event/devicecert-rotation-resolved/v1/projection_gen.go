@@ -4,7 +4,7 @@
 package devicecertrotationresolved
 
 import (
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 // NewProjectionRequest returns a record-ready cell.ProjectionRequest for the L3

@@ -6,9 +6,9 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/httpcookie"
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/runtime/http/cellmw"
 	refreshgen "github.com/ghbvf/gocell/generated/contracts/http/auth/refresh/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/http/cellmw"
 )
 
 // RefreshAdapter implements refreshgen.Service for http.auth.refresh.v1.

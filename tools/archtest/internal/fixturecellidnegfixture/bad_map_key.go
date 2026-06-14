@@ -11,8 +11,8 @@
 package fixturecellidnegfixture
 
 import (
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
 
 // BadMapKey constructs a ProjectMeta with a bare string literal as the

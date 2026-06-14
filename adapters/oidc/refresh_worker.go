@@ -48,7 +48,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
 )
 
 // oidcRefreshWorker adapts *Adapter to the kernel/worker.Worker contract so

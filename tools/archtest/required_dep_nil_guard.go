@@ -56,7 +56,7 @@ import (
 // validationPkgPath is the import path of pkg/validation.
 // Derived from PlatformModulePath so a module rename / /v2 bump updates exactly
 // one place.
-const validationPkgPath = PlatformModulePath + "/pkg/validation"
+const validationPkgPath = PlatformFrameworkModulePath + "/pkg/validation"
 
 // isNilInterfaceFunc is the name of the banned helper function in pkg/validation.
 const isNilInterfaceFunc = "IsNilInterface"

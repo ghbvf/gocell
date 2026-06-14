@@ -5,7 +5,7 @@ package projectioncheckpointenrollfixture
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
 )
 
 // TestEnrolledStoreConformance enrolls enrolledStore in the shared conformance

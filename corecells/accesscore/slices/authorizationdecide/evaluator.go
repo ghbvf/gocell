@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 )
 
 // Sentinel matched-rule ids for the two evaluate outcomes that are not the id of

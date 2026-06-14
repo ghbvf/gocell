@@ -8,7 +8,7 @@ metrics:
       help: Total number of account auto-lockout transitions, by reason (threshold_locked / lazy_unlocked).
       labels:
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_pdp_decision_duration_seconds
       type: histogram
       help: Duration of a PDP authorization decision (policy-store load + evaluate) in seconds, by decision.
@@ -27,14 +27,14 @@ metrics:
         - ".5"
         - "1"
         - "2.5"
-      file: runtime/auth/pdp_metrics.go
+      file: framework/runtime/auth/pdp_metrics.go
     - name: auth_pdp_decision_total
       type: counter
       help: Total number of PDP (ABAC) authorization decisions, by action and decision (allow/deny/error).
       labels:
         - action
         - decision
-      file: runtime/auth/pdp_metrics.go
+      file: framework/runtime/auth/pdp_metrics.go
     - name: auth_refresh_gc_duration_seconds
       type: histogram
       help: Duration of refresh-token GC runs in seconds.
@@ -52,26 +52,26 @@ metrics:
         - "1"
         - "2.5"
         - "5"
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_refresh_gc_removed_total
       type: counter
       help: Total number of refresh-token rows removed by GC.
       labels:
         - result
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_refresh_gc_runs_total
       type: counter
       help: Total number of refresh-token GC runs by result.
       labels:
         - result
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_service_token_verify_total
       type: counter
       help: Total number of service token verifications.
       labels:
         - result
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_token_verify_duration_seconds
       type: histogram
       help: Duration of JWT token verification in seconds.
@@ -86,14 +86,14 @@ metrics:
         - ".025"
         - ".05"
         - ".1"
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_token_verify_total
       type: counter
       help: Total number of JWT token verifications.
       labels:
         - result
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: bootstrap_shutdown_phase_duration_seconds
       type: histogram
       help: Wall-clock duration of each shutdown phase in seconds.
@@ -112,30 +112,30 @@ metrics:
         - "10"
         - "30"
         - "60"
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_phase_entries_total
       type: counter
       help: Total entries into each shutdown phase.
       labels:
         - phase
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_total
       type: counter
       help: Total completed shutdowns by outcome (success|timeout|teardown_error|signal_error).
       labels:
         - outcome
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: cell_transport_requests_total
       type: counter
       help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
       labels:
         - transport_mode
-      file: runtime/transport/metrics.go
+      file: framework/runtime/transport/metrics.go
     - name: config_stale_cipher_total
       type: counter
       help: Number of config values read that are encrypted with a non-current key version.
       labels: []
-      file: runtime/observability/metrics/config_stale_cipher.go
+      file: framework/runtime/observability/metrics/config_stale_cipher.go
     - name: devicecert_rotation_resolved_total
       type: counter
       help: Total rotation-resolved events processed by devicecertcompletion, by outcome (succeeded/failed/rejected).
@@ -156,7 +156,7 @@ metrics:
         - "1"
         - "5"
         - "30"
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_runtime_errors_total
       type: counter
       help: 'Total number of event router runtime-phase faults (Phase 4, after Running()), partitioned by cell, topic, and reason. reason is a closed set: runtime_fault.'
@@ -164,7 +164,7 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_setup_errors_total
       type: counter
       help: 'Total number of event router subscription setup-phase failures (Phase 1-3), partitioned by cell, topic, and reason. reason is a closed set: setup_error | panic | ready_timeout | subscribe_failure.'
@@ -172,20 +172,20 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_subscriptions_active
       type: gauge
       help: Number of currently active event router subscriptions.
       labels:
         - cell
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: eventbus_cache_tombstone_evicted_total
       type: counter
       help: Total number of subscriber-cache tombstone entries evicted by TTL garbage collection, partitioned by owning cell and slice.
       labels:
         - cell
         - slice
-      file: runtime/observability/metrics/eventbus_cache.go
+      file: framework/runtime/observability/metrics/eventbus_cache.go
     - name: grpc_server_request_duration_seconds
       type: histogram
       help: gRPC unary server request duration in seconds.
@@ -219,14 +219,14 @@ metrics:
       help: Total number of hook events dropped by the async hook dispatcher, partitioned by reason.
       labels:
         - reason
-      file: kernel/assembly/hook_dispatcher.go
+      file: framework/kernel/assembly/hook_dispatcher.go
     - name: http_request_body_limit_rejections_total
       type: counter
       help: Total number of HTTP requests rejected for exceeding the body size limit (Content-Length fast-path).
       labels:
         - cell
         - route
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: http_request_duration_seconds
       type: histogram
       help: HTTP request duration in seconds.
@@ -247,7 +247,7 @@ metrics:
         - "2.5"
         - "5"
         - "10"
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: http_requests_total
       type: counter
       help: Total number of HTTP requests.
@@ -256,14 +256,14 @@ metrics:
         - route
         - status
         - cell
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: idempotency_requests_total
       type: counter
       help: Total HTTP idempotency decisions, labeled by terminal state (acquired = fresh claim processed; replayed = cached response served; busy = an in-flight lease already holds the key; store_error = Claim-path store failure (Record/Release failures are logged only, not counted here); oversize = response too large to record; key_reused = same key presented with a different request body (fingerprint mismatch); body_read_failed = request body read failed before the claim, a transient/connection fault — e.g. the client aborted the upload — that maps to 503). acquired counts every fresh claim; oversize is a sub-event of acquired. cell is the owning RouteGroup cell or _runtime for framework paths.
       labels:
         - cell
         - state
-      file: runtime/observability/metrics/idempotency.go
+      file: framework/runtime/observability/metrics/idempotency.go
     - name: mqtt_consume_duration_seconds
       type: histogram
       help: 'End-to-end MQTT consume duration in seconds, from handler invocation to Settlement Commit. Buckets cover 1 ms to 10 s; values outside this range fall into the +Inf bucket. Label: cell = construction-time cell identifier (registration-time enumerated, not from request ctx).'
@@ -368,34 +368,34 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/outbox.go
+      file: framework/runtime/observability/metrics/outbox.go
     - name: outbox_emit_failopen_dropped_total
       type: counter
       help: Total outbox entries dropped in fail-open mode. cell=Cell ID; topic=routing topic.
       labels:
         - cell
         - topic
-      file: kernel/outbox/emitter.go
+      file: framework/kernel/outbox/emitter.go
     - name: outbox_pending_depth
       type: gauge
       help: Current eligible pending outbox entries for the owner cell (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
       labels:
         - cell
-      file: runtime/observability/metrics/outbox.go
+      file: framework/runtime/observability/metrics/outbox.go
     - name: projection_event_replay_lag_seconds
       type: gauge
       help: 'Event replay lag in seconds (now − lastApplied.OccurredAt). Labels: cell, projection.'
       labels:
         - cell
         - projection
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: projection_pending_events
       type: gauge
       help: 'Number of events not yet reflected in the projection (Head − checkpoint). Labels: cell, projection.'
       labels:
         - cell
         - projection
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: projection_rebuild_duration_seconds
       type: histogram
       help: 'Projection rebuild wall-clock duration in seconds. Labels: cell, projection.'
@@ -421,7 +421,7 @@ metrics:
         - "600"
         - "900"
         - "1800"
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: reconcile_duration_seconds
       type: histogram
       help: Reconcile call wall-clock duration in seconds.
@@ -441,26 +441,26 @@ metrics:
         - "10"
         - "30"
         - "60"
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_in_flight
       type: gauge
       help: Reconciles currently executing.
       labels:
         - reconciler
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_leader
       type: gauge
       help: 1 when this instance holds the reconcile lease, else 0.
       labels:
         - reconciler
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_total
       type: counter
       help: Total reconcile attempts by outcome.
       labels:
         - reconciler
         - result
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: saga_drive_total
       type: counter
       help: Total Coordinator driveOne completions, labeled by result (ok = advanced cleanly; error = stale lease / instance gone / step failure). Per-instance forward-progress throughput.
@@ -468,14 +468,14 @@ metrics:
         - cell
         - definition_id
         - result
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_heartbeat_failed_total
       type: counter
       help: Total heartbeat tick failures observed by the saga executor, labeled by reason (infra_error = transient err; stale_lease = ok=false / another coordinator took over). Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.
       labels:
         - cell
         - reason
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_journal_tailer_checkpoint_advance_total
       type: counter
       help: Total saga-journal tailer checkpoint AdvanceIfOwner attempts, labeled by result (ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault). Alert on result=error; exclude result=stale_owner.
@@ -483,7 +483,7 @@ metrics:
         - cell
         - projection
         - result
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_drain_total
       type: counter
       help: Total saga-journal tailer drains that made progress or failed, labeled by result (ok = ≥1 event applied; store_error = checkpoint load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.
@@ -491,14 +491,14 @@ metrics:
         - cell
         - projection
         - result
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_last_success_timestamp_seconds
       type: gauge
       help: Unix time of the last fully-completed saga-journal tailer tick (drives the stalled-tailer alert).
       labels:
         - cell
         - projection
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_lock_acquire_failed_total
       type: counter
       help: Total per-projection distlock acquire failures (the saga-journal tailer leader gate skipped the tick), labeled by reason (contended = another process holds the lock; ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate).
@@ -506,14 +506,14 @@ metrics:
         - cell
         - projection
         - reason
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_pending_events
       type: gauge
       help: Residual saga-journal tailer backlog (HeadSeq − checkpoint) after the last clean tick.
       labels:
         - cell
         - projection
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_leader_elect_skip_total
       type: counter
       help: Total leader-elect skips (acquireLead could not confirm leadership), labeled by reason (contended = another coordinator holds the distlock; ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate). Sustained contended with drive{result=ok}≈0 means an instance is stuck skipping.
@@ -521,7 +521,7 @@ metrics:
         - cell
         - definition_id
         - reason
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_step_outcome_total
       type: counter
       help: Total saga step Execute outcomes (succeeded/failed/expired/canceled/lease_lost). step_name is intentionally excluded to bound the step×outcome cardinality; per-step drill-down uses saga_step_retry_total.
@@ -529,7 +529,7 @@ metrics:
         - cell
         - definition_id
         - outcome
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_step_retry_total
       type: counter
       help: Total retry attempts emitted by the saga executor (attempt N>1 fired) per definition+step.
@@ -537,45 +537,45 @@ metrics:
         - cell
         - definition_id
         - step_name
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_tick_total
       type: counter
       help: Total Coordinator ClaimPending cycles, labeled by result (claimed = ≥1 instance; empty = idle tick; error = ClaimPending failed). Loop liveness; definition_id is not available pre-claim.
       labels:
         - cell
         - result
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: session_cache_errors_total
       type: counter
       help: 'Total session-cache read-path access errors (Redis GET/SET failure, corrupt JSON, or schema-invalid entry). Fail-safe — every read-path error degrades to a miss (errors ⊆ misses) — so this rate distinguishes a cold cache from a degraded Redis. Post-commit revoke DEL failures are a distinct series: session_cache_revoke_del_errors_total.'
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_hits_total
       type: counter
       help: Total session-cache hits (valid entry served from Redis without consulting the inner store). hits + misses = total Get() calls; read-path errors are a subset of misses.
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_misses_total
       type: counter
       help: Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). hits + misses = total Get() calls; read-path errors are a subset of misses.
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_revoke_del_errors_total
       type: counter
       help: Total post-commit single-session revoke cache-DEL failures (#796). A failed DEL leaves the logged-out session's cached entry to expire at TTL (accepted degraded window — stale ≤ TTL). NOT a read-path miss, so it is tracked separately from session_cache_errors_total; a non-zero rate means invalidation latency degraded from near-zero to ≤ TTL (security-relevant).
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: webhook_deliveries_total
       type: counter
       help: Total outbound webhook deliveries by outcome.
       labels:
         - result
         - source
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_delivery_duration_seconds
       type: histogram
       help: Outbound webhook delivery wall-clock duration in seconds.
@@ -591,17 +591,17 @@ metrics:
         - "5"
         - "10"
         - "30"
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_idempotency_hits_total
       type: counter
       help: Total inbound webhook duplicate deliveries deduplicated by the idempotency claimer.
       labels:
         - source
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_signature_failures_total
       type: counter
       help: Total inbound webhook signature-verification failures by reason.
       labels:
         - source
         - reason
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go

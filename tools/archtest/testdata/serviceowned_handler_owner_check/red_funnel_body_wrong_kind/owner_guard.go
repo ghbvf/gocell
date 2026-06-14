@@ -5,7 +5,7 @@
 // — but the otherCalls accumulator in B2 fires on the wrong-Kind exit.
 package red_funnel_body_wrong_kind
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // canonical helper — B2b silent.
 func ownershipMismatch[T any](resource T, ownerID func(T) string, callerID string) bool {

@@ -5,7 +5,7 @@
 // the qualified + aliased shapes and the rule overview.
 package casprotocolfixture
 
-import . "github.com/ghbvf/gocell/runtime/state/cas"
+import . "github.com/ghbvf/gocell/framework/runtime/state/cas"
 
 func dotImportCall() {
 	_, _ = NewProtocol(

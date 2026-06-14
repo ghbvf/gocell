@@ -109,7 +109,7 @@ func TestSessionRevokedFieldAccess_Upstream_01(t *testing.T) {
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
@@ -217,7 +217,7 @@ func TestSessionRevokedFieldAccess_BlindSpot_ReflectFieldByName(t *testing.T) {
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{}, []string{
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {

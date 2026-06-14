@@ -1,7 +1,7 @@
 package abac
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Operator is the comparison operation in a Condition. iota+1 zero-invalid

@@ -6,9 +6,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/auth/session/storetest"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session/storetest"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 

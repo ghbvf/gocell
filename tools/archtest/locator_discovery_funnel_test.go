@@ -196,8 +196,8 @@ var locatorA5AllowedFiles = map[string]bool{
 // form-uniqueness rules and their blind-spot inventory.
 func locatorA2ScanPatterns() []string {
 	return []string{
-		"./kernel/metadata/...",
-		"./kernel/governance/...",
+		"./framework/kernel/metadata/...",
+		"./framework/kernel/governance/...",
 		"./cmd/gocell/...",
 	}
 }
@@ -214,16 +214,16 @@ func locatorA2ScanPatterns() []string {
 // fail A5.
 func locatorConsumerScanPatterns() []string {
 	return []string{
-		"./kernel/governance/...",
+		"./framework/kernel/governance/...",
 		"./cmd/gocell/...",
-		"./kernel/metadata/...",
-		"./kernel/assembly/...",
+		"./framework/kernel/metadata/...",
+		"./framework/kernel/assembly/...",
 	}
 }
 
 // locatorInScanScope reports whether rel (repo-relative) falls under one of the
 // directory prefixes derived from the given "./dir/..." package patterns
-// (e.g. "./kernel/metadata/..." → "kernel/metadata/").
+// (e.g. "./framework/kernel/metadata/..." → "kernel/metadata/").
 //
 // cmd/gocell became its own go.work module (#1557), so the A2/A5 rules switched
 // from a bounded Typed(GOWORK=off) load — which can no longer cross the satellite
@@ -248,7 +248,7 @@ func locatorInScanScope(rel string, patterns []string) bool {
 // kernel/metadata/**.
 func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 	root := findModuleRoot(t)
-	diags := Run(t, AST(DirsScope(root, []string{"kernel/metadata"})),
+	diags := Run(t, AST(DirsScope(root, []string{"framework/kernel/metadata"})),
 		func(p *Pass) []Diagnostic {
 			var d []Diagnostic
 			for _, f := range p.Files {
@@ -774,7 +774,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 	// would mean A2a already catches it and a developer should not be able to
 	// bypass the funnel this way.
 	hasPrefixConstDiags := Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+		[]string{"./framework/kernel/metadata/...", "./framework/kernel/governance/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil
@@ -818,7 +818,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A2_ConstEvalBypassBlindSpots(t *testing.T) 
 
 	// Blind-spot BS-B: const Ident as equality operand evaluating to a banned token.
 	equalityConstDiags := Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./kernel/metadata/...", "./kernel/governance/..."}),
+		[]string{"./framework/kernel/metadata/...", "./framework/kernel/governance/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil {
 				return nil

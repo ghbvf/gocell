@@ -79,7 +79,7 @@ import (
 )
 
 const (
-	checkpointConformancePkg      = PlatformModulePath + "/kernel/projection/projectiontest"
+	checkpointConformancePkg      = PlatformFrameworkModulePath + "/kernel/projection/projectiontest"
 	checkpointConformanceFuncName = "RunCheckpointConformance"
 )
 
@@ -257,7 +257,7 @@ func TestProjectionCheckpointConformanceEnroll01_RedFixture(t *testing.T) {
 	// CheckpointStore interface and the fixture impls come from the SAME load
 	// (pointer-identical *types.Named, required by types.Implements).
 	loadPatterns := []string{
-		"./kernel/projection/...",
+		"./framework/kernel/projection/...",
 		"./tools/archtest/internal/projectioncheckpointenrollfixture/...",
 	}
 

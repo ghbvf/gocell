@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	"github.com/ghbvf/gocell/framework/pkg/pgrepoapproved"
 )
 
 // PGExecutor mirrors the production sealed interface (Exec / Query / QueryRow

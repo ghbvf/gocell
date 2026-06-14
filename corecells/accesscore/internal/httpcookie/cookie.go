@@ -34,7 +34,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/http/cellmw"
+	"github.com/ghbvf/gocell/framework/runtime/http/cellmw"
 )
 
 const (

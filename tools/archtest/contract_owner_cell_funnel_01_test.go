@@ -144,7 +144,7 @@ func isSelectorNamed(expr ast.Expr, name string) bool {
 // through ContractOwner.Cell().
 func TestContractOwnerCellFunnel_NoBypass(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, "kernel", "governance")
+	dir := filepath.Join(root, "framework", "kernel", "governance")
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {

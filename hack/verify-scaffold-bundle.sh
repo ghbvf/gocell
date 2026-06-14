@@ -43,6 +43,10 @@ run_smoke() {
     rm -rf "cells/${CELL_ID}" \
            "contracts/http/${CELL_ID}" \
            "generated/contracts/http/${CELL_ID}"
+    # The smoke materializes a transient root consumer module (see below) so the
+    # scaffolded cell compiles; drop it and restore the workspace file.
+    rm -f go.mod go.sum
+    git checkout -- go.work 2>/dev/null || true
   }
 
   # Clean any prior smoke residue (idempotent re-runs) and ensure cleanup
@@ -56,6 +60,17 @@ run_smoke() {
     --level=L1 \
     --team=scaffoldsmoke \
     --role=cell-owner
+
+  # Post-#1565 the gocell repo has no root module (kernel/runtime/pkg live in the
+  # `framework` submodule; the root carries only go.work). The scaffold emits the
+  # cell under the org module path github.com/ghbvf/gocell, so cells/<id> belongs to
+  # no workspace module and `go test` errors "directory prefix … does not contain
+  # modules listed in go.work". Materialize a transient root consumer module at that
+  # org path + register it in the workspace; framework/ and generated/ resolve as
+  # sibling workspace modules. cleanup_smoke_artifacts removes it (sandbox mode
+  # discards the whole worktree regardless).
+  go mod init github.com/ghbvf/gocell
+  go work use .
 
   go test "./cells/${CELL_ID}/..."
 

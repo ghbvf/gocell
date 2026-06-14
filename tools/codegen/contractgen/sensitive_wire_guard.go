@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // AUDIT-WIRE-SENSITIVE-FIELD-FUNNEL-01 — audit-domain wire-out sensitive-field

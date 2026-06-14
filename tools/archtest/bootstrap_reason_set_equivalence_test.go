@@ -79,11 +79,11 @@ const reasonPrefixInAudit = "Reason"
 
 // bootstrapGoSuffix is the path suffix for runtime/auth/bootstrap.go — the
 // file that contains the inline reason literals.
-const bootstrapGoSuffix = "/runtime/auth/bootstrap.go"
+const bootstrapGoSuffix = "/framework/runtime/auth/bootstrap.go"
 
 // runtimeAuthPkgSuffix is the package path suffix for runtime/audit where the
 // authoritative Reason* constants live.
-const runtimeAuditPkgSuffix = "/runtime/audit"
+const runtimeAuditPkgSuffix = "/framework/runtime/audit"
 
 // setupPkgSuffix is the package path suffix for corecells/accesscore/slices/setup,
 // the producer-side whitelist site (third reason set).

@@ -7,8 +7,8 @@ package identitymanage_direct_revoke_refresh_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
 )
 
 // badRefreshRevoke directly calls RevokeUser on a refresh.Store — bypassing

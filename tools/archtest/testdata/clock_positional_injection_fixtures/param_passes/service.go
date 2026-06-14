@@ -3,7 +3,7 @@
 // No exported WithClock function is present — also compliant.
 package param_passes
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // Service is a production-shaped struct that requires an injected Clock.
 type Service struct {

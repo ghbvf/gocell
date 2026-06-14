@@ -89,7 +89,7 @@ import (
 func CheckAuthKeystestBoundary(t *testing.T, _ ConfigForExternalCell) []Diagnostic {
 	t.Helper()
 	root := findModuleRoot(t)
-	keystestImport := PlatformModulePath + "/runtime/auth/keystest"
+	keystestImport := PlatformFrameworkModulePath + "/runtime/auth/keystest"
 
 	allGoFiles, err := collectGoFiles(root)
 	if err != nil {
@@ -99,7 +99,7 @@ func CheckAuthKeystestBoundary(t *testing.T, _ ConfigForExternalCell) []Diagnost
 		t.Fatal("no .go files found — module root may be wrong")
 	}
 
-	keystestPkgDir := filepath.Join(root, "runtime", "auth", "keystest")
+	keystestPkgDir := filepath.Join(root, "framework", "runtime", "auth", "keystest")
 
 	var diags []Diagnostic
 	for _, f := range allGoFiles {
@@ -129,7 +129,7 @@ func CheckAuthKeystestBoundary(t *testing.T, _ ConfigForExternalCell) []Diagnost
 // files only; C additionally exempts the keystest package's own implementation.
 func keystestRuleFor(rel, dir string, isTest bool, keystestPkgDir string) (sub, suffix string, ok bool) {
 	switch {
-	case strings.HasPrefix(rel, "kernel/"):
+	case strings.HasPrefix(rel, "framework/kernel/"):
 		return "AUTH-KEYSTEST-A", "kernel must not depend on runtime/", true
 	case strings.HasPrefix(rel, PlatformCellsDir+"/"):
 		if isTest {
@@ -137,7 +137,7 @@ func keystestRuleFor(rel, dir string, isTest bool, keystestPkgDir string) (sub, 
 		}
 		return "AUTH-KEYSTEST-B",
 			"cells production code must not import test-only key helpers; use auth.GenerateRSAKeyPair()", true
-	case strings.HasPrefix(rel, "runtime/"):
+	case strings.HasPrefix(rel, "framework/runtime/"):
 		if isTest || dir == keystestPkgDir {
 			return "", "", false
 		}

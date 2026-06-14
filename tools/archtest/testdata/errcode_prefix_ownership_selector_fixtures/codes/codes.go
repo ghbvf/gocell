@@ -5,7 +5,7 @@
 // scan before the typed-const-eval fix.
 package codes
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // Unregistered is an unregistered-prefix code surfaced as an untyped string
 // const so it can be assigned to an errcode.Code sentinel in a sibling package

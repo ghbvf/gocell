@@ -128,7 +128,7 @@ const ruleProdMainWiringNoopReject01 = "PROD-MAIN-WIRING-NOOP-REJECT-01"
 
 // prodMainOutboxPkg is the import path of kernel/outbox, derived from
 // PlatformModulePath so a module rename / /v2 bump updates one place.
-const prodMainOutboxPkg = PlatformModulePath + "/kernel/outbox"
+const prodMainOutboxPkg = PlatformFrameworkModulePath + "/kernel/outbox"
 
 // prodMainOutboxRel is kernel/outbox's module-relative path ("kernel/outbox"),
 // derived from prodMainOutboxPkg so the diagnostic display symbol tracks a module

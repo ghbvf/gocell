@@ -15,8 +15,8 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 
 	"github.com/ghbvf/gocell/adapters/mqtt/internal/topicns"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 )
 
 // MQTT adapter error codes. All codes carry the ERR_ADAPTER_MQTT_ prefix

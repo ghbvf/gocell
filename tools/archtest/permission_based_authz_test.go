@@ -7,7 +7,7 @@
 // that have NOT been migrated to ABAC permission checks.
 //
 // A "role-literal gate" is a call whose receiver resolves (via go/types) to a
-// local alias of github.com/ghbvf/gocell/runtime/auth and whose selector is
+// local alias of github.com/ghbvf/gocell/framework/runtime/auth and whose selector is
 // AnyRole, SelfOr, or RequireAnyRole. These gates hard-code a role identity at
 // the call site, bypassing the ABAC PDP (auth.RequirePermission +
 // pkg/authz.Permission).
@@ -139,7 +139,7 @@ func scanPermissionBasedAuthzViolations(p *Pass, f *ast.File, rel string, allowl
 // auth.RequireAnyRole call outside the migration allowlist is a violation.
 //
 // The scan is import-aware: ResolvePackageRef resolves the callee to its
-// canonical go/types import path (github.com/ghbvf/gocell/runtime/auth),
+// canonical go/types import path (github.com/ghbvf/gocell/framework/runtime/auth),
 // so import aliases and dot-imports are all caught.
 func TestPermissionBasedAuthz_01(t *testing.T) {
 	t.Parallel()

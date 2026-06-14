@@ -86,7 +86,7 @@ import (
 // declaration to be deleted in the same PR.
 var allowedMustDecls = map[string]map[string]struct{}{
 	// (a) assertion guards in kernel/
-	"kernel/cell": {
+	"framework/kernel/cell": {
 		"MustHaveNonEmptyHealthName":     {},
 		"MustHaveLifecycleHookName":      {},
 		"MustHaveNonEmptyConfigPrefixes": {},
@@ -96,7 +96,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 		"MustNewBaseCell":          {},
 		"MustNewBaseSliceFromMeta": {},
 	},
-	"kernel/clock": {
+	"framework/kernel/clock": {
 		"MustHaveClock":            {},
 		"MustHavePositiveInterval": {},
 	},
@@ -105,16 +105,16 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	// files load probe names through this so the validation regex governs
 	// fixture data too). Caller allowlist is enforced separately by
 	// PROBENAME-SEALED-FUNNEL-01/A4.
-	"kernel/healthz": {
+	"framework/kernel/healthz": {
 		"MustProbeName": {},
 	},
-	"kernel/observability/metrics": {
+	"framework/kernel/observability/metrics": {
 		"MustValidateLabels": {},
 	},
-	"kernel/metadata": {
+	"framework/kernel/metadata": {
 		"MustNewGoIdentifier": {},
 	},
-	"kernel/outbox": {
+	"framework/kernel/outbox": {
 		"MustNewEntryID": {},
 	},
 	// (a) assertion guard — credential-invalidate FenceToken nil-token check,
@@ -124,7 +124,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	// archtest blindspots (function-value capture, reflect.MethodByName).
 	// See FENCE-TOKEN-MINT-FUNNEL-01 godoc + ADR
 	// docs/architecture/202605101400-adr-credential-session-protocol.md §A16.
-	"runtime/auth/credentialfence": {
+	"framework/runtime/auth/credentialfence": {
 		"MustHave": {},
 	},
 	// (b) codegen / sealed funnel
@@ -132,7 +132,7 @@ var allowedMustDecls = map[string]map[string]struct{}{
 		"MustNewSpec": {},
 	},
 	// (a) internal validator — NewHub calls it internally, not exposed as constructor
-	"runtime/websocket": {
+	"framework/runtime/websocket": {
 		"MustValidateHubConfig": {},
 	},
 }
@@ -149,22 +149,22 @@ var allowedMustDecls = map[string]map[string]struct{}{
 //     guarantee; not statically enforced by this rule).
 var testFixturePkgPrefixes = []string{
 	"tests/contracttest",
-	"pkg/testutil",
+	"framework/pkg/testutil",
 	// kernel/auth/authtest — AuthPlan Must* helpers (MustAuthJWT, MustAuthJWTFromAssembly,
 	// MustAuthServiceToken) used by composition-root test wiring. Independent package
 	// from runtime/internal/authtest below; spans cmd/+runtime/+kernel/+tests/ consumers,
 	// so no Hard internal/ placement is feasible. AUTH-AUTHTEST-C governs the test-file
 	// boundary (see tools/archtest/auth_authtest_boundary_test.go).
-	"kernel/auth/authtest",
+	"framework/kernel/auth/authtest",
 	// runtime/internal/authtest — RequireAuthenticated policy fixture. Moved here from
 	// runtime/auth/authtest by issue #638; out-of-runtime/ imports are blocked at
 	// compile time by Go's internal/ rule (AUTH-AUTHTEST-B Hard upgrade, see ADR
 	// 202605251700-adr-authtest-internal-path.md).
-	"runtime/internal/authtest",
-	"runtime/auth/keystest",
-	"runtime/audit/ledger/storetest",
+	"framework/runtime/internal/authtest",
+	"framework/runtime/auth/keystest",
+	"framework/runtime/audit/ledger/storetest",
 	"corecells/internal/testoutbox",
-	"kernel/cell/celltest",
+	"framework/kernel/cell/celltest",
 	// tools/archtest/testdata fixtures used by other archtests (panic_registered etc.)
 	"tools/archtest/testdata",
 }
@@ -257,17 +257,17 @@ func TestKernelMustCtorCarveOutLogic(t *testing.T) {
 		desc             string
 	}{
 		// allow-listed: assertion guard
-		{"kernel/clock", "MustHaveClock", true, "kernel/clock.MustHaveClock — assertion guard"},
+		{"framework/kernel/clock", "MustHaveClock", true, "framework/kernel/clock.MustHaveClock — assertion guard"},
 		// allow-listed: codegen funnel
-		{"kernel/cell", "MustNewBaseCell", true, "kernel/cell.MustNewBaseCell — codegen funnel"},
-		{"kernel/cell", "MustNewBaseSliceFromMeta", true, "kernel/cell.MustNewBaseSliceFromMeta — funnel"},
+		{"framework/kernel/cell", "MustNewBaseCell", true, "framework/kernel/cell.MustNewBaseCell — codegen funnel"},
+		{"framework/kernel/cell", "MustNewBaseSliceFromMeta", true, "framework/kernel/cell.MustNewBaseSliceFromMeta — funnel"},
 		// allow-listed: assertion-style validator inside NewHub
-		{"runtime/websocket", "MustValidateHubConfig", true, "runtime/websocket.MustValidateHubConfig — internal validator"},
+		{"framework/runtime/websocket", "MustValidateHubConfig", true, "framework/runtime/websocket.MustValidateHubConfig — internal validator"},
 		// NOT allow-listed: removed by B2-K-02
-		{"kernel/wrapper", "MustHTTPHandler", false, "kernel/wrapper.MustHTTPHandler — must be removed"},
-		{"kernel/auth", "MustNewAuthJWT", false, "kernel/auth.MustNewAuthJWT — must be removed"},
-		{"runtime/auth/session", "MustNewProtocol", false, "runtime/auth/session.MustNewProtocol — must be removed"},
-		{"runtime/http/router", "MustNew", false, "runtime/http/router.MustNew — must be removed"},
+		{"framework/kernel/wrapper", "MustHTTPHandler", false, "framework/kernel/wrapper.MustHTTPHandler — must be removed"},
+		{"framework/kernel/auth", "MustNewAuthJWT", false, "framework/kernel/auth.MustNewAuthJWT — must be removed"},
+		{"framework/runtime/auth/session", "MustNewProtocol", false, "framework/runtime/auth/session.MustNewProtocol — must be removed"},
+		{"framework/runtime/http/router", "MustNew", false, "framework/runtime/http/router.MustNew — must be removed"},
 		{"adapters/websocket", "MustUpgradeHandler", false, "adapters/websocket.MustUpgradeHandler — must be removed"},
 		// hypothetical future violation
 		{"corecells/accesscore", "MustViolation", false, "hypothetical violation in corecells/accesscore must be flagged"},

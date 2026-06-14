@@ -78,7 +78,7 @@ import (
 )
 
 const (
-	checkpointStoreIfacePkg  = PlatformModulePath + "/kernel/projection"
+	checkpointStoreIfacePkg  = PlatformFrameworkModulePath + "/kernel/projection"
 	checkpointStoreIfaceName = "CheckpointStore"
 )
 

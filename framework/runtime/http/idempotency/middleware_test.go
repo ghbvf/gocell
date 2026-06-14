@@ -1,0 +1,1536 @@
+package idempotency
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+)
+
+// testHandler returns a fixed status+body and sets Content-Type + X-Test headers.
+func testHandler(status int, body string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Test", "yes")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	})
+}
+
+// userCtx builds an http.Request with a user Principal embedded in context.
+func requestWithUserCtx(method, target, idemKey, tenantID, subject string) *http.Request {
+	r := httptest.NewRequest(method, target, nil)
+	if idemKey != "" {
+		r.Header.Set("Idempotency-Key", idemKey)
+	}
+	ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+		Kind:     auth.PrincipalUser,
+		Subject:  subject,
+		TenantID: tenantID,
+	})
+	return r.WithContext(ctx)
+}
+
+// — no header passthrough —
+
+func TestMiddleware_NoIdemKeyPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	handler := mw(testHandler(200, "ok"))
+	r := requestWithUserCtx("POST", "/", "", "tenant1", "user1")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// — GET passthrough —
+
+func TestMiddleware_GETPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	handler := mw(testHandler(200, "data"))
+	r := requestWithUserCtx("GET", "/", "some-key", "tenant1", "user1")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+	// No idempotency tracking for GET.
+	// Second call should also hit handler (not replay).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 200 {
+		t.Errorf("second GET code: got %d, want 200", rr2.Code)
+	}
+}
+
+// — service principal passthrough —
+
+func TestMiddleware_ServicePrincipalPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	handler := mw(testHandler(200, "service-resp"))
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+		Kind:         auth.PrincipalService,
+		CallerCellID: "mycell",
+	})
+	r = r.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// — anonymous principal passthrough —
+
+func TestMiddleware_AnonymousPrincipalPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	handler := mw(testHandler(200, "anon-resp"))
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(r.Context(), &auth.Principal{Kind: auth.PrincipalAnonymous})
+	r = r.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// — no principal passthrough —
+
+func TestMiddleware_NoPrincipalPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	handler := mw(testHandler(200, "no-auth"))
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Idempotency-Key", "some-key")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// — first POST is recorded —
+
+func TestMiddleware_FirstPOSTRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/resources", "idem-abc", "tenant1", "user-a")
+
+	// First call.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 201 {
+		t.Errorf("first call code: got %d, want 201", rr.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("handler call count: got %d, want 1", callCount)
+	}
+
+	// Second call — must replay without running handler.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+
+	if rr2.Code != 201 {
+		t.Errorf("replay code: got %d, want 201", rr2.Code)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("missing Idempotency-Replayed header; got %q", rr2.Header().Get("Idempotency-Replayed"))
+	}
+	if callCount != 1 {
+		t.Errorf("handler must not be called again; got call count %d", callCount)
+	}
+	if rr2.Body.String() != `{"id":"1"}` {
+		t.Errorf("replayed body: got %q, want %q", rr2.Body.String(), `{"id":"1"}`)
+	}
+	// Non-sensitive headers must be replayed.
+	if rr2.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type not replayed; got %q", rr2.Header().Get("Content-Type"))
+	}
+}
+
+// — 409 when lease is in progress —
+
+func TestMiddleware_409WhenLeaseInProgress(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	ctx := context.Background()
+	// Pre-seed a lease directly via MemStore to simulate in-flight request.
+	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
+	_, _, _, err := ms.Claim(ctx, memKey("tenant1", "user-b\x00POST\x00/\x00in-flight"), "", idempotency.DefaultLeaseTTL)
+	if err != nil {
+		t.Fatalf("pre-seed claim: %v", err)
+	}
+
+	handler := mw(testHandler(200, "should-not-run"))
+	r := requestWithUserCtx("POST", "/", "in-flight", "tenant1", "user-b")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Errorf("code: got %d, want 409", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "ERR_IDEMPOTENCY_IN_PROGRESS") {
+		t.Errorf("expected ERR_IDEMPOTENCY_IN_PROGRESS in body; got %q", body)
+	}
+	retryAfter := rr.Header().Get("Retry-After")
+	if retryAfter == "" {
+		t.Error("Retry-After header must be set on 409")
+	}
+	// Retry-After is now a small fixed hint (retryAfterHintSeconds = 5s), not the
+	// full lease TTL. Clients should retry soon; the hint avoids a 5-min wait.
+	wantRetryAfter := "5"
+	if retryAfter != wantRetryAfter {
+		t.Errorf("Retry-After: got %q, want %q (small fixed hint, not lease TTL)", retryAfter, wantRetryAfter)
+	}
+}
+
+// — store error → 500 fail-closed —
+
+// failingStore always returns an error from Claim.
+type failingStore struct{}
+
+func (failingStore) Claim(_ context.Context, _ IdempotencyKey, _ string, _ time.Duration) (idempotency.ClaimState, *RecordedResponse, Receipt, error) { //nolint:lll // Store.Claim signature mirrors the interface; cannot shorten without breaking the interface contract
+	return idempotency.ClaimAcquired, nil, nil, errors.New("store unavailable")
+}
+
+func TestMiddleware_StoreError_500FailClosed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, failingStore{})
+
+	handler := mw(testHandler(200, "should-not-run"))
+	r := requestWithUserCtx("POST", "/", "some-key", "tenant1", "user-c")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 500 {
+		t.Errorf("code: got %d, want 500", rr.Code)
+	}
+}
+
+// — oversize body not recorded —
+
+func TestMiddleware_OversizeBodyNotRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	maxBody := 10
+	mw := Middleware(clk, ms, WithMaxBodyBytes(maxBody))
+
+	bigBody := strings.Repeat("x", 100)
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, bigBody)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/big", "oversize-key", "tenant1", "user-d")
+
+	// First call.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 200 {
+		t.Errorf("first call code: got %d, want 200", rr.Code)
+	}
+	// Check that the full body was still forwarded to the client.
+	if rr.Body.String() != bigBody {
+		t.Errorf("first call body: got len=%d, want len=%d", len(rr.Body.String()), len(bigBody))
+	}
+
+	// Second call should re-run the handler (not replay), because body was not recorded.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 2 {
+		t.Errorf("second call must re-run handler; got call count %d", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") == "true" {
+		t.Error("oversize response must not be replayed")
+	}
+}
+
+// — PUT is also guarded —
+
+func TestMiddleware_PUTIsGuarded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "put-resp")
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("PUT", "/resource/1", "put-key", "tenant1", "user-e")
+
+	// First call.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 200 || callCount != 1 {
+		t.Errorf("first PUT: code=%d calls=%d", rr.Code, callCount)
+	}
+
+	// Second call — replay.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 1 {
+		t.Errorf("PUT replay: handler should not be called again; got %d", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("Idempotency-Replayed not set on PUT replay")
+	}
+}
+
+// — no-tenant sentinel namespace —
+
+func TestMiddleware_EmptyTenantUsesNoTenantSentinel(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	handler := mw(inner)
+	// Subject is set but TenantID is empty.
+	r := requestWithUserCtx("POST", "/", "key-notenant", "", "user-f")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 200 {
+		t.Errorf("first call: %d", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 1 {
+		t.Errorf("should replay; callCount=%d", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("Idempotency-Replayed not set")
+	}
+}
+
+// — 4xx response is NOT recorded (handler re-runs on retry) —
+
+func TestMiddleware_4xxResponseNotRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(422)
+		_, _ = io.WriteString(w, `{"error":"validation failed"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/items", "key-4xx", "t1", "user-g")
+
+	// First call: handler returns 422, should NOT be recorded.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 422 {
+		t.Errorf("first call code: got %d, want 422", rr.Code)
+	}
+
+	// Second call: lease was released, handler must be called again.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 2 {
+		t.Errorf("4xx response must not be recorded; callCount=%d, want 2", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") == "true" {
+		t.Error("Idempotency-Replayed must not be set for non-recorded 4xx response")
+	}
+}
+
+// — PATCH and DELETE are guarded (table-driven) —
+
+func TestMiddleware_PATCHAndDELETEAreGuarded(t *testing.T) {
+	cases := []struct {
+		method string
+	}{
+		{"PATCH"},
+		{"DELETE"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			clk := clockmock.New(time.Now())
+			ms := NewMemStore(clk)
+			mw := Middleware(clk, ms)
+
+			callCount := 0
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				callCount++
+				w.WriteHeader(200)
+				_, _ = io.WriteString(w, "resp")
+			})
+
+			handler := mw(inner)
+			r := requestWithUserCtx(tc.method, "/resource/1", "key-"+tc.method, "t1", "user-h")
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, r)
+			if rr.Code != 200 || callCount != 1 {
+				t.Errorf("first %s: code=%d calls=%d", tc.method, rr.Code, callCount)
+			}
+
+			rr2 := httptest.NewRecorder()
+			handler.ServeHTTP(rr2, r)
+			if callCount != 1 {
+				t.Errorf("%s replay: handler called again (callCount=%d)", tc.method, callCount)
+			}
+			if rr2.Header().Get("Idempotency-Replayed") != "true" {
+				t.Errorf("%s replay: Idempotency-Replayed not set", tc.method)
+			}
+		})
+	}
+}
+
+// — PrincipalUser with empty Subject → passthrough (no idempotency) —
+
+func TestMiddleware_EmptySubjectPassthrough(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+	})
+
+	handler := mw(inner)
+	// PrincipalUser with empty Subject.
+	r := httptest.NewRequest("POST", "/", nil)
+	r.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+		Kind:     auth.PrincipalUser,
+		Subject:  "", // empty — must bypass idempotency
+		TenantID: "t1",
+	})
+	r = r.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+	// Second call must also hit handler (no replay).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if callCount != 2 {
+		t.Errorf("empty subject must bypass idempotency; callCount=%d, want 2", callCount)
+	}
+}
+
+// — sensitive headers (Set-Cookie) are NOT replayed —
+
+func TestMiddleware_SensitiveHeadersNotReplayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Set-Cookie", "session=abc123; Path=/; HttpOnly")
+		w.Header().Set("X-Test", "safe-header")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"2"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/items", "key-cookie-test", "t1", "user-i")
+
+	// First call.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 201 {
+		t.Errorf("first call code: got %d, want 201", rr.Code)
+	}
+
+	// Second call — replay.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("expected replay on second call")
+	}
+	// Set-Cookie MUST NOT be replayed (security: avoid session fixation).
+	if rr2.Header().Get("Set-Cookie") != "" {
+		t.Errorf("Set-Cookie must not be replayed; got %q", rr2.Header().Get("Set-Cookie"))
+	}
+	// Non-sensitive headers MUST be replayed.
+	if rr2.Header().Get("X-Test") != "safe-header" {
+		t.Errorf("X-Test not replayed; got %q", rr2.Header().Get("X-Test"))
+	}
+	if rr2.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type not replayed; got %q", rr2.Header().Get("Content-Type"))
+	}
+}
+
+// — 3xx response IS recorded and replayed —
+
+func TestMiddleware_3xxRecordedAndReplayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Location", "/new-location")
+		w.WriteHeader(303)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/resource", "key-3xx", "t1", "user-j")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 303 {
+		t.Errorf("first call: got %d, want 303", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 303 {
+		t.Errorf("replayed code: got %d, want 303", rr2.Code)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("Idempotency-Replayed not set on 3xx replay")
+	}
+	if callCount != 1 {
+		t.Errorf("3xx must be replayed without re-running handler; callCount=%d", callCount)
+	}
+}
+
+// — over-cap Idempotency-Key → 400, handler not called —
+
+func TestMiddleware_OverCapKeyReturns400(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	callCount := 0
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(200)
+	}))
+
+	// Key exceeding maxIdempotencyKeyLen (256 bytes).
+	overCapKey := strings.Repeat("x", maxIdempotencyKeyLen+1)
+	r := requestWithUserCtx("POST", "/", overCapKey, "t1", "user-k")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 400 {
+		t.Errorf("over-cap key: got %d, want 400", rr.Code)
+	}
+	if callCount != 0 {
+		t.Errorf("handler must not be called for over-cap key; got callCount=%d", callCount)
+	}
+	if !strings.Contains(rr.Body.String(), "ERR_VALIDATION_FAILED") {
+		t.Errorf("expected ERR_VALIDATION_FAILED in body; got %q", rr.Body.String())
+	}
+}
+
+// — WithMaxBodyBytes(0) clamped to default, recording still works —
+
+func TestMiddleware_WithMaxBodyBytes0ClampsToDefault(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// WithMaxBodyBytes(0) must be clamped to defaultMaxBodyBytes, not disable recording.
+	mw := Middleware(clk, ms, WithMaxBodyBytes(0))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"clamped"}`)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/", "key-clamped", "t1", "user-l")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+	if rr.Code != 201 {
+		t.Errorf("first call: %d", rr.Code)
+	}
+
+	// Second call must replay (recording was not disabled by MaxBodyBytes=0).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Error("WithMaxBodyBytes(0) must be clamped to default; recording disabled means replay never works")
+	}
+	if callCount != 1 {
+		t.Errorf("handler must not be called twice; callCount=%d", callCount)
+	}
+}
+
+// testLeaseTTL2m is the custom lease TTL used in TestMiddleware_RetryAfterReflectsLeaseTTL.
+// Extracted to a package-level const per TEST-TIME-LITERAL-01 archtest rule.
+const testLeaseTTL2m = 2 * time.Minute
+
+// — Retry-After reflects configured lease TTL —
+
+func TestMiddleware_RetryAfterReflectsLeaseTTL(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithLeaseTTL(testLeaseTTL2m))
+
+	ctx := context.Background()
+	// Pre-seed a lease with the custom TTL to simulate in-flight request.
+	// Key composed by Middleware: subject + "\x00" + method + "\x00" + path + "\x00" + idemKey.
+	_, _, _, err := ms.Claim(ctx, memKey("tenant1", "user-m\x00POST\x00/\x00retry-after-key"), "", testLeaseTTL2m)
+	if err != nil {
+		t.Fatalf("pre-seed claim: %v", err)
+	}
+
+	handler := mw(testHandler(200, "should-not-run"))
+	r := requestWithUserCtx("POST", "/", "retry-after-key", "tenant1", "user-m")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Errorf("code: got %d, want 409", rr.Code)
+	}
+	// Retry-After is now a small fixed hint (retryAfterHintSeconds = 5s) regardless
+	// of the configured lease TTL. This avoids long waits for clients.
+	want := "5"
+	got := rr.Header().Get("Retry-After")
+	if got != want {
+		t.Errorf("Retry-After: got %q, want %q (small fixed hint, not leaseTTL)", got, want)
+	}
+}
+
+// — handler panic releases lease —
+
+func TestMiddleware_HandlerPanicReleasesLease(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	firstCall := true
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if firstCall {
+			firstCall = false
+			panic("test panic from handler")
+		}
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "recovered")
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/", "key-panic", "t1", "user-n")
+
+	// First call: handler panics. The panic propagates; Recovery middleware
+	// is NOT installed here, so we catch it manually to keep the test self-contained.
+	func() {
+		defer func() { recover() }() //nolint:errcheck // intentional: we just need to absorb the panic
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, r)
+	}()
+
+	// After the panic, the lease must have been released by the defer in
+	// recordOrRelease, so the same key is re-claimable.
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 200 {
+		t.Errorf("post-panic re-claim: code=%d, want 200", rr2.Code)
+	}
+	if callCount != 2 {
+		t.Errorf("after panic, lease must be released so handler re-runs; callCount=%d, want 2", callCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithExemptMatcher tests (C2)
+// ---------------------------------------------------------------------------
+
+// TestMiddleware_ExemptMatcher_ExemptPathNotRecorded verifies that when the
+// exempt matcher returns true for a path, the middleware passes through
+// without claiming or recording — the handler is called every time even with
+// the same Idempotency-Key.
+func TestMiddleware_ExemptMatcher_ExemptPathNotRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptPath := "/api/v1/users/abc/password"
+	exemptMatcher := func(r *http.Request) bool {
+		return r.URL.Path == exemptPath
+	}
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := mw(inner)
+
+	// First request to exempt path.
+	r1 := requestWithUserCtx("POST", exemptPath, "idem-key-123", "tenant1", "user-a")
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r1)
+	if rr1.Code != 200 {
+		t.Errorf("first exempt call: code=%d, want 200", rr1.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("first exempt call: handler call count=%d, want 1", callCount)
+	}
+
+	// Second request to exempt path with the same Idempotency-Key:
+	// handler must be called again (not replayed).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r1)
+	if rr2.Code != 200 {
+		t.Errorf("second exempt call: code=%d, want 200", rr2.Code)
+	}
+	if callCount != 2 {
+		t.Errorf("exempt path must not be recorded; handler must run every time; callCount=%d, want 2", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "" {
+		t.Errorf("Idempotency-Replayed must not be set for exempt paths")
+	}
+}
+
+// TestMiddleware_ExemptMatcher_NonExemptPathStillRecorded verifies that the
+// exempt matcher only bypasses the declared path — non-exempt sibling paths
+// still go through the full idempotency flow.
+func TestMiddleware_ExemptMatcher_NonExemptPathStillRecorded(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptPath := "/api/v1/users/abc/password"
+	exemptMatcher := func(r *http.Request) bool {
+		return r.URL.Path == exemptPath
+	}
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := mw(inner)
+
+	// First request to a non-exempt path.
+	normalPath := "/api/v1/orders"
+	r := requestWithUserCtx("POST", normalPath, "idem-key-order-1", "tenant1", "user-a")
+
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r)
+	if rr1.Code != 201 {
+		t.Errorf("first non-exempt call: code=%d, want 201", rr1.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("first non-exempt call: handler count=%d, want 1", callCount)
+	}
+
+	// Second request with same Idempotency-Key: should be replayed (not invoke handler).
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Code != 201 {
+		t.Errorf("replayed non-exempt call: code=%d, want 201", rr2.Code)
+	}
+	if callCount != 1 {
+		t.Errorf("non-exempt path must be replayed on second call; handler count=%d, want 1", callCount)
+	}
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("Idempotency-Replayed must be set to true for replayed non-exempt paths; got %q",
+			rr2.Header().Get("Idempotency-Replayed"))
+	}
+}
+
+// TestMiddleware_ExemptMatcher_NilMatcher_AllRoutesTracked verifies that a nil
+// exempt matcher (the zero value) is a noop — all qualifying routes continue
+// to be tracked as normal.
+func TestMiddleware_ExemptMatcher_NilMatcher_AllRoutesTracked(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithExemptMatcher(nil))
+
+	callCount := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	handler := mw(inner)
+	r := requestWithUserCtx("POST", "/api/v1/orders", "idem-nil-matcher", "t1", "u1")
+
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, r)
+	if rr1.Code != 201 {
+		t.Errorf("first call: code=%d, want 201", rr1.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, r)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Errorf("nil exempt matcher must not affect recording; Idempotency-Replayed=%q, want true",
+			rr2.Header().Get("Idempotency-Replayed"))
+	}
+	if callCount != 1 {
+		t.Errorf("nil exempt matcher must not affect replay; callCount=%d, want 1", callCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WithMetrics / MetricsObserver tests
+// ---------------------------------------------------------------------------
+
+// recordingObserver is a simple in-test MetricsObserver that collects every
+// RequestState emitted on the hot path. It is intentionally minimal: no
+// synchronization (tests are single-goroutine), no deduplication.
+type recordingObserver struct{ states []RequestState }
+
+func (r *recordingObserver) ObserveRequest(_ context.Context, s RequestState) {
+	r.states = append(r.states, s)
+}
+
+// TestMiddleware_Metrics_Acquired verifies that a fresh POST with a recorded
+// 2xx response emits exactly [StateAcquired].
+func TestMiddleware_Metrics_Acquired(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	r := requestWithUserCtx("POST", "/resources", "key-acquired", "t1", "user-1")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 201 {
+		t.Fatalf("code: got %d, want 201", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateAcquired {
+		t.Errorf("states: got %v, want [StateAcquired]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Replayed verifies that the second identical POST emits
+// [StateReplayed].
+func TestMiddleware_Metrics_Replayed(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	r := requestWithUserCtx("POST", "/resources", "key-replay", "t1", "user-2")
+
+	// First call — acquired.
+	rr1 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr1, r)
+	obs.states = obs.states[:0] // reset after first call
+
+	// Second call — must be replayed.
+	rr2 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr2, r)
+
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("expected replay on second call")
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateReplayed {
+		t.Errorf("states: got %v, want [StateReplayed]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Busy verifies that a ClaimBusy (in-flight lease)
+// emits [StateBusy].
+func TestMiddleware_Metrics_Busy(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	ctx := context.Background()
+	// Pre-seed a lease to simulate in-flight request.
+	_, _, _, err := ms.Claim(ctx, memKey("t1", "user-busy\x00POST\x00/\x00key-busy"), "", idempotency.DefaultLeaseTTL)
+	if err != nil {
+		t.Fatalf("pre-seed claim: %v", err)
+	}
+
+	r := requestWithUserCtx("POST", "/", "key-busy", "t1", "user-busy")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != 409 {
+		t.Fatalf("code: got %d, want 409", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateBusy {
+		t.Errorf("states: got %v, want [StateBusy]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_StoreError verifies that a Store.Claim error (not a
+// fingerprint mismatch) emits [StateStoreError].
+func TestMiddleware_Metrics_StoreError(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	obs := &recordingObserver{}
+	mw := Middleware(clk, failingStore{}, WithMetrics(obs))
+
+	r := requestWithUserCtx("POST", "/", "key-store-err", "t1", "user-3")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != 500 {
+		t.Fatalf("code: got %d, want 500", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateStoreError {
+		t.Errorf("states: got %v, want [StateStoreError]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_Oversize verifies that an oversized response emits
+// both StateAcquired (on initial claim) and StateOversize (on body overflow),
+// in that order.
+func TestMiddleware_Metrics_Oversize(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMaxBodyBytes(5), WithMetrics(obs))
+
+	bigBody := strings.Repeat("x", 100)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, bigBody)
+	})
+
+	r := requestWithUserCtx("POST", "/big", "key-oversize", "t1", "user-4")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Fatalf("code: got %d, want 200", rr.Code)
+	}
+	if len(obs.states) != 2 {
+		t.Fatalf("states count: got %d, want 2; states=%v", len(obs.states), obs.states)
+	}
+	if obs.states[0] != StateAcquired {
+		t.Errorf("states[0]: got %v, want StateAcquired", obs.states[0])
+	}
+	if obs.states[1] != StateOversize {
+		t.Errorf("states[1]: got %v, want StateOversize", obs.states[1])
+	}
+}
+
+// fingerprintMismatchStore is a store that returns ErrFingerprintMismatch on
+// the first Claim call after a seed, simulating key reuse with a different body.
+type fingerprintMismatchStore struct{}
+
+func (fingerprintMismatchStore) Claim(
+	_ context.Context, _ IdempotencyKey, _ string, _ time.Duration,
+) (idempotency.ClaimState, *RecordedResponse, Receipt, error) {
+	// Return the typed error wrapping the sentinel, matching the Store contract
+	// (Implementations MUST return a *FingerprintMismatchError). Stored is empty
+	// here — this fake exercises the metric/status path, not the per-field diff.
+	return 0, nil, nil, &FingerprintMismatchError{}
+}
+
+// TestMiddleware_Metrics_KeyReused verifies that a fingerprint mismatch
+// (same Idempotency-Key, different body) emits [StateKeyReused].
+func TestMiddleware_Metrics_KeyReused(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	obs := &recordingObserver{}
+	mw := Middleware(clk, fingerprintMismatchStore{}, WithMetrics(obs))
+
+	r := requestWithUserCtx("POST", "/", "key-reused", "t1", "user-5")
+	rr := httptest.NewRecorder()
+	mw(testHandler(200, "nope")).ServeHTTP(rr, r)
+
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
+		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_Metrics_KeyReused_RealMemStore exercises the real MemStore
+// fingerprint-comparison path end-to-end: the same Idempotency-Key presented
+// with a DIFFERENT request body returns 422 and emits [StateKeyReused] — proving
+// the emit is wired to the actual fingerprint mismatch, not only the fake store.
+func TestMiddleware_Metrics_KeyReused_RealMemStore(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	obs := &recordingObserver{}
+	mw := Middleware(clk, ms, WithMetrics(obs))
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-fp")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind:     auth.PrincipalUser,
+			Subject:  "user-fp",
+			TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request records a response under fingerprint(body="AAA").
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq("AAA"))
+	if len(obs.states) != 1 || obs.states[0] != StateAcquired {
+		t.Fatalf("first request states: got %v, want [StateAcquired]", obs.states)
+	}
+	obs.states = obs.states[:0]
+
+	// Same key, DIFFERENT body → real fingerprint mismatch → 422 + key_reused.
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq("BBB"))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code: got %d, want 422", rr2.Code)
+	}
+	if len(obs.states) != 1 || obs.states[0] != StateKeyReused {
+		t.Errorf("states: got %v, want [StateKeyReused]", obs.states)
+	}
+}
+
+// TestMiddleware_KeyReused_PerFieldDiff verifies the Stripe-style per-field diff:
+// a fingerprint mismatch returns 422 whose details name exactly the top-level
+// fields that changed (sorted), and NO field value leaks into the response.
+func TestMiddleware_KeyReused_PerFieldDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms)
+
+	mkReq := func(body string) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(body))
+		r.Header.Set("Idempotency-Key", "key-diff")
+		ctx := auth.WithPrincipal(r.Context(), &auth.Principal{
+			Kind: auth.PrincipalUser, Subject: "user-d", TenantID: "t1",
+		})
+		return r.WithContext(ctx)
+	}
+
+	// First request establishes the stored fingerprint (distinctive values so a
+	// privacy leak would be unmistakable).
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(`{"amount":"AMT-AAA","currency":"usd","note":"NOTE-AAA"}`))
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201", rr1.Code)
+	}
+
+	// Same key, amount + note changed; currency unchanged → diff = [amount, note].
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(`{"amount":"AMT-BBB","currency":"usd","note":"NOTE-BBB"}`))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := strings.Join(mismatchedFieldsFromBody(t, rr2.Body.Bytes()), ","); got != "amount,note" {
+		t.Errorf("mismatched fields: got %q, want %q", got, "amount,note")
+	}
+	// Privacy: no field VALUE may appear in the response (only field NAMES).
+	body := rr2.Body.String()
+	for _, leak := range []string{"AMT-AAA", "AMT-BBB", "NOTE-AAA", "NOTE-BBB"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaked field value %q: %s", leak, body)
+		}
+	}
+}
+
+// mismatchedFieldsFromBody extracts the "mismatchedField" detail values from a
+// 422 error envelope body, in wire order.
+func mismatchedFieldsFromBody(t *testing.T, raw []byte) []string {
+	t.Helper()
+	var env struct {
+		Error struct {
+			Details []struct {
+				Key   string          `json:"key"`
+				Value json.RawMessage `json:"value"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode error envelope: %v (body=%s)", err, raw)
+	}
+	var fields []string
+	for _, d := range env.Error.Details {
+		if d.Key != "mismatchedField" {
+			continue
+		}
+		var v string
+		if err := json.Unmarshal(d.Value, &v); err != nil {
+			t.Fatalf("mismatchedField value not a string: %v", err)
+		}
+		fields = append(fields, v)
+	}
+	return fields
+}
+
+// TestMiddleware_KeyReused_NoFieldDetails covers two mismatch shapes that yield a
+// 422 with NO per-field detail: (a) same fields, different top-level key order
+// (Body byte-mismatch but identical field hashes); (b) a non-JSON-object body
+// (no field map). The base 422 is still returned in both cases.
+func TestMiddleware_KeyReused_NoFieldDetails(t *testing.T) {
+	cases := []struct{ name, first, second string }{
+		{"key-order-only", `{"a":1,"b":2}`, `{"b":2,"a":1}`},
+		{"non-json-body", `plain-text-A`, `plain-text-B`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			clk := clockmock.New(time.Now())
+			mw := Middleware(clk, NewMemStore(clk))
+			mkReq := func(body string) *http.Request {
+				r := httptest.NewRequest("POST", "/o", strings.NewReader(body))
+				r.Header.Set("Idempotency-Key", "k-nofields")
+				return r.WithContext(auth.WithPrincipal(r.Context(),
+					&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+			}
+			rr1 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(tc.first))
+			if rr1.Code != 201 {
+				t.Fatalf("first code: got %d, want 201", rr1.Code)
+			}
+			rr2 := httptest.NewRecorder()
+			mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(tc.second))
+			if rr2.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+			}
+			if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+				t.Errorf("expected no mismatchedField details, got %v", got)
+			}
+		})
+	}
+}
+
+// TestMiddleware_KeyReused_TruncatesManyFields verifies the diff is capped at
+// maxMismatchedFields with a mismatchedFieldsTruncated marker when more fields
+// differ.
+func TestMiddleware_KeyReused_TruncatesManyFields(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	body := func(val string) string {
+		m := make(map[string]string, maxMismatchedFields+5)
+		for i := 0; i < maxMismatchedFields+5; i++ {
+			m[fmt.Sprintf("field%02d", i)] = val
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	mkReq := func(b string) *http.Request {
+		r := httptest.NewRequest("POST", "/o", strings.NewReader(b))
+		r.Header.Set("Idempotency-Key", "k-trunc")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: "t1"}))
+	}
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr1, mkReq(body("A")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "ok")).ServeHTTP(rr2, mkReq(body("B")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := len(mismatchedFieldsFromBody(t, rr2.Body.Bytes())); got != maxMismatchedFields {
+		t.Errorf("mismatchedField count: got %d, want %d (capped)", got, maxMismatchedFields)
+	}
+	if !strings.Contains(rr2.Body.String(), "mismatchedFieldsTruncated") {
+		t.Errorf("expected mismatchedFieldsTruncated detail; body=%s", rr2.Body.String())
+	}
+}
+
+// TestComputeFingerprintAndDiff exercises the canonical fingerprint + per-field
+// diff helpers directly (white-box).
+func TestComputeFingerprintAndDiff(t *testing.T) {
+	base := computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`))
+
+	// Deterministic: identical body → identical blob.
+	if base != computeFingerprint([]byte(`{"x":1,"y":2,"z":3}`)) {
+		t.Fatal("computeFingerprint is not deterministic")
+	}
+
+	// Changed value → that field in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":9,"z":3}`))), ","); got != "y" {
+		t.Errorf("changed-field diff: got %q, want %q", got, "y")
+	}
+	// Removed field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2}`))), ","); got != "z" {
+		t.Errorf("removed-field diff: got %q, want %q", got, "z")
+	}
+	// Added field → in the diff.
+	if got := strings.Join(diffFields(base, computeFingerprint([]byte(`{"x":1,"y":2,"z":3,"w":4}`))), ","); got != "w" {
+		t.Errorf("added-field diff: got %q, want %q", got, "w")
+	}
+	// Key order / whitespace only → fields identical → empty diff (the middleware
+	// then falls back to the plain "request body differs" 422).
+	if got := diffFields(base, computeFingerprint([]byte(`{ "z":3, "y":2, "x":1 }`))); len(got) != 0 {
+		t.Errorf("order-only diff: got %v, want []", got)
+	}
+	// Non-JSON-object body → nil Fields (no per-field diff available).
+	if fp := parseFingerprint(computeFingerprint([]byte("not json"))); fp.Fields != nil {
+		t.Errorf("non-object body Fields: got %v, want nil", fp.Fields)
+	}
+}
+
+// manyFieldBody builds a JSON object with n top-level string fields all set to
+// val. Used to drive the per-field map past maxFingerprintFieldsBytes.
+func manyFieldBody(n int, val string) []byte {
+	var sb strings.Builder
+	sb.WriteByte('{')
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, "%q:%q", fmt.Sprintf("field%05d", i), val)
+	}
+	sb.WriteByte('}')
+	return []byte(sb.String())
+}
+
+// TestComputeFingerprint_FieldsBudgetDegrade verifies F2: a request body whose
+// top-level field set would push the per-field hash map past
+// maxFingerprintFieldsBytes degrades to body-hash-only (Fields dropped), so the
+// PERSISTED fingerprint stays bounded regardless of how large the body is. The
+// whole-body hash is still present (match decision intact), and the degrade is a
+// pure function of the body so identical bodies still produce identical blobs.
+func TestComputeFingerprint_FieldsBudgetDegrade(t *testing.T) {
+	// ~5000 small fields — far past the 8 KiB per-field budget.
+	body := manyFieldBody(5000, "v")
+
+	fp := computeFingerprint(body)
+
+	// Degraded: per-field map dropped → no diff data persisted.
+	if got := parseFingerprint(fp).Fields; got != nil {
+		t.Errorf("Fields should be nil (degraded) for oversized field set, got %d entries", len(got))
+	}
+	// Whole-body hash still present → match decision unaffected.
+	if parseFingerprint(fp).Body == "" {
+		t.Error("Body hash must be present even when Fields is dropped")
+	}
+	// Stored fingerprint bounded: a body-hash-only blob is tiny (the {"b":"<64hex>"}
+	// envelope), and in particular must NOT scale with the (huge) body.
+	if len(fp) > maxFingerprintFieldsBytes {
+		t.Errorf("degraded fingerprint length %d exceeds budget %d (Fields not dropped?)", len(fp), maxFingerprintFieldsBytes)
+	}
+	// Determinism preserved across the degrade boundary.
+	if fp != computeFingerprint(manyFieldBody(5000, "v")) {
+		t.Error("degraded computeFingerprint is not deterministic")
+	}
+}
+
+// TestComputeFingerprint_LongFieldNameDegrade verifies the byte budget also
+// covers a single field with a pathologically long (client-controlled) name —
+// the per-field cost accounts the name length, so one over-long key degrades to
+// body-hash-only rather than persisting a giant key.
+func TestComputeFingerprint_LongFieldNameDegrade(t *testing.T) {
+	longName := strings.Repeat("x", maxFingerprintFieldsBytes+1)
+	body := []byte(fmt.Sprintf("{%q:1}", longName))
+
+	if got := parseFingerprint(computeFingerprint(body)).Fields; got != nil {
+		t.Errorf("Fields should be nil for an over-long field name, got %v", got)
+	}
+}
+
+// TestComputeFingerprint_UnderBudgetKeepsFields is the negative control: a normal
+// body comfortably under the budget keeps its per-field map so the per-field diff
+// remains available (proving the degrade is bounded to pathological inputs only).
+func TestComputeFingerprint_UnderBudgetKeepsFields(t *testing.T) {
+	body := manyFieldBody(50, "v") // 50 fields ≈ well under 8 KiB
+	fields := parseFingerprint(computeFingerprint(body)).Fields
+	if len(fields) != 50 {
+		t.Errorf("under-budget body should keep all 50 field hashes, got %d", len(fields))
+	}
+}
+
+// TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff is the end-to-end F2
+// regression: a same-key/different-body reuse where BOTH bodies have a degraded
+// (oversized) field set still returns the base 422 — with NO per-field details,
+// since the stored fingerprint dropped its field map — proving the storage bound
+// does not break the 422 decision.
+func TestMiddleware_KeyReused_OversizedFields_BoundedNoDiff(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	mw := Middleware(clk, NewMemStore(clk))
+	mkReq := func(body []byte) *http.Request {
+		r := httptest.NewRequest("POST", "/orders", strings.NewReader(string(body)))
+		r.Header.Set("Idempotency-Key", "key-big")
+		return r.WithContext(auth.WithPrincipal(r.Context(),
+			&auth.Principal{Kind: auth.PrincipalUser, Subject: "user-big", TenantID: "t1"}))
+	}
+
+	rr1 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr1, mkReq(manyFieldBody(5000, "AAA")))
+	if rr1.Code != 201 {
+		t.Fatalf("first code: got %d, want 201", rr1.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	mw(testHandler(201, "created")).ServeHTTP(rr2, mkReq(manyFieldBody(5000, "BBB")))
+	if rr2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("mismatch code: got %d, want 422", rr2.Code)
+	}
+	if got := mismatchedFieldsFromBody(t, rr2.Body.Bytes()); len(got) != 0 {
+		t.Errorf("degraded fingerprint must yield no mismatchedField details, got %v", got)
+	}
+}
+
+// panickingObserver is a MetricsObserver whose ObserveRequest always panics.
+// It models a faulty composition-root-supplied collector; the middleware must
+// isolate the panic (observability.SafeObserve) so idempotency correctness is
+// never affected.
+type panickingObserver struct{}
+
+func (panickingObserver) ObserveRequest(context.Context, RequestState) {
+	panic("boom from metrics observer")
+}
+
+// TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest verifies that a
+// panic inside the MetricsObserver hot-path hook is isolated and does not change
+// the idempotency outcome. The panic fires on the StateAcquired branch (emitted
+// BEFORE the handler runs); without SafeObserve it would escape the middleware,
+// skip the handler, and leak the acquired lease so the second request 409s on a
+// stuck in-flight claim instead of replaying. With the fix the acquired request
+// still runs the handler and records its response, and the second identical
+// request replays.
+func TestMiddleware_Metrics_PanickingObserver_DoesNotAffectRequest(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	mw := Middleware(clk, ms, WithMetrics(panickingObserver{}))
+
+	calls := 0
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(201)
+		_, _ = io.WriteString(w, `{"id":"1"}`)
+	})
+
+	// First request: observer panics on StateAcquired but must not escape.
+	r1 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr1 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr1, r1)
+	if rr1.Code != 201 {
+		t.Fatalf("first request code: got %d, want 201 (panic must be isolated)", rr1.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls after first request: got %d, want 1", calls)
+	}
+
+	// Second identical request: response must replay — proving the panicking
+	// observer did not corrupt the claim/record path on the first request.
+	r2 := requestWithUserCtx("POST", "/resources", "key-panic-obs", "t1", "user-panic-obs")
+	rr2 := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr2, r2)
+	if rr2.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("second request must replay despite observer panic; code=%d", rr2.Code)
+	}
+	if calls != 1 {
+		t.Errorf("handler must NOT run again on replay; calls=%d, want 1", calls)
+	}
+}
+
+// TestMiddleware_Metrics_NilObserver_NoopAndNoPanic verifies that with no
+// observer wired (WithMetrics not called), requests succeed and nothing panics.
+func TestMiddleware_Metrics_NilObserver_NoopAndNoPanic(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// No WithMetrics option — nil observer must be safe.
+	mw := Middleware(clk, ms)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "ok")
+	})
+
+	r := requestWithUserCtx("POST", "/", "key-noop", "t1", "user-6")
+	rr := httptest.NewRecorder()
+	// Must not panic.
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 200 {
+		t.Errorf("code: got %d, want 200", rr.Code)
+	}
+}
+
+// TestMiddleware_Metrics_WithNilArg_NoopAndNoPanic verifies that explicitly
+// passing nil to WithMetrics is a safe noop — no panic, no state recorded.
+func TestMiddleware_Metrics_WithNilArg_NoopAndNoPanic(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+	// WithMetrics(nil) must be a safe noop (typed-nil check).
+	mw := Middleware(clk, ms, WithMetrics(nil))
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+	})
+
+	r := requestWithUserCtx("POST", "/", "key-nil-obs", "t1", "user-7")
+	rr := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rr, r)
+
+	if rr.Code != 201 {
+		t.Errorf("code: got %d, want 201", rr.Code)
+	}
+}
+
+// TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead verifies that the
+// exempt check runs before the body is read — the request body is available
+// to the handler intact (not consumed by the middleware body fingerprinting).
+func TestMiddleware_ExemptMatcher_ShortCircuitsBeforeBodyRead(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	ms := NewMemStore(clk)
+
+	exemptMatcher := func(r *http.Request) bool { return true }
+	mw := Middleware(clk, ms, WithExemptMatcher(exemptMatcher))
+
+	bodyReceived := ""
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodyReceived = string(b)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := mw(inner)
+
+	req := httptest.NewRequest("POST", "/api/v1/any", strings.NewReader("hello-body"))
+	req.Header.Set("Idempotency-Key", "some-key")
+	ctx := auth.WithPrincipal(req.Context(), &auth.Principal{
+		Kind:    auth.PrincipalUser,
+		Subject: "user-1",
+	})
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if bodyReceived != "hello-body" {
+		t.Errorf("body must be intact for exempt routes (not consumed by middleware); got %q", bodyReceived)
+	}
+}
+
+// TestDeriveKey_IsolationMatrix proves DeriveKey actually separates every
+// isolation dimension: identical inputs reproduce the (ns,key) pair (cross-pod
+// dedup), and changing any one dimension changes the pair. A regression that
+// dropped a dimension would collapse one of these; this matrix proves it does not.
+func TestDeriveKey_IsolationMatrix(t *testing.T) {
+	const (
+		tenant = "11111111-1111-1111-1111-111111111111"
+		other  = "22222222-2222-2222-2222-222222222222"
+	)
+	derive := func(tenantID, subject, method, path, idemKey string) (ns, key string) {
+		k := DeriveKey(tenantID, subject, method, path, idemKey)
+		return k.Namespace(), k.Key()
+	}
+	baseNS, baseKey := derive(tenant, "alice", "POST", "/api/v1/orders", "idem-1")
+
+	t.Run("deterministic — identical inputs reproduce the pair (cross-pod dedup)", func(t *testing.T) {
+		ns, key := derive(tenant, "alice", "POST", "/api/v1/orders", "idem-1")
+		if ns != baseNS || key != baseKey {
+			t.Errorf("identical inputs must yield identical (ns,key): got (%q,%q) want (%q,%q)", ns, key, baseNS, baseKey)
+		}
+	})
+
+	// Each dimension, changed in isolation, must alter (ns,key).
+	cases := []struct {
+		name      string
+		tenantID  string
+		subject   string
+		method    string
+		path      string
+		idemKey   string
+		wantNSneq bool // tenant change moves the namespace; the others move the key
+	}{
+		{"tenant", other, "alice", "POST", "/api/v1/orders", "idem-1", true},
+		{"subject", tenant, "bob", "POST", "/api/v1/orders", "idem-1", false},
+		{"method", tenant, "alice", "PUT", "/api/v1/orders", "idem-1", false},
+		{"path", tenant, "alice", "POST", "/api/v1/payments", "idem-1", false},
+		{"idemKey", tenant, "alice", "POST", "/api/v1/orders", "idem-2", false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run("isolated by "+tc.name, func(t *testing.T) {
+			ns, key := derive(tc.tenantID, tc.subject, tc.method, tc.path, tc.idemKey)
+			if ns == baseNS && key == baseKey {
+				t.Errorf("changing %s must change (ns,key); both still %q/%q — isolation collapsed", tc.name, ns, key)
+			}
+			if tc.wantNSneq && ns == baseNS {
+				t.Errorf("changing %s must change the namespace; ns still %q", tc.name, ns)
+			}
+		})
+	}
+
+	t.Run("empty tenant maps to the _notenant sentinel", func(t *testing.T) {
+		ns, _ := derive("", "alice", "POST", "/api/v1/orders", "idem-1")
+		if ns != noTenantSentinel {
+			t.Errorf("empty tenant must map to %q sentinel; got %q", noTenantSentinel, ns)
+		}
+	})
+}

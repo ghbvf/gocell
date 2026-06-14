@@ -1,0 +1,4573 @@
+package bootstrap
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	kauthtest "github.com/ghbvf/gocell/framework/kernel/auth/authtest"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/config"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/runtime/http/health"
+	"github.com/ghbvf/gocell/framework/runtime/http/health/healthtest"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/http/middleware"
+	"github.com/ghbvf/gocell/framework/runtime/http/router"
+	"github.com/ghbvf/gocell/framework/runtime/internal/authtest"
+	"github.com/ghbvf/gocell/framework/runtime/observability/tracingtest"
+)
+
+// mustMount is a test helper that calls auth.Mount and panics on error.
+func mustMount(mux cell.RouteHandler, r auth.Route) {
+	if err := auth.Mount(mux, r); err != nil {
+		panic(err)
+	}
+}
+
+// fsnotifySettleDelay is the pause between consecutive file writes in config
+// reload tests. fsnotify may fire multiple events per WriteFile (Write+Chmod);
+// this delay lets the watcher's event loop drain before the next write,
+// preventing event coalescing or generation count inflation.
+// Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
+const fsnotifySettleDelay = testtime.D200ms
+
+const slowReloaderDelay = testtime.D300ms
+
+// testVerboseToken is the shared verbose-mode token used in tests that exercise
+// /readyz?verbose. Since PR-MODE-1 (SEC-FAIL-CLOSED), verboseDecision denies
+// verbose requests when no token is configured; tests must bootstrap with
+// WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)) and issue requests
+// with the X-Readyz-Token header set to this value.
+const testVerboseToken = "test-verbose-token"
+
+// testHTTPClient is used in place of http.DefaultClient to prevent test
+// hangs on stalled connections (e.g., during shutdown races).
+var testHTTPClient = &http.Client{Timeout: testtime.D2s}
+
+// verboseGet issues an authenticated GET /readyz?verbose=true request, setting
+// the X-Readyz-Token header to testVerboseToken. Use this in place of
+// testHTTPClient.Get(...?verbose...) for tests that configure WithReadyzVerboseToken.
+func verboseGet(ctx context.Context, baseURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/readyz?verbose=true", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set(health.VerboseAuthHeader, testVerboseToken)
+	return testHTTPClient.Do(req)
+}
+
+// newLocalListener creates a TCP listener on a random port, suitable for tests.
+//
+// The listener is registered with t.Cleanup so the underlying socket is
+// released exactly when the test ends, regardless of whether bootstrap
+// consumed it via WithListenerNet (Close is idempotent). Without this,
+// "port holder" callers (e.g. TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure)
+// rely on GC keeping the *net.TCPListener live so the FD stays bound; under
+// race-detector + CI scheduling pressure that GC ordering is not guaranteed
+// and the port can be released before bootstrap.Run hits the bind step,
+// turning a "must collide" assertion into a silent success.
+func newLocalListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = ln.Close()
+	})
+	return ln
+}
+
+// testListeners holds the three pre-bound listeners for a standard bootstrap test.
+type testListeners struct {
+	primary  net.Listener
+	internal net.Listener
+	health   net.Listener
+}
+
+// waitForHealthy polls /healthz on the health listener until it returns 200.
+// In the PR-A14b model, /healthz lives on the HealthListener, not the primary.
+func waitForHealthy(t *testing.T, addr string) {
+	t.Helper()
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+}
+
+// readyzPayload200 extracts the data envelope from a 200 readyz response.
+// PR #391 P1-A: 503 wire body now carries the canonical errcode envelope
+// with an empty details array (K#08 5xx redaction); verbose breakdown
+// (cells/dependencies/adapters) only surfaces on 200 data path or via
+// server-side slog. Callers wanting verbose breakdown on 503 should
+// install withSlogCapture and read readyzUnhealthyDeps(...).
+func readyzPayload200(t *testing.T, body map[string]any) map[string]any {
+	t.Helper()
+	data, ok := body["data"].(map[string]any)
+	require.True(t, ok, "200 readyz must carry {\"data\": {...}} envelope; got %#v", body)
+	return data
+}
+
+// assertReadyzServiceUnavailable asserts the canonical errcode 503 envelope:
+// code/message match the framework public sentinel and details is the empty
+// array form (K#08 strips 5xx details to keep server-side context off the
+// wire). Verbose breakdown — cells/dependencies/adapters and the readiness
+// reason — is emitted to slog instead; tests needing to verify it install
+// withSlogCapture and read the "readyz unhealthy" record.
+func assertReadyzServiceUnavailable(t *testing.T, body map[string]any) {
+	t.Helper()
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "503 readyz must carry an error envelope")
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
+	assert.Equal(t, "service unavailable", errObj["message"])
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "503 readyz must carry the canonical details array (K#08 5xx strip): got %v", errObj["details"])
+	assert.Empty(t, details, "5xx details must be empty per K#08 redaction policy; verbose breakdown lives in slog")
+}
+
+// withSlogCapture redirects slog.Default for the duration of the test and
+// returns a *healthtest.CaptureHandler the test can query to assert on captured events.
+func withSlogCapture(t *testing.T) *healthtest.CaptureHandler {
+	t.Helper()
+	return healthtest.NewCapture(t)
+}
+
+// readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
+// the captured "readyz unhealthy" slog records. See healthtest.ReadyzUnhealthyDeps.
+func readyzUnhealthyDeps(t *testing.T, capture *healthtest.CaptureHandler) map[string]health.SlogDependencyEntry {
+	t.Helper()
+	return healthtest.ReadyzUnhealthyDeps(t, capture)
+}
+
+func captureHasReadyzDependencyStatus(capture *healthtest.CaptureHandler, depName, status string) bool {
+	return healthtest.HasReadyzDependencyStatus(capture, depName, status)
+}
+
+// testCell is a minimal Cell for bootstrap testing.
+type testCell struct {
+	*cell.BaseCell
+}
+
+func newTestCell(id string) *testCell {
+	return &testCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func TestNew_Defaults(t *testing.T) {
+	b := New(clock.Real())
+	// PR-A14b: no default listeners; callers must declare via WithListener.
+	assert.Nil(t, b.listenerConfigs)
+	assert.Nil(t, b.assemblyCore)
+	assert.Nil(t, b.publisher)
+	assert.Nil(t, b.subscriber)
+	// Constructor invariants the rest of Run() relies on: never-nil provider
+	// (so MetricsProvider() can omit nil checks), positive default shutdown
+	// budget, and a watcher factory that phase1LoadConfig can call without
+	// recovering from a nil deref.
+	assert.NotNil(t, b.metricsProvider, "metricsProvider must be non-nil (NopProvider default)")
+	assert.True(t, b.shutdownTimeout > 0, "shutdownTimeout must be positive (DefaultTimeout)")
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil")
+}
+
+func TestNew_WithOptions(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
+	eb := eventbus.New(clock.Real())
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(eb), WithSubscriber(eb),
+		WithListener(cell.PrimaryListener, ":7070", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D5s),
+	)
+
+	// PR-A14b: listener addr is recorded by WithListener into b.listenerConfigs.
+	// Use :7070 (not :9090) to avoid visual collision with the InternalListener
+	// default (127.0.0.1:9090) when scanning the assertion at a glance.
+	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
+	require.True(t, ok, "PrimaryListener config must be registered")
+	assert.Equal(t, ":7070", cfg.addr)
+	assert.Equal(t, asm, b.assemblyCore)
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
+	assert.Equal(t, testtime.D5s, b.shutdownTimeout)
+}
+
+// TestNew_WithMetricsProvider verifies that WithMetricsProvider is observable
+// through MetricsProvider() — the public accessor downstream code reads. The
+// behavior-level coverage that the provider actually flows into hook
+// dispatcher / HTTP collector lives in TestBootstrap_DefaultAssembly_WiresMetricsProvider
+// and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
+func TestNew_WithMetricsProvider(t *testing.T) {
+	custom := struct{ kernelmetrics.NopProvider }{}
+	b := New(clock.Real(), WithMetricsProvider(custom))
+	assert.Equal(t, custom, b.MetricsProvider(),
+		"MetricsProvider() must return the provider injected via WithMetricsProvider")
+}
+
+// Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
+// attached to the readyz route group by the composition root. The handler
+// itself owns no verbose-token state. Coverage:
+//   - PolicyVerboseToken middleware: runtime/bootstrap/policy_test.go
+//   - probequery.Verbose query parsing: runtime/http/health/probequery/verbose_test.go
+
+// optionOriginName returns the name of the function that produced a
+// router.Option closure. router.WithTracer(...) returns a func(*Router) created
+// by the WithTracer constructor; FuncForPC reports its name as
+// ".../router.WithTracer.func1", letting tests assert on the constructor's
+// identity instead of relying on a fragile len(routerOpts) count (R2-05).
+func optionOriginName(opt router.Option) string {
+	pc := reflect.ValueOf(opt).Pointer()
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return ""
+	}
+	return fn.Name()
+}
+
+func TestNew_WithTracer(t *testing.T) {
+	tracer := tracingtest.NewSimpleTracer("bootstrap-test")
+	b := New(clock.Real(), WithTracer(tracer))
+	// WithTracer forwards two router options: router.WithTracer (the tracer
+	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
+	// so /healthz, /readyz, /metrics skip span creation on the per-listener
+	// HealthListener router (the pre-PR-A14b outer-mux bypass is gone).
+	require.Len(t, b.routerOpts, 2,
+		"WithTracer must forward two router options (WithTracer + WithTracingOptions)")
+
+	origins := make([]string, len(b.routerOpts))
+	for i, opt := range b.routerOpts {
+		origins[i] = optionOriginName(opt)
+	}
+
+	var sawTracer, sawTracingOpts bool
+	for _, name := range origins {
+		switch {
+		case strings.Contains(name, "/router.WithTracer."):
+			sawTracer = true
+		case strings.Contains(name, "/router.WithTracingOptions."):
+			sawTracingOpts = true
+		}
+	}
+	assert.True(t, sawTracer,
+		"first router option must come from router.WithTracer (constructor identity check); origins=%v", origins)
+	assert.True(t, sawTracingOpts,
+		"second router option must come from router.WithTracingOptions (probe-filter wiring); origins=%v", origins)
+}
+
+func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
+	// Invalid trusted proxies must return error (not panic), allowing
+	// Bootstrap.Run to roll back already-started components.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-proxy-err", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-valid")
+	assert.Contains(t, err.Error(), "trusted proxy")
+
+	// Verify rollback: assembly was started at Step 3-4, then stopped by
+	// rollback after Step 5 (router.NewE) failed. After rollback, cells
+	// report "unhealthy" because Stop has been called.
+	health := asm.Health()
+	for id, status := range health {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback stopped the assembly", id)
+	}
+}
+
+func TestNew_WithConfig(t *testing.T) {
+	b := New(clock.Real(), WithConfig("/nonexistent.yaml", "APP"))
+	assert.Equal(t, "/nonexistent.yaml", b.configPath)
+	assert.Equal(t, "APP", b.envPrefix)
+	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil after WithConfig")
+}
+
+func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithConfig("/nonexistent/config.yaml", "APP"),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load config")
+}
+
+func TestBootstrap_AssemblyStartWithConfig(t *testing.T) {
+	// Test that StartWithConfig works correctly with the assembly.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
+	tc := newTestCell("cell-1")
+	require.NoError(t, asm.Register(tc))
+
+	cfgMap := map[string]any{"key": "value"}
+	ctx := context.Background()
+	require.NoError(t, asm.StartWithConfig(ctx, cfgMap))
+
+	// Verify cell is healthy.
+	health := asm.Health()
+	assert.Equal(t, "healthy", health["cell-1"].Status)
+
+	require.NoError(t, asm.Stop(ctx))
+}
+
+func TestBootstrap_CellIDs(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("a")))
+	require.NoError(t, asm.Register(newTestCell("b")))
+
+	ids := asm.CellIDs()
+	assert.Equal(t, []string{"a", "b"}, ids)
+}
+
+func TestBootstrap_CellLookup(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test", DurabilityMode: outbox.DurabilityDemo})
+	tc := newTestCell("lookup")
+	require.NoError(t, asm.Register(tc))
+
+	assert.NotNil(t, asm.Cell("lookup"))
+	assert.Nil(t, asm.Cell("nonexistent"))
+}
+
+func TestNew_WithPublisherAndSubscriber(t *testing.T) {
+	eb := eventbus.New(clock.Real())
+
+	b := New(
+		clock.Real(),
+		WithPublisher(eb),
+		WithSubscriber(eb),
+	)
+
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
+}
+
+func TestNew_WithPublisherOnly(t *testing.T) {
+	eb := eventbus.New(clock.Real())
+
+	b := New(clock.Real(), WithPublisher(eb))
+
+	assert.Equal(t, eb, b.publisher)
+	assert.Nil(t, b.subscriber)
+}
+
+func TestNew_WithSubscriberOnly(t *testing.T) {
+	eb := eventbus.New(clock.Real())
+
+	b := New(clock.Real(), WithSubscriber(eb))
+
+	assert.Nil(t, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
+}
+
+// eventCell registers a subscription via reg.Subscribe in Init.
+// subErr can be set to simulate a cell that fails subscription setup.
+type eventCell struct {
+	*cell.BaseCell
+	subErr error
+}
+
+type contextCaptureCell struct {
+	*cell.BaseCell
+	got chan map[string]string
+}
+
+func newContextCaptureCell(id string, got chan map[string]string) *contextCaptureCell {
+	return &contextCaptureCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+		got: got,
+	}
+}
+
+func (c *contextCaptureCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	return reg.Subscribe(testEventSpec("test.context"), func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		requestID, _ := ctxkeys.RequestIDFrom(ctx)
+		correlationID, _ := ctxkeys.CorrelationIDFrom(ctx)
+		traceID, _ := ctxkeys.TraceIDFrom(ctx)
+		c.got <- map[string]string{
+			"request_id":     requestID,
+			"correlation_id": correlationID,
+			"trace_id":       traceID,
+		}
+		return outbox.Ack()
+	}, "capture-cell", c.ID())
+}
+
+type invokeOnceSubscriber struct {
+	entry outbox.Entry
+	once  sync.Once
+}
+
+func (s *invokeOnceSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *invokeOnceSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, handler outbox.SubscriberHandler) error {
+	s.once.Do(func() {
+		handler(ctx, s.entry)
+	})
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *invokeOnceSubscriber) Close(_ context.Context) error { return nil }
+
+func newEventCell(id string, subErr error) *eventCell {
+	return &eventCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+		subErr: subErr,
+	}
+}
+
+func (c *eventCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	if c.subErr != nil {
+		return c.subErr
+	}
+	return reg.Subscribe(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.Ack()
+	}, "test", c.ID())
+}
+
+func TestBootstrap_MissingSubscriber_WithCellSubscriptions_Fails(t *testing.T) {
+	// When a cell registers subscriptions via reg.Subscribe(...) but no subscriber
+	// is configured, bootstrap must fail at startup instead of silently skipping.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-no-sub", DurabilityMode: outbox.DurabilityDemo})
+	ec := newEventCell("needs-sub", nil) // registers a handler
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New(clock.Real())
+	tl := testListeners{
+		primary:  newLocalListener(t),
+		internal: newLocalListener(t),
+		health:   newLocalListener(t),
+	}
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(eb),
+		// WithSubscriber intentionally omitted.
+		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(tl.primary)),
+		WithListener(cell.InternalListener, tl.internal.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(tl.internal)),
+		WithListener(cell.HealthListener, tl.health.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(tl.health)),
+	)
+
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registered subscriptions")
+	assert.Contains(t, err.Error(), "no subscriber")
+}
+
+func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
+	// S3-03: When RegisterSubscriptions fails, Run must rollback previously
+	// started components (assembly) and return an error wrapping the cause.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-rollback", DurabilityMode: outbox.DurabilityDemo})
+	ec := newEventCell("fail-cell", errors.New("DLX not configured"))
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New(clock.Real())
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(eb), WithSubscriber(eb),
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx := context.Background()
+	err := b.Run(ctx)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DLX not configured")
+	// After rollback, assembly should be stopped (health returns empty or degraded).
+	// The key assertion is that Run returns the error instead of hanging.
+}
+
+func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
+	// Cell registers a handler → Router starts → bootstrap serves → ctx cancel → clean shutdown.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-router-ok", DurabilityMode: outbox.DurabilityDemo})
+	ec := newEventCell("ok-cell", nil) // nil error → registers 1 handler
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New(clock.Real())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithSubscriber(eb),
+		WithPublisher(eb),
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	cancel()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err, "clean shutdown should not produce an error")
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-router-context", DurabilityMode: outbox.DurabilityDemo})
+	got := make(chan map[string]string, 1)
+	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
+
+	// PR-A11 FU1: observability fields live in the typed Observability struct;
+	// SubscriberWithMiddleware restores via entry.Observability.RestoreToContext,
+	// not via Metadata merge. The entry is rebuilt through the sanctioned
+	// EntryScan reconstruction funnel (Entry is sealed, issue #1229) so the test
+	// can seed Observability directly.
+	ctxEntry, err := outbox.EntryScan{
+		ID:         "evt-context-1",
+		EventType:  "test.context",
+		Payload:    []byte("{}"),
+		OccurredAt: clock.Real().Now().UTC(),
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-ctx-1",
+			CorrelationID: "corr-ctx-1",
+			TraceID:       "trace-ctx-1",
+		},
+	}.ToEntry()
+	require.NoError(t, err)
+	sub := &invokeOnceSubscriber{entry: ctxEntry}
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithSubscriber(sub),
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	select {
+	case observed := <-got:
+		assert.Equal(t, "req-ctx-1", observed["request_id"])
+		assert.Equal(t, "corr-ctx-1", observed["correlation_id"])
+		assert.Equal(t, "trace-ctx-1", observed["trace_id"])
+	case <-time.After(testtime.EventuallyDefault):
+		t.Fatal("timed out waiting for restored consumer context")
+	}
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_RunContextCancel(t *testing.T) {
+	// Test that Run returns when context is canceled immediately,
+	// even though it will fail at listen (sandbox restriction).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	// This should complete quickly, either with a listen error
+	// (sandbox) or context canceled.
+	err := b.Run(ctx)
+	// Either outcome is acceptable in the sandbox.
+	_ = err
+}
+
+func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so first Run exits quickly
+
+	b := New(clock.Real(), WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}))
+	_ = b.Run(ctx) // first call — may error due to canceled ctx or sandbox
+
+	err := b.Run(ctx) // second call — must be rejected
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Run called more than once")
+}
+
+func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-hc-healthy", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for the HTTP server to be ready.
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// GET /readyz?verbose and verify the checker appears as healthy.
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
+	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
+	require.True(t, ok, "rabbitmq entry must be a map")
+	assert.Equal(t, "healthy", rabbitmq["status"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
+			return fmt.Errorf("connection closed")
+		}),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	capture := withSlogCapture(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for the HTTP server to be ready.
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return true
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// GET /readyz?verbose and verify the checker appears as unhealthy.
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assertReadyzServiceUnavailable(t, body)
+
+	// Verbose breakdown lives in slog (K#08 5xx redaction strips wire details).
+	deps := readyzUnhealthyDeps(t, capture)
+	rabbitmq, ok := deps["rabbitmq"]
+	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
+	assert.Equal(t, "unhealthy", rabbitmq.Status())
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-adapter-info", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithAdapterInfo(map[string]string{
+			"mode":    "in-memory",
+			"storage": "in-memory",
+		}),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	adapters, ok := readyzPayload200(t, body)["adapters"].(map[string]any)
+	require.True(t, ok, "verbose readyz must contain adapters map")
+	assert.Equal(t, "in-memory", adapters["mode"])
+	assert.Equal(t, "in-memory", adapters["storage"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// --- Registry.Healthz drain tests ---
+
+func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
+	// This test covers the framework-probe path: WithHealthChecker is the
+	// composition-root entry that drainProbes wires onto bootstrap's aggregator.
+	// The cell-registered probe path (reg.RegisterReadiness during Init →
+	// RegistrySnapshot.Probes → drainCellProbes) is covered by
+	// TestBootstrap_CellProbe_DrainAppearsInReadyz.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-hc-contrib", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("accesscore")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+		// WithHealthChecker is the composition-root path that drainProbes wires
+		// into bootstrap's aggregator.
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
+	sessionStore, ok := deps["accesscore_repo_ready"].(map[string]any)
+	require.True(t, ok, "accesscore-repo entry must be a map")
+	assert.Equal(t, "healthy", sessionStore["status"],
+		"WithHealthChecker-registered probe should appear in /readyz verbose")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_CellProbe_DrainAppearsInReadyz proves the F1 fix end-to-end: a
+// cell that registers a probe via reg.RegisterReadiness during Init has that
+// probe accumulated into RegistrySnapshot.Probes, drained onto the runtime
+// aggregator by drainCellProbes, and surfaced in /readyz verbose output. Before
+// the snapshot-drain fix the recorder discarded the probe into a noopAggregator.
+func TestBootstrap_CellProbe_DrainAppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-cell-probe", DurabilityMode: outbox.DurabilityDemo})
+	// snapshotCheckCell.Init registers healthz probe "probe_<id>" via reg.RegisterReadiness.
+	require.NoError(t, asm.Register(newSnapshotCheckCell("widget")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
+	probe, ok := deps["probe_widget"].(map[string]any)
+	require.True(t, ok, "cell-registered probe must appear in /readyz verbose dependencies")
+	assert.Equal(t, "healthy", probe["status"],
+		"cell probe registered via reg.RegisterReadiness must be drained to /readyz")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
+	// Duplicate detection is exercised here via WithHealthChecker — the
+	// composition-root path that drainProbes wires onto bootstrap's aggregator.
+	// Cell-probe duplicate fail-fast (drainCellProbes → aggregator.Register →
+	// ErrDuplicateProbe) shares the same aggregator first-wins contract.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-hc-dup", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-a")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		// Two WithHealthChecker calls with the same name trigger duplicate detection
+		// in drainProbes when it calls s.registerHealthChecker. Intentional duplication.
+		WithHealthChecker(healthz.MustProbeName("accesscore_repo_ready"), func(_ context.Context) error { return nil }),
+		newDupHealthCheckerOption(healthz.MustProbeName("accesscore_repo_ready")),
+	)
+
+	ctx := t.Context()
+
+	err = b.Run(ctx)
+	require.Error(t, err, "duplicate probe names via WithHealthChecker should fail")
+	assert.Contains(t, err.Error(), "duplicate health checker")
+	assert.Contains(t, err.Error(), "accesscore_repo_ready")
+}
+
+// newDupHealthCheckerOption returns a second WithHealthChecker Option for
+// the given name. It exists solely so TestBootstrap_RegistryHealth_DuplicateName_FailsFast
+// can register the same checker twice without tripping gocritic's dupOption
+// lint — the literal-equal arguments are now produced by two different
+// call expressions.
+func newDupHealthCheckerOption(name healthz.ProbeName) Option {
+	return WithHealthChecker(name, func(_ context.Context) error { return nil })
+}
+
+func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithHealthChecker("", func(_ context.Context) error { return nil }),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
+}
+
+func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
+	// Verify that invalid health checker params are caught BEFORE any
+	// component starts (no assembly start, no config watcher, no rollback).
+	// Evidence: error returned directly (not wrapped by rollback log).
+	var buf bytes.Buffer
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	b := New(
+		clock.Real(),
+		WithHealthChecker("", func(_ context.Context) error { return nil }),
+		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
+	assert.NotContains(t, buf.String(), "rolling back",
+		"validation error must fire before any side effects — no rollback should occur")
+}
+
+func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
+	b := New(
+		clock.Real(),
+		WithHealthChecker(healthz.MustProbeName("mycheck"), nil),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
+}
+
+// mockAllowerForBootstrap is a minimal Allower used only in bootstrap option tests.
+type mockAllowerForBootstrap struct{}
+
+func (m *mockAllowerForBootstrap) Allow() (bool, func(error)) {
+	return true, func(error) {}
+}
+
+func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
+	// A bare nil interface must cause Run() to fail-fast with a descriptive
+	// error rather than silently leaving the service without CB protection.
+	b := New(clock.Real(), WithCircuitBreaker(nil))
+	err := b.Run(context.Background())
+	require.Error(t, err, "nil interface Allower must return error from Run")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
+	// A typed-nil (*mockAllowerForBootstrap)(nil) has a non-nil interface value
+	// but a nil underlying pointer. Calling Allow() on it would panic at runtime.
+	// Bootstrap must detect and reject it just like a bare nil.
+	var cb *mockAllowerForBootstrap // typed nil
+	b := New(clock.Real(), WithCircuitBreaker(cb))
+	err := b.Run(context.Background())
+	require.Error(t, err, "typed-nil Allower must return error from Run")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-multi-hc", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error { return nil }),
+		WithHealthChecker(healthz.MustProbeName("postgres"), func(_ context.Context) error { return fmt.Errorf("connection refused") }),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	capture := withSlogCapture(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// GET /readyz?verbose — one unhealthy checker should make the whole response 503.
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"any unhealthy dependency must cause 503")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assertReadyzServiceUnavailable(t, body)
+
+	// Verbose breakdown lives in slog (K#08 5xx redaction).
+	deps := readyzUnhealthyDeps(t, capture)
+	rabbitmqEntry, ok := deps["rabbitmq"]
+	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
+	assert.Equal(t, "healthy", rabbitmqEntry.Status(), "rabbitmq checker should be healthy")
+	postgresEntry, ok := deps["postgres"]
+	require.True(t, ok, "postgres entry must be present in slog breakdown")
+	assert.Equal(t, "unhealthy", postgresEntry.Status(), "postgres checker should be unhealthy")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-dynamic-hc", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	// Atomic flag to simulate connection health transitions at runtime.
+	var unhealthy atomic.Bool
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthChecker(healthz.MustProbeName("rabbitmq"), func(_ context.Context) error {
+			if unhealthy.Load() {
+				return fmt.Errorf("connection lost")
+			}
+			return nil
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// Phase 1: healthy state → 200.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "should be ready when checker is healthy")
+	closeBody(t, resp)
+
+	// Phase 2: flip to unhealthy → 503.
+	unhealthy.Store(true)
+
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"should be unready after health state transition")
+	closeBody(t, resp)
+
+	// Phase 3: recover → 200.
+	unhealthy.Store(false)
+
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "should recover after health state restores")
+	closeBody(t, resp)
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	testwait.External(t, "bootstrap-watcher-ready", func() bool {
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		defer closeBody(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return false
+		}
+		deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+		if !ok {
+			return false
+		}
+		probe, ok := deps[configWatcherCheckerName.String()].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "config watcher did not become ready in time")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-watcher-ready", func() bool {
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		defer closeBody(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return false
+		}
+		deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+		if !ok {
+			return false
+		}
+		// Config drift checker should be registered and healthy (no drift).
+		probe, ok := deps[configDriftCheckerName.String()].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "config-drift checker not found or not healthy")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigDriftChecker_ReportsUnhealthy(t *testing.T) {
+	// Unit test: verify the config-drift checker closure logic directly.
+	// Integration of HasDrift with generation/observedGeneration is covered
+	// by runtime/config/config_test.go (TestConfig_HasDrift).
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	// Initially: generation=0, observedGeneration=0 → no drift.
+	assert.False(t, config.HasDrift(cfg))
+
+	// Reload to bump generation to 1; observedGeneration stays 0 → drift.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: updated\n"), 0o644))
+	r, ok := cfg.(config.Reloader)
+	require.True(t, ok)
+	require.NoError(t, r.Reload(cfgFile, ""))
+	assert.True(t, config.HasDrift(cfg), "generation 1 != observed 0 → drift")
+
+	// Simulate cells applying → set observed = generation → no drift.
+	og := cfg.(config.ObservedGenerationer)
+	g := cfg.(config.Generationer)
+	og.SetObservedGeneration(g.Generation())
+	assert.False(t, config.HasDrift(cfg), "after cells apply, drift resolved")
+}
+
+func TestBootstrap_ConfigDriftChecker_ErrorMessage(t *testing.T) {
+	// Verify the drift checker closure returns a correctly formatted error
+	// containing both generation and observedGeneration values.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	g := cfg.(config.Generationer)
+	og := cfg.(config.ObservedGenerationer)
+
+	// Construct the same checker closure that bootstrap.Run creates.
+	checker := func() error {
+		if g.Generation() != og.ObservedGeneration() {
+			return fmt.Errorf("config drift: generation %d, observed %d",
+				g.Generation(), og.ObservedGeneration())
+		}
+		return nil
+	}
+
+	// No drift initially.
+	assert.NoError(t, checker())
+
+	// Trigger drift via reload.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: v2\n"), 0o644))
+	require.NoError(t, cfg.(config.Reloader).Reload(cfgFile, ""))
+
+	err = checker()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config drift")
+	assert.Contains(t, err.Error(), "generation 1")
+	assert.Contains(t, err.Error(), "observed 0")
+
+	// Resolve drift.
+	og.SetObservedGeneration(g.Generation())
+	assert.NoError(t, checker(), "drift resolved after cells apply")
+}
+
+func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
+	// Integration test: verify /readyz returns 503 when config drift exists.
+	// Uses a reloaderCell that always fails → observedGeneration never advances.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	failCell := newReloaderCell("fail-cell")
+	failCell.err = fmt.Errorf("intentional reload failure")
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-drift-http-503", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(failCell))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	driftSlogCapture := withSlogCapture(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for server to be ready (healthy initially — no drift yet).
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "server did not become ready")
+
+	// Trigger a config change → watcher fires OnChange → Reload → generation++
+	// → failCell.OnConfigReload returns error → observedGeneration stays → drift!
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: drifted\n"), 0o644))
+
+	// Poll /readyz?verbose until 503; verbose breakdown rides on slog (K#08
+	// 5xx redaction strips wire details), so we pair the HTTP poll with the
+	// driftSlogCapture installed above. configDriftCheckerName must appear
+	// unhealthy in the captured breakdown.
+	testwait.External(t, "bootstrap-drift-detected", func() bool {
+		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		defer closeBody(t, resp)
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			return false
+		}
+		return captureHasReadyzDependencyStatus(driftSlogCapture, configDriftCheckerName.String(), "unhealthy")
+	}, testtime.EventuallyLong, testtime.SlowPoll, "readyz should return 503 with config-drift unhealthy")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-config-watcher-fail-fast", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+	// Override instance-level factory to simulate init failure (safe for parallel tests).
+	b.configWatcherFactory = func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error) {
+		return nil, errors.New("watcher init failed")
+	}
+
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config watcher")
+	assert.Contains(t, err.Error(), "watcher init failed")
+}
+
+func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reserved-health-checker", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithHealthChecker(healthz.MustProbeName("config_watcher"), func(_ context.Context) error { return nil }),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	require.NotPanics(t, func() {
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate health checker")
+		assert.Contains(t, err.Error(), "config_watcher")
+	})
+}
+
+func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-eventrouter-readyz", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
+
+	eb := eventbus.New(clock.Real())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithPublisher(eb),
+		WithSubscriber(eb),
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain dependencies")
+	erProbe, ok := deps["event_router"].(map[string]any)
+	require.True(t, ok, "event_router probe must be a structured ProbeResult")
+	assert.Equal(t, "healthy", erProbe["status"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestSnapshotConfig_WithSnapshotter(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("a: 1\nb: two\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
+}
+
+// plainConfig implements config.Config but NOT config.Snapshotter,
+// exercising the snapshotConfig fallback path (Keys+Get iteration).
+type plainConfig struct {
+	data map[string]any
+}
+
+func (c *plainConfig) Get(key string) any { return c.data[key] }
+func (c *plainConfig) Scan(_ any) error   { return nil }
+func (c *plainConfig) Keys() []string {
+	keys := make([]string, 0, len(c.data))
+	for k := range c.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func TestSnapshotConfig_Fallback(t *testing.T) {
+	// plainConfig does NOT implement Snapshotter, so snapshotConfig
+	// must use the Keys()+Get() fallback path.
+	cfg := &plainConfig{data: map[string]any{"a": 1, "b": "two"}}
+
+	// Verify it does NOT implement Snapshotter.
+	_, ok := config.Config(cfg).(config.Snapshotter)
+	assert.False(t, ok, "plainConfig must not implement Snapshotter")
+
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
+}
+
+// ---------------------------------------------------------------------------
+// OnConfigReload integration tests (WM-34)
+// ---------------------------------------------------------------------------
+
+// reloaderCell registers a config-reload callback via reg.OnConfigReload in Init.
+type reloaderCell struct {
+	*cell.BaseCell
+	mu         sync.Mutex
+	events     []cell.ConfigChangeEvent
+	callOrder  *[]string // shared slice to track call order across cells
+	err        error     // configurable error to return
+	doPanic    bool      // if true, panic instead of returning
+	panicCount atomic.Int32
+}
+
+func newReloaderCell(id string) *reloaderCell {
+	return &reloaderCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func (c *reloaderCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.OnConfigReload(nil, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		if c.doPanic {
+			c.panicCount.Add(1)
+			panic("intentional test panic in OnConfigReload")
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.events = append(c.events, event)
+		if c.callOrder != nil {
+			*c.callOrder = append(*c.callOrder, c.ID())
+		}
+		return c.err
+	})
+	return nil
+}
+
+func (c *reloaderCell) eventCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.events)
+}
+
+func (c *reloaderCell) lastEvent() *cell.ConfigChangeEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.events) == 0 {
+		return nil
+	}
+	e := c.events[len(c.events)-1]
+	return &e
+}
+
+// slowReloaderCell sleeps during OnConfigReload to simulate a slow handler.
+// Used to test that shutdown waits for in-flight reload callbacks to complete.
+type slowReloaderCell struct {
+	*cell.BaseCell
+	delay     time.Duration
+	called    atomic.Int32
+	completed atomic.Int32
+}
+
+type blockingStopWorker struct {
+	stopStarted chan struct{}
+	releaseStop chan struct{}
+}
+
+func newBlockingStopWorker() *blockingStopWorker {
+	return &blockingStopWorker{
+		stopStarted: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+}
+
+func (w *blockingStopWorker) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (w *blockingStopWorker) Stop(_ context.Context) error {
+	select {
+	case <-w.stopStarted:
+	default:
+		close(w.stopStarted)
+	}
+	<-w.releaseStop
+	return nil
+}
+
+func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
+	return &slowReloaderCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		delay:    delay,
+	}
+}
+
+func (c *slowReloaderCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	d := c.delay
+	reg.OnConfigReload(nil, func(_ context.Context, _ cell.ConfigChangeEvent) error {
+		c.called.Add(1)
+		time.Sleep(d) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
+		c.completed.Add(1)
+		return nil
+	})
+	return nil
+}
+
+// TestBootstrap_ShutdownDrainsInflightReload verifies that an in-flight config
+// reload callback completes before assembly.Stop() is called during shutdown.
+// This catches the race where assemblyStopped is checked (false) but shutdown
+// begins before the callback finishes, leading to concurrent OnConfigReload
+// and assembly.Stop execution.
+func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-drain", DurabilityMode: outbox.DurabilityDemo})
+	slow := newSlowReloaderCell("slow-cell", slowReloaderDelay)
+	require.NoError(t, asm.Register(slow))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D5s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Trigger a config change that will take 300ms to process.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait just long enough for the callback to start but not finish.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return slow.called.Load() >= 1
+	}, testtime.EventuallyDefault, testtime.D10ms, "slow handler should have started")
+
+	// Trigger shutdown while the slow callback is still in flight.
+	cancel()
+
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectAsyncSettle):
+		t.Fatal("shutdown timeout")
+	}
+
+	// The slow callback must have completed (not been interrupted by shutdown).
+	assert.Equal(t, int32(1), slow.completed.Load(),
+		"in-flight reload callback must complete before shutdown finishes")
+}
+
+func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 8080\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("auth-core")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for HTTP ready.
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Modify config file — add a new key.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\nnew_key: added\n"), 0o644))
+
+	// Wait for callback.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload to fire")
+
+	evt := rc.lastEvent()
+	require.NotNil(t, evt)
+	assert.Contains(t, evt.Updated, "server.port")
+	assert.Contains(t, evt.Added, "new_key")
+	assert.NotNil(t, evt.Config)
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload-err", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("fail-cell")
+	rc.err = errors.New("reload callback failed")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Modify config — cell will return error.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for callback to be called (even though it returns error).
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Bootstrap should still be running (error does not crash).
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell reload error")
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload-panic", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("panic-cell")
+	rc.doPanic = true
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Modify config — cell will panic.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for panic to fire and be recovered.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.panicCount.Load() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload panic to fire")
+
+	// Bootstrap should still be running after the panic.
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell panic")
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload-fifo", DurabilityMode: outbox.DurabilityDemo})
+	callOrder := make([]string, 0, 3)
+	cells := make([]*reloaderCell, 3)
+	for i, id := range []string{"first", "second", "third"} {
+		cells[i] = newReloaderCell(id)
+		cells[i].callOrder = &callOrder
+		require.NoError(t, asm.Register(cells[i]))
+	}
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Modify config.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for all cells to be called.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return cells[2].eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Verify FIFO order.
+	assert.Equal(t, []string{"first", "second", "third"}, callOrder)
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload-skip", DurabilityMode: outbox.DurabilityDemo})
+	plain := newTestCell("plain-cell") // does NOT call reg.OnConfigReload
+	rc := newReloaderCell("reloader-cell")
+	require.NoError(t, asm.Register(plain))
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Modify config.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for reloader cell to be called.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Plain cell should not have been called (it doesn't call reg.OnConfigReload).
+	// The test verifies by checking that only the reloader cell receives events.
+	assert.Equal(t, 1, rc.eventCount())
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-reload-noop", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("noop-cell")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// First: write different content to confirm the callback pipeline works.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected first config change to fire callback")
+
+	// Second: re-write the SAME content that config currently has (val2).
+	// This triggers the watcher but Diff(val2, val2) = empty, so no callback.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Stabilization delay: give the watcher time to process the no-diff event
+	// before writing different content. Without this, on macOS kqueue the two
+	// writes can be coalesced into a single event, or the second event can be
+	// lost entirely — causing the test to flake.
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
+
+	// Third: write different content — proves the watcher is still alive
+	// after the no-diff reload.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 2
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected third config change to fire callback")
+
+	// Exactly 2 callbacks: the no-diff reload in the middle was correctly skipped.
+	assert.Equal(t, 2, rc.eventCount(), "no-diff reload should not trigger callback")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+// mutatingReloaderCell modifies the event to test isolation between cells.
+type mutatingReloaderCell struct {
+	*cell.BaseCell
+	called atomic.Int32
+}
+
+func newMutatingReloaderCell(id string) *mutatingReloaderCell {
+	return &mutatingReloaderCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+	}
+}
+
+func (c *mutatingReloaderCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.OnConfigReload(nil, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		c.called.Add(1)
+		// Attempt to corrupt shared state.
+		if len(event.Added) > 0 {
+			event.Added[0] = "CORRUPTED"
+		}
+		event.Config["INJECTED"] = "malicious"
+		delete(event.Config, "key")
+		return nil
+	})
+	return nil
+}
+
+func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-isolation", DurabilityMode: outbox.DurabilityDemo})
+	mutator := newMutatingReloaderCell("mutator")
+	observer := newReloaderCell("observer")
+	// Register mutator first — it tries to corrupt the event.
+	require.NoError(t, asm.Register(mutator))
+	require.NoError(t, asm.Register(observer))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Trigger config change that adds a new key.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\nnew_key: added\n"), 0o644))
+
+	// Wait for both cells to be called.
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return observer.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Observer should see clean data despite mutator's corruption attempt.
+	evt := observer.lastEvent()
+	require.NotNil(t, evt)
+	assert.Contains(t, evt.Added, "new_key", "Added should contain original key, not CORRUPTED")
+	assert.Contains(t, evt.Config, "key", "Config should still have 'key' despite delete attempt")
+	assert.NotContains(t, evt.Config, "INJECTED", "Config should not have mutator's injected key")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+// TestBootstrap_ShutdownNoPostStopReload verifies that no config reload
+// callbacks fire after assembly.Stop() completes during shutdown.
+func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-shutdown-race", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("shutdown-race-cell")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// Trigger shutdown.
+	cancel()
+
+	// Wait for shutdown to complete.
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+
+	countBefore := rc.eventCount()
+
+	// Write config AFTER shutdown — should NOT trigger a callback.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_post_stop\n"), 0o644))
+
+	// Brief wait to give any spurious callback time to fire.
+	time.Sleep(testtime.D300ms) //archtest:allow:test-sleep negative test: must elapse without state change
+	assert.Equal(t, countBefore, rc.eventCount(),
+		"no config reload callback should fire after shutdown")
+}
+
+// TestBootstrap_ShutdownRejectsReloadDuringDrain verifies that shutdown starts
+// rejecting new reload callbacks before earlier teardown steps (such as worker
+// shutdown) have finished.
+func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-shutdown-drain-reject", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("shutdown-drain-cell")
+	require.NoError(t, asm.Register(rc))
+
+	blocker := newBlockingStopWorker()
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithWorkers(blocker),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	cancel()
+
+	select {
+	case <-blocker.stopStarted:
+	case <-time.After(testtime.EventuallyDefault):
+		t.Fatal("shutdown did not reach worker stop")
+	}
+
+	countBefore := rc.eventCount()
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_during_shutdown\n"), 0o644))
+
+	assert.Never(t, func() bool {
+		return rc.eventCount() > countBefore
+	}, testtime.D500ms, testtime.D20ms,
+		"shutdown must reject config reloads once graceful shutdown begins")
+
+	close(blocker.releaseStop)
+
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+// TestBootstrap_ConfigReload_GenerationTracking verifies that the Generation
+// field in ConfigChangeEvent is populated correctly.
+func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-generation", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("gen-cell")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if e != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	// First change.
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
+	prevCount := rc.eventCount()
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() > prevCount
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	evt := rc.lastEvent()
+	require.NotNil(t, evt)
+	gen1 := evt.Generation
+	assert.Greater(t, gen1, int64(0), "first reload generation must be positive")
+
+	// Second change.
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
+	prevCount = rc.eventCount()
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() > prevCount
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
+
+	evt = rc.lastEvent()
+	require.NotNil(t, evt)
+	assert.Greater(t, evt.Generation, gen1, "second reload generation must be greater than first")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestCloneMap_DeepIsolation_Slices(t *testing.T) {
+	src := map[string]any{
+		"tags": []any{"alpha", "beta"},
+		"key":  "val",
+	}
+	dst := cloneMap(src)
+
+	// Mutate dst slice.
+	dst["tags"].([]any)[0] = "CORRUPTED"
+
+	// src must be unaffected.
+	assert.Equal(t, "alpha", src["tags"].([]any)[0],
+		"cloneMap must deep-copy slices; mutating dst corrupted src")
+}
+
+func TestCloneMap_DeepIsolation_NestedMap(t *testing.T) {
+	src := map[string]any{
+		"db": map[string]any{
+			"host": "localhost",
+			"port": 5432,
+		},
+	}
+	dst := cloneMap(src)
+
+	// Mutate nested map in dst.
+	dst["db"].(map[string]any)["host"] = "CORRUPTED"
+
+	// src must be unaffected.
+	assert.Equal(t, "localhost", src["db"].(map[string]any)["host"],
+		"cloneMap must deep-copy nested maps; mutating dst corrupted src")
+}
+
+// --- Auth middleware wiring via bootstrap ---
+
+// httpCell is a test Cell that registers business routes via RouteGroups.
+type httpCell struct {
+	*cell.BaseCell
+}
+
+func newHTTPCell(id string) *httpCell {
+	return &httpCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+	}
+}
+
+func (c *httpCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
+type bootstrapTestVerifier struct {
+	claims    kauth.Claims
+	err       error
+	callCount atomic.Int32
+}
+
+func (v *bootstrapTestVerifier) Verify(_ context.Context, _ string) (kauth.Claims, error) {
+	v.callCount.Add(1)
+	return v.claims, v.err
+}
+
+func (v *bootstrapTestVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	v.callCount.Add(1)
+	return v.claims, v.err
+}
+
+func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-auth-401", DurabilityMode: outbox.DurabilityDemo})
+	hc := newHTTPCell("auth-test-cell")
+	require.NoError(t, asm.Register(hc))
+
+	verifier := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// Protected route without token → 401.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"business route without auth token must return 401")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// publicHTTPCell registers routes as public via mustMount(Public:true),
+// following the F3 pattern where cells own their auth declarations.
+type publicHTTPCell struct {
+	*cell.BaseCell
+}
+
+func newPublicHTTPCell(id string) *publicHTTPCell {
+	return &publicHTTPCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+	}
+}
+
+func (c *publicHTTPCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Public: true,
+			})
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
+	// F3: public routes are declared via mustMount(Public:true) inside the cell.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-auth-public", DurabilityMode: outbox.DurabilityDemo})
+	hc := newPublicHTTPCell("auth-public-cell")
+	require.NoError(t, asm.Register(hc))
+
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not verify for public route"),
+	}
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	testwait.External(t, "bootstrap-listener-served", func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthLn.Addr().String()))
+		if err != nil {
+			return false
+		}
+		closeBody(t, resp)
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	// Public login route without token → should pass auth.
+	resp, err := testHTTPClient.Post(
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr),
+		"application/json", nil,
+	)
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"public login endpoint must be accessible without auth token")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for public endpoint")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// --- Framework capability protection (BOOT-OPTION-01) ---
+
+func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
+	// PR-A14b: health endpoints are now registered by bootstrap via HealthRouteGroups
+	// on the health listener (or primary as fallback). There is no router.WithHealthHandler
+	// option — health is always wired by the framework, not configurable by callers.
+	// This test verifies that /readyz returns 200 (healthy) because the framework-managed
+	// health handler is backed by the started assembly.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-health-override", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// The framework-managed handler (backed by started asm) responds with 200.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthLn.Addr().String()))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"framework health handler must return 200 for a started assembly")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// --- Graceful shutdown drain (OPS-4) ---
+
+func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
+	ln := newLocalListener(t)
+	healthLn := newLocalListener(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+	)
+	go func() { errCh <- b.Run(ctx) }()
+
+	// Wait for server to be ready.
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Trigger shutdown.
+	cancel()
+
+	// Poll /readyz — it should become 503.
+	deadline := time.After(testtime.SelectShutdown)
+	for {
+		resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/readyz")
+		if err != nil {
+			break // server already closed, that's fine
+		}
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			closeBody(t, resp)
+			break // got 503 — drain signal works
+		}
+		closeBody(t, resp)
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for /readyz to return 503 during shutdown")
+		case <-time.After(testtime.D10ms):
+		}
+	}
+
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err)
+	case <-time.After(testtime.SelectAsyncSettle):
+		t.Fatal("timed out waiting for bootstrap shutdown")
+	}
+}
+
+// --- Bootstrap tracing E2E ---
+
+// tracingTestCell is a test Cell that registers routes via RouteGroups with a
+// caller-supplied route registration function, used by tracing E2E tests.
+type tracingTestCell struct {
+	*cell.BaseCell
+	registerFn func(mux cell.RouteMux) error
+}
+
+func newTracingTestCell(id string, fn func(mux cell.RouteMux) error) *tracingTestCell {
+	return &tracingTestCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+		registerFn: fn,
+	}
+}
+
+func (c *tracingTestCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	if c.registerFn != nil {
+		reg.RouteGroup(cell.RouteGroup{
+			Listener: cell.PrimaryListener,
+			Prefix:   "",
+			Register: c.registerFn,
+		})
+	}
+	return nil
+}
+
+func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracingtest.NewSimpleTracer("bootstrap-tracing-e2e")
+
+	var gotTraceID string
+	// PR-A14a: register via raw mux.Handle + coverage whitelist so the route
+	// is neither Public (which starts a new trace root) nor policy-guarded
+	// (which would 401 without a verifier). Handler runs, tracing works.
+	tc := newTracingTestCell("trace-biz", func(mux cell.RouteMux) error {
+		mux.Handle("GET /api/v1/trace-test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+		return nil
+	})
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "trace-e2e", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithTracer(tracer),
+		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/trace-test")
+	require.NoError(t, err)
+	closeBody(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context via bootstrap tracing")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracingtest.NewSimpleTracer("bootstrap-upstream-e2e")
+
+	var gotTraceID string
+	// PR-A14a: see TestBootstrap_TracingE2E_BusinessRoute rationale for the
+	// raw-Handle + whitelist pattern.
+	tc := newTracingTestCell("trace-upstream", func(mux cell.RouteMux) error {
+		mux.Handle("GET /api/v1/propagate", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+		return nil
+	})
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "trace-upstream", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithTracer(tracer),
+		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Send request with upstream traceparent header.
+	upstreamTraceID := "0af7651916cd43dd8448eb211c80319c"
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/api/v1/propagate", nil)
+	require.NoError(t, err)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-b7ad6b7169203331-01")
+
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	closeBody(t, resp)
+	assert.Equal(t, upstreamTraceID, gotTraceID,
+		"bootstrap must propagate upstream trace_id from traceparent header")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracingtest.NewSimpleTracer("bootstrap-panic-e2e")
+
+	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) error {
+		mux.Handle("GET /api/v1/boom", http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			panic("boom for tracing test")
+		}))
+		return nil
+	})
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "trace-panic", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithTracer(tracer),
+		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/boom")
+	require.NoError(t, err)
+	closeBody(t, resp)
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"panicking handler must return 500 even with tracing enabled")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
+	// Round-4 F4: middleware.Tracing applies DefaultProbeFilter by default,
+	// so /healthz / /readyz / /livez / /metrics no longer produce a span
+	// (and therefore no trace_id in their access logs). This reverses the
+	// pre-round-4 behavior where probe routes were traced by accident.
+	// High-frequency infra traffic no longer consumes span / metric budget.
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, nil)))
+
+	ln := newLocalListener(t)
+	tracer := tracingtest.NewSimpleTracer("bootstrap-infra-e2e")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithTracer(tracer),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	resp, err := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
+	require.NoError(t, err)
+	closeBody(t, resp)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Shut down so all access logs are flushed.
+	cancel()
+	<-done
+
+	// Probe endpoint must NOT emit trace_id — F4 DefaultProbeFilter pre-empts span creation.
+	logOutput := buf.String()
+	assert.NotContains(t, logOutput, "trace_id",
+		"round-4 F4: /healthz span creation is skipped by DefaultProbeFilter so no trace_id is emitted")
+}
+
+// --- Auth Provider discovery (post-Init cell discovery) ---
+
+// authProviderCell registers a route group via reg.RouteGroup and exposes an IntentTokenVerifier.
+type authProviderCell struct {
+	*cell.BaseCell
+	verifier kauth.IntentTokenVerifier
+}
+
+func newAuthProviderCell(id string, verifier kauth.IntentTokenVerifier) *authProviderCell {
+	return &authProviderCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		verifier: verifier,
+	}
+}
+
+func (c *authProviderCell) TokenVerifier() kauth.IntentTokenVerifier {
+	return c.verifier
+}
+
+func (c *authProviderCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+			// F3: login is declared as a public route so auth discovery tests can verify
+			// that no-token requests bypass JWT checks on this endpoint.
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+				}),
+				Public: true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-auth-discovery-401", DurabilityMode: outbox.DurabilityDemo})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("no token provided"),
+	}
+	hc := newAuthProviderCell("accesscore", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Protected route without token -> 401.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"discovered auth verifier must protect business routes")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-auth-discovery-public", DurabilityMode: outbox.DurabilityDemo})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not verify for public route"),
+	}
+	hc := newAuthProviderCell("accesscore", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		// F3: public routes are declared via mustMount(Public:true) in the cell.
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Public login route without token -> should pass auth.
+	resp, err := testHTTPClient.Post(
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr),
+		"application/json", nil,
+	)
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"public endpoint must be accessible without auth token via discovered verifier")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for public endpoint")
+
+	// Method-specific bypass regression: GET must return 401 (only POST is public).
+	getReq, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr), nil)
+	require.NoError(t, err)
+	getResp, err := testHTTPClient.Do(getReq)
+	require.NoError(t, err)
+	defer closeBody(t, getResp)
+	assert.Equal(t, http.StatusUnauthorized, getResp.StatusCode,
+		"GET must not bypass auth when only POST is declared public (method-specific bypass)")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-auth-precedence", DurabilityMode: outbox.DurabilityDemo})
+
+	cellVerifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("cell-verifier: should not be called"),
+	}
+	hc := newAuthProviderCell("accesscore", cellVerifier)
+	require.NoError(t, asm.Register(hc))
+
+	explicitVerifier := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "explicit-user", Roles: []string{"admin"}},
+	}
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(),
+			[]kauth.ListenerAuth{kauthtest.MustAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Send request WITH Authorization header — explicit verifier should handle it.
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/v1/data", addr), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer closeBody(t, resp)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"explicit verifier should authenticate successfully")
+	assert.Equal(t, int32(1), explicitVerifier.callCount.Load(),
+		"explicit verifier must be called")
+	assert.Equal(t, int32(0), cellVerifier.callCount.Load(),
+		"cell verifier must NOT be called when explicit verifier is provided")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// Register a plain cell with no TokenVerifier method.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-no-auth-provider", DurabilityMode: outbox.DurabilityDemo})
+	hc := newHTTPCell("plain-cell")
+	require.NoError(t, asm.Register(hc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx := t.Context()
+
+	// Run should fail because no authProvider cell was discovered.
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should fail when no authProvider cell is discovered")
+	assert.Contains(t, errFull(t, err), "authProvider cell",
+		"error should mention missing authProvider")
+}
+
+func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	verifier1 := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	verifier2 := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "user-2", Roles: []string{"admin"}},
+	}
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-multi-auth", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
+	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx := t.Context()
+
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should reject multiple authProvider cells")
+	assert.Contains(t, errFull(t, err), "multiple authProvider cells")
+	assert.Contains(t, errFull(t, err), "accesscore")
+	assert.Contains(t, errFull(t, err), "identity-core")
+}
+
+// TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that
+// bootstrap auto-wiring correctly passes authPublicEndpoints to the request_id
+// middleware. Public endpoints must reject client-supplied X-Request-Id headers
+// (preventing untrusted callers from injecting observability identifiers),
+// while protected endpoints must accept trusted upstream IDs.
+func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-trust-boundary", DurabilityMode: outbox.DurabilityDemo})
+	verifier := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	hc := newAuthProviderCell("accesscore", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		// F3: public routes declared via mustMount(Public:true) in authProviderCell.
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// --- Public endpoint: client-supplied X-Request-Id must be ignored ---
+	t.Run("public endpoint ignores client-supplied request ID", func(t *testing.T) {
+		req, reqErr := http.NewRequest("POST",
+			fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr), nil)
+		require.NoError(t, reqErr)
+		req.Header.Set("X-Request-Id", "attacker-injected-id")
+
+		resp, respErr := testHTTPClient.Do(req)
+		require.NoError(t, respErr)
+		defer closeBody(t, resp)
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		actualID := resp.Header.Get("X-Request-Id")
+		assert.NotEmpty(t, actualID, "response must have X-Request-Id")
+		assert.NotEqual(t, "attacker-injected-id", actualID,
+			"public endpoint must generate a fresh request ID, not accept client-supplied value")
+	})
+
+	// --- Protected endpoint: trusted upstream X-Request-Id must be accepted ---
+	t.Run("protected endpoint accepts trusted upstream request ID", func(t *testing.T) {
+		req, reqErr := http.NewRequest("GET",
+			fmt.Sprintf("http://%s/api/v1/data", addr), nil)
+		require.NoError(t, reqErr)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-Request-Id", "trusted-upstream-id")
+
+		resp, respErr := testHTTPClient.Do(req)
+		require.NoError(t, respErr)
+		defer closeBody(t, resp)
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "trusted-upstream-id", resp.Header.Get("X-Request-Id"),
+			"protected endpoint must accept trusted upstream X-Request-Id")
+	})
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-sechdr", DurabilityMode: outbox.DurabilityDemo})
+	tc := newTestCell("hsts-cell")
+	require.NoError(t, asm.Register(tc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithSecurityHeadersOptions(
+			middleware.WithHSTSIncludeSubDomains(),
+			middleware.WithHSTSPreload(),
+		),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	resp, reqErr := testHTTPClient.Get("http://" + healthLn.Addr().String() + "/healthz")
+	require.NoError(t, reqErr)
+	closeBody(t, resp)
+
+	hsts := resp.Header.Get("Strict-Transport-Security")
+	assert.Contains(t, hsts, "includeSubDomains",
+		"WithSecurityHeadersOptions must propagate HSTS subdomain directive")
+	assert.Contains(t, hsts, "preload",
+		"WithSecurityHeadersOptions must propagate HSTS preload directive")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OnConfigReload prefix-filter integration tests (CFG-KEYFILTER-WIRE-01)
+// ---------------------------------------------------------------------------
+
+// keyFilterReloaderCell registers a config-reload callback with key-prefix
+// filtering via reg.OnConfigReload in Init.
+type keyFilterReloaderCell struct {
+	*cell.BaseCell
+	prefixes []string
+	reloaded chan cell.ConfigChangeEvent
+}
+
+func newKeyFilterReloaderCell(id string, prefixes []string) *keyFilterReloaderCell {
+	return &keyFilterReloaderCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+		prefixes: prefixes,
+		reloaded: make(chan cell.ConfigChangeEvent, 4),
+	}
+}
+
+func (c *keyFilterReloaderCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.OnConfigReload(c.prefixes, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		c.reloaded <- event
+		return nil
+	})
+	return nil
+}
+
+// TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched verifies that a cell with
+// ConfigKeyPrefixes()=["server."] is NOT notified when only "db.host" changes.
+func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: localhost\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-keyfilter-skip", DurabilityMode: outbox.DurabilityDemo})
+	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
+	require.NoError(t, asm.Register(kfc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Change only a db.* key — server. cell must NOT be notified.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
+
+	// Wait long enough for any spurious notification to arrive.
+	select {
+	case evt := <-kfc.reloaded:
+		t.Fatalf("cell must NOT be notified when keys don't match prefix: got event %+v", evt)
+	case <-time.After(testtime.D500ms):
+		// expected: no notification
+	}
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched verifies that a cell with
+// ConfigKeyPrefixes()=["server."] IS notified when "server.port" changes.
+func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 8080\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-keyfilter-match", DurabilityMode: outbox.DurabilityDemo})
+	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
+	require.NoError(t, asm.Register(kfc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Change a server.* key — server. cell MUST be notified.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\ndb:\n  host: localhost\n"), 0o644))
+
+	select {
+	case evt := <-kfc.reloaded:
+		assert.Contains(t, evt.Updated, "server.port",
+			"event must contain the matched key")
+		// Minimal exposure: Config snapshot only contains keys matching the
+		// cell's registered prefixes, not the full config.
+		_, hasServer := evt.Config["server.port"]
+		_, hasDB := evt.Config["db.host"]
+		assert.True(t, hasServer, "Config must contain matched prefix keys")
+		assert.False(t, hasDB, "Config must NOT contain keys outside registered prefixes (minimal exposure)")
+	case <-time.After(testtime.EventuallyDefault):
+		t.Fatal("cell was not notified after matching key change")
+	}
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies that a cell
+// calling reg.OnConfigReload with nil prefixes receives all config change
+// notifications regardless of which keys changed.
+func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: localhost\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-keyfilter-nofilter", DurabilityMode: outbox.DurabilityDemo})
+	rc := newReloaderCell("plain-reloader")
+	require.NoError(t, asm.Register(rc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// Change any key — plain reloader must receive notification.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
+
+	testwait.External(t, "bootstrap-config-reloaded", func() bool {
+		return rc.eventCount() >= 1
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain OnConfigReload (no prefixes) must receive all notifications")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Trust boundary: traceparent header injection (F2-SEC-03)
+// ---------------------------------------------------------------------------
+
+// traceCapturingCell registers routes that capture the trace_id from context.
+type traceCapturingCell struct {
+	*cell.BaseCell
+	verifier     kauth.IntentTokenVerifier
+	gotPublic    chan string
+	gotProtected chan string
+}
+
+func newTraceCapturingCell(id string, verifier kauth.IntentTokenVerifier) *traceCapturingCell {
+	return &traceCapturingCell{
+		BaseCell:     cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		verifier:     verifier,
+		gotPublic:    make(chan string, 4),
+		gotProtected: make(chan string, 4),
+	}
+}
+
+func (c *traceCapturingCell) TokenVerifier() kauth.IntentTokenVerifier {
+	return c.verifier
+}
+
+func (c *traceCapturingCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			// F3: public/ping is declared public so it creates new trace roots and
+			// rejects client-supplied request IDs.
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotPublic <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Public: true,
+			})
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotProtected <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the
+// trust boundary for traceparent headers:
+//   - Public endpoints must NOT propagate a client-supplied traceparent (new root trace).
+//   - Protected endpoints with a valid auth token MUST propagate the upstream traceparent.
+func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracingtest.NewSimpleTracer("trust-test")
+
+	verifier := &bootstrapTestVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	tc := newTraceCapturingCell("trace-boundary-cell", verifier)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(tc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithTracer(tracer),
+		WithShutdownTimeout(testtime.D2s),
+		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	upstreamTraceID := "aabbccddeeff00112233445566778899"
+	traceparentHeader := "00-" + upstreamTraceID + "-b7ad6b7169203331-01"
+
+	t.Run("public endpoint creates new root trace", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/public/ping", addr), nil)
+		require.NoError(t, err)
+		req.Header.Set("traceparent", traceparentHeader)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		closeBody(t, resp)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var gotTraceID string
+		select {
+		case gotTraceID = <-tc.gotPublic:
+		case <-time.After(testtime.D2s):
+			t.Fatal("handler did not capture trace_id")
+		}
+		assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context")
+		assert.NotEqual(t, upstreamTraceID, gotTraceID,
+			"public endpoint must create a new root trace, not propagate client-supplied traceparent")
+	})
+
+	t.Run("protected endpoint continues upstream trace", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/protected/ping", addr), nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("traceparent", traceparentHeader)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		closeBody(t, resp)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var gotTraceID string
+		select {
+		case gotTraceID = <-tc.gotProtected:
+		case <-time.After(testtime.D2s):
+			t.Fatal("handler did not capture trace_id")
+		}
+		assert.Equal(t, upstreamTraceID, gotTraceID,
+			"protected endpoint must propagate upstream trace_id from traceparent header")
+	})
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// F3 round-3: TestBootstrap_ConflictingAuthOptions_ReturnsError was removed.
+// JWT auth has a single source of truth — the listener's cell.Policy. Both
+// WithAuthMiddleware and the standalone PolicyJWTFromAssembly bootstrap.Option
+// were deleted, so the "mutually exclusive" guard has nothing to detect.
+
+// ---------------------------------------------------------------------------
+// Circuit breaker nil option detection (P1-A fail-fast)
+// ---------------------------------------------------------------------------
+
+func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "cb-nil-test", DurabilityMode: outbox.DurabilityDemo})
+	tc := newTestCell("cb-nil-cell")
+	require.NoError(t, asm.Register(tc))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithCircuitBreaker(nil),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err, "nil Allower must cause Run to return an error")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+// publicPingAuthCell is a test cell that provides TokenVerifier (for discovery)
+// and registers GET /api/v1/public/ping as a public route.
+type publicPingAuthCell struct {
+	*cell.BaseCell
+	verifier kauth.IntentTokenVerifier
+}
+
+func newPublicPingAuthCell(id string, verifier kauth.IntentTokenVerifier) *publicPingAuthCell {
+	return &publicPingAuthCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		verifier: verifier,
+	}
+}
+
+func (c *publicPingAuthCell) TokenVerifier() kauth.IntentTokenVerifier { return c.verifier }
+
+func (c *publicPingAuthCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
+// declaration automatically covers HEAD requests (RFC 7231 §4.3.2).
+func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-head-alias", DurabilityMode: outbox.DurabilityDemo})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not be called for GET/HEAD public route"),
+	}
+	// F3: cell declares GET /api/v1/public/ping as public; HEAD alias is automatic.
+	hc := newPublicPingAuthCell("accesscore", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauthtest.MustAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, healthLn.Addr().String())
+
+	// HEAD request to the GET-declared public endpoint must bypass auth.
+	headReq, err := http.NewRequest(http.MethodHead,
+		fmt.Sprintf("http://%s/api/v1/public/ping", addr), nil)
+	require.NoError(t, err)
+	headResp, err := testHTTPClient.Do(headReq)
+	require.NoError(t, err)
+	defer closeBody(t, headResp)
+
+	// HEAD to a public GET endpoint should not return 401 (verifier not called).
+	assert.NotEqual(t, http.StatusUnauthorized, headResp.StatusCode,
+		"HEAD must bypass auth when GET is declared public (RFC 7231 §4.3.2 alias)")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for HEAD request to GET-public endpoint")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
+	var startCalled, stopCalled atomic.Bool
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-lc-ok", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("lc-cell-1")))
+
+	ln := newLocalListener(t)
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithLifecycle(func(lc Lifecycle) {
+			_ = lc.Append(Hook{
+				Name: "test-hook",
+				OnStart: func(_ context.Context) error {
+					startCalled.Store(true)
+					return nil
+				},
+				OnStop: func(_ context.Context) error {
+					stopCalled.Store(true)
+					return nil
+				},
+			})
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+
+	require.True(t, startCalled.Load(), "OnStart should have been called before HTTP server is ready")
+
+	cancel()
+	require.NoError(t, <-errCh)
+	require.True(t, stopCalled.Load(), "OnStop should have been called during teardown")
+}
+
+func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
+	wantErr := errors.New("hook-boom")
+
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-lc-fail", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("lc-cell-2")))
+
+	ln := newLocalListener(t)
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithLifecycle(func(lc Lifecycle) {
+			_ = lc.Append(Hook{
+				Name:    "failing",
+				OnStart: func(_ context.Context) error { return wantErr },
+			})
+		}),
+	)
+
+	err := b.Run(t.Context())
+	require.Error(t, err)
+	require.ErrorIs(t, err, wantErr)
+}
+
+// ---------------------------------------------------------------------------
+// F7: WithManagedCloser — LIFO teardown registration
+// ---------------------------------------------------------------------------
+
+// mockContextCloser is a test double that records Close calls and optionally
+// returns an error.
+type mockContextCloser struct {
+	closed   atomic.Bool
+	closeErr error
+}
+
+func (m *mockContextCloser) Close(_ context.Context) error {
+	m.closed.Store(true)
+	return m.closeErr
+}
+
+// TestBootstrap_WithManagedCloser_RegistersAsTeardown verifies that a resource
+// registered via WithManagedCloser has its Close(ctx) called during shutdown.
+//
+// ref: uber-go/fx Lifecycle.Append OnStop(ctx) — managed teardown registration.
+func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-managed-closer", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("managed-cell")))
+
+	ln := newLocalListener(t)
+
+	resource := &mockContextCloser{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	healthLn := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(healthLn)),
+		WithShutdownTimeout(testtime.D2s),
+		WithManagedCloser(resource),
+	)
+	go func() { errCh <- b.Run(ctx) }()
+
+	waitForHealthy(t, healthLn.Addr().String())
+	cancel()
+	require.NoError(t, <-errCh)
+
+	assert.True(t, resource.closed.Load(), "WithManagedCloser resource must be closed during teardown")
+}
+
+// TestBootstrap_WithManagedCloser_NilFailFast verifies that WithManagedCloser(nil)
+// sets the closerNil flag and Run() rejects it at phase0 before any side effects.
+// Mirrors the WithManagedResource / WithCircuitBreaker fail-fast pattern.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go Append — bad inputs surface
+// before any component starts.
+func TestBootstrap_WithManagedCloser_NilFailFast(t *testing.T) {
+	app := New(clock.Real(), WithManagedCloser(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedCloser(nil) was used")
+	}
+	const want = "managed closer must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithManagedCloser_TypedNilFailFast verifies that a typed-nil
+// (non-nil interface wrapping a nil pointer) is detected at phase0 and causes
+// Run() to return an error.
+func TestBootstrap_WithManagedCloser_TypedNilFailFast(t *testing.T) {
+	var c *mockContextCloser // typed nil
+	var iface kernellifecycle.ContextCloser = c
+
+	app := New(clock.Real(), WithManagedCloser(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedCloser receives a typed-nil interface")
+	}
+	const want = "managed closer must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// mockRateLimiter is a test double satisfying middleware.RateLimiter.
+type mockRateLimiter struct{ allow bool }
+
+func (m *mockRateLimiter) Allow(string) bool { return m.allow }
+
+// TestBootstrap_WithRateLimiter_NilFailFast verifies that WithRateLimiter(nil)
+// sets the rateLimiterNil flag and Run() rejects it at phase0.
+func TestBootstrap_WithRateLimiter_NilFailFast(t *testing.T) {
+	app := New(clock.Real(), WithRateLimiter(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithRateLimiter(nil) was used")
+	}
+	const want = "rate limiter must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithRateLimiter_TypedNilFailFast verifies that a typed-nil
+// RateLimiter is rejected at phase0.
+func TestBootstrap_WithRateLimiter_TypedNilFailFast(t *testing.T) {
+	var rl *mockRateLimiter // typed nil
+	var iface middleware.RateLimiter = rl
+
+	app := New(clock.Real(), WithRateLimiter(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithRateLimiter receives a typed-nil interface")
+	}
+	const want = "rate limiter must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F8: FinalizeAuth failure propagates rollback — duplicate auth declaration
+// ---------------------------------------------------------------------------
+
+// duplicateAuthCell declares the same (method, path) twice via auth.Mount,
+// which must cause FinalizeAuth to return a "duplicate auth declaration" error.
+type duplicateAuthCell struct {
+	*cell.BaseCell
+}
+
+func newDuplicateAuthCell(id string) *duplicateAuthCell {
+	return &duplicateAuthCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func (c *duplicateAuthCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			mustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
+			mustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			return nil
+		},
+	})
+	return nil
+}
+
+type protectedAuthCell struct {
+	*cell.BaseCell
+}
+
+func newProtectedAuthCell(id string) *protectedAuthCell {
+	return &protectedAuthCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func (c *protectedAuthCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract("GET", "/api/v1/protected"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-protected-auth", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must reject protected route declarations without an auth plan")
+	assert.Contains(t, err.Error(), "without an auth plan")
+	assert.Contains(t, err.Error(), "GET /api/v1/protected")
+	assert.Contains(t, err.Error(), "NewAuthJWTFromAssembly")
+}
+
+func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
+	// F8: a cell that declares the same (method, path) twice causes FinalizeAuth
+	// to fail. Bootstrap.Run must propagate the error and roll back (stop the
+	// assembly). No HTTP listener must be started.
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-dup-auth", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
+		// before the listener is actually bound, so no connection is ever served.
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must return error when FinalizeAuth fails")
+	assert.Contains(t, err.Error(), "duplicate auth declaration",
+		"error must identify the duplicate declaration")
+
+	// After rollback, the assembly cells must be stopped (unhealthy).
+	h := asm.Health()
+	for id, status := range h {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback", id)
+	}
+}
+
+// TestBootstrap_DuplicateListenerRef_FailsFast verifies CORR-02: declaring the
+// same ListenerRef twice must cause phase0 to return an error before any side
+// effects (no assembly init, no socket bind).
+func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
+	ln := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		// Two declarations for PrimaryListener — second one is the duplicate.
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "duplicate listener ref must cause Run to fail")
+	assert.Contains(t, err.Error(), "duplicate WithListener", "error must identify the duplicate ref")
+	assert.Contains(t, err.Error(), "primary", "error must name the duplicate listener ref")
+}
+
+// TestBootstrap_DuplicateRouteGroup_FailsFast verifies that a cell that
+// declares two RouteGroups with the same (listener, prefix) combination causes
+// FinalizeAuth or phase5 to fail with an actionable error.
+// Note: duplicate route declarations on different prefixes are allowed;
+// duplicate (method, path) within the same prefix is caught by FinalizeAuth.
+func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-dup-rg", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-rg-cell")))
+
+	ln := newLocalListener(t)
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []kauth.ListenerAuth{kauth.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "duplicate auth declaration must cause Run to fail")
+	assert.Contains(t, err.Error(), "duplicate auth declaration")
+}
+
+// ---------------------------------------------------------------------------
+// B6 — FinalizeAuth failure on InternalListener / HealthListener
+// ---------------------------------------------------------------------------
+
+// duplicateInternalCell declares the same (method, path) twice on InternalListener,
+// triggering FinalizeAuth failure on the internal router.
+type duplicateInternalCell struct {
+	*cell.BaseCell
+}
+
+func newDuplicateInternalCell(id string) *duplicateInternalCell {
+	return &duplicateInternalCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func (c *duplicateInternalCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
+				Handler:  handler,
+			})
+			// Duplicate declaration — must trigger FinalizeAuth error.
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
+				Handler:  handler,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// TestBootstrap_Phase5_FinalizeFailure_OnInternalListener verifies that a
+// FinalizeAuth failure on the InternalListener is propagated as a Bootstrap.Run
+// error and triggers assembly rollback, matching the same behavior as a
+// PrimaryListener FinalizeAuth failure (TEST-10).
+func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-dup-internal", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newDuplicateInternalCell("dup-internal-cell")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]kauth.ListenerAuth{kauthtest.MustAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must return error when InternalListener FinalizeAuth fails")
+	assert.Contains(t, err.Error(), "duplicate auth declaration",
+		"error must identify the duplicate declaration")
+
+	// After rollback, cells must be stopped.
+	h := asm.Health()
+	for id, status := range h {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback", id)
+	}
+}
+
+// healthListenerTargetingCell declares a business RouteGroup on
+// cell.HealthListener — forbidden since #673: the health listener is reserved
+// for framework-owned /healthz, /readyz, /metrics (CellID==""), so
+// phase5MountRouteGroups rejects a cell-owned route there fail-fast. Before #673
+// a cell could silently mount on HealthListener (exposing business endpoints on
+// the unauthenticated probe port); that gap is exactly what the guard closes.
+type healthListenerTargetingCell struct {
+	*cell.BaseCell
+}
+
+func newHealthListenerTargetingCell(id string) *healthListenerTargetingCell {
+	return &healthListenerTargetingCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   id,
+			Type: "core",
+		}),
+	}
+}
+
+func (c *healthListenerTargetingCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.HealthListener, // reserved for framework — #673 rejects cell routes here
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract("GET", "/api/v1/rogue-health"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack verifies the #673
+// reserved-boundary guard end-to-end: a cell that declares a RouteGroup on
+// cell.HealthListener makes Bootstrap.Run fail with ERR_CELL_INVALID_CONFIG
+// (phase5MountRouteGroups rejects it before any server starts) and triggers
+// assembly rollback. The unit-level guard is covered by
+// TestPhase5MountRouteGroups_RejectsCellRouteOnHealthListener; this is the
+// Run-path + rollback proof. (Pre-#673 this test injected a duplicate auth
+// declaration via a cell-owned health RouteGroup to exercise FinalizeAuth
+// failure on the health router — that path is now structurally impossible, and
+// finalize-failure propagation on a non-primary listener stays covered by
+// TestBootstrap_Phase5_FinalizeFailure_OnInternalListener.)
+func TestBootstrap_CellRouteOnHealthListener_FailsAndRollsBack(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-rogue-health", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newHealthListenerTargetingCell("rogue-health-cell")))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must fail when a cell targets cell.HealthListener")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr, "guard error must be a typed *errcode.Error")
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ecErr.Code,
+		"reserved-boundary violation must surface ERR_CELL_INVALID_CONFIG")
+	assert.Contains(t, ecErr.Message, "cell.HealthListener",
+		"error must name cell.HealthListener so operators know the fix")
+
+	// After rollback, cells must be stopped.
+	h := asm.Health()
+	for id, status := range h {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback", id)
+	}
+}
+
+// unknownListenerCell declares a RouteGroup on an undeclared (zero-value) ListenerRef
+// to trigger the phase5 "references undeclared listener" error (TEST-03).
+type unknownListenerCell struct {
+	*cell.BaseCell
+}
+
+func newUnknownListenerCell() *unknownListenerCell {
+	return &unknownListenerCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID:   "unknown-listener-cell",
+			Type: "core",
+		}),
+	}
+}
+
+func (c *unknownListenerCell) Init(ctx context.Context, reg cell.Registrar) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	// Zero-value ListenerRef — not registered with any WithListener call.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.ListenerRef{}, // zero value — undeclared
+		Prefix:   "/api/v1/unknown",
+		Register: func(mux cell.RouteMux) error {
+			mustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	return nil
+}
+
+// TestBootstrap_UnknownListenerRef_FailsFast verifies that a RouteGroup
+// referencing a ListenerRef that was not declared via WithListener causes
+// phase5 to return an error before any HTTP server starts (TEST-03).
+func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "unknown-ln-test", DurabilityMode: outbox.DurabilityDemo})
+	require.NoError(t, asm.Register(newUnknownListenerCell()))
+
+	b := New(
+		clock.Real(),
+		WithAssembly(asm),
+		// Only PrimaryListener declared; cell uses zero-value ref.
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []kauth.ListenerAuth{kauth.AuthNone{}}),
+		WithShutdownTimeout(testtime.D1s),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "undeclared listener ref must cause Run to fail fast")
+	assert.Contains(t, err.Error(), "undeclared listener",
+		"error must mention 'undeclared listener'")
+}
+
+// ---------------------------------------------------------------------------
+// WithIdempotencyStore fail-fast tests (Batch 3)
+// ---------------------------------------------------------------------------
+
+// TestBootstrap_WithIdempotencyStore_NilFailFast verifies that
+// WithIdempotencyStore(nil) sets the sentinel flag and Run() rejects it at
+// phase0. Mirrors TestBootstrap_WithRateLimiter_NilFailFast.
+func TestBootstrap_WithIdempotencyStore_NilFailFast(t *testing.T) {
+	app := New(clock.Real(), WithIdempotencyStore(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithIdempotencyStore(nil) was used")
+	}
+	const want = "idempotency store must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestBootstrap_WithIdempotencyStore_TypedNilFailFast verifies that a
+// typed-nil idemhttp.Store is rejected at phase0.
+func TestBootstrap_WithIdempotencyStore_TypedNilFailFast(t *testing.T) {
+	var store *idemhttp.MemStore // typed nil
+	var iface idemhttp.Store = store
+
+	app := New(clock.Real(), WithIdempotencyStore(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithIdempotencyStore receives a typed-nil interface")
+	}
+	const want = "idempotency store must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}

@@ -10,8 +10,8 @@ package archtest
 // Rule statement: any Go function declared as `func Test.*_NotFound(...)` or
 // any t.Run("..._NotFound", ...) table case must contain at least one
 // CallExpr whose Fun resolves via *types.Info to
-//   - github.com/ghbvf/gocell/pkg/errcode/errcodetest.AssertCode, or
-//   - github.com/ghbvf/gocell/pkg/errcode/errcodetest.AssertWireCode,
+//   - github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest.AssertCode, or
+//   - github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest.AssertWireCode,
 //
 // and whose `expected` argument is a SelectorExpr that resolves to a typed
 // errcode.Code constant whose value matches ^ERR_.*_NOT_FOUND$.

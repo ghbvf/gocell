@@ -2,9 +2,9 @@ package policymanage
 
 import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 
 	policyCreate "github.com/ghbvf/gocell/generated/contracts/http/policy/create/v1"
 	policyGet "github.com/ghbvf/gocell/generated/contracts/http/policy/get/v1"

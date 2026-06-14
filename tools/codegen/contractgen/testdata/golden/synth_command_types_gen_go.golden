@@ -3,7 +3,7 @@
 
 package do
 
-import "github.com/ghbvf/gocell/kernel/cellvocab"
+import "github.com/ghbvf/gocell/framework/kernel/cellvocab"
 
 // COMMAND-CONTRACT-CONSISTENCY-LEVEL-01 (#1668) — compile-time Hard gate. Command
 // contracts must declare consistencyLevel L1 (LocalTx) or higher: a command

@@ -6,8 +6,8 @@
 package accesscore
 
 import (
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/runtime/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // TokenVerifier returns the session-validate service. It satisfies

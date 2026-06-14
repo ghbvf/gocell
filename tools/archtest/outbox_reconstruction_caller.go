@@ -115,7 +115,7 @@ const ruleOutboxReconstructionCaller01 = "OUTBOX-RECONSTRUCTION-CALLER-01"
 
 // reconstructionOutboxPkg is the import path of kernel/outbox, derived from
 // PlatformModulePath so a module rename / /v2 bump updates one place.
-const reconstructionOutboxPkg = PlatformModulePath + "/kernel/outbox"
+const reconstructionOutboxPkg = PlatformFrameworkModulePath + "/kernel/outbox"
 
 // reconstructionFunnelAllowlist maps each Entry-reconstruction funnel symbol to
 // the module-relative production files that may call it. The two funnels have

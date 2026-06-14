@@ -3,9 +3,15 @@ package archtest
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/workspace"
 )
+
+// frameworkSubdir is the workspace-root-relative directory holding the core
+// framework module (kernel/runtime/pkg) since the #1565 split. It is an on-disk
+// dir name, NOT a module path, so it is not a platform-path literal under
+// ARCHTEST-MODULE-PATH-FUNNEL-01. Used by the anchor tests that read
+// framework/go.mod directly (external_test.go, root_module_no_replace_test.go).
+const frameworkSubdir = "framework"
 
 // lookupModuleRoot returns the scan root by walking up from the process's cwd.
 // It delegates to [workspace.WorkspaceRoot] (go.work-first, single-module
@@ -44,17 +50,25 @@ func findModuleRoot(t testing.TB) string {
 	return root
 }
 
-// moduleImportPath returns the declared import path (e.g. "github.com/ghbvf/gocell")
-// from root/go.mod — the CORE module at the workspace root. It is used where a
-// rule needs the platform module path (e.g. to construct a symbol path like
-// <module>/kernel/cell). The set of ALL workspace modules (for the production
-// scan / classification) comes from [findWorkspaceModules], not this function.
+// moduleImportPath returns the GoCell org/repo PREFIX (e.g. "github.com/ghbvf/gocell")
+// for the workspace anchored at root. Callers compose sibling-module symbol paths
+// as <prefix>+"/adapters/…", "/tools/…", "/corecells", and framework-internal
+// symbol paths as <prefix>+"/framework/kernel/…" (post-#1565 split). The set of
+// ALL workspace modules (production scan / classification) comes from
+// [findWorkspaceModules], not this function.
 //
-// Hardcoding the path would silently mis-resolve on a module rename or /v2 bump,
-// so it is always read from go.mod via gomodutil.ReadModulePath, the single
-// shared parser used by codegen, scaffold, the CLI, and archtest.
+// Resolution (never hardcoded, so a module rename / /v2 bump is caught by
+// TestPlatformModulePathMatchesGoMod):
+//   - external single-module consumer (Operator-SDK, #1081): go.mod sits at root
+//     → return its declared module path verbatim.
+//   - GoCell workspace (#1565): the workspace root holds NO go.mod (only go.work);
+//     the core framework module lives at root/framework. Read framework/go.mod and
+//     strip the trailing "/framework" to recover the org prefix the siblings share.
+//
+// The derivation is single-sourced in [workspace.CorePrefix] (shared with
+// modrelease / releasesmoke), which reads framework/go.mod and strips "/framework".
 func moduleImportPath(root string) (string, error) {
-	return gomodutil.ReadModulePath(root)
+	return workspace.CorePrefix(root)
 }
 
 // findWorkspaceModules returns every workspace member declared in root/go.work

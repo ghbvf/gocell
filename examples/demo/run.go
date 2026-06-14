@@ -20,13 +20,13 @@ import (
 	"log/slog"
 
 	democell "github.com/ghbvf/gocell/examples/demo/cells/democell"
-	"github.com/ghbvf/gocell/kernel/assembly"
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/http/router"
 )
 
 // listenerAddrs bundles the demo's two loopback listener addresses.

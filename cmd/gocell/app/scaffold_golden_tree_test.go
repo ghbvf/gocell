@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 

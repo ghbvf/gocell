@@ -12,7 +12,7 @@
 // Expected: 1 violation — Fix: "" (empty literal).
 package empty_fix_red
 
-import "github.com/ghbvf/gocell/kernel/governance"
+import "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // emptyFixResult constructs a ValidationResult with an explicit empty Fix field.
 // CMD-VALIDATIONRESULT-FIX-FIELD-01 must flag this.

@@ -49,7 +49,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // ---------------------------------------------------------------------------
@@ -124,10 +124,10 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 func TestOutboxMarkReturnsBool01(t *testing.T) {
 	root := findModuleRoot(t)
 	scope := DirsScope(
-		root, []string{"runtime/outbox"},
+		root, []string{"framework/runtime/outbox"},
 		MatchRels(func(rel string) bool {
 			return strings.HasPrefix(filepath.Base(rel), "relay") &&
-				filepath.ToSlash(filepath.Dir(rel)) == "runtime/outbox"
+				filepath.ToSlash(filepath.Dir(rel)) == "framework/runtime/outbox"
 		}),
 	)
 
@@ -299,7 +299,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	src := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	src := filepath.Join(root, "framework", "kernel", "outbox", "outbox.go")
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
@@ -410,7 +410,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 // so no handler can write it; the structural absence is the stronger guard.
 func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	path := filepath.Join(root, "framework", "kernel", "outbox", "outbox.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -474,7 +474,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	src := filepath.Join(root, "runtime", "outbox", "relay.go")
+	src := filepath.Join(root, "framework", "runtime", "outbox", "relay.go")
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
@@ -545,7 +545,7 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	src := filepath.Join(root, "kernel", "outbox", "relay_metrics.go")
+	src := filepath.Join(root, "framework", "kernel", "outbox", "relay_metrics.go")
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, src, nil, parser.SkipObjectResolution)
@@ -608,7 +608,7 @@ const (
 	outboxServiceRuleRuntimeOutbox   = "OUTBOX-SERVICE-03"
 	outboxServiceRulePublisherMode   = "OUTBOX-SERVICE-04"
 	outboxServiceRuleWriterAdapter   = "OUTBOX-SERVICE-05_no_writer_adapter_option"
-	outboxRuntimeImportRelPath       = "runtime/outbox"
+	outboxRuntimeImportRelPath       = "framework/runtime/outbox"
 	outboxServiceGlobReadablePattern = "cells/**/slices/**/service.go"
 )
 
@@ -1275,7 +1275,7 @@ var handleResultAllowedFields = map[string]struct{}{
 // and comments. Archtest is the minimum-friction gate.
 func TestOutboxHandleResultFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	path := filepath.Join(root, "framework", "kernel", "outbox", "outbox.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -1398,7 +1398,7 @@ var deliveryOutcomeAllowedFields = map[string]struct{}{
 // kept name-only here so the two sibling freezes stay structurally identical.
 func TestOutboxDeliveryOutcomeFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "outbox", "outbox.go")
+	path := filepath.Join(root, "framework", "kernel", "outbox", "outbox.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -1558,9 +1558,12 @@ func TestIsHandleResultLiteralAllowed(t *testing.T) {
 		pkgPath, rel string
 		want         bool
 	}{
-		{"sanctioned platform factory file", PlatformModulePath + "/kernel/outbox", "kernel/outbox/result.go", true},
-		{"conformance harness", PlatformModulePath + "/kernel/outbox/outboxtest", "kernel/outbox/outboxtest/conformance.go", true},
-		{"consumer_base.go no longer allowlisted (#663 split)", PlatformModulePath + "/kernel/outbox", "kernel/outbox/consumer_base.go", false},
+		{"sanctioned platform factory file", PlatformFrameworkModulePath + "/kernel/outbox", "kernel/outbox/result.go", true},
+		{"conformance harness", PlatformFrameworkModulePath + "/kernel/outbox/outboxtest", "kernel/outbox/outboxtest/conformance.go", true},
+		{
+			"consumer_base.go no longer allowlisted (#663 split)", PlatformFrameworkModulePath + "/kernel/outbox",
+			"kernel/outbox/consumer_base.go", false,
+		},
 		{"consumer module forges allowlisted rel", "consumer.example/app/kernel/outbox", "kernel/outbox/result.go", false},
 		{"platform pkg, non-allowlisted rel", PlatformModulePath + "/cells/foo", "cells/foo/handler.go", false},
 		{"unresolved pkg", "", "kernel/outbox/result.go", false},
@@ -1677,9 +1680,9 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 	t.Parallel()
 
 	const (
-		outboxPkgPath     = PlatformModulePath + "/kernel/outbox"
+		outboxPkgPath     = PlatformFrameworkModulePath + "/kernel/outbox"
 		sanctionedHolder  = "closeWithBudget"
-		outboxtestPattern = "./kernel/outbox/outboxtest/..."
+		outboxtestPattern = "./framework/kernel/outbox/outboxtest/..."
 	)
 
 	type violation struct {
@@ -1779,7 +1782,7 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 func TestOutboxtestCloseViaBudget01_BlindSpot_NoMethodValue(t *testing.T) {
 	t.Parallel()
 
-	const outboxtestPattern = "./kernel/outbox/outboxtest/..."
+	const outboxtestPattern = "./framework/kernel/outbox/outboxtest/..."
 
 	type violation struct {
 		rel  string

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
-	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Compile-time assertions: Service implements both generated interfaces.

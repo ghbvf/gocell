@@ -11,7 +11,7 @@ package sagaenumredforeignconst
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/framework/runtime/saga/executor"
 )
 
 // rogueSkip is a const declared in the fixture package (NOT in

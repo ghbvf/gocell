@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
@@ -130,7 +130,7 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		{"requestValidator var", "var requestValidator = newRequestValidator()"},
 		{"newRequestValidator helper", "func newRequestValidator() schemavalidate.Validator"},
 		{"DispatchAsync value-validate call", "requestValidator.Validate(ctx, entry.Payload())"},
-		{"schemavalidate import", `"github.com/ghbvf/gocell/runtime/schemavalidate"`},
+		{"schemavalidate import", `"github.com/ghbvf/gocell/framework/runtime/schemavalidate"`},
 		{"KindInvalid", "errcode.KindInvalid"},
 		{"KindNotFound", "errcode.KindNotFound"},
 		{"KindInternal", "errcode.KindInternal"},

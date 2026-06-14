@@ -286,10 +286,10 @@ func formatBannedSymbolDeclDiag(authImportPath, name string) string {
 // productionScanPatterns is the seven production roots scanned by both the
 // main invariant test and the BS-1 reverse self-check.
 var productionScanPatterns = []string{
-	"./runtime/...",
+	"./framework/runtime/...",
 	"./corecells/...",
 	"./cmd/...",
-	"./kernel/...",
+	"./framework/kernel/...",
 	"./adapters/...",
 	"./examples/...",
 	"./tests/...",

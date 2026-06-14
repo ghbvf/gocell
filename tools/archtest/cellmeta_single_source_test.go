@@ -56,7 +56,7 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 		"CellVerify":   true,
 		"L0Dep":        true,
 	}
-	scope := DirsScope(root, []string{"kernel/cell"})
+	scope := DirsScope(root, []string{"framework/kernel/cell"})
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			EachInSubtree[ast.TypeSpec](file, func(ts *ast.TypeSpec) {
@@ -79,7 +79,7 @@ func TestCellmetaSingleSource01_NoForbiddenTypes(t *testing.T) {
 func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "base.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "base.go")
 	fset := token.NewFileSet()
 	f, perr := parser.ParseFile(fset, path, nil, 0)
 	if perr != nil {
@@ -115,7 +115,7 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 func TestCellmetaSingleSource03_MetadataInterfaceReturn(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "interfaces.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "interfaces.go")
 	fset := token.NewFileSet()
 	f, perr := parser.ParseFile(fset, path, nil, 0)
 	if perr != nil {

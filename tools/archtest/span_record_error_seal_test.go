@@ -82,7 +82,7 @@ import (
 // saga_invariants_test.go — keep in sync if function signatures change).
 // ---------------------------------------------------------------------------
 
-const redactionImportPath = `"github.com/ghbvf/gocell/pkg/redaction"`
+const redactionImportPath = `"github.com/ghbvf/gocell/framework/pkg/redaction"`
 
 // redactionLocalName returns the local identifier used in file to refer to
 // the pkg/redaction package (default "redaction"; alias otherwise).
@@ -578,7 +578,7 @@ func TestSpanRecordErrorSeal_B_DetectsViolation(t *testing.T) {
 			src: `package otel
 import (
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 var _ = redaction.Mask
 type otelSpan struct{ inner oteltrace.Span }
@@ -593,7 +593,7 @@ func (s *otelSpan) RecordError(err error) {
 			src: `package otel
 import (
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 var sentinel error
 type otelSpan struct{ inner oteltrace.Span }
@@ -608,7 +608,7 @@ func (s *otelSpan) RecordError(err error) {
 			src: `package otel
 import (
 	oteltrace "go.opentelemetry.io/otel/trace"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 type otelSpan struct{ inner oteltrace.Span }
 func (s *otelSpan) RecordError(err error) {

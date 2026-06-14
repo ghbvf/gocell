@@ -38,7 +38,7 @@ import (
 // conformance.go importing runtime/distlock/locktest (a conformance suite whose
 // path has no `*test` segment, so isTestInfraPath does not exempt it). #986
 // resolves that exemption first, then lands the generalized rule.
-var outboxtestImportPathPattern = regexp.MustCompile(`^github\.com/[^/]+/[^/]+/kernel/outbox/outboxtest$`)
+var outboxtestImportPathPattern = regexp.MustCompile(`^github\.com/[^/]+/[^/]+/(framework/)?kernel/outbox/outboxtest$`)
 
 // isOutboxtestImportPath reports whether an absolute import path is exactly the
 // kernel/outbox/outboxtest test-infrastructure package.
@@ -140,7 +140,7 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		// Positive: should match (violation when imported by production code).
 		{
 			name:      "kernel outboxtest direct",
-			path:      PlatformModulePath + "/kernel/outbox/outboxtest",
+			path:      PlatformFrameworkModulePath + "/kernel/outbox/outboxtest",
 			wantMatch: true,
 		},
 		{
@@ -151,22 +151,22 @@ func TestOutboxtestImportPath_PatternTable(t *testing.T) {
 		// Negative: out of this narrow rule's declared scope.
 		{
 			name:      "runtime outboxtest (different package; deferred to #986 broad rule)",
-			path:      PlatformModulePath + "/runtime/outbox/outboxtest",
+			path:      PlatformFrameworkModulePath + "/runtime/outbox/outboxtest",
 			wantMatch: false,
 		},
 		{
 			name:      "distlock locktest (deferred to #986 broad rule)",
-			path:      PlatformModulePath + "/runtime/distlock/locktest",
+			path:      PlatformFrameworkModulePath + "/runtime/distlock/locktest",
 			wantMatch: false,
 		},
 		{
 			name:      "kernel outbox (production package)",
-			path:      PlatformModulePath + "/kernel/outbox",
+			path:      PlatformFrameworkModulePath + "/kernel/outbox",
 			wantMatch: false,
 		},
 		{
 			name:      "outboxtest sub-package (blind spot — anchored out)",
-			path:      PlatformModulePath + "/kernel/outbox/outboxtest/sub",
+			path:      PlatformFrameworkModulePath + "/kernel/outbox/outboxtest/sub",
 			wantMatch: false,
 		},
 		{

@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // webhookSourceFixture builds a WebhookSourceRepository over a fresh per-test

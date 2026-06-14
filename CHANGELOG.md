@@ -8,6 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Breaking Changes
 
+- **Go SDK module path (轴 A)**: the framework core module moved from the repo root
+  `github.com/ghbvf/gocell` (holding `kernel/ runtime/ pkg/`) to the dedicated
+  submodule `github.com/ghbvf/gocell/framework` (PR #1565). Every public SDK symbol
+  import path changes accordingly — `github.com/ghbvf/gocell/kernel/...` →
+  `github.com/ghbvf/gocell/framework/kernel/...` (likewise `runtime/`, `pkg/`).
+  External consumers must `go get github.com/ghbvf/gocell/framework@vX.Y.Z` and rewrite
+  framework imports. Satellite modules (`adapters/*`, `corecells`, `cellmodules`,
+  `generated`, `tools`, `cmd/*`) keep their existing `github.com/ghbvf/gocell/<dir>`
+  paths. Pre-GA, no external wire consumers — all in-repo callers updated atomically in
+  the same PR. The directory now matches the import path (Go convention, cf.
+  `golang.org/x/tools/gopls`). See ADR
+  `docs/architecture/202606131200-1088-adr-go-api-authoring-schema-semver-policy.md`
+  §framework-module-path amendment.
+
 - **readyz wire**: `/readyz?verbose` dependency names for 3 outbox relay probes
   renamed from hyphen to underscore form (typed `ProbeName` funnel — see PR #1187):
   - `outbox-relay-poll` → `outbox_relay_poll`

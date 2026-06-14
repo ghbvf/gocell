@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // SARIFPrinter renders results as a SARIF 2.1.0 log. Designed to be ingested

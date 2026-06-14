@@ -8,7 +8,7 @@
 // it sets. Expected: 1 violation from the funnel scan path.
 package composite_lit_no_message_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // violateNoMessage constructs a raw ValidationResult composite literal — the
 // forbidden bypass shape.

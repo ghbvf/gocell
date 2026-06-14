@@ -2,9 +2,12 @@
 
 // INVARIANT: ROOT-MODULE-NO-REPLACE-01
 //
-// ROOT-MODULE-NO-REPLACE-01 — the workspace ROOT module (github.com/ghbvf/gocell)
-// go.mod must carry NO replace and NO exclude directives, so the published module
-// is cleanly consumable by external `go get` and `go install pkg@version`.
+// ROOT-MODULE-NO-REPLACE-01 — the externally-consumable CORE module — since the
+// #1565 split that is the FRAMEWORK module (github.com/ghbvf/gocell/framework) at
+// root/framework, no longer a module at the repo root — go.mod must carry NO
+// replace and NO exclude directives, so the published module is cleanly consumable
+// by external `go get` and `go install pkg@version`. (Rule ID retains the
+// "ROOT-MODULE" name: framework is the root of GoCell's published module tree.)
 //
 // # Why
 //
@@ -57,8 +60,9 @@
 //
 // # Anti-vacuity + reverse self-check
 //
-//   - Anti-vacuity: TestRootModuleNoReplace01 asserts the resolved root module path
-//     == PlatformModulePath, so a mis-resolved or empty go.mod cannot pass silently.
+//   - Anti-vacuity: TestRootModuleNoReplace01 asserts the resolved framework module
+//     path == PlatformFrameworkModulePath, so a mis-resolved or empty go.mod cannot
+//     pass silently.
 //   - Reverse self-check (negative control): TestRootModuleNoReplace01_NegativeControl
 //     feeds testdata/root_module_replace_fixture/go.mod (which DOES carry a replace
 //     AND an exclude) to the same detector and asserts both are flagged — proving
@@ -80,27 +84,31 @@ const rootModuleNoReplaceRule = "ROOT-MODULE-NO-REPLACE-01"
 func TestRootModuleNoReplace01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
+	// Post-#1565 the externally-consumable CORE module is the framework module at
+	// root/framework (the workspace root holds only go.work, no go.mod). This
+	// invariant guards THAT module's go.mod.
+	frameworkRoot := filepath.Join(root, frameworkSubdir)
 
-	// Anti-vacuity: prove we resolved the REAL root module, not a misresolved /
+	// Anti-vacuity: prove we resolved the REAL framework module, not a misresolved /
 	// empty go.mod that would trivially have zero replace/exclude.
-	mod, err := moduleImportPath(root)
+	mod, err := gomodutil.ReadModulePath(frameworkRoot)
 	if err != nil {
-		t.Fatalf("%s: read root module path (anti-vacuity): %v", rootModuleNoReplaceRule, err)
+		t.Fatalf("%s: read framework module path (anti-vacuity): %v", rootModuleNoReplaceRule, err)
 	}
-	if mod != PlatformModulePath {
-		t.Fatalf("%s: anti-vacuity failed: resolved root module %q, want %q",
-			rootModuleNoReplaceRule, mod, PlatformModulePath)
+	if mod != PlatformFrameworkModulePath {
+		t.Fatalf("%s: anti-vacuity failed: resolved framework module %q, want %q",
+			rootModuleNoReplaceRule, mod, PlatformFrameworkModulePath)
 	}
 
-	replaces, excludes, err := gomodutil.ReadReplaceExclude(root)
+	replaces, excludes, err := gomodutil.ReadReplaceExclude(frameworkRoot)
 	if err != nil {
-		t.Fatalf("%s: read root go.mod replace/exclude: %v", rootModuleNoReplaceRule, err)
+		t.Fatalf("%s: read framework go.mod replace/exclude: %v", rootModuleNoReplaceRule, err)
 	}
 	if len(replaces) > 0 || len(excludes) > 0 {
-		t.Errorf("%s: root module %q go.mod must have NO replace/exclude directives "+
+		t.Errorf("%s: framework module %q go.mod must have NO replace/exclude directives "+
 			"(they break external `go get` and `go install pkg@version`); "+
 			"found replaces=%v excludes=%v. Satellite modules (cmd/gocell, examples/*) may "+
-			"keep local replaces, but the root module must not — remove any replace added "+
+			"keep local replaces, but the framework module must not — remove any replace added "+
 			"for local debugging before committing.",
 			rootModuleNoReplaceRule, mod, replaces, excludes)
 	}

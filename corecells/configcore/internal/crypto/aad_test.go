@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	configcrypto "github.com/ghbvf/gocell/corecells/configcore/internal/crypto"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // tenantA / tenantB are canonical test-tenant UUIDs used to assert that the

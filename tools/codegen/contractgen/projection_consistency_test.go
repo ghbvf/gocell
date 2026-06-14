@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // PROJECTION-CONSISTENCY-01 (gh #960) — contractgen codegen funnel tests.
@@ -37,7 +37,7 @@ func TestProjectionTypesEmitsConsistencyGuard(t *testing.T) {
 			t.Fatalf("renderTypes(%s): %v", level, err)
 		}
 		got := string(out)
-		if !strings.Contains(got, `"github.com/ghbvf/gocell/kernel/cellvocab"`) {
+		if !strings.Contains(got, `"github.com/ghbvf/gocell/framework/kernel/cellvocab"`) {
 			t.Errorf("level %s: generated types missing cellvocab import:\n%s", level, got)
 		}
 		wantGuard := "const _ = uint(cellvocab." + level + " - cellvocab.L3)"
@@ -134,7 +134,7 @@ func TestProjectionLowLevelGuardFailsCompile(t *testing.T) {
 
 	goDirective := "go 1.25"
 	// #nosec G304 -- test-internal: root is the repo module root, not user input.
-	if data, rerr := os.ReadFile(filepath.Join(root, "go.mod")); rerr == nil {
+	if data, rerr := os.ReadFile(filepath.Join(root, "framework", "go.mod")); rerr == nil {
 		for _, ln := range strings.Split(string(data), "\n") {
 			if strings.HasPrefix(ln, "go ") {
 				goDirective = strings.TrimSpace(ln)
@@ -143,7 +143,7 @@ func TestProjectionLowLevelGuardFailsCompile(t *testing.T) {
 		}
 	}
 	gomod := "module projectionguardcompile\n\n" + goDirective +
-		"\n\nrequire github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => " + root + "\n"
+		"\n\nrequire github.com/ghbvf/gocell/framework v0.0.0\n\nreplace github.com/ghbvf/gocell/framework => " + root + "/framework\n"
 	writeFile("go.mod", []byte(gomod))
 
 	cmd := exec.Command("go", "build", "./...")

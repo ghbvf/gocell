@@ -10,7 +10,7 @@
 // Expected: 1 violation from the CompositeLit scan path.
 package composite_lit_no_code_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // violateNoCode returns a ValidationResult that omits Code:. The receiver of
 // every governance result must reference a RuleCode const declared in

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // TestProbeReady_StringValue asserts the literal value of the typed const.

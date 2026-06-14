@@ -29,13 +29,13 @@ import (
 	"log/slog"
 	"strings"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
-	"github.com/ghbvf/gocell/runtime/lifecycle"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/lifecycle"
 )
 
 // runCorebundle is the handwritten runtime half behind the generated

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 )
 
 // stubModule is a test-only CellModule implementation that returns a fixed ID.

@@ -6,7 +6,7 @@
 // and bypass the positional injection promise — sub-check C flags this.
 package struct_field_violates
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // BarConfig is an input Config struct. Its exported Clock field violates
 // sub-check C: clock must enter via positional parameter, not struct literal.

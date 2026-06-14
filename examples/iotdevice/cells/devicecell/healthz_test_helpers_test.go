@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/observability/healthz/healthztest"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/runtime/observability/healthz/healthztest"
 )
 
 // newTestAgg returns a shared fake healthz.Aggregator for use in cell unit tests.

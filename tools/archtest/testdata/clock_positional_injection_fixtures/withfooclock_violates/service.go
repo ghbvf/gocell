@@ -4,7 +4,7 @@
 // This proves the broadened predicate catches suffixed names beyond "WithClock".
 package withfooclock_violates
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // Option configures Service.
 type Option func(*Service)

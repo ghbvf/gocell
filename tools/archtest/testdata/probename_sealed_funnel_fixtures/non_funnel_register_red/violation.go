@@ -11,7 +11,7 @@ package non_funnel_register_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // fakeAggregator is a minimal healthz.Aggregator implementation used to

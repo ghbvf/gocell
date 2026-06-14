@@ -10,9 +10,9 @@ package projection_register_violate
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
 )
 
 // fixtureRequest builds a valid ProjectionRequest for the fixture callsites.

@@ -1,7 +1,6 @@
 # Publishable module set — DERIVED from go.work minus examples/ + tests/ + cmd/.
 # Regenerate intentionally: make update-modrelease-golden
 # <reldir>\t<import-path>
-.	github.com/ghbvf/gocell
 adapters/adapterutil	github.com/ghbvf/gocell/adapters/adapterutil
 adapters/grpc	github.com/ghbvf/gocell/adapters/grpc
 adapters/mqtt	github.com/ghbvf/gocell/adapters/mqtt
@@ -17,5 +16,7 @@ adapters/vault	github.com/ghbvf/gocell/adapters/vault
 adapters/websocket	github.com/ghbvf/gocell/adapters/websocket
 cellmodules	github.com/ghbvf/gocell/cellmodules
 corecells	github.com/ghbvf/gocell/corecells
+framework	github.com/ghbvf/gocell/framework
 generated	github.com/ghbvf/gocell/generated
+tests	github.com/ghbvf/gocell/tests
 tools	github.com/ghbvf/gocell/tools

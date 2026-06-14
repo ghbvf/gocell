@@ -9,7 +9,7 @@ package configcore
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 var (

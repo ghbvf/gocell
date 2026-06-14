@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/distlock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/distlock"
 )
 
 // Compile-time assertion: *RedisDriver satisfies distlock.Driver.

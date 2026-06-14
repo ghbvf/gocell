@@ -5,9 +5,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 const testServiceKey = "test-service-secret-at-least-32-bytes!!"

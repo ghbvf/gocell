@@ -6,7 +6,7 @@ import (
 
 	gofumpt "mvdan.cc/gofumpt/format"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 

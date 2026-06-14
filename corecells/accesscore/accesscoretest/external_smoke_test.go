@@ -34,9 +34,9 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore"
 	"github.com/ghbvf/gocell/corecells/accesscore/accesscoretest"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/identitymanage"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // TestExternalImportSurface_NoInternalTypes calls every public symbol that

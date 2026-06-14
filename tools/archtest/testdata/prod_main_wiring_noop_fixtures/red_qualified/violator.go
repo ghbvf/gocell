@@ -9,7 +9,7 @@
 // must NOT be flagged. Expect six diagnostics.
 package redqualified
 
-import "github.com/ghbvf/gocell/kernel/outbox"
+import "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 var (
 	_ outbox.Writer    = outbox.NoopWriter{}        // raw noop writer

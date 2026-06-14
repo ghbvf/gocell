@@ -38,7 +38,7 @@ import (
 //	└────────────────┴─────────────────────────────────────┴──────────────────────────────┘
 //
 // All three branches resolve to the same (pkgPath, name) tuple
-// ("github.com/ghbvf/gocell/runtime/auth/session", "NewProtocol") — the
+// ("github.com/ghbvf/gocell/framework/runtime/auth/session", "NewProtocol") — the
 // type-aware rule does not care about the source callee shape.
 func TestSessionProtocol_RedFixtureDetected(t *testing.T) {
 	diags := Run(t, Fixture(

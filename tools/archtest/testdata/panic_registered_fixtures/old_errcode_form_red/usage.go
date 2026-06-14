@@ -2,7 +2,7 @@
 // without Approved wrap is caught: 1 violation expected.
 package old_errcode_form_red
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 func foo() {
 	panic(errcode.Assertion("x"))

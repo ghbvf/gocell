@@ -24,7 +24,7 @@ package projcarrierfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // carrierIface stands in for the post-migration ProjectionEvent interface — a

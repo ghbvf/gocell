@@ -12,7 +12,7 @@ import (
 	"os"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app"
-	"github.com/ghbvf/gocell/runtime/observability/logging"
+	"github.com/ghbvf/gocell/framework/runtime/observability/logging"
 )
 
 func main() {

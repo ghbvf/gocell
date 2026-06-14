@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	helloslice "github.com/ghbvf/gocell/examples/demo/cells/democell/slices/hello"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 	hellov1 "github.com/ghbvf/gocell/generated/contracts/http/demo/hello/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 // DemoCell is the democell Cell implementation.

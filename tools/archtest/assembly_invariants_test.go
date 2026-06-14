@@ -57,7 +57,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // ---- ASSEMBLY-MODULES-GEN-01 / ASSEMBLY-MODULES-SWITCH-FORBIDDEN-02 /
@@ -467,7 +467,7 @@ func TestRunGoNoCellIDSwitch_ScopeCoversExamples(t *testing.T) {
 func TestAssemblyMetaMaxConsistencyDerivedTag(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	srcPath := filepath.Join(root, "kernel", "metadata", "types.go")
+	srcPath := filepath.Join(root, "framework", "kernel", "metadata", "types.go")
 
 	fset := token.NewFileSet()
 	af, err := parser.ParseFile(fset, srcPath, nil, parser.SkipObjectResolution)
@@ -725,7 +725,7 @@ func checkCellModuleTypePresentInDir(t *testing.T, root, entrypointDir string) {
 // type. The generated composition-API modules_gen.go must return
 // []composition.CellModule from this exact package. Derived from
 // PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01.
-const compositionPkgPath = PlatformModulePath + "/runtime/composition"
+const compositionPkgPath = PlatformFrameworkModulePath + "/runtime/composition"
 
 // hasCompositionCellModuleReturnType returns true when af contains a top-level
 // function named "generatedCellModules" whose return type is
@@ -1386,7 +1386,7 @@ func asnViolation(file string, line int) string {
 // asnFindAssemblyProductionGoFiles returns all non-test .go files under
 // kernel/assembly/.
 func asnFindAssemblyProductionGoFiles(root string) ([]string, error) {
-	scope := DirsScope(root, []string{"kernel/assembly"})
+	scope := DirsScope(root, []string{"framework/kernel/assembly"})
 	files, err := scope.Files()
 	if err != nil {
 		return nil, err
@@ -1435,7 +1435,7 @@ var expectedAssemblyRefMethods = map[string]string{
 func TestAssemblyRefMethodSet(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	srcPath := filepath.Join(root, "kernel", "auth", "auth_plan.go")
+	srcPath := filepath.Join(root, "framework", "kernel", "auth", "auth_plan.go")
 
 	fset := token.NewFileSet()
 	af, err := parser.ParseFile(fset, srcPath, nil, parser.SkipObjectResolution)
@@ -1597,8 +1597,8 @@ func TestAssemblyCrossModuleImportFunnel(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	scope := DirsScope(root, []string{"kernel/assembly"}, MatchRels(func(rel string) bool {
-		return strings.HasPrefix(filepath.ToSlash(rel), "kernel/assembly/") &&
+	scope := DirsScope(root, []string{"framework/kernel/assembly"}, MatchRels(func(rel string) bool {
+		return strings.HasPrefix(filepath.ToSlash(rel), "framework/kernel/assembly/") &&
 			strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go")
 	}))
 

@@ -7,7 +7,7 @@ import (
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // retryableS3ErrorCodes mirrors aws-sdk-go-v2 retry.DefaultRetryableErrorCodes

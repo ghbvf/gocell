@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/examples/iotdevice
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -37,7 +36,9 @@ require (
 	github.com/ghbvf/gocell/adapters/grpc v0.0.0
 	github.com/ghbvf/gocell/adapters/mqtt v0.0.0
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -89,12 +90,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Local monorepo replace: under GOWORK=on the go.work workspace overrides this
-// and resolves the core module to the repo root; under GOWORK=off (the
-// release-consistency build in hack/verify-workspace.sh) this replace makes the
-// unpublished core module resolve to the repo root instead of being fetched.
-replace github.com/ghbvf/gocell => ../../
-
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
 
 replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
@@ -104,3 +99,7 @@ replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
 replace github.com/ghbvf/gocell/generated => ../../generated
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

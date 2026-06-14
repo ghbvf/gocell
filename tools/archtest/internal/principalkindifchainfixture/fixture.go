@@ -11,7 +11,7 @@
 // DO NOT use this package in production code.
 package principalkindifchainfixture
 
-import "github.com/ghbvf/gocell/runtime/auth"
+import "github.com/ghbvf/gocell/framework/runtime/auth"
 
 // ifChain handles only some PrincipalKind values via an if/else-if chain (no
 // PrincipalDevice, no switch). The exhaustiveness rule must NOT flag this.

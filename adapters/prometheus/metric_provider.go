@@ -12,8 +12,8 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ghbvf/gocell/adapters/prometheus/internal/promwrap"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // MetricProviderConfig configures a Prometheus-backed metrics.Provider.

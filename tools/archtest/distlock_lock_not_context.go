@@ -37,7 +37,7 @@ import (
 // distlockPkgPath is the import path of runtime/distlock.
 // Derived from PlatformModulePath so a module rename / /v2 bump updates exactly
 // one place.
-const distlockPkgPath = PlatformModulePath + "/runtime/distlock"
+const distlockPkgPath = PlatformFrameworkModulePath + "/runtime/distlock"
 
 // contextPkgPath is the stdlib context package import path.
 const contextPkgPath = "context"
@@ -79,7 +79,7 @@ func CheckDistlockLockNotContext01(t *testing.T, _ ConfigForExternalCell) []Diag
 func scanDistlockPkg(t *testing.T) distlockCheckResult {
 	t.Helper()
 	var res distlockCheckResult
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != distlockPkgPath {
 				return nil

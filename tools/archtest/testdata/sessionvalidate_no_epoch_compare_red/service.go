@@ -8,9 +8,9 @@ package sessionvalidate_no_epoch_compare_red
 import (
 	"context"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // stubService is a stub holding a non-nil userRepo field to satisfy the

@@ -85,13 +85,13 @@ import (
 func TestTracingSimpleTracerTestOnly(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath := readModulePath(t, root)
-	tracingtestImport := modPath + "/runtime/observability/tracingtest"
+	tracingtestImport := modPath + "/framework/runtime/observability/tracingtest"
 
 	allGoFiles, err := collectGoFiles(root)
 	require.NoError(t, err, "failed to collect .go files")
 	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
 
-	tracingtestPkgDir := filepath.Join(root, "runtime", "observability", "tracingtest")
+	tracingtestPkgDir := filepath.Join(root, "framework", "runtime", "observability", "tracingtest")
 
 	// R-A: ban `tracing.NewTracer(...)` and `tracingtest.NewSimpleTracer(...)`
 	// call expressions in non-test production files. Detection is AST-based
@@ -181,7 +181,7 @@ func TestTracingSimpleTracerTestOnly(t *testing.T) {
 	//      sanctioned test path.
 	t.Run("R-C_reverse_self_check", func(t *testing.T) {
 		// 1. deleted package stays deleted.
-		deletedPkgDir := filepath.Join(root, "runtime", "observability", "tracing")
+		deletedPkgDir := filepath.Join(root, "framework", "runtime", "observability", "tracing")
 		if _, statErr := os.Stat(deletedPkgDir); !os.IsNotExist(statErr) {
 			t.Errorf("runtime/observability/tracing must stay deleted (B2-A-20); "+
 				"found existing directory %s — the backward-compat Tracer/Span/Attr "+

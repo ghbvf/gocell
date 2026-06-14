@@ -22,13 +22,13 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/composition"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // LoadSourceStore builds the persistent webhook [kwh.SourceStore] from postgres.

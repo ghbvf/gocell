@@ -141,7 +141,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
@@ -214,10 +214,10 @@ var mustProbeNameAllowlist = map[string]bool{
 // in the same PR (enforced by A1 golden lock in TestProbenameSealedFunnel).
 func goldenProbeNames() []string {
 	names := []string{
-		// kernel/healthz — framework constants
-		"kernel/healthz.ConfigDriftProbeName=config_drift",
-		"kernel/healthz.ConfigWatcherProbeName=config_watcher",
-		"kernel/healthz.EventRouterProbeName=event_router",
+		// framework/kernel/healthz — framework constants (module github.com/ghbvf/gocell/framework)
+		"framework/kernel/healthz.ConfigDriftProbeName=config_drift",
+		"framework/kernel/healthz.ConfigWatcherProbeName=config_watcher",
+		"framework/kernel/healthz.EventRouterProbeName=event_router",
 		// adapter probes (all _ready suffix)
 		"adapters/grpc.ProbeReady=grpc_ready",
 		"adapters/mqtt.ProbeReady=mqtt_ready",
@@ -232,13 +232,13 @@ func goldenProbeNames() []string {
 		"adapters/redis.ProbeReady=redis_ready",
 		"adapters/s3.ProbeReady=s3_ready",
 		"adapters/vault.ProbeReady=vault_transit_ready",
-		// runtime probes — outbox relay probes (no _ready suffix: relay operation, not dep availability)
-		"runtime/outbox.ProbeCleanup=outbox_relay_cleanup",
-		"runtime/outbox.ProbePoll=outbox_relay_poll",
-		"runtime/outbox.ProbeReclaim=outbox_relay_reclaim",
-		// runtime probes (all _ready suffix)
-		"runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
-		"runtime/websocket.ProbeReady=websocket_hub_ready",
+		// framework/runtime probes — outbox relay probes (no _ready suffix: relay operation, not dep availability)
+		"framework/runtime/outbox.ProbeCleanup=outbox_relay_cleanup",
+		"framework/runtime/outbox.ProbePoll=outbox_relay_poll",
+		"framework/runtime/outbox.ProbeReclaim=outbox_relay_reclaim",
+		// framework/runtime probes (all _ready suffix)
+		"framework/runtime/saga.ProbeCoordinatorReady=saga_coordinator_ready",
+		"framework/runtime/websocket.ProbeReady=websocket_hub_ready",
 		// cellgen repo probes (all _repo_ready suffix)
 		"corecells/accesscore.ProbeRepoReady=accesscore_repo_ready",
 		"corecells/auditcore.ProbeRepoReady=auditcore_repo_ready",

@@ -15,7 +15,7 @@
 package kernelcellsibling
 
 import (
-	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 )
 
 // CallWrapForCellFromKernelCellSibling deliberately calls persistence.WrapForCell

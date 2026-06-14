@@ -385,7 +385,7 @@ func TestCredentialInvalidateFunnel_BlindSpot_ReflectMethodByName(t *testing.T) 
 
 	var violations []string
 	_ = Run(t, Typed(TypedOpts{Tests: false},
-		[]string{"./corecells/accesscore/...", "./runtime/auth/...", "./adapters/...", "./cmd/..."}),
+		[]string{"./corecells/accesscore/...", "./framework/runtime/auth/...", "./adapters/...", "./cmd/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

@@ -22,7 +22,7 @@ package errcodeselectorfixture
 import (
 	"errors"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 
 	"fixturetest/errcode_prefix_ownership_selector/codes"
 )

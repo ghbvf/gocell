@@ -6,7 +6,7 @@ package non_literal_reason_red
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 )
 
 func foo() {

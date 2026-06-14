@@ -17,10 +17,13 @@ import "strings"
 
 const (
 	// poolstatsForbiddenImport is the legacy path that must not be imported.
-	poolstatsForbiddenImport = PlatformModulePath + "/runtime/observability/poolstats"
+	poolstatsForbiddenImport = PlatformFrameworkModulePath + "/runtime/observability/poolstats"
 
-	// poolstatsCanonicalDir is the correct location after the M0-FOUNDATION descent.
-	poolstatsCanonicalDir = "kernel/observability/poolstats"
+	// poolstatsCanonicalDir is the correct location after the M0-FOUNDATION descent,
+	// workspace-root-relative (so it doubles as the on-disk DirsScope path AND the
+	// PlatformModulePath+"/"+dir import-path suffix). Post-#1565 kernel lives under
+	// framework/, so the dir carries the framework/ segment.
+	poolstatsCanonicalDir = "framework/kernel/observability/poolstats"
 )
 
 // scanPoolstatsNonStdlibImports scans every file in the pass for non-stdlib

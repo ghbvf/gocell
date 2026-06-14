@@ -85,7 +85,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 // syncTransportFixturePkg is the archtest_fixture RED fixture package pattern.
@@ -157,7 +157,7 @@ func TestCellSyncTransportFunnel01_SyntheticDetector(t *testing.T) {
 		{netHTTPLibPath, "ServeMux"},  // server mux
 		// a cell's own type named Client, or a transport package, must NOT fire.
 		{PlatformModulePath + "/corecells/accesscore", "Client"},
-		{PlatformModulePath + "/runtime/transport", "CellTransport"},
+		{PlatformFrameworkModulePath + "/runtime/transport", "CellTransport"},
 	}
 	for _, tc := range green {
 		_, forbidden := forbiddenHTTPClientRef(tc.pkg, tc.name)

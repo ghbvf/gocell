@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/projection"
-	"github.com/ghbvf/gocell/kernel/projection/projectiontest"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection/projectiontest"
 )
 
 // TestPGOwnerCheckpointStore_Conformance enrolls the concrete

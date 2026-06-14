@@ -55,7 +55,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/workspace"
 )
 
@@ -216,7 +215,7 @@ func TestInstallableRequiresPublishable01(t *testing.T) {
 
 	root := workspaceRootForTest(t)
 
-	rootPrefix, err := gomodutil.ReadModulePath(root)
+	rootPrefix, err := workspace.CorePrefix(root)
 	if err != nil {
 		t.Fatalf("%s: read root module path: %v", rule, err)
 	}

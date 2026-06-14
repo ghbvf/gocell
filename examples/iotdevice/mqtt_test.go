@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // TestMQTTEventTopic verifies the dotted-event-type → namespaced-slash-topic

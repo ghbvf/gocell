@@ -3,8 +3,8 @@ package cellgen
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/pathsafe"
-	"github.com/ghbvf/gocell/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
+	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // mustPlanSet wraps pathsafe.NewPlanSet with t.Fatal on construction error so

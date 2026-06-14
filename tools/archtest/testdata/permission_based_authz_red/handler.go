@@ -9,7 +9,7 @@ package permission_based_authz_red
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // registerRoutes is a RED fixture: it calls auth.AnyRole in a business handler

@@ -162,10 +162,10 @@ type Service struct {
 		t.Errorf("expected 'return nil' body; got:\n%s", got)
 	}
 	// No imports of errcode or validation since no guards needed.
-	if strings.Contains(got, `"github.com/ghbvf/gocell/pkg/errcode"`) {
+	if strings.Contains(got, `"github.com/ghbvf/gocell/framework/pkg/errcode"`) {
 		t.Errorf("unexpected errcode import in degenerate case; got:\n%s", got)
 	}
-	if strings.Contains(got, `"github.com/ghbvf/gocell/pkg/validation"`) {
+	if strings.Contains(got, `"github.com/ghbvf/gocell/framework/pkg/validation"`) {
 		t.Errorf("unexpected validation import in degenerate case; got:\n%s", got)
 	}
 }

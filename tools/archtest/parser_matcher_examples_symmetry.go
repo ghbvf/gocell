@@ -68,7 +68,7 @@ var matchYAMLFuncRE = regexp.MustCompile(`^match.+Path$`)
 // parserMatcherMetadataPkg is the import path of the kernel/metadata package.
 // Derived from PlatformModulePath so a module rename updates exactly one place
 // (ARCHTEST-MODULE-PATH-FUNNEL-01).
-const parserMatcherMetadataPkg = PlatformModulePath + "/kernel/metadata"
+const parserMatcherMetadataPkg = PlatformFrameworkModulePath + "/kernel/metadata"
 
 // parserMatcherLocatorFile is the module-relative path of the file holding
 // the match*Path functions.
@@ -141,7 +141,7 @@ func CheckParserMatcherExamplesSymmetry01(t *testing.T, _ ConfigForExternalCell)
 // runPrimarySymmetryCheck fills results with per-matcher foundExamples/foundRoot.
 func runPrimarySymmetryCheck(t *testing.T, results map[string]*matcherResult) {
 	t.Helper()
-	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != parserMatcherMetadataPkg {
 			return nil
 		}
@@ -299,7 +299,7 @@ func collectSymmetryDiagnostics(results map[string]*matcherResult) []Diagnostic 
 func runUpstreamCoverageCheck(t *testing.T) []Diagnostic {
 	t.Helper()
 	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{}, []string{"./kernel/metadata/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/metadata/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != parserMatcherMetadataPkg {
 			return nil
 		}

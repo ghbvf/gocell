@@ -15,7 +15,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/corecells/syscore/slices/healthread"
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
 // SysCore is the platform system/observability cell. It embeds BaseCell and owns

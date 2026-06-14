@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/verify"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/verify"
 	"github.com/ghbvf/gocell/tools/generatedverify"
 )
 

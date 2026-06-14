@@ -14,8 +14,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/observability/metrics/metricstest"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics/metricstest"
 )
 
 // promNamespace mirrors newTestProvider's MetricProviderConfig.Namespace; the

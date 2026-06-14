@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	ordercreated "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	orderstatuschanged "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
 
 func newTestService(t *testing.T) *Service {

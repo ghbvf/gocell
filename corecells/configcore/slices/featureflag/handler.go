@@ -6,16 +6,16 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	evaluate "github.com/ghbvf/gocell/generated/contracts/http/config/flags/evaluate/v1"
 	flagsget "github.com/ghbvf/gocell/generated/contracts/http/config/flags/get/v1"
 	flagslist "github.com/ghbvf/gocell/generated/contracts/http/config/flags/list/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/projection"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // GetAdapter wraps Service to implement flagsget.Service for http.config.flags.get.v1.

@@ -48,7 +48,7 @@
   gocell version  # 验证安装成功
   ```
 
-  The framework itself is a public module; `go get github.com/ghbvf/gocell@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` as the root — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` resolves (see §6). These satellite tags exist **from the first stable release that ships #1843 onward** (the root-only `v0.1.0` predates it and has no satellite tags).
+  The framework itself is a public module; `go get github.com/ghbvf/gocell/framework@v0.1.0` works without GOPRIVATE. #1843 adds per-module release tags for every **library** satellite (`framework`, `adapters/*`, `corecells`, `cellmodules`; `tools` is published for toolchain consumers such as external `archtest` users, not business Cells), synchronized to the same `vX.Y.Z` — so `go get github.com/ghbvf/gocell/framework@vX.Y.Z` and `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` both resolve (see §6). These satellite tags exist **from the first stable release that ships #1843 onward**.
 
   **`go install @version`（版本化安装，toolchain-managed 环境可选）**
 
@@ -68,7 +68,7 @@
   #   framework_version:          v0.1.0
   #   compatible_framework_range: >=v0.1.0 <v0.2.0
 
-  go list -m github.com/ghbvf/gocell
+  go list -m github.com/ghbvf/gocell/framework
   # Confirm the framework version falls within compatible_framework_range above
   ```
 
@@ -82,11 +82,11 @@
 ```bash
 mkdir -p ~/work/acme-payment-cell && cd ~/work/acme-payment-cell
 go mod init github.com/acme/payment-cell
-go get github.com/ghbvf/gocell@vX.Y.Z   # pin a stable tag (see Releases; @develop = prerelease snapshot)
+go get github.com/ghbvf/gocell/framework@vX.Y.Z   # pin the core framework satellite (kernel/runtime/pkg)
 # Synchronized-version contract: pin every library satellite you import at the
-# SAME vX.Y.Z as the core, in one command — Go MVS otherwise resolves a satellite's
+# SAME vX.Y.Z as the framework, in one command — Go MVS otherwise resolves a satellite's
 # internal require to a different version and the gocell module graph won't line up:
-go get github.com/ghbvf/gocell@vX.Y.Z github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z
+go get github.com/ghbvf/gocell/framework@vX.Y.Z github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z
 go list -m all | grep ghbvf/gocell   # verify every gocell module sits at vX.Y.Z
 ```
 
@@ -243,7 +243,7 @@ builder := composition.New(cellIDs...).
 
 **Execution bridge**: `composition.Build()` itself does **not** run migrations (the schema must be in place before cells start, and `runtime/` must not depend on `adapters/`). In the composition root (which can import both layers), drain the registered migration set into `adapters/postgres.MigrationSet` and apply it **before** `Build` — `NewMigrationSetWithPlatform` places the platform namespace first (platform-first ordering guarantees: external cell migrations can FK platform tables):
 
-> **Note (per-adapter module split #1558 / external publishing #1843)**: `adapters/postgres` — like every `adapters/*` — is a **separate satellite module** (`github.com/ghbvf/gocell/adapters/postgres`), no longer part of the root `github.com/ghbvf/gocell` module. As of #1843 the release pipeline tags every library satellite per module (`adapters/postgres/vX.Y.Z`), **synchronized to the same `vX.Y.Z` as the root** — so `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` now resolves directly. **Pin it at the same `vX.Y.Z` you use for the core `go get github.com/ghbvf/gocell@vX.Y.Z`** (the synchronized-release contract holds every gocell module at one version). Note that `go get github.com/ghbvf/gocell@vX.Y.Z` alone does **not** pull `adapters/postgres` — it is a distinct module; add it explicitly. The Go workspace / local `replace` route (Workspace Mode, §5 above) remains available as a dev-time convenience but is no longer required for consumption.
+> **Note (per-adapter module split #1558 / external publishing #1843 / framework module #1565)**: `adapters/postgres` — like every `adapters/*` and `framework` — is a **separate satellite module** (`github.com/ghbvf/gocell/adapters/postgres`). As of #1843 the release pipeline tags every library satellite per module (`framework/vX.Y.Z`, `adapters/postgres/vX.Y.Z`, etc.), **synchronized to the same `vX.Y.Z`** — so `go get github.com/ghbvf/gocell/framework@vX.Y.Z` and `go get github.com/ghbvf/gocell/adapters/postgres@vX.Y.Z` both resolve directly. **Pin every satellite at the same `vX.Y.Z`** (the synchronized-release contract holds every gocell module at one version). Note that `go get github.com/ghbvf/gocell/framework@vX.Y.Z` alone does **not** pull `adapters/postgres` — it is a distinct module; add it explicitly. The Go workspace / local `replace` route (Workspace Mode, §5 above) remains available as a dev-time convenience but is no longer required for consumption.
 
 ```go
 set, err := adapterpg.NewMigrationSetWithPlatform() // seeds "platform" first

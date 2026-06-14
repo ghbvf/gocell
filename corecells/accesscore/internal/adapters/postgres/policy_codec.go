@@ -28,8 +28,8 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // invertCodeMap derives the reverse (code→enum) map from a forward (enum→code)

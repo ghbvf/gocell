@@ -4,7 +4,7 @@
 // proves the rule is specific to DerivedOverwrite, not to any pathsafe use.
 package green_compliant
 
-import "github.com/ghbvf/gocell/pkg/pathsafe"
+import "github.com/ghbvf/gocell/framework/pkg/pathsafe"
 
 // build constructs a plan set via the public, non-force-overwrite constructor.
 func build() (pathsafe.PlanSet, error) {

@@ -7,7 +7,7 @@ import (
 
 	mqttserver "github.com/mochi-mqtt/server/v2"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // CloseBrokerSafely is the single shared helper that closes a mochi v2 broker

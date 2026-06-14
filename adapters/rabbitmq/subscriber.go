@@ -15,9 +15,9 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // errSubscriptionLost is a sentinel error returned by subscribeOnce when the

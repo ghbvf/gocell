@@ -12,7 +12,7 @@
 package errcode_assertion_green
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func foo() *errcode.Error {

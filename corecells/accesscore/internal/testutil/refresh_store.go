@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/framework/runtime/auth/refresh/memstore"
 )
 
 // RealRefreshStore returns a ready-to-use in-memory refresh.Store for unit

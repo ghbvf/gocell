@@ -29,7 +29,7 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------

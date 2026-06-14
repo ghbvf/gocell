@@ -12,7 +12,7 @@ package compliant
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // Service holds an injected clock and exposes derived time queries.

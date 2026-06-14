@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // DefaultProbeTimeout bounds a /readyz probe so a slow dependency does not

@@ -17,7 +17,7 @@
 // All call sites must use the auth.RoleAdmin constant instead.
 //
 // The call-site rule is import-aware: the receiver of the selector
-// expression must resolve to a local alias of github.com/ghbvf/gocell/runtime/auth
+// expression must resolve to a local alias of github.com/ghbvf/gocell/framework/runtime/auth
 // (default name "auth" or any explicit rename via `import x "…/runtime/auth"`).
 // A same-named method on an unrelated type or package does NOT trigger the
 // rule. Literal comparison is normalized through scanner.StringLitValue, so
@@ -162,7 +162,7 @@ func TestRoleAdminCallSiteLiteralIsForbidden(t *testing.T) {
 	// tests=false matches the original DirsScope(searchDirsRoleAdmin) which
 	// excluded *_test.go by default.
 	diags := Run(t, Typed(TypedOpts{}, []string{
-		"./runtime/...", "./corecells/...", "./adapters/...", "./cmd/...",
+		"./framework/runtime/...", "./corecells/...", "./adapters/...", "./cmd/...",
 	}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {

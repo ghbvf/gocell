@@ -60,7 +60,18 @@ func LoadProductionPackages(workspaceRoot string, modules []workspace.Module, te
 		// "./<dir>/..." — relative-dir pattern resolves the local workspace
 		// member; "./..." for the root module (Dir ".").
 		patterns[i] = "./" + path.Join(filepath.ToSlash(m.Dir), "...")
-		generatedPrefixes[i] = m.ImportPath + "/generated/"
+		// Generated code is excluded from the production set. The dedicated
+		// `generated` module is codegen output in its entirety, so the WHOLE
+		// module is excluded; for any other module only its `generated/` subtree
+		// is. Pre-#1565 the root module's path WAS the org prefix, so
+		// "<root>/generated/" coincidentally matched the generated module's
+		// packages; after the split (no root module) the generated module must be
+		// matched by its own import path.
+		if path.Base(filepath.ToSlash(m.Dir)) == "generated" {
+			generatedPrefixes[i] = m.ImportPath + "/"
+		} else {
+			generatedPrefixes[i] = m.ImportPath + "/generated/"
+		}
 	}
 	resolver, err := sharedResolverMode(packagesload.ModeWorkspace, workspaceRoot, tests, tags, patterns...)
 	if err != nil {

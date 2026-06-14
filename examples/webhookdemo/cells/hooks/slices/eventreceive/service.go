@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/kernel/webhook"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // eventPayload is the slice-local (DTO scope A) decoded view of the webhook

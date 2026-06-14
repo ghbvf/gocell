@@ -11,9 +11,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	kauth "github.com/ghbvf/gocell/kernel/auth"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // Wall-clock budgets for the boot+serve smoke (extracted per TEST-TIME-LITERAL-01).

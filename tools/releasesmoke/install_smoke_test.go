@@ -52,8 +52,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/gomodutil"
 	"github.com/ghbvf/gocell/tools/modrelease"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // TestExternalInstall_StrippedCmdGocell_Resolves is the green path: publish the
@@ -122,7 +122,7 @@ func TestExternalInstall_ReplaceKept_Rejected(t *testing.T) {
 // installable module's import path.
 func publishInstallableBinary(t *testing.T, proxyRoot, root, version string, strip bool) string {
 	t.Helper()
-	prefix, err := gomodutil.ReadModulePath(root)
+	prefix, err := workspace.CorePrefix(root)
 	if err != nil {
 		t.Fatalf("read root module path: %v", err)
 	}

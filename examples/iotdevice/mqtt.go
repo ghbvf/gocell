@@ -17,10 +17,10 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/mqtt"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // Environment variables controlling the MQTT publish demo channel.

@@ -56,7 +56,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Sentinel errors returned by Generate. Declared via errcode.New (not
@@ -97,7 +97,9 @@ var (
 )
 
 const (
-	modulePrefix     = "github.com/ghbvf/gocell"
+	// modulePrefix is the FRAMEWORK module path (#1565): errcode + validation are
+	// framework-internal packages, so generated import paths resolve under it.
+	modulePrefix     = "github.com/ghbvf/gocell/framework"
 	errcodeImport    = modulePrefix + "/pkg/errcode"
 	validationImport = modulePrefix + "/pkg/validation"
 

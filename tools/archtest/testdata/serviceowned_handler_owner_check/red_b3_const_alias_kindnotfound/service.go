@@ -15,8 +15,8 @@ package red_b3_const_alias_kindnotfound
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // aliasedKind is a typed-const alias of errcode.KindNotFound. go/types

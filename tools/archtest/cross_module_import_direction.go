@@ -3,7 +3,7 @@ package archtest
 import (
 	"sort"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 // cross_module_import_direction.go — the CROSS-MODULE-IMPORT-DIRECTION-01 rule

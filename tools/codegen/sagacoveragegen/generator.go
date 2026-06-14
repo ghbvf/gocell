@@ -7,7 +7,7 @@
 //
 //   - terminal_coverage_gen.go — a struct with exactly one field per TERMINAL
 //     saga.Status. The hand-written keyless composite literal of that struct in
-//     kernel/saga/sagajournaltest/conformance.go is a COMPILE-TIME exhaustiveness
+//     framework/kernel/saga/sagajournaltest/conformance.go is a COMPILE-TIME exhaustiveness
 //     gate: add a terminal status const → regen adds a field → the keyless literal
 //     fails to compile ("too few values in struct literal") until a happy-path
 //     driver is supplied. This is the Hard half of the fanout closure.
@@ -28,9 +28,9 @@ import (
 	"go/format"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Marker pairs delimit the generated regions inside the hand-curated ops docs.
@@ -66,7 +66,7 @@ var ErrNoPhase = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 // Artifacts holds the three rendered fanout artifacts.
 type Artifacts struct {
 	// TerminalCoverageGo is the gofmt-canonical content of
-	// kernel/saga/sagajournaltest/terminal_coverage_gen.go.
+	// framework/kernel/saga/sagajournaltest/terminal_coverage_gen.go.
 	TerminalCoverageGo []byte
 	// ReadyzTable is the markdown status table fragment (no markers, trailing \n).
 	ReadyzTable string
@@ -153,7 +153,7 @@ func renderTerminalCoverageGo(statuses []statusInfo) ([]byte, error) {
 
 package sagajournaltest
 
-import "github.com/ghbvf/gocell/kernel/saga"
+import "github.com/ghbvf/gocell/framework/kernel/saga"
 
 // terminalCoverage has exactly one field per terminal saga.Status. The
 // hand-written KEYLESS composite literal of this type (terminalHappyPaths in

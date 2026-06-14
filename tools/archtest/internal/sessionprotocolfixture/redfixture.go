@@ -27,8 +27,8 @@
 package sessionprotocolfixture
 
 import (
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	sess "github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	sess "github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // dotImportAlias keeps a second import of runtime/auth/session under a dot

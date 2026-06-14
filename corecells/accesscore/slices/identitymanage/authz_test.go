@@ -14,8 +14,8 @@ package identitymanage
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // fixedAuthorizer is a test-only auth.Authorizer that returns a fixed Decision.

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/ghbvf/gocell/pkg/cmdrun"
+	"github.com/ghbvf/gocell/framework/pkg/cmdrun"
 )
 
 // execFn is the function signature for running a subprocess (go test, go list).

@@ -4,8 +4,8 @@ package authorizationdecide
 
 import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
-	runtimeauth "github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	runtimeauth "github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // builtinBaseline is the package-level rule set returned by builtinBaselineRules.

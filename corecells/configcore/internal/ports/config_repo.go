@@ -5,8 +5,8 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // ConfigRepository persists and retrieves ConfigEntry and ConfigVersion records.

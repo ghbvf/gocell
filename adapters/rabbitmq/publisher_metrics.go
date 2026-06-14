@@ -3,8 +3,8 @@ package rabbitmq
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // PublishFailureReason classifies why a Publish() call did not complete the

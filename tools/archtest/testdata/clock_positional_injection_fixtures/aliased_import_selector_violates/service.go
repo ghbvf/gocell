@@ -7,7 +7,7 @@
 // go/types regardless of the alias name.
 package aliased_import_selector_violates
 
-import clk "github.com/ghbvf/gocell/kernel/clock"
+import clk "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // Config bundles dependencies in the old struct-injection pattern.
 type Config struct {

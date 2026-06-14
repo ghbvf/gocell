@@ -27,7 +27,7 @@ const ruleCASProtocolCompositionRoot01 = "CAS-PROTOCOL-COMPOSITION-ROOT-01"
 
 // casPkgPath is the canonical import path of the runtime/state/cas package,
 // derived from PlatformModulePath — no bare literal.
-const casPkgPath = PlatformModulePath + "/runtime/state/cas"
+const casPkgPath = PlatformFrameworkModulePath + "/runtime/state/cas"
 
 // casOwnPkgPrefix and casOwnPkgExact are the relative-path guards used to
 // exempt the cas package itself and its sub-packages from the rule.
@@ -71,7 +71,7 @@ func CheckCASProtocolCompositionRoot01(t *testing.T, cfg ConfigForExternalCell) 
 func casProtocolProductionPatterns() []string {
 	return []string{
 		"./corecells/...",
-		"./runtime/...",
+		"./framework/runtime/...",
 		"./adapters/...",
 	}
 }

@@ -6,7 +6,7 @@ package allowlisted_function_extra_call_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 func allowedButBad(ctx, txCtx context.Context, s session.Store, id string) error {

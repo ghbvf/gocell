@@ -1,8 +1,8 @@
 package abac
 
 import (
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // AttributeSource identifies the namespace from which a Condition's attribute

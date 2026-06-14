@@ -1,7 +1,7 @@
 package postgres
 
 import (
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // PostgreSQL adapter error codes.

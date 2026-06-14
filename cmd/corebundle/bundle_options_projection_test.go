@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // projNoopTxRunner is a minimal persistence.TxRunner so the test PGProvider's

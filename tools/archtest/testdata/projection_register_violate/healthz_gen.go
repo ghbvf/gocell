@@ -2,7 +2,7 @@
 
 package projection_register_violate
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // generatedHealthzRegister models a sibling generated file (healthz_gen.go) that
 // carries the IDENTICAL cellgen DO-NOT-EDIT banner but is NOT a sanctioned

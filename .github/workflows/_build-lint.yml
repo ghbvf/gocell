@@ -54,7 +54,7 @@ jobs:
       matrix:
         include:
           - shard: kernel
-            pkgs: ./kernel/...
+            pkgs: ./framework/kernel/...
             static_checks: true
           - shard: tools
             # archtest 16-shard matrix runs in .github/workflows/archtest-nightly.yml
@@ -75,7 +75,7 @@ jobs:
             pkgs: _dynamic_archtest_excluded
             static_checks: false
           - shard: runtime
-            pkgs: ./runtime/... ./pkg/...
+            pkgs: ./framework/runtime/... ./framework/pkg/...
             static_checks: false
           # corecells is its own go.work module (github.com/ghbvf/gocell/corecells,
           # #1560), so a root `./corecells/...` pattern stops at the nested-module
@@ -404,7 +404,7 @@ jobs:
         run: |
           set -euo pipefail
           PROFILE="coverage-shard-${{ matrix.shard }}.out"
-          KERNEL_PREFIX='github.com/ghbvf/gocell/kernel/'
+          KERNEL_PREFIX='github.com/ghbvf/gocell/framework/kernel/'
 
           if [ ! -s "$PROFILE" ]; then
             echo "FAIL: $PROFILE missing or empty"; exit 1
@@ -552,7 +552,7 @@ jobs:
             run_adapters_extras: false
             run_adapters_race: false
           - shard: tests
-            filter: '^github.com/ghbvf/gocell/(tests|kernel|runtime|tools)/'
+            filter: '^github.com/ghbvf/gocell/(tests|framework/|tools)/'
             run_main_integration: true
             run_adapters_extras: false
             run_adapters_race: false
@@ -988,7 +988,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Vet (cross-platform unit subset)
-        run: go vet ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+        run: go vet ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
         shell: bash
 
       - name: Cross-platform unit smoke
@@ -996,9 +996,9 @@ jobs:
         # Enable -race on macOS to maximise race-detector coverage.
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -race -count=1 -timeout 5m ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
           else
-            go test -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/... ./pkg/fspath/... ./pkg/pathsafe/...
+            go test -count=1 -timeout 5m ./framework/runtime/shutdown/... ./framework/runtime/config/... ./framework/kernel/governance/... ./framework/pkg/fspath/... ./framework/pkg/pathsafe/...
           fi
         shell: bash
 

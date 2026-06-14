@@ -6,8 +6,8 @@ package democell
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 var _ cell.Cell = (*DemoCell)(nil)

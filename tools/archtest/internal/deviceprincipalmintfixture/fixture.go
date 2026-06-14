@@ -25,7 +25,7 @@
 //     detector is scoped to PrincipalDevice, not "any Principal literal".
 package deviceprincipalmintfixture
 
-import "github.com/ghbvf/gocell/runtime/auth"
+import "github.com/ghbvf/gocell/framework/runtime/auth"
 
 // ForgeDevicePrincipal is the RED case: a device-kind principal minted outside
 // the sanctioned issuer. The funnel archtest must flag this construction.

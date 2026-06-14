@@ -207,7 +207,7 @@ func reconcileSendSiteName(s reconcileSendSite) string {
 func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	const reconcilePkg = PlatformFrameworkModulePath + "/kernel/reconcile"
 
 	var allDiags []Diagnostic
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
@@ -234,7 +234,7 @@ func TestReconcileRequeueEnqueueCaller01(t *testing.T) {
 func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 	t.Parallel()
 
-	const reconcilePkg = PlatformModulePath + "/kernel/reconcile"
+	const reconcilePkg = PlatformFrameworkModulePath + "/kernel/reconcile"
 
 	var totalFound int
 	var foundInSanctioned int

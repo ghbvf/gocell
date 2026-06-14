@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // TestResolveValueTransformer covers F3: the silent nil→NoopTransformer fallback

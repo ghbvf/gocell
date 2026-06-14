@@ -50,10 +50,13 @@ if [[ ${#module_dirs[@]} -eq 0 ]]; then
 fi
 found_root=0
 for dir in "${module_dirs[@]}"; do
-    [[ "${dir}" == "." ]] && found_root=1
+    # Normalize a leading "./" so the check matches whether go.work stores the
+    # core module as "framework" or "./framework".
+    norm="${dir#./}"
+    [[ "${norm}" == "framework" ]] && found_root=1
 done
 if [[ "${found_root}" -eq 0 ]]; then
-    gocell::log::error "workspace module list does not contain '.' (root module) — anti-vacuity check failed"
+    gocell::log::error "workspace module list does not contain 'framework' (core module) — anti-vacuity check failed"
     exit 1
 fi
 gocell::log::status "Workspace modules: ${module_dirs[*]}"

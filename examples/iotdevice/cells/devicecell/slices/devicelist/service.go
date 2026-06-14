@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
-	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // defaultSort orders devices by name ASC, id ASC (stable, human-friendly).

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/persistence/persistencetest"
+	"github.com/ghbvf/gocell/framework/kernel/persistence/persistencetest"
 )
 
 // TestDemoTxRunner_AfterCommitConformance asserts the todoorder demo runner

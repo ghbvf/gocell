@@ -3,7 +3,7 @@ package rabbitmq
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // entryToSubHandler wraps a business EntryHandler as a SubscriberHandler with

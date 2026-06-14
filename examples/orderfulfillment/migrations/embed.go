@@ -11,7 +11,7 @@ package migrations
 import (
 	"embed"
 
-	"github.com/ghbvf/gocell/pkg/migration"
+	"github.com/ghbvf/gocell/framework/pkg/migration"
 )
 
 // FS embeds all *.sql migration files in this directory.

@@ -28,7 +28,7 @@
 // NewProtocol remains.
 package auditledgerfixture
 
-import auditledger "github.com/ghbvf/gocell/runtime/audit/ledger"
+import auditledger "github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 
 // AliasedNewProtocol intentionally invokes NewProtocol through a non-default
 // import alias. The return value is discarded; the function is never called

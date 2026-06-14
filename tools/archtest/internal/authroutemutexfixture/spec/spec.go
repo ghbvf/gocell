@@ -12,7 +12,7 @@
 // resulting cross-package SelectorExpr violation is detected.
 package authroutemutexfixturespec
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 
 // WithClients is referenced from the sibling fixture package's auth.Route
 // composite literal as `spec.WithClients`. The static detector must resolve

@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	"github.com/ghbvf/gocell/framework/pkg/pgrepoapproved"
 	"github.com/ghbvf/gocell/tools/archtest/internal/pgrepoambienttxfixture/internal/pgexec"
 )
 

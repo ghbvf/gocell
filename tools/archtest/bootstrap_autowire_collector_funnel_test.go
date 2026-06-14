@@ -120,7 +120,7 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
-const autoWireBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
+const autoWireBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 
 // autoWireHelperName is the single-source generic helper every bootstrap metric
 // auto-wire must route through. It is an unexported package-local func in
@@ -129,9 +129,9 @@ const autoWireBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
 const autoWireHelperName = "autoWireCachedCollector"
 
 const (
-	autoWireRuntimeMetricsPkgPath = PlatformModulePath + "/runtime/observability/metrics"
-	autoWireProjectionPkgPath     = PlatformModulePath + "/kernel/projection"
-	autoWireWebhookPkgPath        = PlatformModulePath + "/kernel/webhook"
+	autoWireRuntimeMetricsPkgPath = PlatformFrameworkModulePath + "/runtime/observability/metrics"
+	autoWireProjectionPkgPath     = PlatformFrameworkModulePath + "/kernel/projection"
+	autoWireWebhookPkgPath        = PlatformFrameworkModulePath + "/kernel/webhook"
 )
 
 // autoWireCtorSymbols maps each {pkgPath, funcName} metric-collector constructor

@@ -61,13 +61,13 @@
 //
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
-//   - Frozen type: `github.com/ghbvf/gocell/runtime/composition.CellModule`
+//   - Frozen type: `github.com/ghbvf/gocell/framework/runtime/composition.CellModule`
 //   - Frozen method: `Provide`
 //   - Required In[0]: `context.Context`
 //   - Required In[1]: `*runtime/composition.SharedDeps`
 //   - Required Out[0]: `runtime/composition.ModuleResult`
 //   - Required Out[1]: `error`
-//   - Frozen struct: `github.com/ghbvf/gocell/runtime/composition.ModuleResult`
+//   - Frozen struct: `github.com/ghbvf/gocell/framework/runtime/composition.ModuleResult`
 //   - Field "Cell": `kernel/cell.Cell`
 //   - Field "Opts": `[]runtime/bootstrap.Option`
 //   - Field "Resources": `[]kernel/lifecycle.ManagedResource`
@@ -83,10 +83,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 const ruleModuleProvideNoValueHandoff01 = "MODULE-PROVIDE-NO-VALUE-HANDOFF-01"

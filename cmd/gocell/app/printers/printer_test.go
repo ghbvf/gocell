@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // updateGolden, when set, rewrites the testdata/golden/<format>/<case>.<ext>

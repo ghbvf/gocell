@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 // ---------------------------------------------------------------------------

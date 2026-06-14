@@ -7,9 +7,9 @@ package violates
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/ctxcancel"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/pkg/ctxcancel"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
 )
 
 // CallWithSprintfMessage is the canonical violation pattern: runtime data

@@ -20,29 +20,29 @@ import "strings"
 const (
 	// healthzAggPkgPath is the import path of the kernel/healthz package that
 	// defines the Aggregator interface (used by A1 and A3 detection).
-	healthzAggPkgPath = PlatformModulePath + "/kernel/healthz"
+	healthzAggPkgPath = PlatformFrameworkModulePath + "/kernel/healthz"
 )
 
 // healthzHolderAllowlist is the set of (pkg-path.TypeName) pairs allowed to
 // hold a healthz.Aggregator field (HEALTHZ-WRITE-01/A3).
 var healthzHolderAllowlist = map[string]bool{
-	PlatformModulePath + "/runtime/observability/healthz.aggregator": true, // unexported impl
-	PlatformModulePath + "/runtime/http/health.Handler":              true, // HTTP transport
-	PlatformModulePath + "/runtime/bootstrap.Bootstrap":              true, // composition root
+	PlatformFrameworkModulePath + "/runtime/observability/healthz.aggregator": true, // unexported impl
+	PlatformFrameworkModulePath + "/runtime/http/health.Handler":              true, // HTTP transport
+	PlatformFrameworkModulePath + "/runtime/bootstrap.Bootstrap":              true, // composition root
 	// #1860: read-only HealthView façade for the syscore aggregated cell-health
 	// endpoint. Holds the aggregator to call Evaluate at request time (injected by
 	// bootstrap into the primary-listener ctx); it never calls Register — read-only.
-	PlatformModulePath + "/runtime/syshealth.view": true, // aggregated cell-health read façade
+	PlatformFrameworkModulePath + "/runtime/syshealth.view": true, // aggregated cell-health read façade
 }
 
 // healthzAllLayerPrefixes is the set of platform layer prefixes scanned by
 // TestHealthzWrite01 (A1 + A3 production scan): kernel, cells, adapters,
 // runtime, cmd, examples.
 var healthzAllLayerPrefixes = []string{
-	PlatformModulePath + "/kernel/",
+	PlatformFrameworkModulePath + "/kernel/",
 	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
-	PlatformModulePath + "/runtime/",
+	PlatformFrameworkModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",
 	PlatformModulePath + "/examples/",
 }
@@ -54,7 +54,7 @@ var healthzAllLayerPrefixes = []string{
 var healthzNonKernelLayerPrefixes = []string{
 	PlatformCellsModulePath + "/",
 	PlatformModulePath + "/adapters/",
-	PlatformModulePath + "/runtime/",
+	PlatformFrameworkModulePath + "/runtime/",
 	PlatformModulePath + "/cmd/",
 	PlatformModulePath + "/examples/",
 }

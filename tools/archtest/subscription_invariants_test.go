@@ -178,7 +178,7 @@ func collectSubscriptionFieldViolations(f *ast.File, fset *token.FileSet, label 
 // access would break that intra-package construction.
 func TestSubscriptionFieldsFrozen(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "outbox", "subscription.go")
+	path := filepath.Join(root, "framework", "kernel", "outbox", "subscription.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -399,7 +399,7 @@ func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label st
 // the fallback; this archtest prevents re-introduction.
 func TestSubscriptionObservabilityNoFallback(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "outbox", "subscription.go")
+	path := filepath.Join(root, "framework", "kernel", "outbox", "subscription.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -596,7 +596,7 @@ func collectSubscribeSignatureViolations(fset *token.FileSet, ft *ast.FuncType, 
 //	          opts ...SubscriptionOption) error
 func TestRegistrySubscribeCellIDPositional(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "registry.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "registry.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -902,7 +902,7 @@ func collectSubscriptionBuilderShapeViolations(_ *token.FileSet, f *ast.File, la
 // the collapse / extra-method / return-type regressions.
 func TestRegistrySubscribeCellIDMandatory_BuilderShape(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "subscription_builder.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "subscription_builder.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
@@ -1102,7 +1102,7 @@ func collectSubscriptionBuilderFieldViolations(f *ast.File, label string) []stri
 // embedded fields outright — keeps the missing-CellID path unexpressible.
 func TestRegistrySubscribeCellIDMandatory_BuilderFields(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "subscription_builder.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "subscription_builder.go")
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {

@@ -152,11 +152,11 @@ linters:
             - "!**/examples/**"  # examples are unrestricted (CLAUDE.md)
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
             - gopkg.in/yaml.v3
           deny:
-            - pkg: github.com/ghbvf/gocell/pkg/pgquery
+            - pkg: github.com/ghbvf/gocell/framework/pkg/pgquery
               desc: |
                 pkg/pgquery is a PG-specific SQLSTATE classifier helper; kernel/ must not
                 depend on any PG driver package (CLAUDE.md layering: kernel depends only
@@ -179,7 +179,7 @@ linters:
             - "!**/examples/**"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/framework/pkg
             - github.com/google/uuid
             - github.com/santhosh-tekuri/jsonschema
             - golang.org/x/sys/unix  # pkg/pathsafe fd-anchored openat/mkdirat/unlinkat on non-Windows platforms (stdlib syscall.Openat is linux-only; x/sys/unix provides unified linux/darwin/freebsd API)
@@ -201,9 +201,9 @@ linters:
             - "!**/examples/**"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/felixge/httpsnoop
             - github.com/fsnotify/fsnotify
             - github.com/go-chi/chi
@@ -217,7 +217,7 @@ linters:
             - google.golang.org/grpc  # runtime/grpc/interceptor: gRPC transport library (the grpc analogue of go-chi/chi for runtime/http; adapters/grpc owns the server, runtime/grpc owns the cross-cutting interceptors)
             - gopkg.in/yaml.v3
           deny:
-            - pkg: github.com/ghbvf/gocell/pkg/pgquery
+            - pkg: github.com/ghbvf/gocell/framework/pkg/pgquery
               desc: |
                 pkg/pgquery is a PG-specific SQLSTATE classifier helper; runtime/ must not
                 depend on any PG driver package (CLAUDE.md layering: runtime depends on
@@ -247,7 +247,7 @@ linters:
             - "**/runtime/saga/executor/**"
             - "!**/runtime/saga/executor/**/*_test.go"
           deny:
-            - pkg: github.com/ghbvf/gocell/kernel/saga/journal
+            - pkg: github.com/ghbvf/gocell/framework/kernel/saga/journal
               desc: |
                 runtime/saga/executor must never import kernel/saga/journal; it
                 declares its own narrow Heartbeater interface (heartbeat.go) that
@@ -267,7 +267,7 @@ linters:
             - "**/adapters/grpc/**"
             - "!**/adapters/grpc/**/*_test.go"
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
               desc: |
                 adapters/grpc must never import runtime/grpc/interceptor;
                 interceptors are composed at the bootstrap layer (PR-4) and
@@ -304,7 +304,7 @@ linters:
             - "!**/cmd/corebundle/*_test.go"
             - "!**/cmd/corebundle/**/*_test.go"
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/eventbus
+            - pkg: github.com/ghbvf/gocell/framework/runtime/eventbus
               desc: |
                 cmd/corebundle must never import runtime/eventbus directly; the
                 in-memory bus is reachable only through
@@ -332,7 +332,7 @@ linters:
             - "!**/examples/ssobff/*_test.go"
             - "!**/examples/ssobff/**/*_test.go"
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/eventbus
+            - pkg: github.com/ghbvf/gocell/framework/runtime/eventbus
               desc: |
                 examples/ssobff must not import runtime/eventbus directly; the
                 in-memory bus is reachable only through
@@ -357,9 +357,9 @@ linters:
             - "!**/examples/**"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/ghbvf/gocell/adapters
             - github.com/aws/aws-sdk-go-v2
             - github.com/aws/smithy-go
@@ -396,7 +396,7 @@ linters:
           allow:
             - $gostd
             - github.com/ghbvf/gocell/adapters
-            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/framework/pkg
             - github.com/ghbvf/gocell/tests/testutil/pgclone
         cells-isolation:
           # LAYER-02: cells/ depend on kernel/ + runtime/ + pkg/. Cell-internal
@@ -416,9 +416,9 @@ linters:
             - "!**/examples/**"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/ghbvf/gocell/cells
             - github.com/ghbvf/gocell/corecells
             - github.com/ghbvf/gocell/generated/contracts
@@ -438,7 +438,7 @@ linters:
                 cellmodules/ is a Composition Root layer; cells/ must not import it
                 (reverse import = layer violation — cellmodules/ imports cells/, not
                 the other way around). Belt-and-suspenders alongside strict allow-list.
-            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
               desc: |
                 cells/ must not import runtime/grpc/interceptor — gRPC interceptor
                 wiring (auth/metrics/tracing/recovery) is a composition-root
@@ -464,16 +464,16 @@ linters:
             - "!**/examples/demo/cells/**/*_test.go"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/ghbvf/gocell/examples/demo
             - github.com/ghbvf/gocell/generated/contracts
             # grpc-serve cell_gen.go references the grpc transport lib (#1601);
             # interceptor/adapter wiring stays denied below.
             - google.golang.org/grpc
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
               desc: |
                 example cells must not import runtime/grpc/interceptor — mirrors
                 cells-isolation. gRPC interceptor wiring is a composition-root
@@ -485,9 +485,9 @@ linters:
             - "!**/examples/iotdevice/cells/**/*_test.go"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/ghbvf/gocell/examples/iotdevice
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
@@ -500,7 +500,7 @@ linters:
             # wiring stays denied below.
             - google.golang.org/grpc
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
               desc: |
                 example cells must not import runtime/grpc/interceptor — mirrors
                 cells-isolation. gRPC interceptor wiring is a composition-root
@@ -512,9 +512,9 @@ linters:
             - "!**/examples/todoorder/cells/**/*_test.go"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel
-            - github.com/ghbvf/gocell/pkg
-            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
             - github.com/ghbvf/gocell/examples/todoorder
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
@@ -523,7 +523,7 @@ linters:
             # interceptor/adapter wiring stays denied below.
             - google.golang.org/grpc
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/grpc/interceptor
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
               desc: |
                 example cells must not import runtime/grpc/interceptor — mirrors
                 cells-isolation. gRPC interceptor wiring is a composition-root
@@ -538,12 +538,12 @@ linters:
             - "**/generated/contracts/**"
           allow:
             - $gostd
-            - github.com/ghbvf/gocell/kernel/cell
-            - github.com/ghbvf/gocell/kernel/wrapper
-            - github.com/ghbvf/gocell/kernel/outbox
-            - github.com/ghbvf/gocell/pkg/httputil
-            - github.com/ghbvf/gocell/pkg/errcode
-            - github.com/ghbvf/gocell/runtime/auth
+            - github.com/ghbvf/gocell/framework/kernel/cell
+            - github.com/ghbvf/gocell/framework/kernel/wrapper
+            - github.com/ghbvf/gocell/framework/kernel/outbox
+            - github.com/ghbvf/gocell/framework/pkg/httputil
+            - github.com/ghbvf/gocell/framework/pkg/errcode
+            - github.com/ghbvf/gocell/framework/runtime/auth
             - github.com/go-chi/chi/v5
         typesutil-test-tool-only:
           # PROD-TYPESUTIL-IMPORT-01: tools/typesutil exposes go/types-backed
@@ -590,7 +590,7 @@ linters:
             - "!**/storetest/**"
             - "!**/sagajournaltest/**"
           deny:
-            - pkg: github.com/ghbvf/gocell/kernel/clock/clockmock
+            - pkg: github.com/ghbvf/gocell/framework/kernel/clock/clockmock
               desc: "clockmock is test-only; production code must inject clock.Clock"
         tracingtest-test-only:
           # TRACING-SIMPLETRACER-TEST-ONLY-01: runtime/observability/tracingtest
@@ -605,7 +605,7 @@ linters:
             - "!**/tools/archtest/**"
             - "!**/runtime/observability/tracingtest/**"
           deny:
-            - pkg: github.com/ghbvf/gocell/runtime/observability/tracingtest
+            - pkg: github.com/ghbvf/gocell/framework/runtime/observability/tracingtest
               desc: "tracingtest is test-only; production code must use kernel/wrapper + bootstrap.WithTracer (adapters/otel)"
         scaffold-os-ban:
           # SCAFFOLD-WRITE-FUNNEL-DEPGUARD-01: Hard-level enforcement of
@@ -840,7 +840,6 @@ linters:
           # ref: kubernetes/kubernetes hack/verify-import-boss.sh ; OpenPeeDeeP/depguard v2.
           list-mode: lax
           files:
-            - "**/gocell.go"      # root-level core package — no per-layer rule covers it
             - "**/kernel/**"
             - "**/pkg/**"
             - "**/runtime/**"
@@ -989,7 +988,7 @@ linters:
       # examples/ssobff/smoke_test.go) where the binary path is also
       # constant or test-controlled; those test sites are intentionally
       # not routed through cmdrun.
-      - path: ^pkg/cmdrun/cmdrun\.go
+      - path: ^framework/pkg/cmdrun/cmdrun\.go
         linters:
           - gosec
         text: "G204"
@@ -1003,11 +1002,11 @@ linters:
       # and refuses to clear the taint through sanitize helpers. Audit logs
       # need these fields; slog's structured-attr encoding (no format-string
       # interpolation) is not an injection surface in practice.
-      - path: ^runtime/http/health/health\.go
+      - path: ^framework/runtime/http/health/health\.go
         linters:
           - gosec
         text: "G706"
-      - path: ^runtime/http/middleware/(recovery|csrf)\.go
+      - path: ^framework/runtime/http/middleware/(recovery|csrf)\.go
         linters:
           - gosec
         text: "G706"
@@ -1023,13 +1022,6 @@ linters:
         linters:
           - gosec
         text: "G706"
-      # scaffoldfs.FileMode / DirMode are 0o644 / 0o755 by design (scaffold
-      # output is committed to git and read by multi-user CI bots). Source
-      # comment documents the decision.
-      - path: ^pkg/scaffoldfs/perms\.go
-        linters:
-          - gosec
-        text: "G30(1|6)"
       # pkg/errcode/errcode.go is the project-wide error-code dictionary.
       # Every const value is a wire-protocol identifier, never a credential;
       # gosec G101 matches names containing "token" / "password" — 100%
@@ -1037,7 +1029,7 @@ linters:
       # (not the var-block-with-string-concat trick that hides the literal
       # from static scanners) matters because importers must not be able
       # to mutate canonical wire identifiers.
-      - path: ^pkg/errcode/errcode\.go
+      - path: ^framework/pkg/errcode/errcode\.go
         linters:
           - gosec
         text: "G101"

@@ -6,15 +6,40 @@ import (
 	"strings"
 )
 
+// topLevelDirs is the candidate production-scan scope. It lists every top-level
+// directory that may hold production packages in EITHER context this scan runs in:
+//
+//   - the real gocell repo (a multi-module workspace), and
+//   - a single-module consumer/fixture project (the metricschema OBS-01 fixtures,
+//     a downstream module that vendors gocell).
+//
+// dirExists + IsModuleRoot prune entries that don't apply, and patternLoadMode
+// (in tools/metricschema) routes each surviving pattern to the right load mode, so
+// the EFFECTIVE scan differs per context without a per-context list:
+//
+//   - Real repo post-#1565: the core lives in the `framework` submodule, so
+//     framework/{kernel,runtime,pkg} match (loaded ModeWorkspace — framework is a
+//     sibling go.work member); the bare kernel/runtime/pkg no longer exist at the
+//     root and are pruned; cmd/adapters/examples are separate go.work modules whose
+//     "./<dir>/…" pattern MATCH-ZEROES under ModeModule (GOWORK=off) — kept in the
+//     list only so the OBS-01 coverage guard stays symmetric with the production
+//     top-levels it walks (full cross-module coverage is gh #1590). cellmodules/
+//     corecells are module roots → pruned by IsModuleRoot.
+//   - Single-module fixture: framework/<layer> doesn't exist (pruned); the bare
+//     cmd/pkg/kernel/runtime the fixture writes ARE part of the one module, so their
+//     "./<dir>/…" pattern matches under ModeModule and is actually scanned.
 var topLevelDirs = []string{
+	"framework/kernel",
+	"framework/runtime",
+	"framework/pkg",
 	"cmd",
 	"kernel",
 	"runtime",
+	"pkg",
 	"adapters",
 	"cells",
 	"cellmodules",
 	"examples",
-	"pkg",
 }
 
 // Patterns returns the repository production package patterns used by typed

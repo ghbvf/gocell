@@ -2,7 +2,7 @@
 // value-shape double-underscore 子分支的独立 RED fixture。
 package value_shape_double_underscore_red
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // VIOLATION A1/value-shape: double underscore fails (?:_[a-z0-9]+)* group.
 const DoubleUnderProbe healthz.ProbeName = "double__under_ready"

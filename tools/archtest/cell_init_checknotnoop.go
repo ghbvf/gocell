@@ -26,4 +26,4 @@ package archtest
 // PlatformModulePath — not a bare string literal. Consumed by the Phase B
 // scanner in cell_init_checknotnoop_test.go (via the kernelCellCheckNotNoopFullName
 // alias).
-const checkNotNoopFullName = PlatformModulePath + "/kernel/outbox.CheckNotNoop"
+const checkNotNoopFullName = PlatformFrameworkModulePath + "/kernel/outbox.CheckNotNoop"

@@ -30,12 +30,12 @@ const ruleNotFoundTestStrict = "POSTGRES-NOTFOUND-TEST-OTHER-ERROR-MIXUP-ARCHTES
 
 // errcodetestPkgPath is the canonical import path of the errcodetest funnel
 // package. Only callees in this package are accepted by the rule.
-const errcodetestPkgPath = PlatformModulePath + "/pkg/errcode/errcodetest"
+const errcodetestPkgPath = PlatformFrameworkModulePath + "/pkg/errcode/errcodetest"
 
 // notFoundCodeErrcodePkgPath is the package path of typed errcode.Code
 // constants. Used to validate that the `expected` argument resolves through
 // *types.Info to a constant declared in this package.
-const notFoundCodeErrcodePkgPath = PlatformModulePath + "/pkg/errcode"
+const notFoundCodeErrcodePkgPath = PlatformFrameworkModulePath + "/pkg/errcode"
 
 // notFoundCodeTypeName is the unqualified name of the typed-string named
 // type that all errcode.Err* constants share. The rule's type check

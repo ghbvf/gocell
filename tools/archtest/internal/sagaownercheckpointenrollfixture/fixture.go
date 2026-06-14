@@ -15,7 +15,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // unenrolledOwnerStore implements projection.OwnerCheckpointStore but is NOT

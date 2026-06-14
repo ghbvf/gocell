@@ -3,9 +3,9 @@ package testutil
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	sessiontest "github.com/ghbvf/gocell/runtime/auth/session/sessiontest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	sessiontest "github.com/ghbvf/gocell/framework/runtime/auth/session/sessiontest"
 )
 
 // RealSessionRepo returns a ready-to-use in-memory session.Store for unit

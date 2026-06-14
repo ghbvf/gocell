@@ -9,12 +9,12 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	commandruntime "github.com/ghbvf/gocell/runtime/command"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 // newWiredCommandCell builds a fully-wired devicecell over the given registry +

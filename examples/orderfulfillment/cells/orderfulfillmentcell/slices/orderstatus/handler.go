@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	orderstatusgen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/orderstatus/v1"
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Handler adapts Service to the generated orderstatusgen.Service interface.

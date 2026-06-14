@@ -25,12 +25,12 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/corecells/configcore"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/composition"
-	"github.com/ghbvf/gocell/runtime/crypto"
-	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/state/cas"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 // ModuleOption configures a configcore module.

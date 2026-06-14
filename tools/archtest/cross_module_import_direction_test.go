@@ -25,20 +25,28 @@ package archtest
 import (
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 // TestCrossModuleImportDirection01_RealRepoVacuous runs the rule over the live
 // workspace graph and asserts ZERO core→satellite edges. The workspace already
 // holds satellite modules (adapters/*, corecells, cellmodules, cmd/*, tools, and
 // generated as of #1564), so this is a live gate — it stays empty only because
-// the layering holds (no root-module package imports a satellite), not because
-// the workspace is single-module. The firing path is exercised by
+// the layering holds (no framework-module package imports a satellite), not
+// because the workspace is single-module. The firing path is exercised by
 // TestCrossModuleImportDirection01_SyntheticGraph.
+//
+// coreModule MUST be the framework module path (PlatformFrameworkModulePath =
+// github.com/ghbvf/gocell/framework) — the #1565 successor to the pre-split root
+// module. readModulePath returns workspace.CorePrefix (the ORG prefix
+// github.com/ghbvf/gocell, /framework stripped), which owns no framework package:
+// using it would make Classifier.OwningModule never equal coreModule, silently
+// skipping every framework package (vacuous guard). framework/kernel|runtime|pkg
+// are owned by the framework module path.
 func TestCrossModuleImportDirection01_RealRepoVacuous(t *testing.T) {
 	root := findModuleRoot(t)
 	g, _ := loadModule(t, root)
-	coreModule := readModulePath(t, root)
+	coreModule := PlatformFrameworkModulePath
 	if v := CheckCrossModuleImportDirection(g, coreModule); len(v) > 0 {
 		t.Errorf("CROSS-MODULE-IMPORT-DIRECTION-01: base module %q must not import any other workspace module: %+v",
 			coreModule, v)

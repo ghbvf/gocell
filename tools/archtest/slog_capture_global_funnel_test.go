@@ -87,10 +87,27 @@ import (
 const ruleSlogCaptureGlobalFunnel01 = "SLOG-CAPTURE-GLOBAL-FUNNEL-01"
 
 // slogCaptureAllowlist is the closed, shrink-only set of rel-path dir prefixes
-// whose code may call the global-mutating primitive slog.SetDefault. Exactly one
-// entry: the sanctioned holder. See the file godoc for why.
+// whose code may call the global-mutating primitive slog.SetDefault. The first
+// entry is the single sanctioned test-scope holder; the remaining entries are
+// production assembly entry points whose slog.SetDefault call is the A3 process-
+// global seal (SLOG-HANDLER-SEALED-FUNNEL-01), not a test-scope global mutation.
+//
+// Post-#1565: the workspace ./... pattern now spans all member modules, so the
+// production mains (cmd/* and examples/*) are included in the scan. Their
+// slog.SetDefault calls are sanctioned by A3 and must be allowlisted here.
+//
+// Pass.Rel strips the "framework/" physical prefix for framework-module files
+// (newPackageRel → stripFrameworkPrefix), so pkg/testutil/slogcapture's rel
+// remains "pkg/testutil/slogcapture/" — no "framework/" prefix needed there.
+// The cmd/ and examples/ entry points are non-framework modules and carry their
+// natural workspace-root-relative paths.
 var slogCaptureAllowlist = []string{
 	"pkg/testutil/slogcapture/",
+	// Production assembly entry points: slog.SetDefault is the A3 slog seal, not
+	// a test-scope global mutation. Scanned post-#1565 workspace expansion.
+	"cmd/corebundle/",
+	"cmd/gocell/",
+	"examples/",
 }
 
 const slogCaptureFunnelReason = "raw slog.SetDefault mutates the process-global slog.Default() " +

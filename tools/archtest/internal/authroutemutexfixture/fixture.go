@@ -37,8 +37,8 @@ package authroutemutexfixture
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/kernel/contractspec"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	spec "github.com/ghbvf/gocell/tools/archtest/internal/authroutemutexfixture/spec"
 )
 

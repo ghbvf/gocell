@@ -14,7 +14,7 @@ package external_mint_red
 import (
 	r "reflect"
 
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
 )
 
 // 1. direct call.

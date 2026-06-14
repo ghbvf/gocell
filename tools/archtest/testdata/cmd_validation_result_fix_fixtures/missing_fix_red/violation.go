@@ -12,7 +12,7 @@
 // Expected: 1 violation — Fix: field absent.
 package missing_fix_red
 
-import "github.com/ghbvf/gocell/kernel/governance"
+import "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // missingFixResult constructs a ValidationResult without a Fix field.
 // CMD-VALIDATIONRESULT-FIX-FIELD-01 must flag this.

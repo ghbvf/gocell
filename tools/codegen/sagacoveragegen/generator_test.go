@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/saga"
-	"github.com/ghbvf/gocell/kernel/saga/journal"
+	"github.com/ghbvf/gocell/framework/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/saga/journal"
 )
 
 func TestPascalCase(t *testing.T) {

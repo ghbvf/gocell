@@ -30,7 +30,7 @@ package audittraceidfixture
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
 // badCompositeLit fabricates a ledger.Entry with explicit TraceID AND

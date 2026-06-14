@@ -7,7 +7,7 @@
 // Unalias fix is load-bearing. Gated by the archtest_fixture build tag.
 package reconcileloopredfixture
 
-import rc "github.com/ghbvf/gocell/kernel/reconcile"
+import rc "github.com/ghbvf/gocell/framework/kernel/reconcile"
 
 // loopTypeAlias is a Go 1.23 type alias to reconcile.Loop. Under
 // gotypesalias=1, a composite literal of it denotes a *types.Alias, so the

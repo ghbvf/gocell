@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 var fooReady = healthz.MustProbeName("foo_ready")

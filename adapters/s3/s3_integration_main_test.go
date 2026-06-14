@@ -11,7 +11,7 @@ import (
 
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/ghbvf/gocell/tests/testutil/minioctr"
 )

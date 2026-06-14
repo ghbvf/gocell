@@ -124,7 +124,7 @@ const (
 	// distlockMgrPkgPath is a GoCell platform symbol path, anchored to
 	// PlatformModulePath so a module rename / /v2 bump updates exactly one
 	// place and ARCHTEST-MODULE-PATH-FUNNEL-01 stays green (no bare literal).
-	distlockMgrPkgPath   = PlatformModulePath + "/runtime/distlock"
+	distlockMgrPkgPath   = PlatformFrameworkModulePath + "/runtime/distlock"
 	handleOrphanFuncName = "handleOrphan"
 	detachLockFuncName   = "detachLock"
 	driverIfaceName      = "Driver"
@@ -151,7 +151,7 @@ func TestDistlockOrphanNoDriverIO01(t *testing.T) {
 		violations        []Diagnostic
 	)
 
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -535,7 +535,7 @@ func TestDistlockMgrDriverIOOffloaded01(t *testing.T) {
 		violations       []Diagnostic
 	)
 
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil {
 				return nil
@@ -650,7 +650,7 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_LocalVarMethodValue(t *testing.
 	// a call).
 	var violations []Diagnostic
 
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != distlockMgrPkgPath {
 				return nil
@@ -722,7 +722,7 @@ func TestDistlockOrphanNoDriverIO01_ReverseCheck_DriverFuncField(t *testing.T) {
 	// holds such a field, it would be a blind spot for the orphan-no-IO rule.
 	var violations []Diagnostic
 
-	Run(t, Typed(TypedOpts{Tests: false}, []string{"./runtime/distlock/..."}),
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/distlock/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != distlockMgrPkgPath {
 				return nil

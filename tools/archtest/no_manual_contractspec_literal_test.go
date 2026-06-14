@@ -128,7 +128,7 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_ExcludesConstructionHomes(t *testing.
 		}
 		// Guard against a vacuous exclusion: the home dir must exist (a typo'd
 		// prefix that matches nothing would silently excuse nothing).
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(home)))
+		info, err := os.Stat(filepath.Join(root, "framework", filepath.FromSlash(home)))
 		if err != nil || !info.IsDir() {
 			t.Fatalf("construction home %q must exist as a directory for the exclusion to be load-bearing: %v", home, err)
 		}
@@ -246,7 +246,7 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture(t *testing.T) {
 func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture_EventSpec(t *testing.T) {
 	t.Parallel()
 	src := `package p
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 func init() {
 	_ = contractspec.EventSpec("event.bad.v1", "amqp", "bad.topic")
 }

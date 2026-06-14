@@ -65,7 +65,7 @@ import (
 
 // distlockModule is the import path whose in-process single-pod driver
 // constructor the funnel funnels through sagaprojectiondeps.
-const distlockModule = PlatformModulePath + "/runtime/distlock"
+const distlockModule = PlatformFrameworkModulePath + "/runtime/distlock"
 
 // sagaProjectionDepsScannedRoots are the wiring layers scanned for a direct
 // distlock.NewInProcessDriver call. The sanctioned resolver lives under

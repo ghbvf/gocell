@@ -24,13 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	devicebootstrap "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicebootstrap"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/idempotency"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
 	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/command"
-	"github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
 // dedupEnqueueHandler counts how many times the enqueue handler runs so the test

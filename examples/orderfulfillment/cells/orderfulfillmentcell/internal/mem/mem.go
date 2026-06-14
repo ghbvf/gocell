@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/ghbvf/gocell/examples/orderfulfillment/cells/orderfulfillmentcell/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // OrderRepository is an in-memory implementation of ports.OrderRepository.

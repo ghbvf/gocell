@@ -87,7 +87,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// tenantPkgPath ("github.com/ghbvf/gocell/pkg/tenant") is declared in
+// tenantPkgPath ("github.com/ghbvf/gocell/framework/pkg/tenant") is declared in
 // tenant_repo_param_funnel_test.go (same package); reused here.
 
 // tenantWithScopeSetter is the funneled tenant.WithScope function name.

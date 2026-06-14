@@ -112,7 +112,7 @@ func isCellSubtreePkgPath(pkgPath string) bool {
 // if this returned nil).
 func TestLoadModeNoDeps_NonVacuity_SagaStepFunc(t *testing.T) {
 	var found bool
-	Run(t, Typed(TypedOpts{}, []string{"./runtime/saga/..."}), func(p *Pass) []Diagnostic {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/saga/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil {
 			return nil
 		}
@@ -131,7 +131,7 @@ func TestLoadModeNoDeps_NonVacuity_SagaStepFunc(t *testing.T) {
 // exact name (not via the transitive walk) and is unaffected.
 func TestLoadModeNoDeps_NonVacuity_AfterCommitBannedReceivers(t *testing.T) {
 	const pgxPath = "github.com/jackc/pgx/v5"
-	outboxPath := PlatformModulePath + "/kernel/outbox"
+	outboxPath := PlatformFrameworkModulePath + "/kernel/outbox"
 
 	var pgxFound, outboxWriterFound bool
 	Run(t, Typed(TypedOpts{}, []string{"./adapters/postgres/..."}), func(p *Pass) []Diagnostic {

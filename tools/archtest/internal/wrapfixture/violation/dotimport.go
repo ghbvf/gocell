@@ -15,7 +15,7 @@
 package violation
 
 import (
-	. "github.com/ghbvf/gocell/kernel/outbox"
+	. "github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // CallDotImportWrapPublisher writes the wrap call without a package

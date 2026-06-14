@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	_ "github.com/ghbvf/gocell/tools/codegen/markergen" // ensure import is resolved
 	"github.com/ghbvf/gocell/tools/wiresummary"
 )

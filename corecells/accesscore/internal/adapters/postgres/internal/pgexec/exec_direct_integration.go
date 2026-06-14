@@ -17,9 +17,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/panicregister"
-	"github.com/ghbvf/gocell/pkg/pgrepoapproved"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/pgrepoapproved"
 )
 
 // ExecDirect bypasses the ambient transaction. The first parameter is a

@@ -7,7 +7,7 @@
 package indirect_var_red
 
 import (
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // varRef holds testwait.External as a function value — indirect reference.

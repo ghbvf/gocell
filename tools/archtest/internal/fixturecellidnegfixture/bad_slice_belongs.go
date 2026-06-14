@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadSliceBelongs uses a bare string literal in SliceMeta.BelongsToCell —
 // must be flagged by A1 (direct field position).

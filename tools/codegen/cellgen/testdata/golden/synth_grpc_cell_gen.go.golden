@@ -9,9 +9,9 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*Demo)(nil)

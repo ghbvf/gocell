@@ -3,7 +3,7 @@ package accesscore
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/runtime/state/cas"
+	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
 // testPassthroughBootstrapAuth is a no-op middleware satisfying the

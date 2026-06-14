@@ -4,8 +4,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
 const (

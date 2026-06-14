@@ -4,8 +4,8 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 func makeValidRuleWithFieldMask(id string) abac.Rule {

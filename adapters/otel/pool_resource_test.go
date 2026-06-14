@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/kernel/observability/poolstats"
+	"github.com/ghbvf/gocell/framework/kernel/observability/poolstats"
 )
 
 // staticStatter is a test double: returns the supplied fixed snapshot on

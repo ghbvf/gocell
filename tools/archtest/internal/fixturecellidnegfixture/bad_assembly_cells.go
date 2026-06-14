@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadAssemblyCells uses bare string literals at the AssemblyCellRef.ID
 // position — each must be flagged by A1 (struct-field position; the cell-id

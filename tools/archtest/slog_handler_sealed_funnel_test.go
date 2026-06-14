@@ -538,7 +538,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{slogFunnelLoggingPkgRelDir})
+	scope := DirsScope(root, []string{"framework/" + slogFunnelLoggingPkgRelDir})
 
 	var handleFound, withAttrsFound bool
 	var all []Diagnostic
@@ -547,7 +547,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 		var ds []Diagnostic
 		for _, f := range p.Files {
 			rel := filepath.ToSlash(p.Rel(f))
-			if !strings.HasPrefix(rel, slogFunnelLoggingPkgRelDir) {
+			if !strings.HasPrefix(rel, "framework/"+slogFunnelLoggingPkgRelDir) {
 				continue
 			}
 			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
@@ -676,12 +676,7 @@ func firstCallBearingStmtSatisfies(body *ast.BlockStmt, pred func(*ast.CallExpr)
 func TestSlogHandlerSealedFunnel_A3_EntryPointSeal(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	if err != nil {
-		t.Fatalf("SLOG-HANDLER-SEALED-FUNNEL-01 A3: read module path: %v", err)
-	}
-	loggingPkgPath := modPath + "/" + slogFunnelLoggingPkgImportSuffix
+	loggingPkgPath := PlatformFrameworkModulePath + "/" + slogFunnelLoggingPkgImportSuffix
 
 	var all []Diagnostic
 
@@ -853,7 +848,7 @@ func TestSlogHandlerSealedFunnel_A2_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
 	// redactionImport is the import path as it would appear in logging.go.
-	const redactionImport = `"github.com/ghbvf/gocell/pkg/redaction"`
+	const redactionImport = `"github.com/ghbvf/gocell/framework/pkg/redaction"`
 
 	cases := []struct {
 		name    string
@@ -1016,7 +1011,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Additionally confirm the production contextHandler.Handle yields 0 violations
 	// (non-vacuity proof of the GREEN path against real code).
 	root := findModuleRoot(t)
-	scope := DirsScope(root, []string{slogFunnelLoggingPkgRelDir})
+	scope := DirsScope(root, []string{"framework/" + slogFunnelLoggingPkgRelDir})
 	var handleChecked bool
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
@@ -1051,7 +1046,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 // presence-only "RedactSlogAttr appears once" check would catch.
 func TestSlogHandlerSealedFunnel_A2_WithAttrs_DetectsViolation(t *testing.T) {
 	t.Parallel()
-	const redactionImport = `"github.com/ghbvf/gocell/pkg/redaction"`
+	const redactionImport = `"github.com/ghbvf/gocell/framework/pkg/redaction"`
 	cases := []struct {
 		name    string
 		src     string
@@ -1226,12 +1221,7 @@ func run() {
 func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	if err != nil {
-		t.Fatalf("SLOG-HANDLER-SEALED-FUNNEL-01 A3 reverse check: read module path: %v", err)
-	}
-	loggingPkgPath := modPath + "/" + slogFunnelLoggingPkgImportSuffix
+	loggingPkgPath := PlatformFrameworkModulePath + "/" + slogFunnelLoggingPkgImportSuffix
 
 	// Generated-segment non-vacuity: cmd/corebundle's generated main.go must be
 	// marker-detected AND seal in run().
@@ -1316,12 +1306,7 @@ func TestSlogHandlerSealedFunnel_A3_DetectsViolation(t *testing.T) {
 func TestSlogHandlerSealedFunnel_NoBlindspotsInProduction(t *testing.T) {
 	t.Parallel()
 
-	root := findModuleRoot(t)
-	modPath, err := moduleImportPath(root)
-	if err != nil {
-		t.Fatalf("SLOG-HANDLER-SEALED-FUNNEL-01 blindspot: read module path: %v", err)
-	}
-	loggingFullPkgPath := modPath + "/" + slogFunnelLoggingPkgImportSuffix
+	loggingFullPkgPath := PlatformFrameworkModulePath + "/" + slogFunnelLoggingPkgImportSuffix
 
 	// healthtest contains a CaptureHandler for testing (acceptable test helper).
 	// The check skips _test.go files since a Production scope uses Tests:false.
@@ -1451,7 +1436,7 @@ func TestSlogHandlerSealedFunnel_A3_EntryPointsCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("A3 entry-point coverage: read module path: %v", err)
 	}
-	bootstrapPkgPath := modPath + "/runtime/bootstrap"
+	bootstrapPkgPath := modPath + "/framework/runtime/bootstrap"
 
 	// Build a lookup set of hand-written packages already in the allowlist.
 	handwrittenPkgs := make(map[string]bool) // pkgPattern → true
@@ -1538,32 +1523,40 @@ var slogLogValuerAllowlist = []struct {
 	selfRedacts string
 }{
 	{
-		pkg:         "runtime/http/health",
+		// Post-#1565: runtime/http/health lives under framework/, so relPkg =
+		// strings.TrimPrefix(pkgPath, modPath+"/") yields "framework/runtime/http/health".
+		pkg:         "framework/runtime/http/health",
 		typeName:    "SlogDependencyEntry",
 		selfRedacts: "error_msg via newRedactedErrorMsg→RedactString (HEALTH-REDACTED-ERROR-MSG-FUNNEL-01); status/durationMs non-sensitive",
 	},
 	{
+		// adapters/redis is a separate workspace module; relPkg = "adapters/redis".
 		pkg:         "adapters/redis",
 		typeName:    "Config",
 		selfRedacts: "password absent from LogValue; standalone+cluster addrs via redactAddr/url.Redacted (#1036 F1)",
 	},
 	{
+		// adapters/mqtt is a separate workspace module; relPkg = "adapters/mqtt".
 		pkg:         "adapters/mqtt",
 		typeName:    "AuthConfig",
 		selfRedacts: "password replaced with redaction.Mask when non-empty; username is non-sensitive",
 	},
 	{
-		pkg:         "kernel/webhook",
+		// Post-#1565: kernel/webhook lives under framework/, so relPkg =
+		// strings.TrimPrefix(pkgPath, modPath+"/") yields "framework/kernel/webhook".
+		pkg:         "framework/kernel/webhook",
 		typeName:    "Source",
 		selfRedacts: "secret field always replaced with redaction.Mask literal",
 	},
 	{
-		pkg:         "kernel/webhook",
+		pkg:         "framework/kernel/webhook",
 		typeName:    "hmacSigner",
 		selfRedacts: "delegates to Source.LogValue() which self-redacts the secret",
 	},
 	{
-		pkg:         "kernel/command",
+		// Post-#1565: kernel/command lives under framework/, so relPkg =
+		// strings.TrimPrefix(pkgPath, modPath+"/") yields "framework/kernel/command".
+		pkg:         "framework/kernel/command",
 		typeName:    "Entry",
 		selfRedacts: "payload replaced with '<REDACTED bytes=N>' sentinel; no credential fields in other attrs",
 	},

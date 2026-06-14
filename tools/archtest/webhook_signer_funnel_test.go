@@ -120,7 +120,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/kernel/webhook"
 )
 
 const (
@@ -131,7 +131,7 @@ const (
 	// that merely shares the name "Apply" cannot inherit it, and the method can
 	// move files freely without updating this const. A rename of the method flips
 	// every violation to caught (fail-closed), forcing the author to update here.
-	signerSanctionedApplyFunc = "(" + PlatformModulePath + "/kernel/webhook.SignedHeaders).Apply"
+	signerSanctionedApplyFunc = "(" + PlatformFrameworkModulePath + "/kernel/webhook.SignedHeaders).Apply"
 
 	httpPkgPath = "net/http"
 )
@@ -242,8 +242,8 @@ func scanSignerHeaderSetMethodValue(fset *token.FileSet, file *ast.File, rel str
 // TestWebhookSignerFunnel. Covers both the kernel types and the runtime
 // consumer layer.
 var webhookSignerPkgPatterns = []string{
-	"./kernel/webhook/...",
-	"./runtime/webhook/...",
+	"./framework/kernel/webhook/...",
+	"./framework/runtime/webhook/...",
 }
 
 func TestWebhookSignerFunnel(t *testing.T) {
@@ -270,8 +270,8 @@ func TestWebhookSignerFunnel(t *testing.T) {
 			inTree := func(base string) bool {
 				return pkgPath == base || strings.HasPrefix(pkgPath, base+"/")
 			}
-			if !inTree(PlatformModulePath+"/kernel/webhook") &&
-				!inTree(PlatformModulePath+"/runtime/webhook") {
+			if !inTree(PlatformFrameworkModulePath+"/kernel/webhook") &&
+				!inTree(PlatformFrameworkModulePath+"/runtime/webhook") {
 				return nil
 			}
 			for _, f := range p.Files {

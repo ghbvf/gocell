@@ -4,9 +4,9 @@ package configgetter
 import (
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	accesshttp "github.com/ghbvf/gocell/corecells/accesscore/internal/adapters/http"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/transport"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
 // WithTransport constructs a CellTransport-backed ConfigGetter and injects it

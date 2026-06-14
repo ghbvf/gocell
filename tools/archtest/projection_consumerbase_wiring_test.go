@@ -74,7 +74,7 @@ import (
 // projectionWiringBootstrapPkgPath is the package owning the WithProjection* /
 // WithConsumerBase bootstrap options. Derived from PlatformModulePath
 // (ARCHTEST-MODULE-PATH-FUNNEL-01: no bare module-path literal).
-const projectionWiringBootstrapPkgPath = PlatformModulePath + "/runtime/bootstrap"
+const projectionWiringBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 
 // projectionWiringConsumerBaseOption is the option whose presence the rule
 // requires whenever any projectionWiringOptions entry is wired.

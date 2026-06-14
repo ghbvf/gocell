@@ -11,7 +11,7 @@ package redunguardedparam
 import (
 	"errors"
 
-	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // errDepRequired models the fail-fast error a real constructor returns when a

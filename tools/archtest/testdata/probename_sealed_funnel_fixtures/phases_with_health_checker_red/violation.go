@@ -14,7 +14,7 @@ package phases_with_health_checker_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // VIOLATION A2/WithHealthChecker: bare untyped string literal implicitly

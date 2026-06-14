@@ -11,6 +11,15 @@
 - ref: Operator-SDK R9（外部消费方 `go get @vX.Y.Z` 编译耦合面）；SemVer §4（v0.x minor/patch 允许 breaking）；
   #1724（v0.x 自用不做承诺）；#1081（v1.0 GA 后外部 Cell 仓库承诺起点）
 
+> **Amendment 2026-06-14（#1565 framework module-path）**：轴 A 的 framework 核心 module 从 repo 根
+> `github.com/ghbvf/gocell`（含 `kernel/ runtime/ pkg/`）迁到独立子 module
+> **`github.com/ghbvf/gocell/framework`**，使目录与 import path 对齐（Go 惯例，对标 gopls）。下文凡描述轴 A
+> SDK 的 `go get github.com/ghbvf/gocell@vX.Y.Z` 与 `kernel/`/`runtime/`/`pkg/` 符号路径，**现读作**
+> `go get github.com/ghbvf/gocell/framework@vX.Y.Z` 与 `framework/kernel/...` 等。**威胁矩阵不变**：pre-GA
+> 阶段无外部 wire/SDK 消费方（README/CLAUDE.md），全部 in-repo 调用方随 #1565 原子更新，R9（外部编译耦合）此刻
+> 为零实际暴露；这是轴 A 上的一次 breaking module-path 变更（CHANGELOG `[Unreleased]` 已记），政策本身（v0.x
+> 允许 breaking、CLI 与 framework 同 tag）未变。CLI 子 module `github.com/ghbvf/gocell/cmd/gocell` 不动。
+
 ## Context
 
 ### 轴 A 的定义

@@ -12,8 +12,8 @@ import (
 	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // smokeBootDuration is the time the example is allowed to start and respond

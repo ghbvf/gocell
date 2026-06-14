@@ -58,10 +58,10 @@ import (
 )
 
 const (
-	replaySourceConformancePkg      = PlatformModulePath + "/kernel/projection/projectiontest"
+	replaySourceConformancePkg      = PlatformFrameworkModulePath + "/kernel/projection/projectiontest"
 	replaySourceConformanceFuncName = "RunReplaySourceConformance"
 
-	replaySourceIfacePkg  = PlatformModulePath + "/kernel/projection"
+	replaySourceIfacePkg  = PlatformFrameworkModulePath + "/kernel/projection"
 	replaySourceIfaceName = "ReplaySource"
 
 	fixtureReplayEnrollPkg = PlatformModulePath + "/tools/archtest/internal/projectionreplayenrollfixture"
@@ -199,7 +199,7 @@ func TestProjectionReplaySourceConformanceEnroll01_RedFixture(t *testing.T) {
 	}
 
 	loadPatterns := []string{
-		"./kernel/projection/...",
+		"./framework/kernel/projection/...",
 		"./tools/archtest/internal/projectionreplayenrollfixture/...",
 	}
 

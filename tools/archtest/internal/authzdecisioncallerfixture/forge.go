@@ -11,7 +11,7 @@
 // loaded by the Fixture() façade in the reverse self-check.
 package authzdecisioncallerfixture
 
-import "github.com/ghbvf/gocell/pkg/authz"
+import "github.com/ghbvf/gocell/framework/pkg/authz"
 
 // ForgeAllow forges an Allow verdict outside the sanctioned PDP engine (RED).
 func ForgeAllow() authz.Decision {

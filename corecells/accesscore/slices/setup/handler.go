@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net/http"
 
+	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/authz"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/projection"
-	"github.com/ghbvf/gocell/pkg/tenant"
 )
 
 // StatusAdapter implements statusGen.Service for http.auth.setup.status.v1.

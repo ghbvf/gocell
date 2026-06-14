@@ -5,7 +5,7 @@
 // printed a bogus ":0:" prefix with the location duplicated inside the message).
 package red_literal
 
-import "github.com/ghbvf/gocell/kernel/outbox"
+import "github.com/ghbvf/gocell/framework/kernel/outbox"
 
 // handle returns a bare outbox.HandleResult{} composite literal — the form
 // business handlers must replace with outbox.Ack() / Requeue(err) / Reject(err).

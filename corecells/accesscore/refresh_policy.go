@@ -3,7 +3,7 @@ package accesscore
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
 )
 
 // Refresh policy defaults for accesscore — the canonical numbers used by both

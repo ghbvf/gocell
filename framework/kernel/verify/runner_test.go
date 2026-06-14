@@ -1,0 +1,513 @@
+package verify
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
+)
+
+func TestParseSliceKey(t *testing.T) {
+	tests := []struct {
+		key     string
+		wantC   string
+		wantS   string
+		wantErr bool
+	}{
+		{"accesscore/session-login", "accesscore", "session-login", false},
+		{"a/b", "a", "b", false},
+		{"noslash", "", "", true},
+		{"/leading", "", "", true},
+		{"trailing/", "", "", true},
+		{"../evil/s", "", "", true},
+		{`c\s`, "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			c, s, err := parseSliceKey(tt.key)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantC, c)
+			assert.Equal(t, tt.wantS, s)
+		})
+	}
+}
+
+func TestVerifySlice_NotFound(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Slices: map[string]*metadata.SliceMeta{},
+	}, t.TempDir())
+	_, err := r.VerifySlice(context.Background(), "cell/missing")
+	errcodetest.AssertCode(t, err, errcode.ErrSliceNotFound)
+	// retained for Details assertion — errors.As fills ecErrSlice for assertDetailString.
+	var ecErrSlice *errcode.Error
+	require.True(t, errors.As(err, &ecErrSlice))
+	assertDetailString(t, ecErrSlice, "slice", "cell/missing")
+}
+
+func TestVerifyCell_NotFound(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{},
+	}, t.TempDir())
+	_, err := r.VerifyCell(context.Background(), "missing")
+	errcodetest.AssertCode(t, err, errcode.ErrCellNotFound)
+	// retained for Details assertion — errors.As fills ecErrCell for assertDetailString.
+	var ecErrCell *errcode.Error
+	require.True(t, errors.As(err, &ecErrCell))
+	assertDetailString(t, ecErrCell, "cell", "missing")
+}
+
+func TestRunJourney_NotFound(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{},
+	}, t.TempDir())
+	_, err := r.RunJourney(context.Background(), "missing")
+	errcodetest.AssertCode(t, err, errcode.ErrJourneyNotFound)
+	// retained for Details assertion — errors.As fills ecErrJourney for assertDetailString.
+	var ecErrJourney *errcode.Error
+	require.True(t, errors.As(err, &ecErrJourney))
+	assertDetailString(t, ecErrJourney, "journey", "missing")
+}
+
+func TestRunJourney_ManualPending(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID: "J-test",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeManual, Text: "Check the UI renders correctly"},
+					{Mode: ModeManual, Text: "Verify email was sent"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunJourney(context.Background(), "J-test")
+	require.NoError(t, err)
+	assert.True(t, result.Passed, "manual-only should pass with no auto criteria")
+	assert.Equal(t, []string{
+		"Check the UI renders correctly",
+		"Verify email was sent",
+	}, result.ManualPending)
+	// R3-6: assert warning TestResult exists
+	require.Len(t, result.Results, 1)
+	assert.Contains(t, result.Results[0].Output, "warning")
+}
+
+func TestRunJourney_AutoNoCheckRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID: "J-test",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeAuto, Text: "Unverifiable criterion", CheckRef: ""},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunJourney(context.Background(), "J-test")
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "auto without checkRef should fail")
+	require.Len(t, result.Results, 1)
+	assert.Contains(t, result.Results[0].Output, "no checkRef")
+}
+
+func TestRunJourney_InvalidRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID: "J-test",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeAuto, CheckRef: "bad-ref"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunJourney(context.Background(), "J-test")
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "invalid ref should fail")
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Error(), "ERR_CHECKREF_INVALID")
+}
+
+func TestRunActiveJourneys_ManualOnlyActiveFails(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID:        "J-test",
+				Lifecycle: "active",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeManual, Text: "Security signoff"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "active journeys need at least one auto checkRef")
+	require.NotEmpty(t, result.Results)
+	assert.Contains(t, result.Results[len(result.Results)-1].Output, "active journey has no auto checkRef")
+}
+
+func TestRunActiveJourneys_NilProjectPasses(t *testing.T) {
+	r := NewRunner(nil, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Empty(t, result.Results)
+}
+
+// TestRunActiveJourneys_EmptyActiveSetFails closes K-02 (b): a non-nil
+// project with zero active journeys must fail RunActiveJourneys, otherwise
+// the verifier silently passes on a regressed project where every journey
+// is stuck at experimental.
+func TestRunActiveJourneys_EmptyActiveSetFails(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-draft": {
+				ID:        "J-draft",
+				Lifecycle: "experimental",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeManual, Text: "Explore manually"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.False(t, result.Passed,
+		"a project with zero active journeys must not silently pass")
+	require.NotEmpty(t, result.Results)
+	last := result.Results[len(result.Results)-1]
+	assert.False(t, last.Passed)
+	assert.Contains(t, last.Output, "no active journey present")
+	assert.Contains(t, last.Output, "; fix:")
+}
+
+func TestRunActiveJourneys_AutoCheckRefPasses(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "journey_test.go"), []byte(`package journeys
+import "testing"
+func TestJActiveHappyPath(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-active": {
+				ID:        "J-active",
+				Lifecycle: "active",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: ModeAuto, Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
+				},
+			},
+		},
+	}, dir)
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "journey.J-active.happy-path", result.Results[0].Name)
+}
+
+func TestRunJourneyCheckRef_RejectsMismatchedJourneyScope(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "journey_test.go"), []byte(`package journeys
+import "testing"
+func TestJOtherHappyPath(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{}, dir)
+	tr, errs := r.RunJourneyCheckRef(
+		context.Background(),
+		&metadata.JourneyMeta{ID: "J-current"},
+		"journey.J-other.happy-path",
+	)
+
+	assert.False(t, tr.Passed, "a journey must not borrow another journey's passing test")
+	require.Len(t, errs, 1)
+	var ecErrScope *errcode.Error
+	require.True(t, errors.As(errs[0], &ecErrScope))
+	assertDetailString(t, ecErrScope, "scope", "J-other")
+	assertDetailString(t, ecErrScope, "journey", "J-current")
+}
+
+func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{}, t.TempDir())
+
+	tr, errs := r.RunJourneyCheckRef(
+		context.Background(),
+		&metadata.JourneyMeta{ID: "J-current"},
+		"smoke.accesscore.startup",
+	)
+
+	assert.False(t, tr.Passed)
+	require.Len(t, errs, 1)
+	var ecErrJourneyPrefix *errcode.Error
+	require.True(t, errors.As(errs[0], &ecErrJourneyPrefix))
+	assert.Contains(t, ecErrJourneyPrefix.Message+" "+ecErrJourneyPrefix.Error(), "journey prefix")
+}
+
+func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "tests", "integration", "go.mod"),
+		[]byte("module example.com/project/tests/integration\n\ngo 1.25\n"),
+		0o644,
+	))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "example.com/project/tests/integration/...", pkg)
+	assert.Contains(t, extra, "-tags=integration")
+}
+
+func TestResolveJourneyPkg_IntegrationDirWithoutGoModFallsBackRelative(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./tests/integration/...", pkg)
+	assert.Contains(t, extra, "-tags=integration")
+}
+
+func TestResolveJourneyPkg_ExampleJourneyPrefersExamplePackage(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "examples", "todoorder"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{
+		File: "examples/todoorder/journeys/J-ordercreate.yaml",
+	}, resolvedRef{Kind: PrefixJourney})
+
+	assert.Equal(t, "./examples/todoorder/...", pkg)
+	assert.Nil(t, extra)
+}
+
+func TestResolveJourneyPkg_JourneysDir(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./journeys/...", pkg)
+	assert.Nil(t, extra)
+}
+
+func TestResolveJourneyPkg_Fallback(t *testing.T) {
+	r := NewRunner(nil, t.TempDir())
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./...", pkg)
+	assert.Nil(t, extra)
+}
+
+func TestExampleNameFromJourneyFile(t *testing.T) {
+	name, ok := exampleNameFromJourneyFile("examples/todoorder/journeys/J-ordercreate.yaml")
+	require.True(t, ok)
+	assert.Equal(t, "todoorder", name)
+
+	_, ok = exampleNameFromJourneyFile("journeys/J-ordercreate.yaml")
+	assert.False(t, ok)
+}
+
+func TestResolveSlicePkg_PrefersGoFiles(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create metadata dir with only YAML
+	yamlDir := filepath.Join(base, "my-slice")
+	require.NoError(t, os.MkdirAll(yamlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(yamlDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
+	// Create Go package dir
+	goDir := filepath.Join(base, "myslice")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "service.go"), []byte("package myslice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "cells/c/slices/my-slice/slice.yaml", "c", "my-slice")
+	assert.Contains(t, pkg, "myslice", "should prefer dir with Go files")
+	assert.NotContains(t, pkg, "my-slice")
+}
+
+func TestResolveSlicePkg_FallbackToMetadata(t *testing.T) {
+	// Empty sliceFile exercises the synthetic-metadata fallback to the
+	// conventional ./cells/<cell>/slices/<slice>/ layout.
+	pkg := resolveSlicePkg(t.TempDir(), "", "c", "nonexistent")
+	assert.Contains(t, pkg, "nonexistent")
+	assert.Contains(t, pkg, "cells/c/slices/nonexistent")
+}
+
+func TestResolveSlicePkg_UsesSliceIDDirWhenStrippedHasNoGoFiles(t *testing.T) {
+	// Covers the second branch: hasGoFiles(base, sliceID) = true,
+	// hasGoFiles(base, stripped) = false.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create Go package in the hyphenated dir (sliceID), not in stripped dir.
+	goDir := filepath.Join(base, "my-slice")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "handler.go"), []byte("package myslice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "cells/c/slices/my-slice/slice.yaml", "c", "my-slice")
+	assert.Contains(t, pkg, "my-slice", "should use sliceID dir when stripped dir has no Go files")
+}
+
+func TestResolveSlicePkg_FallbackToStrippedDirWhenNoGoFiles(t *testing.T) {
+	// Covers the third branch: dirExists(base, stripped) = true but
+	// hasGoFiles = false for both stripped and sliceID dirs.
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create stripped dir with only a YAML file (no Go files).
+	strippedDir := filepath.Join(base, "myslice")
+	require.NoError(t, os.MkdirAll(strippedDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(strippedDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "cells/c/slices/myslice/slice.yaml", "c", "my-slice")
+	assert.Contains(t, pkg, "myslice", "should use stripped dir when it exists but has no Go files")
+}
+
+func TestResolveSlicePkg_CorecellsFlatLayout(t *testing.T) {
+	// #1560 regression: platform slices live flat under
+	// corecells/<cell>/slices/<slice>/ with slice.yaml and the Go package in the
+	// SAME dir. resolveSlicePkg must derive the path from sm.File, NOT a
+	// hardcoded "cells/" literal (which would resolve to the now-nonexistent
+	// ./cells/accesscore/slices/sessionlogin/ and fail verify slice).
+	dir := t.TempDir()
+	goDir := filepath.Join(dir, "corecells", "accesscore", "slices", "sessionlogin")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "slice.yaml"), []byte("id: sessionlogin"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "service.go"), []byte("package sessionlogin"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "corecells/accesscore/slices/sessionlogin/slice.yaml", "accesscore", "sessionlogin")
+	assert.Equal(t, "./corecells/accesscore/slices/sessionlogin/...", pkg,
+		"platform slice must resolve under corecells/, not the hardcoded cells/ literal")
+	assert.NotContains(t, pkg, "/cells/", "must not fall back to the legacy cells/ layout")
+}
+
+func TestIsZeroMatch(t *testing.T) {
+	assert.True(t, isZeroMatch("testing: warning: no tests to run\nPASS"))
+	assert.True(t, isZeroMatch("?   \tpkg\t[no test files]"))
+	assert.False(t, isZeroMatch("--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isZeroMatch("testing: warning: no tests to run\n--- SKIP: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isZeroMatch(""))
+}
+
+func TestIsSkipOnly(t *testing.T) {
+	assert.True(t, isSkipOnly("=== RUN   TestFoo\n--- SKIP: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly("=== RUN   TestFoo\n--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly(""))
+}
+
+func TestVerifyCell_NoSmoke(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.NewCellID("demo"): {ID: metadatatest.NewCellID("demo"), Verify: metadata.CellVerifyMeta{}},
+		},
+	}, t.TempDir())
+
+	result, err := r.VerifyCell(context.Background(), metadatatest.NewCellID("demo"))
+	require.NoError(t, err)
+	assert.True(t, result.Passed, "no smoke refs = warning but pass")
+	require.Len(t, result.Results, 1, "should have a warning TestResult")
+	assert.Contains(t, result.Results[0].Output, "warning")
+}
+
+func TestRunRefs_AllInvalid(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Slices: map[string]*metadata.SliceMeta{
+			"cc/s": {
+				ID:            "s",
+				BelongsToCell: metadatatest.CellIDCC,
+				Verify: metadata.SliceVerifyMeta{
+					Unit: []string{"bad-ref", "also-bad"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.VerifySlice(context.Background(), "cc/s")
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "all invalid refs should fail")
+	assert.Len(t, result.Errors, 2, "two invalid refs = two errors")
+}
+
+func TestRecordResult_ZeroMatchMessage(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "testing: warning: no tests to run\nPASS", Passed: true, ZeroMatch: true}
+	recordResult(result, "ref", res, "./pkg/...", "SomePattern")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ecErrZero *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ecErrZero))
+	assert.Contains(t, ecErrZero.Message, "check your YAML ref")
+	assertDetailString(t, ecErrZero, "pattern", "SomePattern")
+	assertDetailString(t, ecErrZero, "pkg", "./pkg/...")
+}
+
+func TestRecordResult_SkipOnlyFails(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "--- SKIP: TestFoo (0.00s)\nPASS", Passed: true, SkippedOnly: true}
+	recordResult(result, "ref", res, "./pkg/...", "^TestFoo$")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ecErrSkip *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ecErrSkip))
+	assert.Contains(t, ecErrSkip.Message, "only skipped tests")
+	assertDetailString(t, ecErrSkip, "pattern", "^TestFoo$")
+	assertDetailString(t, ecErrSkip, "pkg", "./pkg/...")
+}
+
+// TestRecordResult_ZeroMatchNoPattern covers the pattern=="" else branch
+// (PR #391 K#08 split: pattern presence determines public message, fixable
+// verify context rides on public WithDetails). Without explicit coverage, recordResult's
+// else arms drop kernel/verify below the 90% gate.
+func TestRecordResult_ZeroMatchNoPattern(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "testing: warning: no tests to run\nPASS", Passed: true, ZeroMatch: true}
+	recordResult(result, "ref", res, "./pkg/...", "")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ec *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ec))
+	assert.Equal(t, "matched no tests", ec.Message)
+	assertDetailString(t, ec, "pkg", "./pkg/...")
+}
+
+// TestRecordResult_SkipOnlyNoPattern covers the SkippedOnly pattern=="" else
+// branch — same coverage motivation as TestRecordResult_ZeroMatchNoPattern.
+func TestRecordResult_SkipOnlyNoPattern(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "--- SKIP: TestFoo (0.00s)\nPASS", Passed: true, SkippedOnly: true}
+	recordResult(result, "ref", res, "./pkg/...", "")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ec *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ec))
+	assert.Equal(t, "matched only skipped tests", ec.Message)
+	assertDetailString(t, ec, "pkg", "./pkg/...")
+}
+
+func assertDetailString(t *testing.T, ec *errcode.Error, key, want string) {
+	t.Helper()
+	attr, ok := ec.FindAttr(key)
+	require.True(t, ok, "missing detail attr %q", key)
+	assert.Equal(t, want, attr.Value())
+}

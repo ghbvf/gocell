@@ -11,7 +11,7 @@ package bare_literal_arg_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
 )
 
 // buildProbeFromBareString demonstrates the A2 violation: passing a

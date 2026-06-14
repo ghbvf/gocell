@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
+	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
+	outboxrt "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // ---------------------------------------------------------------------------

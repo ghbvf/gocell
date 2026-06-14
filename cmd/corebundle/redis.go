@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	idemhttp "github.com/ghbvf/gocell/runtime/http/idempotency"
+	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 type redisHTTPIdempotencyStoreFactory func(*adapterredis.Client, adapterredis.KeyNamespace) (idemhttp.Store, error)

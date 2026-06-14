@@ -15,10 +15,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/testutil/slogcapture"
-	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
-	rout "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
+	rout "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // FP7 #1291 followup (#1309): PG-specific persistence-layer branch tests for the

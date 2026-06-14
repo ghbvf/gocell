@@ -142,7 +142,7 @@ func collectWebhookEnumConsts(p *Pass, typeName string) ([]string, bool) {
 func TestWebhookMetricLabelValuesFrozen01(t *testing.T) {
 	t.Parallel()
 
-	const webhookPkg = PlatformModulePath + "/kernel/webhook"
+	const webhookPkg = PlatformFrameworkModulePath + "/kernel/webhook"
 	got := map[string][]string{}
 	found := map[string]bool{}
 
@@ -418,8 +418,8 @@ func TestWebhookMetricLabelValuesFrozen01_CallsiteGuard(t *testing.T) {
 	t.Parallel()
 
 	const (
-		kernelWebhookPkg  = PlatformModulePath + "/kernel/webhook"
-		runtimeWebhookPkg = PlatformModulePath + "/runtime/webhook"
+		kernelWebhookPkg  = PlatformFrameworkModulePath + "/kernel/webhook"
+		runtimeWebhookPkg = PlatformFrameworkModulePath + "/runtime/webhook"
 	)
 	var allDiags []Diagnostic
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
@@ -503,7 +503,7 @@ func scanSignatureFailureReasonConversions(p *Pass) []Diagnostic {
 			if !ok || tn.Name() != "SignatureFailureReason" || tn.Pkg() == nil {
 				return
 			}
-			if tn.Pkg().Path() != PlatformModulePath+"/kernel/webhook" {
+			if tn.Pkg().Path() != PlatformFrameworkModulePath+"/kernel/webhook" {
 				return
 			}
 			diags = append(diags, Diagnostic{
@@ -526,8 +526,8 @@ func scanSignatureFailureReasonConversions(p *Pass) []Diagnostic {
 func TestWebhookMetricLabelValuesFrozen01_NoReasonConversion(t *testing.T) {
 	t.Parallel()
 	const (
-		kernelWebhookPkg  = PlatformModulePath + "/kernel/webhook"
-		runtimeWebhookPkg = PlatformModulePath + "/runtime/webhook"
+		kernelWebhookPkg  = PlatformFrameworkModulePath + "/kernel/webhook"
+		runtimeWebhookPkg = PlatformFrameworkModulePath + "/runtime/webhook"
 	)
 	var allDiags []Diagnostic
 	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {

@@ -38,7 +38,7 @@ import (
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
@@ -48,7 +48,7 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	outboxImportPath = PlatformModulePath + "/kernel/outbox"
+	outboxImportPath = PlatformFrameworkModulePath + "/kernel/outbox"
 )
 
 // ---------------------------------------------------------------------------

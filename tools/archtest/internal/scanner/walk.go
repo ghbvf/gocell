@@ -73,7 +73,7 @@ func moduleRelDisplay(modRoot, path string) string {
 	if err != nil {
 		return "rel-failed:" + path
 	}
-	return filepath.ToSlash(rel)
+	return StripFrameworkPrefix(filepath.ToSlash(rel))
 }
 
 // skipDirCheck returns filepath.SkipDir if name is in skipDirs, else nil.

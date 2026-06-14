@@ -3,7 +3,7 @@ package testoutbox
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 func MustEmitter(t testing.TB, w outbox.Writer) outbox.Emitter {

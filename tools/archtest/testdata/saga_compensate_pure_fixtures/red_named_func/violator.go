@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
+	ksaga "github.com/ghbvf/gocell/framework/kernel/saga"
 )
 
 // badCompensate is a named function with the CompensateFunc signature.

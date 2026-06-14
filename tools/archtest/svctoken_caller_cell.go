@@ -40,7 +40,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
@@ -51,7 +51,7 @@ const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 // authRuntimeImportPath is the canonical import path for runtime/auth.
 // Shared with no_deleted_auth_symbols.go in the same archtest package; do
 // not duplicate.
-const authRuntimeImportPath = PlatformModulePath + "/runtime/auth"
+const authRuntimeImportPath = PlatformFrameworkModulePath + "/runtime/auth"
 
 // CheckSvctokenCallerCellRequired01 runs SVCTOKEN-CALLER-CELL-REQUIRED-01 over
 // the running module and returns its diagnostics: every call to

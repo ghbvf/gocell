@@ -21,7 +21,7 @@ package auditquerytenantparamfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // FakeGoodQueryStore is the sanctioned audit-Query shape: ctx, then the typed

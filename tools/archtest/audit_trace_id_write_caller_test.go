@@ -160,7 +160,7 @@
 // # Handled — NOT a blind spot (F10: corrects a prior misclassification)
 //
 //   - Dot-import of the ledger package
-//     (import . "github.com/ghbvf/gocell/runtime/audit/ledger"): a bare "Entry"
+//     (import . "github.com/ghbvf/gocell/framework/runtime/audit/ledger"): a bare "Entry"
 //     ident is unresolvable by name-based ResolvePackageRef, but this scanner
 //     never relies on name resolution — the composite-literal check reads
 //     p.TypesInfo.Types[lit].Type and the assignment check reads
@@ -184,7 +184,7 @@ import (
 )
 
 const (
-	ledgerPkgPath   = PlatformModulePath + "/runtime/audit/ledger"
+	ledgerPkgPath   = PlatformFrameworkModulePath + "/runtime/audit/ledger"
 	ledgerEntryName = "Entry"
 )
 

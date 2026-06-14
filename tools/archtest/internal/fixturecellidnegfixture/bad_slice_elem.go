@@ -2,7 +2,7 @@
 
 package fixturecellidnegfixture
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import "github.com/ghbvf/gocell/framework/kernel/metadata"
 
 // BadSliceElem uses bare literals as elements of JourneyMeta.Cells —
 // must be flagged by A1 (slice element position).

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 const testTenant tenant.TenantID = "11111111-1111-1111-1111-111111111111"

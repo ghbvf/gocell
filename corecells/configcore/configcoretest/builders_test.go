@@ -12,12 +12,12 @@ import (
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/corecells/configcore/internal/events"
 	"github.com/ghbvf/gocell/corecells/configcore/slices/configwrite"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // testFixedTime is a fixed point-in-time used for clock-sensitive assertions.

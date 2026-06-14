@@ -14,10 +14,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/logutil"
-	"github.com/ghbvf/gocell/runtime/auth"
-	rtws "github.com/ghbvf/gocell/runtime/websocket"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/logutil"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	rtws "github.com/ghbvf/gocell/framework/runtime/websocket"
 )
 
 // upgradeFailedBody is the public response body for any non-401 upgrade

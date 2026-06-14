@@ -6,7 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
+	outboxrt "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // ---------------------------------------------------------------------------

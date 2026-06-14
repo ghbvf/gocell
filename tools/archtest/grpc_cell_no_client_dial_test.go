@@ -130,7 +130,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 // ruleGRPCCellNoClientDial is the archtest rule identifier.
@@ -287,14 +287,14 @@ func TestGRPCCellNoClientDial01_SyntheticDetector(t *testing.T) {
 		{grpcRuntimeLibPath, "ServiceDesc"},
 		{grpcRuntimeLibPath, "ServerStream"},
 		// generated SERVER surface — all suffixed "Server" → legitimate registration.
-		{genPkg, "DeviceCommandServiceServer"},                        // server interface
-		{genPkg, "RegisterDeviceCommandServiceServer"},                // server registrar
-		{genPkg, "UnimplementedDeviceCommandServiceServer"},           // forward-compat base
-		{genPkg, "UnsafeDeviceCommandServiceServer"},                  // opt-out marker
-		{genPkg, "DeviceCommandService_WatchCommandsServer"},          // stream-server alias
-		{genPkg, "IssueCommandRequest"},                               // a message type (neither Client nor Server)
-		{PlatformModulePath + "/runtime/grpc", "NewServiceRegistrar"}, // runtime/grpc, not the lib
-		{PlatformModulePath + "/corecells/accesscore", "NewClient"},   // a cell's own *Client, not lib/generated
+		{genPkg, "DeviceCommandServiceServer"},                                 // server interface
+		{genPkg, "RegisterDeviceCommandServiceServer"},                         // server registrar
+		{genPkg, "UnimplementedDeviceCommandServiceServer"},                    // forward-compat base
+		{genPkg, "UnsafeDeviceCommandServiceServer"},                           // opt-out marker
+		{genPkg, "DeviceCommandService_WatchCommandsServer"},                   // stream-server alias
+		{genPkg, "IssueCommandRequest"},                                        // a message type (neither Client nor Server)
+		{PlatformFrameworkModulePath + "/runtime/grpc", "NewServiceRegistrar"}, // runtime/grpc, not the lib
+		{PlatformModulePath + "/corecells/accesscore", "NewClient"},            // a cell's own *Client, not lib/generated
 		// #1961 F3 negative: a VENDORED generated path — the marker appears
 		// mid-string but NOT as a prefix, so HasPrefix (not Contains) must reject it.
 		{"example.com/vendor/" + PlatformModulePath + "/generated/contracts/grpc/device/command/v1", "NewDeviceCommandServiceClient"},

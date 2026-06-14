@@ -3,7 +3,7 @@ package rabbitmq
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/observability/poolstats"
+	"github.com/ghbvf/gocell/framework/kernel/observability/poolstats"
 )
 
 func TestConnection_ChannelStatter_NilConn_ReturnsZeroSnapshot(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/kernel/webhook"
 )
 
 // newTestService builds a Service with a discard logger so unit tests stay quiet.

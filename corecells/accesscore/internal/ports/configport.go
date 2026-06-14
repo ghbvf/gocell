@@ -9,7 +9,7 @@ package ports
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // ConfigEntry holds the fields returned by the internal config GET endpoint

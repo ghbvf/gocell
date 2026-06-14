@@ -22,7 +22,7 @@
 // All three shapes are GREEN (empty diag.golden).
 package struct_field_unexported_ok
 
-import "github.com/ghbvf/gocell/kernel/clock"
+import "github.com/ghbvf/gocell/framework/kernel/clock"
 
 // (a) unexported option-pattern accumulator: BOTH struct AND field unexported.
 type fooConfig struct {

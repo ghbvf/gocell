@@ -26,7 +26,7 @@ package webhooksourcecryptofixture
 import (
 	"context"
 
-	kwh "github.com/ghbvf/gocell/kernel/webhook"
+	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
 )
 
 // badEncrypt calls Source.Encrypt outside the sanctioned repo — a caller here

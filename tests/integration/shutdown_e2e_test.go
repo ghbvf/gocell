@@ -37,10 +37,10 @@ import (
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	"github.com/ghbvf/gocell/tests/testutil/rabbitmqctr"
 )
 

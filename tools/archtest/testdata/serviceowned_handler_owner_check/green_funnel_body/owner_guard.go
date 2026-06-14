@@ -7,7 +7,7 @@
 // B2/B2b must stay silent.
 package green_funnel_body
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // ownershipMismatch is the canonical helper — body is the operand-identity-
 // bound canonical AST tree expected by B2b.

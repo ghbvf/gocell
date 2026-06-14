@@ -3,8 +3,8 @@
 package fixturecellidnegfixture
 
 import (
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/metadata/metadatatest"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
 
 // BadField uses a sanctioned map key (metadatatest constant) but a bare

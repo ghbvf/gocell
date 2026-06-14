@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/cmd/corebundle
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/ghbvf/gocell/tools v0.0.0
@@ -46,7 +45,9 @@ require (
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0 // indirect
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -116,12 +117,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Local monorepo replace: under GOWORK=on the go.work workspace overrides these
-// and resolves the unpublished sibling modules to repo-relative dirs; under
-// GOWORK=off (the release-consistency build in hack/verify-workspace.sh) these
-// replaces make the unpublished modules resolve locally instead of being fetched.
-replace github.com/ghbvf/gocell => ../../
-
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 
 replace github.com/ghbvf/gocell/tools => ../../tools
@@ -148,3 +143,7 @@ replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
 
 replace github.com/ghbvf/gocell/generated => ../../generated
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

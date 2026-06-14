@@ -59,7 +59,7 @@ var expectedSubInterfaceMethods = map[string][]string{
 func TestCellIfaceISP01_CellComposesFourSubInterfaces(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	cellIface := loadInterfaceType(t, root, "kernel/cell", "Cell")
+	cellIface := loadInterfaceType(t, root, "framework/kernel/cell", "Cell")
 	if cellIface == nil {
 		t.Fatal("CELL-IFACE-ISP-COMPOSITE-01: Cell interface not found in kernel/cell/interfaces.go")
 	}
@@ -95,7 +95,7 @@ func TestCellIfaceISP02_SubInterfaceMethodSets(t *testing.T) {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			iface := loadInterfaceType(t, root, "kernel/cell", name)
+			iface := loadInterfaceType(t, root, "framework/kernel/cell", name)
 			if iface == nil {
 				t.Fatalf("CELL-IFACE-ISP-METHODSETS-01: sub-interface %s not found in kernel/cell/interfaces.go", name)
 			}
@@ -119,7 +119,7 @@ func TestCellIfaceISP02_SubInterfaceMethodSets(t *testing.T) {
 func TestCellIfaceISP03_BaseCellFourSegmentCheck(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "kernel", "cell", "base.go")
+	path := filepath.Join(root, "framework", "kernel", "cell", "base.go")
 	fset := token.NewFileSet()
 	f, perr := parser.ParseFile(fset, path, nil, 0)
 	if perr != nil {
@@ -328,7 +328,7 @@ func TestCellIfaceISP00_MethodSetsHashGuard(t *testing.T) {
 	// Build the (sub-interface → method-set) map by reading the actual AST.
 	liveMethodSets := make(map[string][]string, len(expectedSubInterfaces))
 	for _, name := range expectedSubInterfaces {
-		iface := loadInterfaceType(t, root, "kernel/cell", name)
+		iface := loadInterfaceType(t, root, "framework/kernel/cell", name)
 		if iface == nil {
 			t.Fatalf("CELL-IFACE-ISP-METHODSETS-01: sub-interface %s not found in kernel/cell/interfaces.go — "+
 				"cannot compute source-driven hash", name)

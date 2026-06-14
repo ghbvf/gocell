@@ -24,14 +24,14 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	grpcadapter "github.com/ghbvf/gocell/adapters/grpc"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
-	"github.com/ghbvf/gocell/runtime/auth"
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
-	"github.com/ghbvf/gocell/runtime/grpc/interceptor"
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 const (

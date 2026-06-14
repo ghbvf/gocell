@@ -150,7 +150,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 )
 
 // frozenDecisionField is the expected frozen shape of one authz.Decision field.
@@ -507,7 +507,7 @@ func authzPkgDir(t *testing.T) string {
 	// thisFile is tools/archtest/authz_decision_sealed_test.go
 	// repo root is two levels up
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	return filepath.Join(repoRoot, "pkg", "authz")
+	return filepath.Join(repoRoot, "framework", "pkg", "authz")
 }
 
 // authzParseNonTestFiles parses all non-test Go files in dir and returns
@@ -778,7 +778,7 @@ func TestAuthzFieldMaskFieldsFrozen(t *testing.T) {
 // --- AUTHZ-DECISION-ALLOW-DENY-CALLER-01 (Hard downstream caller-allowlist) ---
 
 // authzPkgPath is the pkg/authz import path, anchored to PlatformModulePath.
-const authzPkgPath = PlatformModulePath + "/pkg/authz"
+const authzPkgPath = PlatformFrameworkModulePath + "/pkg/authz"
 
 // allowDenyCallerAllowlist is the set of module-relative production files allowed
 // to reference authz.Allow / authz.Deny. PR-7 (#1345): the sole ABAC PDP engine

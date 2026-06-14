@@ -3,7 +3,7 @@ package postgres
 import (
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/pgquery"
+	"github.com/ghbvf/gocell/framework/pkg/pgquery"
 )
 
 // lastAdminTriggerSentinel is the message prefix emitted by the

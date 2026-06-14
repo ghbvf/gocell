@@ -34,7 +34,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	kerneldepgraph "github.com/ghbvf/gocell/framework/kernel/depgraph"
 )
 
 const ruleKernelInternalDAG = "KERNEL-INTERNAL-DAG-01"
@@ -141,7 +141,7 @@ type kernelEdgeViolation struct {
 // path segment after "kernel/" — or "" if pkgID is not under <module>/kernel/.
 // modulePrefix must include the trailing slash (e.g. "github.com/ghbvf/gocell/").
 func kernelOwnerOf(modulePrefix, pkgID string) string {
-	const kernelSeg = "kernel/"
+	const kernelSeg = "framework/kernel/"
 	want := modulePrefix + kernelSeg
 	if !strings.HasPrefix(pkgID, want) {
 		return ""
@@ -226,11 +226,11 @@ func TestKernelInternalDAG(t *testing.T) {
 		cases := []struct {
 			id, want string
 		}{
-			{module + "/kernel/cell", "cell"},
-			{module + "/kernel/cell/celltest", "cell"},
-			{module + "/kernel/cell/levelrank", "cell"}, // historical path; absorbed into cellvocab
-			{module + "/kernel/outbox/outboxtest", "outbox"},
-			{module + "/runtime/auth", ""},
+			{module + "/framework/kernel/cell", "cell"},
+			{module + "/framework/kernel/cell/celltest", "cell"},
+			{module + "/framework/kernel/cell/levelrank", "cell"}, // historical path; absorbed into cellvocab
+			{module + "/framework/kernel/outbox/outboxtest", "outbox"},
+			{module + "/framework/runtime/auth", ""},
 			{module + "/kernel", ""},
 			{"", ""},
 		}
@@ -242,9 +242,13 @@ func TestKernelInternalDAG(t *testing.T) {
 
 	// Sub-test 2: Classifier.Layer labels every owner under kernel/ as LayerKernel.
 	t.Run("owners_classified_as_kernel_layer", func(t *testing.T) {
-		cls := kerneldepgraph.NewClassifier([]string{module})
+		// After #1565 framework module split, kernel packages live under the
+		// github.com/ghbvf/gocell/framework module. The classifier must include
+		// the framework module path so that the first segment after stripping the
+		// module prefix ("kernel/") maps to LayerKernel.
+		cls := kerneldepgraph.NewClassifier([]string{module, module + "/framework"})
 		for owner := range owners {
-			pkg := module + "/kernel/" + owner
+			pkg := module + "/framework/kernel/" + owner
 			assert.Equal(t, kerneldepgraph.LayerKernel,
 				cls.Layer(pkg),
 				"kernel/%s must classify as LayerKernel", owner)

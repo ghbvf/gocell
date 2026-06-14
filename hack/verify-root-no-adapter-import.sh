@@ -2,10 +2,11 @@
 # verify-bucket: inv
 # ROOT-FRAMEWORK-TESTS-NO-ADAPTER-IMPORT-01
 #
-# Root-owned framework/test surfaces (kernel/runtime/pkg/tests) must not
-# directly import top-level adapters, because adapters will become
-# satellite/per-adapter modules and the root go.mod must remain replace-free.
-# Adapter-real tests belong in adapter packages or consumer satellite modules.
+# Framework/test surfaces (framework/{kernel,runtime,pkg} + tests) must not
+# directly import top-level adapters, because adapters are satellite/per-adapter
+# modules and the framework module's go.mod must remain replace-free (the #1565
+# GOWORK=off closure). Adapter-real tests belong in adapter packages or consumer
+# satellite modules. (#1565: kernel/runtime/pkg moved under framework/.)
 #
 # Discovered automatically by make verify via hack/verify-*.sh glob
 # (governance.yml). Keep this filename shape so the gate stays PR-time.
@@ -24,7 +25,7 @@ while IFS= read -r -d '' file; do
         :
     fi
 done < <(
-    find kernel runtime pkg tests \
+    find framework/kernel framework/runtime framework/pkg tests \
         -path tests/integration -prune -o \
         -path tests/testutil/pgshare -prune -o \
         -path '*/testdata/*' -prune -o \

@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	placeordergen "github.com/ghbvf/gocell/generated/contracts/http/orderfulfillment/placeorder/v1"
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Compile-time assertion: Handler implements the generated Service interface.

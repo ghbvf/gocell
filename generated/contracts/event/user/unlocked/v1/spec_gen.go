@@ -4,8 +4,8 @@
 package unlocked
 
 import (
-	"github.com/ghbvf/gocell/kernel/cellvocab"
-	"github.com/ghbvf/gocell/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
 )
 
 // spec is the ContractSpec for event.user.unlocked.v1.

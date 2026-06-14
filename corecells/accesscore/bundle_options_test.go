@@ -9,8 +9,8 @@ import (
 
 	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
 	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // TestWithMemBundle_WiresFourPrimitives verifies that WithMemBundle copies the

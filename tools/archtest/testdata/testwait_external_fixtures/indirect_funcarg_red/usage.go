@@ -9,7 +9,7 @@ package indirect_funcarg_red
 import (
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testwait"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // externalFn is the signature of testwait.External.

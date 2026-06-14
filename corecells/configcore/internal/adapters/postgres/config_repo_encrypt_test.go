@@ -28,10 +28,10 @@ import (
 
 	configcrypto "github.com/ghbvf/gocell/corecells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/corecells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/crypto"
 )
 
 // ---------------------------------------------------------------------------

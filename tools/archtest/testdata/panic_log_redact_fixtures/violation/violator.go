@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // compliant is the sanctioned form — must NOT be flagged.

@@ -57,7 +57,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
@@ -81,17 +81,17 @@ const (
 // both import-path matching (errcodeImportNames) and go/types package-path
 // resolution in message/code gating helpers (messageGatedCallees,
 // codeGatedCallees).
-const errcodeImportPath = PlatformModulePath + "/pkg/errcode"
+const errcodeImportPath = PlatformFrameworkModulePath + "/pkg/errcode"
 
 const (
-	httputilPackagePath  = PlatformModulePath + "/pkg/httputil"
-	ctxcancelPackagePath = PlatformModulePath + "/pkg/ctxcancel"
+	httputilPackagePath  = PlatformFrameworkModulePath + "/pkg/httputil"
+	ctxcancelPackagePath = PlatformFrameworkModulePath + "/pkg/ctxcancel"
 )
 
 // errcodeKernelClockPkgPath is the import path of kernel/clock, used by
 // nillableParamKind to exempt clock.Clock parameters from IsNilInterface
 // enforcement (governed by its own MustHaveClock funnel instead).
-const errcodeKernelClockPkgPath = PlatformModulePath + "/kernel/clock"
+const errcodeKernelClockPkgPath = PlatformFrameworkModulePath + "/kernel/clock"
 
 // errcodeRegisterPrefixHint is the fix hint appended to unregistered-prefix
 // diagnostics.
@@ -167,8 +167,8 @@ type carveOut struct{ rel, fn string }
 // To add or remove a carve-out, update BOTH this map AND the ADR registry
 // table in the same PR. Attempting either in isolation will fail CI.
 var errcodeKindLiteralCarveOuts = map[carveOut]struct{}{
-	{rel: "pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {},
-	{rel: "pkg/httputil/response.go", fn: "WritePublic"}:   {},
+	{rel: "framework/pkg/ctxcancel/ctxcancel.go", fn: "WrapOrInfra"}: {},
+	{rel: "framework/pkg/httputil/response.go", fn: "WritePublic"}:   {},
 }
 
 // ─── error_first constants ────────────────────────────────────────────────────
@@ -176,25 +176,25 @@ var errcodeKindLiteralCarveOuts = map[carveOut]struct{}{
 // errorFirstEnforcedFiles are the relative paths of files whose declarations
 // must satisfy ERROR-FIRST-API-01.
 var errorFirstEnforcedFiles = []string{
-	"kernel/wrapper/handler.go",
-	"kernel/wrapper/consumer.go",
-	"kernel/contractspec/spec.go",
-	"kernel/wrapper/lifecycle.go",
-	"kernel/auth/auth_plan.go",
-	"kernel/outbox/entry_id.go",
-	"kernel/outbox/envelope.go",
-	"kernel/idempotency/inmem.go",
-	"kernel/worker/worker.go",
-	"runtime/eventrouter/router.go",
-	"runtime/eventrouter/contract_tracing_subscriber.go",
-	"runtime/auth/route.go",
-	"runtime/worker/worker.go",
-	"runtime/distlock/locker.go",
-	"runtime/auth/refresh/memstore/store.go",
-	"runtime/http/middleware/circuit_breaker.go",
-	"runtime/http/health/health.go",
-	"runtime/http/router/router.go",
-	"kernel/persistence/tx.go",
+	"framework/kernel/wrapper/handler.go",
+	"framework/kernel/wrapper/consumer.go",
+	"framework/kernel/contractspec/spec.go",
+	"framework/kernel/wrapper/lifecycle.go",
+	"framework/kernel/auth/auth_plan.go",
+	"framework/kernel/outbox/entry_id.go",
+	"framework/kernel/outbox/envelope.go",
+	"framework/kernel/idempotency/inmem.go",
+	"framework/kernel/worker/worker.go",
+	"framework/runtime/eventrouter/router.go",
+	"framework/runtime/eventrouter/contract_tracing_subscriber.go",
+	"framework/runtime/auth/route.go",
+	"framework/runtime/worker/worker.go",
+	"framework/runtime/distlock/locker.go",
+	"framework/runtime/auth/refresh/memstore/store.go",
+	"framework/runtime/http/middleware/circuit_breaker.go",
+	"framework/runtime/http/health/health.go",
+	"framework/runtime/http/router/router.go",
+	"framework/kernel/persistence/tx.go",
 	"corecells/accesscore/slices/sessionlogin/service.go",
 	"corecells/accesscore/slices/sessionrefresh/service.go",
 	"corecells/accesscore/slices/sessionlogout/service.go",
@@ -205,10 +205,10 @@ var errorFirstEnforcedFiles = []string{
 // from ERROR-FIRST-API-01.
 // Key format: "<rel-path>::<funcName>".
 var errorFirstPanicWhitelist = map[string]struct{}{
-	"kernel/wrapper/lifecycle.go::recoverAndFinish":                          {},
-	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": {},
-	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback":        {},
-	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback":         {},
+	"framework/kernel/wrapper/lifecycle.go::recoverAndFinish":                          {},
+	"framework/runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": {},
+	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback":                  {},
+	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback":                   {},
 }
 
 // ─── ERRCODE-KIND-LITERAL-01 ──────────────────────────────────────────────────
@@ -1179,7 +1179,7 @@ func checkPublicDetailInvariants(t *testing.T) []Diagnostic {
 	diags = append(diags, checkPublicDetailValueField(dt, detailsRel)...)
 
 	root := findModuleRoot(t)
-	detailsPath := filepath.Join(root, "pkg", "errcode", "details.go")
+	detailsPath := filepath.Join(root, "framework", "pkg", "errcode", "details.go")
 	if detailsFile := errcodeParseGoFile(t, detailsPath); detailsFile != nil {
 		errcodeAssertExactStringSet(t, &diags, "DETAILS-SEALED-FIELD-FROZEN-01 publicValue implementers",
 			errcodeCollectPublicValueImplementers(detailsFile),

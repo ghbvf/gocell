@@ -30,7 +30,7 @@ const commandTopicNamespacePrefix = "command."
 // commandEmitFunnelPkgPath is the SOLE sanctioned caller package for constructing
 // a command-namespace entry: runtime/command (EmitAsync's body calls kout.NewEntry
 // there).
-const commandEmitFunnelPkgPath = PlatformModulePath + "/runtime/command"
+const commandEmitFunnelPkgPath = PlatformFrameworkModulePath + "/runtime/command"
 
 // TestCommandAsyncEmitFunnel01 asserts that every production kout.Emit / kout.NewEntry
 // callsite whose topic argument const-evaluates to a `command.*` string is declared
@@ -178,7 +178,7 @@ func commandTopicOfEmitOrNewEntry(p *Pass, call *ast.CallExpr) (topic string, ok
 func observedCommandEmitFunnelPresent(t *testing.T) bool {
 	t.Helper()
 	var found bool
-	_ = Run(t, Typed(TypedOpts{}, []string{"./runtime/command/..."}), func(p *Pass) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/runtime/command/..."}), func(p *Pass) []Diagnostic {
 		if !p.Typed() || p.Pkg.Path() != commandEmitFunnelPkgPath {
 			return nil
 		}

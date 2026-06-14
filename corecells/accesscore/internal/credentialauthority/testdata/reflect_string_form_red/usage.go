@@ -33,7 +33,7 @@ import (
 	"reflect"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // const-ident forms of the protected names.

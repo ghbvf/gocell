@@ -7,8 +7,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // TestSafeStringAttr_RedactsSensitiveSubstrings asserts SPAN-SETATTR-REDACT-01:

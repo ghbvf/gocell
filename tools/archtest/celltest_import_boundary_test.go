@@ -120,9 +120,9 @@ func TestCelltestImportBoundary_SubRules(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	const modPath = "example.test/extmod" // NON-github → proves module-path-agnostic
-	celltestImport := modPath + "/kernel/cell/celltest"
-	celltestPkgDir := filepath.Join(root, "kernel", "cell", "celltest")
-	celltestParentDir := filepath.Join(root, "kernel", "cell")
+	celltestImport := modPath + "/framework/kernel/cell/celltest"
+	celltestPkgDir := filepath.Join(root, "framework", "kernel", "cell", "celltest")
+	celltestParentDir := filepath.Join(root, "framework", "kernel", "cell")
 
 	// write creates root/<rel> with a blank import of celltest on line 2 and
 	// returns the absolute path.
@@ -135,13 +135,13 @@ func TestCelltestImportBoundary_SubRules(t *testing.T) {
 	}
 
 	files := []string{
-		write("cells/foo/handler.go"),             // A RED (non-test, outside celltest dir)
-		write("cells/foo/handler_test.go"),        // A GREEN (_test.go)
-		write("kernel/sub/thing_test.go"),         // B RED (kernel _test.go)
-		write("kernel/cell/celltest/celltest.go"), // A & B GREEN (celltest's own source)
-		write("kernel/cell/cell_test.go"),         // B GREEN (kernel/cell parent _test.go carve-out)
-		write("examples/app/app.go"),              // A RED + C RED (examples non-test)
-		write("examples/app/app_test.go"),         // C GREEN (_test.go)
+		write("cells/foo/handler.go"),                       // A RED (non-test, outside celltest dir)
+		write("cells/foo/handler_test.go"),                  // A GREEN (_test.go)
+		write("framework/kernel/sub/thing_test.go"),         // B RED (kernel _test.go)
+		write("framework/kernel/cell/celltest/celltest.go"), // A & B GREEN (celltest's own source)
+		write("framework/kernel/cell/cell_test.go"),         // B GREEN (kernel/cell parent _test.go carve-out)
+		write("examples/app/app.go"),                        // A RED + C RED (examples non-test)
+		write("examples/app/app_test.go"),                   // C GREEN (_test.go)
 	}
 
 	// relsOf returns the sorted module-relative Rel set of diags, asserting each
@@ -162,7 +162,7 @@ func TestCelltestImportBoundary_SubRules(t *testing.T) {
 		"CELLTEST-A flags every non-_test.go file (outside celltest's own dir) importing celltest")
 
 	diagsB := celltestSubB(t, root, files, celltestPkgDir, celltestParentDir, celltestImport)
-	assert.Equal(t, []string{"kernel/sub/thing_test.go"}, relsOf(t, diagsB),
+	assert.Equal(t, []string{"framework/kernel/sub/thing_test.go"}, relsOf(t, diagsB),
 		"CELLTEST-B flags kernel/ files (incl _test.go) except celltest's own dir and the kernel/cell parent _test.go")
 
 	diagsC := celltestSubC(t, root, files, celltestImport)

@@ -1,6 +1,6 @@
 package mqtt
 
-import "github.com/ghbvf/gocell/kernel/healthz"
+import "github.com/ghbvf/gocell/framework/kernel/healthz"
 
 // ProbeReady is the readiness probe name for the MQTT connection. It is the
 // single declaration site for "mqtt_ready" (PROBENAME-SEALED-FUNNEL-01 typed

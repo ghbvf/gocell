@@ -60,7 +60,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/kernel/reconcile"
 	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
@@ -573,7 +573,7 @@ func scanReconcileLoopConstruction(p *Pass, reconcilePkgPath string, allowedPkgP
 // reconcile.Loop: the home package only (Builder is the sole public constructor;
 // kernel/command uses the Builder and has no Loop literals).
 func reconcileBuilderFunnelAllowed(modPath string) (reconcilePkgPath string, allowed map[string]bool) {
-	reconcilePkgPath = modPath + "/kernel/reconcile"
+	reconcilePkgPath = modPath + "/framework/kernel/reconcile"
 	return reconcilePkgPath, map[string]bool{
 		reconcilePkgPath: true,
 	}
@@ -848,7 +848,7 @@ func TestReconcileFencedWriteFunnel01_Callsites(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err)
-	reconcilePkg := modPath + "/kernel/reconcile"
+	reconcilePkg := modPath + "/framework/kernel/reconcile"
 	allowedFiles := map[string]bool{
 		"kernel/reconcile/loop.go":   true, // sole mint + inject site (process / runLeaseTerm)
 		"kernel/reconcile/fenced.go": true, // the funnel funcs' own definitions
@@ -899,7 +899,7 @@ func TestReconcileFencedWriteFunnel01_ApplyFencedCaller(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err)
-	reconcilePkg := modPath + "/kernel/reconcile"
+	reconcilePkg := modPath + "/framework/kernel/reconcile"
 	allowed := map[string]bool{
 		"kernel/reconcile/fenced.go":                    true, // FencedWriter.Write — the sanctioned delegate
 		"kernel/reconcile/reconciletest/conformance.go": true, // RunFencingConformance real-failure-injection
@@ -991,11 +991,11 @@ func TestReconcileLeaderImplFunnel01(t *testing.T) {
 	root := findModuleRoot(t)
 	modPath, err := moduleImportPath(root)
 	require.NoError(t, err)
-	reconcilePkg := modPath + "/kernel/reconcile"
+	reconcilePkg := modPath + "/framework/kernel/reconcile"
 	allowed := map[string]bool{
-		modPath + "/adapters/redis":                 true,
-		modPath + "/adapters/postgres":              true,
-		modPath + "/kernel/reconcile/reconciletest": true, // FakeLeaderElector
+		modPath + "/adapters/redis":                           true,
+		modPath + "/adapters/postgres":                        true,
+		modPath + "/framework/kernel/reconcile/reconciletest": true, // FakeLeaderElector
 	}
 
 	var iface *types.Interface

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // buildTestMetrics is a test helper that builds a TransitMetrics using an

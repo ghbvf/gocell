@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // TextPrinter renders results in the human-readable format also used by the

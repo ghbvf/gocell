@@ -6,9 +6,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/redaction"
-	"github.com/ghbvf/gocell/pkg/secutil"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
+	"github.com/ghbvf/gocell/framework/pkg/secutil"
 )
 
 // validBrokerSchemes is the closed set of URL schemes accepted by autopaho.

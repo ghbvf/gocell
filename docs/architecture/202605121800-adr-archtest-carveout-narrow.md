@@ -61,8 +61,8 @@ archtest `ERRCODE-CARVEOUT-ADR-CONSISTENCY-01` 解析此表（`File` 与 `Functi
 <!-- CARVEOUT-REGISTRY:BEGIN -->
 | Rule | File | Function | Reason |
 |---|---|---|---|
-| ERRCODE-KIND-LITERAL-01 | pkg/ctxcancel/ctxcancel.go | WrapOrInfra | bridge helper: caller-supplied fallbackMsg must be spliced into Message via struct literal, else every call site violates MESSAGE-CONST-LITERAL-01 |
-| ERRCODE-KIND-LITERAL-01 | pkg/httputil/response.go | WritePublic | HTTP serialization boundary: framework-selected message constructs the response error via struct literal; call sites stay under the const-literal constraint |
+| ERRCODE-KIND-LITERAL-01 | framework/pkg/ctxcancel/ctxcancel.go | WrapOrInfra | bridge helper: caller-supplied fallbackMsg must be spliced into Message via struct literal, else every call site violates MESSAGE-CONST-LITERAL-01 |
+| ERRCODE-KIND-LITERAL-01 | framework/pkg/httputil/response.go | WritePublic | HTTP serialization boundary: framework-selected message constructs the response error via struct literal; call sites stay under the const-literal constraint |
 <!-- CARVEOUT-REGISTRY:END -->
 
 ## Escalation

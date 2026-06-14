@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/verify"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/kernel/verify"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // VerifyPrinter renders a kernel/verify.VerifyResult to a writer. Verify

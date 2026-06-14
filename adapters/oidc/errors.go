@@ -1,6 +1,6 @@
 package oidc
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import "github.com/ghbvf/gocell/framework/pkg/errcode"
 
 // OIDC adapter error codes.
 //

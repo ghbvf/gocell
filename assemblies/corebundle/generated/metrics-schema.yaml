@@ -10,7 +10,7 @@ metrics:
       help: Total number of account auto-lockout transitions, by reason (threshold_locked / lazy_unlocked).
       labels:
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_pdp_decision_duration_seconds
       fqName: gocell_auth_pdp_decision_duration_seconds
       namespace: gocell
@@ -31,7 +31,7 @@ metrics:
         - ".5"
         - "1"
         - "2.5"
-      file: runtime/auth/pdp_metrics.go
+      file: framework/runtime/auth/pdp_metrics.go
     - name: auth_pdp_decision_total
       fqName: gocell_auth_pdp_decision_total
       namespace: gocell
@@ -40,7 +40,7 @@ metrics:
       labels:
         - action
         - decision
-      file: runtime/auth/pdp_metrics.go
+      file: framework/runtime/auth/pdp_metrics.go
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -60,7 +60,7 @@ metrics:
         - "1"
         - "2.5"
         - "5"
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_refresh_gc_removed_total
       fqName: gocell_auth_refresh_gc_removed_total
       namespace: gocell
@@ -68,7 +68,7 @@ metrics:
       help: Total number of refresh-token rows removed by GC.
       labels:
         - result
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_refresh_gc_runs_total
       fqName: gocell_auth_refresh_gc_runs_total
       namespace: gocell
@@ -76,7 +76,7 @@ metrics:
       help: Total number of refresh-token GC runs by result.
       labels:
         - result
-      file: runtime/auth/refresh/metrics.go
+      file: framework/runtime/auth/refresh/metrics.go
     - name: auth_service_token_verify_total
       fqName: gocell_auth_service_token_verify_total
       namespace: gocell
@@ -85,7 +85,7 @@ metrics:
       labels:
         - result
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_token_verify_duration_seconds
       fqName: gocell_auth_token_verify_duration_seconds
       namespace: gocell
@@ -102,7 +102,7 @@ metrics:
         - ".025"
         - ".05"
         - ".1"
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: auth_token_verify_total
       fqName: gocell_auth_token_verify_total
       namespace: gocell
@@ -111,7 +111,7 @@ metrics:
       labels:
         - result
         - reason
-      file: runtime/auth/metrics.go
+      file: framework/runtime/auth/metrics.go
     - name: bootstrap_shutdown_phase_duration_seconds
       fqName: gocell_bootstrap_shutdown_phase_duration_seconds
       namespace: gocell
@@ -132,7 +132,7 @@ metrics:
         - "10"
         - "30"
         - "60"
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_phase_entries_total
       fqName: gocell_bootstrap_shutdown_phase_entries_total
       namespace: gocell
@@ -140,7 +140,7 @@ metrics:
       help: Total entries into each shutdown phase.
       labels:
         - phase
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: bootstrap_shutdown_total
       fqName: gocell_bootstrap_shutdown_total
       namespace: gocell
@@ -148,7 +148,7 @@ metrics:
       help: Total completed shutdowns by outcome (success|timeout|teardown_error|signal_error).
       labels:
         - outcome
-      file: runtime/observability/metrics/shutdown.go
+      file: framework/runtime/observability/metrics/shutdown.go
     - name: cell_hook_duration_seconds
       fqName: gocell_cell_hook_duration_seconds
       namespace: gocell
@@ -188,7 +188,7 @@ metrics:
       help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
       labels:
         - transport_mode
-      file: runtime/transport/metrics.go
+      file: framework/runtime/transport/metrics.go
     - name: config_event_process_total
       fqName: gocell_config_event_process_total
       namespace: gocell
@@ -216,7 +216,7 @@ metrics:
       type: counter
       help: Number of config values read that are encrypted with a non-current key version.
       labels: []
-      file: runtime/observability/metrics/config_stale_cipher.go
+      file: framework/runtime/observability/metrics/config_stale_cipher.go
     - name: event_router_ready_wait_seconds
       fqName: gocell_event_router_ready_wait_seconds
       namespace: gocell
@@ -233,7 +233,7 @@ metrics:
         - "1"
         - "5"
         - "30"
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_runtime_errors_total
       fqName: gocell_event_router_runtime_errors_total
       namespace: gocell
@@ -243,7 +243,7 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_setup_errors_total
       fqName: gocell_event_router_setup_errors_total
       namespace: gocell
@@ -253,7 +253,7 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: event_router_subscriptions_active
       fqName: gocell_event_router_subscriptions_active
       namespace: gocell
@@ -261,7 +261,7 @@ metrics:
       help: Number of currently active event router subscriptions.
       labels:
         - cell
-      file: runtime/observability/metrics/event.go
+      file: framework/runtime/observability/metrics/event.go
     - name: eventbus_cache_tombstone_evicted_total
       fqName: gocell_eventbus_cache_tombstone_evicted_total
       namespace: gocell
@@ -270,7 +270,7 @@ metrics:
       labels:
         - cell
         - slice
-      file: runtime/observability/metrics/eventbus_cache.go
+      file: framework/runtime/observability/metrics/eventbus_cache.go
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
@@ -278,7 +278,7 @@ metrics:
       help: Total number of hook events dropped by the async hook dispatcher, partitioned by reason.
       labels:
         - reason
-      file: kernel/assembly/hook_dispatcher.go
+      file: framework/kernel/assembly/hook_dispatcher.go
     - name: http_request_body_limit_rejections_total
       fqName: gocell_http_request_body_limit_rejections_total
       namespace: gocell
@@ -287,7 +287,7 @@ metrics:
       labels:
         - cell
         - route
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: http_request_duration_seconds
       fqName: gocell_http_request_duration_seconds
       namespace: gocell
@@ -310,7 +310,7 @@ metrics:
         - "2.5"
         - "5"
         - "10"
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: http_requests_total
       fqName: gocell_http_requests_total
       namespace: gocell
@@ -321,7 +321,7 @@ metrics:
         - route
         - status
         - cell
-      file: runtime/bootstrap/phases_http.go
+      file: framework/runtime/bootstrap/phases_http.go
     - name: idempotency_requests_total
       fqName: gocell_idempotency_requests_total
       namespace: gocell
@@ -330,7 +330,7 @@ metrics:
       labels:
         - cell
         - state
-      file: runtime/observability/metrics/idempotency.go
+      file: framework/runtime/observability/metrics/idempotency.go
     - name: outbox_batch_size
       fqName: gocell_outbox_batch_size
       namespace: gocell
@@ -366,7 +366,7 @@ metrics:
         - cell
         - topic
         - reason
-      file: runtime/observability/metrics/outbox.go
+      file: framework/runtime/observability/metrics/outbox.go
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
@@ -375,7 +375,7 @@ metrics:
       labels:
         - cell
         - topic
-      file: kernel/outbox/emitter.go
+      file: framework/kernel/outbox/emitter.go
     - name: outbox_pending_depth
       fqName: gocell_outbox_pending_depth
       namespace: gocell
@@ -383,7 +383,7 @@ metrics:
       help: Current eligible pending outbox entries for the owner cell (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
       labels:
         - cell
-      file: runtime/observability/metrics/outbox.go
+      file: framework/runtime/observability/metrics/outbox.go
     - name: outbox_poll_duration_seconds
       fqName: gocell_outbox_poll_duration_seconds
       namespace: gocell
@@ -441,7 +441,7 @@ metrics:
       labels:
         - cell
         - projection
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: projection_pending_events
       fqName: gocell_projection_pending_events
       namespace: gocell
@@ -450,7 +450,7 @@ metrics:
       labels:
         - cell
         - projection
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: projection_rebuild_duration_seconds
       fqName: gocell_projection_rebuild_duration_seconds
       namespace: gocell
@@ -478,7 +478,7 @@ metrics:
         - "600"
         - "900"
         - "1800"
-      file: kernel/projection/metrics.go
+      file: framework/kernel/projection/metrics.go
     - name: rabbitmq_publish_failed_total
       fqName: gocell_rabbitmq_publish_failed_total
       namespace: gocell
@@ -509,7 +509,7 @@ metrics:
         - "10"
         - "30"
         - "60"
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_in_flight
       fqName: gocell_reconcile_in_flight
       namespace: gocell
@@ -517,7 +517,7 @@ metrics:
       help: Reconciles currently executing.
       labels:
         - reconciler
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_leader
       fqName: gocell_reconcile_leader
       namespace: gocell
@@ -525,7 +525,7 @@ metrics:
       help: 1 when this instance holds the reconcile lease, else 0.
       labels:
         - reconciler
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: reconcile_total
       fqName: gocell_reconcile_total
       namespace: gocell
@@ -534,7 +534,7 @@ metrics:
       labels:
         - reconciler
         - result
-      file: kernel/reconcile/metrics.go
+      file: framework/kernel/reconcile/metrics.go
     - name: saga_drive_total
       fqName: gocell_saga_drive_total
       namespace: gocell
@@ -544,7 +544,7 @@ metrics:
         - cell
         - definition_id
         - result
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_heartbeat_failed_total
       fqName: gocell_saga_heartbeat_failed_total
       namespace: gocell
@@ -553,7 +553,7 @@ metrics:
       labels:
         - cell
         - reason
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_journal_tailer_checkpoint_advance_total
       fqName: gocell_saga_journal_tailer_checkpoint_advance_total
       namespace: gocell
@@ -563,7 +563,7 @@ metrics:
         - cell
         - projection
         - result
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_drain_total
       fqName: gocell_saga_journal_tailer_drain_total
       namespace: gocell
@@ -573,7 +573,7 @@ metrics:
         - cell
         - projection
         - result
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_last_success_timestamp_seconds
       fqName: gocell_saga_journal_tailer_last_success_timestamp_seconds
       namespace: gocell
@@ -582,7 +582,7 @@ metrics:
       labels:
         - cell
         - projection
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_lock_acquire_failed_total
       fqName: gocell_saga_journal_tailer_lock_acquire_failed_total
       namespace: gocell
@@ -592,7 +592,7 @@ metrics:
         - cell
         - projection
         - reason
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_journal_tailer_pending_events
       fqName: gocell_saga_journal_tailer_pending_events
       namespace: gocell
@@ -601,7 +601,7 @@ metrics:
       labels:
         - cell
         - projection
-      file: runtime/observability/metrics/saga_tailer.go
+      file: framework/runtime/observability/metrics/saga_tailer.go
     - name: saga_leader_elect_skip_total
       fqName: gocell_saga_leader_elect_skip_total
       namespace: gocell
@@ -611,7 +611,7 @@ metrics:
         - cell
         - definition_id
         - reason
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_step_outcome_total
       fqName: gocell_saga_step_outcome_total
       namespace: gocell
@@ -621,7 +621,7 @@ metrics:
         - cell
         - definition_id
         - outcome
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_step_retry_total
       fqName: gocell_saga_step_retry_total
       namespace: gocell
@@ -631,7 +631,7 @@ metrics:
         - cell
         - definition_id
         - step_name
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: saga_tick_total
       fqName: gocell_saga_tick_total
       namespace: gocell
@@ -640,7 +640,7 @@ metrics:
       labels:
         - cell
         - result
-      file: runtime/observability/metrics/saga.go
+      file: framework/runtime/observability/metrics/saga.go
     - name: session_cache_errors_total
       fqName: gocell_session_cache_errors_total
       namespace: gocell
@@ -648,7 +648,7 @@ metrics:
       help: 'Total session-cache read-path access errors (Redis GET/SET failure, corrupt JSON, or schema-invalid entry). Fail-safe — every read-path error degrades to a miss (errors ⊆ misses) — so this rate distinguishes a cold cache from a degraded Redis. Post-commit revoke DEL failures are a distinct series: session_cache_revoke_del_errors_total.'
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_hits_total
       fqName: gocell_session_cache_hits_total
       namespace: gocell
@@ -656,7 +656,7 @@ metrics:
       help: Total session-cache hits (valid entry served from Redis without consulting the inner store). hits + misses = total Get() calls; read-path errors are a subset of misses.
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_misses_total
       fqName: gocell_session_cache_misses_total
       namespace: gocell
@@ -664,7 +664,7 @@ metrics:
       help: Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). hits + misses = total Get() calls; read-path errors are a subset of misses.
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: session_cache_revoke_del_errors_total
       fqName: gocell_session_cache_revoke_del_errors_total
       namespace: gocell
@@ -672,7 +672,7 @@ metrics:
       help: Total post-commit single-session revoke cache-DEL failures (#796). A failed DEL leaves the logged-out session's cached entry to expire at TTL (accepted degraded window — stale ≤ TTL). NOT a read-path miss, so it is tracked separately from session_cache_errors_total; a non-zero rate means invalidation latency degraded from near-zero to ≤ TTL (security-relevant).
       labels:
         - cell
-      file: runtime/observability/metrics/session_cache.go
+      file: framework/runtime/observability/metrics/session_cache.go
     - name: vault_auth_login_total
       fqName: gocell_vault_auth_login_total
       namespace: gocell
@@ -719,7 +719,7 @@ metrics:
       labels:
         - result
         - source
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_delivery_duration_seconds
       fqName: gocell_webhook_delivery_duration_seconds
       namespace: gocell
@@ -737,7 +737,7 @@ metrics:
         - "5"
         - "10"
         - "30"
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_idempotency_hits_total
       fqName: gocell_webhook_idempotency_hits_total
       namespace: gocell
@@ -745,7 +745,7 @@ metrics:
       help: Total inbound webhook duplicate deliveries deduplicated by the idempotency claimer.
       labels:
         - source
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go
     - name: webhook_signature_failures_total
       fqName: gocell_webhook_signature_failures_total
       namespace: gocell
@@ -754,4 +754,4 @@ metrics:
       labels:
         - source
         - reason
-      file: kernel/webhook/metrics.go
+      file: framework/kernel/webhook/metrics.go

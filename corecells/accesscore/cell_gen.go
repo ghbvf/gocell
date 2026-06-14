@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 	sub2 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
 	sub3 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*AccessCore)(nil)

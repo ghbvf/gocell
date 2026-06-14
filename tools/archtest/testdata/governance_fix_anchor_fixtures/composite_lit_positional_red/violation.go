@@ -10,7 +10,7 @@
 // Expected: 1 violation from the funnel scan path.
 package composite_lit_positional_red
 
-import gov "github.com/ghbvf/gocell/kernel/governance"
+import gov "github.com/ghbvf/gocell/framework/kernel/governance"
 
 // violatePositional constructs a raw ValidationResult composite literal with
 // positional fields — the forbidden bypass shape. The 10 values match the

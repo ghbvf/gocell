@@ -13,10 +13,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/runtime/http/middleware"
-	"github.com/ghbvf/gocell/runtime/observability/tracingtest"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/runtime/http/middleware"
+	"github.com/ghbvf/gocell/framework/runtime/observability/tracingtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

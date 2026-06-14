@@ -20,8 +20,8 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/tenant"
-	"github.com/ghbvf/gocell/runtime/auth/credentialfence"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/runtime/auth/credentialfence"
 )
 
 // badBump directly calls BumpAuthzEpoch on a ports.UserRepository — bypassing

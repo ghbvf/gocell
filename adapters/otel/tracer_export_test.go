@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 )
 
 // newInMemoryTracer returns a Tracer wired to a TracerProvider that batches

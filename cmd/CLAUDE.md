@@ -51,9 +51,9 @@ app.Run(ctx)
 ## Listener 配置
 
 > 自 PR #615（G-10）后，`auth.AuthPlan` / `auth.ListenerAuth` / `auth.NewAuth*` 等
-> 符号来自 `github.com/ghbvf/gocell/kernel/auth`（不是 `kernel/cell`）。当同一文件
+> 符号来自 `github.com/ghbvf/gocell/framework/kernel/auth`（不是 `kernel/cell`）。当同一文件
 > 还 import `runtime/auth` 时，把 kernel/auth 别名为 `kauth`：
-> `kauth "github.com/ghbvf/gocell/kernel/auth"`。`cell.PrimaryListener` 等 listener
+> `kauth "github.com/ghbvf/gocell/framework/kernel/auth"`。`cell.PrimaryListener` 等 listener
 > 引用保留在 `kernel/cell`。
 
 ```go

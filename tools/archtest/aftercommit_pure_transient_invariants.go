@@ -94,7 +94,7 @@ const (
 	// persistencePkgPath is the canonical import path of the kernel/persistence
 	// package — a GoCell platform symbol path, anchored to PlatformModulePath so
 	// a module rename updates exactly one place.
-	persistencePkgPath     = PlatformModulePath + "/kernel/persistence"
+	persistencePkgPath     = PlatformFrameworkModulePath + "/kernel/persistence"
 	registerAfterCommitFn  = "RegisterAfterCommit"
 	txFromContextFn        = "TxFromContext"
 	afterCommitFixturesDir = "aftercommit_pure_transient_fixtures"
@@ -113,9 +113,9 @@ var afterCommitDrainFns = map[string]bool{
 // types a hook body may not call methods on (rule A2). Paths derived from
 // PlatformModulePath so a module rename updates exactly one place.
 var afterCommitBannedReceivers = map[string]string{
-	"github.com/jackc/pgx/v5.Tx":                 "pgx.Tx",
-	"database/sql.Tx":                            "*sql.Tx",
-	PlatformModulePath + "/kernel/outbox.Writer": "outbox.Writer",
+	"github.com/jackc/pgx/v5.Tx":                          "pgx.Tx",
+	"database/sql.Tx":                                     "*sql.Tx",
+	PlatformFrameworkModulePath + "/kernel/outbox.Writer": "outbox.Writer",
 }
 
 // afterCommitDrainCallerAllowlist is the set of production files permitted to
@@ -176,7 +176,7 @@ func resolveBannedReceivers(pkg *types.Package) []bannedReceiver {
 	var out []bannedReceiver
 	for _, b := range []struct{ path, name, label string }{
 		{"github.com/jackc/pgx/v5", "Tx", "pgx.Tx"},
-		{PlatformModulePath + "/kernel/outbox", "Writer", "outbox.Writer"},
+		{PlatformFrameworkModulePath + "/kernel/outbox", "Writer", "outbox.Writer"},
 	} {
 		if iface := lookupInterface(pkg, b.path, b.name); iface != nil {
 			out = append(out, bannedReceiver{label: b.label, iface: iface})

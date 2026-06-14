@@ -23,7 +23,7 @@ package commandgenfunnelfixture
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/command"
+	"github.com/ghbvf/gocell/framework/runtime/command"
 )
 
 // BadRequest is a dummy request type for the look-alike handler.

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // MsgInvalidTenant is the shared error message used by PolicyRepository

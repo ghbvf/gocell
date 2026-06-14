@@ -95,16 +95,16 @@ import (
 const (
 	// Symbol/package paths are derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01;
 	// bare "github.com/ghbvf/gocell" string literals are banned in archtest files).
-	outboxEntryCanonical     = PlatformModulePath + "/kernel/outbox.Entry"
-	projectionEventCanonical = PlatformModulePath + "/kernel/cellvocab.ProjectionEvent"
+	outboxEntryCanonical     = PlatformFrameworkModulePath + "/kernel/outbox.Entry"
+	projectionEventCanonical = PlatformFrameworkModulePath + "/kernel/cellvocab.ProjectionEvent"
 
-	projectionPkgPath = PlatformModulePath + "/kernel/projection"
-	cellvocabPkgPath  = PlatformModulePath + "/kernel/cellvocab"
+	projectionPkgPath = PlatformFrameworkModulePath + "/kernel/projection"
+	cellvocabPkgPath  = PlatformFrameworkModulePath + "/kernel/cellvocab"
 	// projectionCarrierCellPkgPath is this rule's own kernel/cell path constant
 	// (rule self-contained — does not borrow prom_cell_label_funnel_test.go's
 	// cellPkgPath, so the carrier archtest carries no implicit dependency on an
 	// unrelated rule file's constant).
-	projectionCarrierCellPkgPath = PlatformModulePath + "/kernel/cell"
+	projectionCarrierCellPkgPath = PlatformFrameworkModulePath + "/kernel/cell"
 )
 
 // expectedProjCarrierFixtureViolations is the number of
@@ -472,8 +472,8 @@ func TestProjectionEventCarrierTyped01_SymbolScope(t *testing.T) {
 		{projectionCarrierCellPkgPath, "ProjectionFutureCarrier", true},
 		{projectionCarrierCellPkgPath, "Subscribe", false}, // bus API — out of scope
 		{projectionCarrierCellPkgPath, "SubscriptionRequest", false},
-		{projectionCarrierCellPkgPath, "RegisterProjection", false},              // not Projection*-prefixed (RegisterP…)
-		{PlatformModulePath + "/runtime/bootstrap", "ProjectionAnything", false}, // outside scan set
+		{projectionCarrierCellPkgPath, "RegisterProjection", false},                       // not Projection*-prefixed (RegisterP…)
+		{PlatformFrameworkModulePath + "/runtime/bootstrap", "ProjectionAnything", false}, // outside scan set
 	}
 	for _, c := range cases {
 		assert.Equalf(t, c.want, projCarrierSymbolInScope(c.pkg, c.sym),

@@ -15,15 +15,15 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/kernel/healthz"
-	"github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/kernel/worker"
-	"github.com/ghbvf/gocell/pkg/aeadutil"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/logutil"
-	"github.com/ghbvf/gocell/pkg/secutil"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
+	"github.com/ghbvf/gocell/framework/pkg/aeadutil"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/logutil"
+	"github.com/ghbvf/gocell/framework/pkg/secutil"
 )
 
 // reauthBackoffInitial is the first backoff interval for re-authentication retries.

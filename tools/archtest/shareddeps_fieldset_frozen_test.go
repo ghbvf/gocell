@@ -48,7 +48,7 @@
 //
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
-//   - Frozen type: github.com/ghbvf/gocell/runtime/composition.SharedDeps
+//   - Frozen type: github.com/ghbvf/gocell/framework/runtime/composition.SharedDeps
 //   - Frozen golden: sharedDepsFrozenExportedFields (23 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
@@ -65,7 +65,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 const ruleSharedDepsFieldSetFrozen01 = "SHAREDDEPS-FIELDSET-FROZEN-01"

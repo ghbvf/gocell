@@ -63,7 +63,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // wantReservedMetadataKeys is the frozen membership of

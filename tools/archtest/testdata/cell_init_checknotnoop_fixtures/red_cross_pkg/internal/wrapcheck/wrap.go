@@ -7,7 +7,7 @@
 package wrapcheck
 
 import (
-	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
 // Check delegates the durability-mode guard to kernel/outbox.CheckNotNoop.

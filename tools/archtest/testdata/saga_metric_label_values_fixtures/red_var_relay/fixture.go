@@ -10,7 +10,7 @@ package sagaenumredvarrelay
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/saga/executor"
+	"github.com/ghbvf/gocell/framework/runtime/saga/executor"
 )
 
 func leaderSink(_ context.Context, _ executor.LeaderSkipReason) {}

@@ -34,7 +34,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
 // lintGateCase models one fixture: a synthetic module's file tree plus the
@@ -246,10 +246,10 @@ func buildLintGateCases() []lintGateCase {
 			name: "depguard_example_cell_own_subtree_allowed",
 			files: map[string]string{
 				"examples/iotdevice/cells/foo/c.go": "package foo\n\nimport (\n" +
-					"\t_ \"github.com/ghbvf/gocell/kernel\"\n" +
+					"\t_ \"github.com/ghbvf/gocell/framework/kernel\"\n" +
 					"\t_ \"github.com/ghbvf/gocell/examples/iotdevice/cells/foo/internal\"\n)\n",
 				"examples/iotdevice/cells/foo/internal/stub.go": stub("internal"),
-				"kernel/stub.go": stub("kernel"),
+				"framework/kernel/stub.go":                      stub("kernel"),
 			},
 			expectNoFindings: []lintGateFinding{{linter: "depguard", file: "examples/iotdevice/cells/foo/c.go"}},
 		},

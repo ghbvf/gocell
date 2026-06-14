@@ -98,8 +98,8 @@ Option 签名直接接受了 `persistence.TxRunner` / `outbox.Publisher` / `outb
 ```go
 // examples/myapp/main.go 或 cmd/myserver/main.go（composition root）
 import (
-    "github.com/ghbvf/gocell/kernel/outbox"
-    "github.com/ghbvf/gocell/kernel/persistence"
+    "github.com/ghbvf/gocell/framework/kernel/outbox"
+    "github.com/ghbvf/gocell/framework/kernel/persistence"
     "github.com/ghbvf/gocell/cells/mycell"
 )
 
@@ -124,8 +124,8 @@ warn 日志提示当前运行在 demo 模式——这是预期行为。
 ```go
 // cellmodules/accesscore/module.go（composition root）
 import (
-    "github.com/ghbvf/gocell/kernel/outbox"
-    "github.com/ghbvf/gocell/kernel/persistence"
+    "github.com/ghbvf/gocell/framework/kernel/outbox"
+    "github.com/ghbvf/gocell/framework/kernel/persistence"
     "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/adapters/postgres"
     "github.com/ghbvf/gocell/adapters/rabbitmq"
@@ -154,8 +154,8 @@ wrap 函数在测试文件中可以任意调用：
 ```go
 // cells/mycell/cell_test.go 或 cells/mycell/slices/xxx/service_test.go
 import (
-    "github.com/ghbvf/gocell/kernel/outbox"
-    "github.com/ghbvf/gocell/kernel/persistence"
+    "github.com/ghbvf/gocell/framework/kernel/outbox"
+    "github.com/ghbvf/gocell/framework/kernel/persistence"
     "github.com/ghbvf/gocell/cells/mycell"
 )
 

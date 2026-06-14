@@ -19,8 +19,8 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/projection"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/projection"
 )
 
 // enrolledCursor is a correct in-memory Cursor that the fixture _test.go enrolls

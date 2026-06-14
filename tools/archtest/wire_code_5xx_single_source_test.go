@@ -44,7 +44,7 @@ func TestWireCode5xxSingleSource(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	statusFile := filepath.Join(root, "pkg", "errcode", "status.go")
+	statusFile := filepath.Join(root, "framework", "pkg", "errcode", "status.go")
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, statusFile, nil, 0)

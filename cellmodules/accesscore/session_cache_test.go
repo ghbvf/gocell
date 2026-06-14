@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/runtime/auth/session"
-	"github.com/ghbvf/gocell/runtime/capability"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // counterNameSpy is a minimal kernelmetrics.Provider that records counter

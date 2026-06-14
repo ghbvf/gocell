@@ -10,7 +10,7 @@ package crypto
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // AADForConfig computes the Additional Authenticated Data for a config entry.

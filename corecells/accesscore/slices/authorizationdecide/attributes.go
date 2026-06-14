@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
-	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // attributeResolver resolves a Condition's (Source, Key) to the attribute

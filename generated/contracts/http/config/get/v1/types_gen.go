@@ -10,9 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/pkg/projection"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 )
 
 // Request — http.config.get.v1.request

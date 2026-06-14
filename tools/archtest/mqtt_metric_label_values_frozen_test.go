@@ -167,7 +167,7 @@ func collectMqttMetricNames(p *Pass) []string {
 	if info == nil {
 		return nil
 	}
-	const metricsPkg = PlatformModulePath + "/kernel/observability/metrics"
+	const metricsPkg = PlatformFrameworkModulePath + "/kernel/observability/metrics"
 	var names []string
 	for _, file := range p.Files {
 		if strings.HasSuffix(p.Rel(file), "_test.go") {
@@ -581,7 +581,7 @@ func collectMqttInstrumentFields(p *Pass) map[string]bool {
 	if info == nil || p.Pkg == nil {
 		return nil
 	}
-	const metricsPkg = PlatformModulePath + "/kernel/observability/metrics"
+	const metricsPkg = PlatformFrameworkModulePath + "/kernel/observability/metrics"
 	got := map[string]bool{}
 	for _, n := range mqttCollectorStructNames {
 		tn, ok := p.Pkg.Scope().Lookup(n).(*types.TypeName)

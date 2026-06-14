@@ -37,7 +37,7 @@
 //     is satisfied by the package itself being governance).
 //   - This test scans cmd/gocell/app (a cross-package consumer) and relies on
 //     go/types to resolve the composite literal's type to
-//     github.com/ghbvf/gocell/kernel/governance.ValidationResult — a stronger
+//     github.com/ghbvf/gocell/framework/kernel/governance.ValidationResult — a stronger
 //     type-gated approach since the type is imported, not declared in scope.
 //
 // Blind-spot self-check (AST forms outside the chosen tools' declared scope):
@@ -176,7 +176,7 @@ func testCMDFixFieldProductionSource(t *testing.T) {
 //     INV-3 so the two invariants are consistent).
 //
 // The type gate uses p.TypesInfo to identify composite literals typed as
-// github.com/ghbvf/gocell/kernel/governance.ValidationResult — this is a
+// github.com/ghbvf/gocell/framework/kernel/governance.ValidationResult — this is a
 // stronger cross-package type resolution compared to INV-3's same-package scan.
 //
 // pkgPath is always governancePkgPath — the type we are looking for is always

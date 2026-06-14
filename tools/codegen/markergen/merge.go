@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // knownMarkers is the closed set of GoCell marker names.

@@ -18,7 +18,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
 
 // Format identifies a supported output format. Use the FormatXxx constants

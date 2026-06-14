@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Assert is the read-side credential-authority Hard funnel.

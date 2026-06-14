@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 )
 
 // mustTransitMetrics constructs a *TransitMetrics backed by the kernel NopProvider.

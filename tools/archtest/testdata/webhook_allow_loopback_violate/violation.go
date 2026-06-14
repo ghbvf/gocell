@@ -6,7 +6,7 @@
 // DO NOT use this package in production code.
 package webhook_allow_loopback_violate
 
-import "github.com/ghbvf/gocell/kernel/webhook"
+import "github.com/ghbvf/gocell/framework/kernel/webhook"
 
 // buildLeakyPolicy is a production-file callsite of WithAllowLoopback — the very
 // thing WEBHOOK-ALLOW-LOOPBACK-PROD-BAN-01 forbids outside _test.go.

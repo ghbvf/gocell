@@ -105,8 +105,8 @@ func scanAuthAuthenticatedCalls(t *testing.T, root string, allGoFiles []string) 
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
 		if strings.HasPrefix(rel, "tools/archtest/") ||
-			strings.HasPrefix(rel, "runtime/internal/authtest/") ||
-			strings.HasPrefix(rel, "kernel/auth/authtest/") {
+			strings.HasPrefix(rel, "framework/runtime/internal/authtest/") ||
+			strings.HasPrefix(rel, "framework/kernel/auth/authtest/") {
 			continue
 		}
 		callHits, err := findCallExpr(f, "auth", "Authenticated")
@@ -133,12 +133,12 @@ func scanAuthAuthenticatedCalls(t *testing.T, root string, allGoFiles []string) 
 func scanAuthtestImports(t *testing.T, root string, allGoFiles []string) []Diagnostic {
 	t.Helper()
 	authtestImports := map[string]bool{
-		PlatformModulePath + "/runtime/internal/authtest": true,
-		PlatformModulePath + "/kernel/auth/authtest":      true,
+		PlatformFrameworkModulePath + "/runtime/internal/authtest": true,
+		PlatformFrameworkModulePath + "/kernel/auth/authtest":      true,
 	}
 	authtestPkgDirs := map[string]bool{
-		filepath.Join(root, "runtime", "internal", "authtest"): true,
-		filepath.Join(root, "kernel", "auth", "authtest"):      true,
+		filepath.Join(root, "framework", "runtime", "internal", "authtest"): true,
+		filepath.Join(root, "framework", "kernel", "auth", "authtest"):      true,
 	}
 
 	var diags []Diagnostic

@@ -125,7 +125,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/runtime/http/idempotency"
+	"github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
 // ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_SoleProducerAndSink(t *testing.T) {
 	visited := false
 	var diags []Diagnostic
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{"./runtime/http/idempotency/..."}),
+		[]string{"./framework/runtime/http/idempotency/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != httpIdempotencyPkgPath {
 				return nil
@@ -557,7 +557,7 @@ func TestHTTPIdempotencyKeyNodeAgnostic01_RequiredUse(t *testing.T) {
 	t.Parallel()
 
 	root := findModuleRoot(t)
-	path := filepath.Join(root, "runtime", "http", "idempotency", deriveKeyFile)
+	path := filepath.Join(root, "framework", "runtime", "http", "idempotency", deriveKeyFile)
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	require.NoError(t, err, "parse %s", path)

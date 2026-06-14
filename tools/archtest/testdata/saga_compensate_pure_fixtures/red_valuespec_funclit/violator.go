@@ -5,8 +5,8 @@ package redcompensatevaluespecfunclit
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
-	ksaga "github.com/ghbvf/gocell/kernel/saga"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	ksaga "github.com/ghbvf/gocell/framework/kernel/saga"
 )
 
 // buildValueSpecCompensate declares a ksaga.CompensateFunc-typed variable via a

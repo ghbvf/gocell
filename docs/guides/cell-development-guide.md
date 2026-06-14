@@ -84,8 +84,8 @@ import (
     "context"
     "log/slog"
 
-    "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/kernel/clock"
+    "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // ISP split: cell.Cell is decomposed into four focused interfaces. Each assertion
@@ -156,10 +156,10 @@ The framework provides three sealed marker types, obtainable only through their 
 package mycell
 
 import (
-    "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/kernel/outbox"
-    "github.com/ghbvf/gocell/kernel/persistence"
-    "github.com/ghbvf/gocell/pkg/validation"
+    "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/kernel/outbox"
+    "github.com/ghbvf/gocell/framework/kernel/persistence"
+    "github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 type MyCell struct {

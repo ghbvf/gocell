@@ -2,7 +2,7 @@
 
 package projection_register_violate
 
-import "github.com/ghbvf/gocell/kernel/cell"
+import "github.com/ghbvf/gocell/framework/kernel/cell"
 
 // generatedCellRegister models the SANCTIONED cellgen projection wiring: a
 // reg.RegisterProjection call inside cell_gen.go bearing the cellgen DO-NOT-EDIT

@@ -8,10 +8,10 @@ import (
 
 	"github.com/ghbvf/gocell/cellmodules/eventtransport"
 	"github.com/ghbvf/gocell/cellmodules/replaydeps"
-	"github.com/ghbvf/gocell/kernel/clock"
-	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/composition"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 // SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so

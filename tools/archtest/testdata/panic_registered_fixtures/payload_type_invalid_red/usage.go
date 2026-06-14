@@ -6,7 +6,7 @@ package payload_type_invalid_red
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 )
 
 func WithFmtErrorf() {

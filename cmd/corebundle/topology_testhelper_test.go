@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // mkTopo builds a validated bootstrap.Topology for tests, panicking on an

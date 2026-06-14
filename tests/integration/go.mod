@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/tests/integration
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell v0.0.0
 	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
@@ -38,7 +37,9 @@ require (
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
+	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0 // indirect
+	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -88,8 +89,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ghbvf/gocell => ../..
-
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
@@ -109,3 +108,7 @@ replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
 replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
 
 replace github.com/ghbvf/gocell/generated => ../../generated
+
+replace github.com/ghbvf/gocell/framework => ../../framework
+
+replace github.com/ghbvf/gocell/tests => ../../tests

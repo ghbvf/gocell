@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	proj0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"
 	proj1 "github.com/ghbvf/gocell/generated/contracts/event/order-status-changed/v1"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*OrderCell)(nil)

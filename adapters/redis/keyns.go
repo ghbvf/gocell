@@ -3,7 +3,7 @@ package redis
 import (
 	"regexp"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // KeyNamespace scopes every Redis key produced by the four primitives in this

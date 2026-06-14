@@ -2,7 +2,7 @@
 // wrapped with panicregister.Approved is accepted: 0 violations expected.
 package recovered_value_green
 
-import "github.com/ghbvf/gocell/pkg/panicregister"
+import "github.com/ghbvf/gocell/framework/pkg/panicregister"
 
 func foo() {
 	defer func() {

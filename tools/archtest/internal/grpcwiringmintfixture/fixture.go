@@ -21,7 +21,7 @@ package grpcwiringmintfixture
 import (
 	"google.golang.org/grpc"
 
-	runtimegrpc "github.com/ghbvf/gocell/runtime/grpc"
+	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
 // badMint mints a registrar + drain outside the NewServerInterceptors funnel.

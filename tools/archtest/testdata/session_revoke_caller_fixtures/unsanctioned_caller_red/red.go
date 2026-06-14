@@ -7,7 +7,7 @@ package unsanctioned_caller_red
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 )
 
 // unsanctionedRevoke calls session.Store.Revoke without any RunInTx scope.

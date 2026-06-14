@@ -215,7 +215,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 
 	t.Run("LayerA_identifier_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
+		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
 			actualValueDecls := make(map[string]foundDecl)
 			actualFuncs := make(map[string]foundDecl)
 			actualTypes := make(map[string]foundDecl)
@@ -267,7 +267,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 
 	t.Run("LayerC_key_string_value_golden_diff", func(t *testing.T) {
 		t.Parallel()
-		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
+		diags := Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/pkg/ctxkeys/..."}), func(p *Pass) []Diagnostic {
 			actualValues := make(map[string]foundDecl)
 			for _, file := range p.Files {
 				rel := p.Rel(file)
@@ -287,7 +287,7 @@ func TestPkgCtxkeysNoCellModel01(t *testing.T) {
 		// closes the gap by refusing the file-shape entirely. Also serves as
 		// the reverse self-check for the documented blind spot
 		// "build-tag-hidden files" — see file-header godoc.
-		boundaryScope := DirsScope(root, []string{"pkg/ctxkeys"}, IncludeTests())
+		boundaryScope := DirsScope(root, []string{"framework/pkg/ctxkeys"}, IncludeTests())
 		diags := Run(t, AST(boundaryScope), func(p *Pass) []Diagnostic {
 			var ds []Diagnostic
 			for _, file := range p.Files {

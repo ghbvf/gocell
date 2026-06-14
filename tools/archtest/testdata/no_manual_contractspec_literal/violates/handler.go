@@ -3,7 +3,7 @@
 // in a non-generated, non-test file to trigger the archtest violation.
 package violates
 
-import "github.com/ghbvf/gocell/kernel/contractspec"
+import "github.com/ghbvf/gocell/framework/kernel/contractspec"
 
 // badSpec is a manually declared ContractSpec literal — forbidden outside generated code.
 var badSpec = contractspec.ContractSpec{

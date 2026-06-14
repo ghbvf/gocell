@@ -6,10 +6,10 @@ import (
 	"fmt"
 {{- end }}
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 {{- if or .WebhookReceivers .WebhookDispatches }}
-	webhook "github.com/ghbvf/gocell/kernel/webhook"
+	webhook "github.com/ghbvf/gocell/framework/kernel/webhook"
 {{- end }}
 {{- range .Subscriptions }}
 	{{.SubscriptionAlias}} "{{.SubscriptionPackage}}"
