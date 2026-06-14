@@ -31,7 +31,7 @@ func TestHasNestedModuleRoot(t *testing.T) {
 	if !HasNestedModuleRoot(filepath.Join(root, "cmd")) {
 		t.Errorf("HasNestedModuleRoot(cmd) = false, want true (cmd holds member modules)")
 	}
-	if HasNestedModuleRoot(filepath.Join(root, "framework/kernel")) {
+	if HasNestedModuleRoot(filepath.Join(root, "framework", "kernel")) {
 		t.Errorf("HasNestedModuleRoot(framework/kernel) = true, want false (no nested go.mod)")
 	}
 	if HasNestedModuleRoot(filepath.Join(root, "does-not-exist")) {
