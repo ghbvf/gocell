@@ -137,8 +137,13 @@ func TestExternalGet_AllPublishable_Build(t *testing.T) {
 }
 
 // buildProxy publishes every publishable module at version into a fresh file
-// GOPROXY directory and returns its path. When bump is true each module's go.mod
-// is release-bumped first; otherwise the as-committed go.mod (with v0.0.0) is used.
+// GOPROXY directory and returns its path. Each module's go.mod is release-bumped
+// (internal requires pinned to version) before publishing; import paths passed in
+// omit are left unpublished to simulate an incomplete tag set. Every caller passes
+// the synthetic synthVersion — there is no second publish version to exercise (an
+// unbumped/alternate version is not a discriminator; see
+// [TestExternalGet_IncompleteSet_Fails]), so version stays a named axis for parity
+// with stageGoMod / writeProxyModule (hence the nolint:unparam below).
 //
 // Each published module is an INTERNAL-DEPS-ONLY PROJECTION of the real module:
 // external requires are stripped and the package is a stub that blank-imports the
@@ -148,7 +153,7 @@ func TestExternalGet_AllPublishable_Build(t *testing.T) {
 // version resolution of exactly the modules the bump rewrites, without dragging
 // in the root module's external universe. The local replace is PRESERVED to prove
 // Go ignores a dependency's replace (the OTel-canonical shape).
-func buildProxy(t *testing.T, root, version string, omit ...string) string {
+func buildProxy(t *testing.T, root, version string, omit ...string) string { //nolint:unparam // one synthetic publish version by design
 	t.Helper()
 	prefix, err := gomodutil.ReadModulePath(root)
 	if err != nil {
