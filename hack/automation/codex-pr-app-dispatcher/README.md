@@ -37,7 +37,8 @@ Required environment:
 export GOCELL_APP_ROUTER_AUTHORS="alice bot"
 export GOCELL_APP_ROUTER_REPO_ROOT="/Users/shengming/Documents/code/gocell"
 export GOCELL_APP_ROUTER_HOME="${HOME}/.local/gocell-pr-app-router"
-export GOCELL_APP_ROUTER_INTERVAL=120
+export GOCELL_APP_ROUTER_INTERVAL=600
+export GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS=1800
 export GOCELL_APP_ROUTER_REPO="ghbvf/gocell"
 export CODEX_BIN="codex"
 export GH_BIN="gh"
@@ -68,10 +69,33 @@ Default:
 Recommended LaunchAgent value for normal operation:
 
 ```bash
-export GOCELL_APP_ROUTER_INTERVAL=300
+export GOCELL_APP_ROUTER_INTERVAL=600
 ```
 
-That means one GitHub PR information pull every 5 minutes. A normal empty poll performs two `gh pr list` calls, one for each trigger label. It performs extra `gh pr view` calls only for candidate PRs that pass initial discovery.
+That means one GitHub PR information pull every 10 minutes. A normal empty poll performs two `gh pr list` calls, one for each trigger label. It performs extra `gh pr view` calls only for candidate PRs that pass initial discovery.
+
+## Dispatch Cooldown
+
+The router has a PR-level cooldown per dispatch kind:
+
+```bash
+export GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS=1800
+```
+
+That means the same PR cannot start the same dispatch kind again within 30 minutes:
+
+- `review`: `pr-review <PR#>`
+- `check`: `pr-review <PR#> --check`
+
+The cooldown is keyed by `(PR, kind)`, not by head SHA. If a PR gets multiple new commits within 30 minutes while it still has `pr-status/needs-review-again`, the router skips repeated `review` dispatches and logs the remaining cooldown. `check` is independent so a later fix verification is not blocked by an earlier review dispatch.
+
+Successful dispatches are appended to:
+
+```text
+$GOCELL_APP_ROUTER_HOME/state/dispatch-events.jsonl
+```
+
+Set `GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS=0` only for offline tests or manual emergency redispatch.
 
 ## Active Poll Trigger
 
@@ -304,7 +328,13 @@ This proves whether dispatch happened and whether the review-side skill changed 
 
 ### Level 2: Codex App Visibility
 
-For real-time viewing inside Codex App, the cleanest approach is to make app-server-created threads visible/indexed in the app's normal thread list.
+Current limitation: a turn started by this dispatcher is not a normal Codex App-owned live thread. The dispatcher owns its own `codex app-server --stdio` transport and stops reading after `turn/start` returns. Codex app-server streams progress notifications such as `item/agentMessage/delta`, tool progress, and `turn/completed` only to the active transport connection. Opening the persisted session in Codex App may show a snapshot, but it is not guaranteed to be a live stream.
+
+For real-time viewing inside Codex App, do not rely on opening the stdio-created session directly. Use one of these designs:
+
+1. Keep the dispatcher fire-and-forget and build a read-only monitor from session JSONL + GitHub comments/labels.
+2. Replace the dispatch transport with a long-lived remote-control/proxy client that keeps reading app-server notifications and stores them in a dispatch index.
+3. Build a small Tauri or web console that reads the dispatch index/session stream and links back to GitHub/Codex sessions.
 
 Required capabilities:
 

@@ -11,4 +11,3 @@ if ! command -v launchctl >/dev/null 2>&1; then
 fi
 
 launchctl kill SIGUSR1 "gui/$(id -u)/${LABEL}"
-

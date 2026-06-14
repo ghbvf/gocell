@@ -29,4 +29,3 @@ active poll trigger received
 ```
 
 This only wakes one `poll_once`. It must not wait for `turn/completed`, inspect Codex session results, or move PR labels directly.
-

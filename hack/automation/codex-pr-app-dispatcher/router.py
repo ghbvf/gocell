@@ -46,6 +46,7 @@ class Config:
     codex_bin: str
     gh_bin: str
     dry_run: bool
+    pr_cooldown_seconds: int
 
     @property
     def state_dir(self) -> Path:
@@ -62,6 +63,10 @@ class Config:
     @property
     def ledger_file(self) -> Path:
         return self.state_dir / "dispatched"
+
+    @property
+    def dispatch_events_file(self) -> Path:
+        return self.state_dir / "dispatch-events.jsonl"
 
     @property
     def skill_path(self) -> Path:
@@ -165,6 +170,16 @@ def load_config(args: argparse.Namespace) -> Config:
     if interval <= 0:
         fail("GOCELL_APP_ROUTER_INTERVAL must be positive")
 
+    cooldown_raw = os.environ.get("GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS", "1800")
+    try:
+        pr_cooldown_seconds = int(cooldown_raw)
+    except ValueError as exc:
+        raise SystemExit(
+            f"router: invalid GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS={cooldown_raw!r}"
+        ) from exc
+    if pr_cooldown_seconds < 0:
+        fail("GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS must be non-negative")
+
     cfg = Config(
         repo_root=repo_root,
         router_home=router_home,
@@ -174,12 +189,14 @@ def load_config(args: argparse.Namespace) -> Config:
         codex_bin=os.environ.get("CODEX_BIN", "codex"),
         gh_bin=os.environ.get("GH_BIN", "gh"),
         dry_run=args.dry_run,
+        pr_cooldown_seconds=pr_cooldown_seconds,
     )
     for path in (cfg.state_dir, cfg.locks_dir, cfg.logs_dir):
         path.mkdir(parents=True, exist_ok=True)
     if not cfg.skill_path.exists():
         fail(f"pr-review skill not found: {cfg.skill_path}")
     cfg.ledger_file.touch(exist_ok=True)
+    cfg.dispatch_events_file.touch(exist_ok=True)
     return cfg
 
 
@@ -271,6 +288,70 @@ def ledger_contains(cfg: Config, key: str) -> bool:
 def ledger_append(cfg: Config, key: str) -> None:
     with cfg.ledger_file.open("a", encoding="utf-8") as fh:
         fh.write(key + "\n")
+
+
+def iter_dispatch_events(cfg: Config) -> list[dict[str, Any]]:
+    try:
+        lines = cfg.dispatch_events_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for line in lines:
+        if not line:
+            continue
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(raw, dict):
+            events.append(raw)
+    return events
+
+
+def recent_dispatch_reason(cfg: Config, cand: Candidate, now: float) -> str | None:
+    if cfg.pr_cooldown_seconds <= 0:
+        return None
+    for event in reversed(iter_dispatch_events(cfg)):
+        if int(event.get("pr", 0)) != cand.number:
+            continue
+        if str(event.get("kind", "")) != cand.kind:
+            continue
+        try:
+            dispatched_at = float(event["dispatchedAtEpoch"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        age = now - dispatched_at
+        if age < cfg.pr_cooldown_seconds:
+            remaining = int(cfg.pr_cooldown_seconds - age)
+            return (
+                f"recent {cand.kind} dispatch within cooldown "
+                f"({remaining}s remaining, thread={event.get('threadId', '-')}, "
+                f"turn={event.get('turnId', '-')})"
+            )
+        return None
+    return None
+
+
+def dispatch_event_append(
+    cfg: Config,
+    cand: Candidate,
+    thread_id: str,
+    turn_id: str,
+    dispatched_at: float,
+) -> None:
+    event = {
+        "pr": cand.number,
+        "kind": cand.kind,
+        "headSha": cand.head_sha,
+        "key": cand.key,
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "dispatchedAtEpoch": dispatched_at,
+        "dispatchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(dispatched_at)),
+    }
+    with cfg.dispatch_events_file.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(event, separators=(",", ":"), sort_keys=True) + "\n")
 
 
 def pid_alive(pid: int) -> bool:
@@ -496,6 +577,11 @@ def dispatch_one(cfg: Config, client: AppServerClient | None, cand: Candidate) -
             log(f"PR #{cand.number}: skip - {skip}")
             return False
 
+        cooldown = recent_dispatch_reason(cfg, cand, time.time())
+        if cooldown:
+            log(f"PR #{cand.number}: skip - {cooldown}")
+            return False
+
         live_head = gh_live_head(cfg, cand.number)
         if live_head != cand.head_sha:
             log(
@@ -512,7 +598,9 @@ def dispatch_one(cfg: Config, client: AppServerClient | None, cand: Candidate) -
 
         log(f"PR #{cand.number}: dispatching {cand.kind} via Codex app-server ({cand.key})")
         thread_id, turn_id = start_pr_review_turn(cfg, client, cand)
+        dispatched_at = time.time()
         ledger_append(cfg, cand.key)
+        dispatch_event_append(cfg, cand, thread_id, turn_id, dispatched_at)
         log(
             f"PR #{cand.number}: dispatched {cand.kind}; "
             f"thread={thread_id} turn={turn_id}; ledger key recorded"

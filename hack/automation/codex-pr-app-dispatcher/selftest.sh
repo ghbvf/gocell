@@ -144,6 +144,9 @@ run_router() {
         GOCELL_APP_ROUTER_REPO_ROOT="${REPO_ROOT}" \
         GOCELL_APP_ROUTER_REPO="ghbvf/gocell" \
         GOCELL_APP_ROUTER_AUTHORS="alice bot" \
+        GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS="${ROUTER_COOLDOWN:-1800}" \
+        CODEX_BIN="${STUB_BIN}/codex" \
+        GH_BIN="${STUB_BIN}/gh" \
         GH_REVIEW_LIST_FILE="${REVIEW_LIST}" \
         GH_CHECK_LIST_FILE="${CHECK_LIST}" \
         GH_OID_MAP_FILE="${OID_MAP}" \
@@ -175,6 +178,8 @@ assert_contains "S1-check-command" "${CALLS_LOG}" "Execute \`pr-review 2 --check
 assert_contains "S1-label-transition" "${CALLS_LOG}" "actually applying the label transition"
 assert_contains "S1-ledger-review" "${ROUTER_HOME}/state/dispatched" "1@${OID1}:review"
 assert_contains "S1-ledger-check" "${ROUTER_HOME}/state/dispatched" "2@${OID2}:check"
+assert_contains "S1-events-review" "${ROUTER_HOME}/state/dispatch-events.jsonl" "\"key\":\"1@${OID1}:review\""
+assert_contains "S1-events-check" "${ROUTER_HOME}/state/dispatch-events.jsonl" "\"key\":\"2@${OID2}:check\""
 
 echo ""
 echo "=== Scenario 2: ledger de-dupes repeated poll ==="
@@ -182,13 +187,20 @@ run_router
 assert_line_count "S2-no-extra-turns" "${CALLS_LOG}" "turn/start" "2"
 
 echo ""
-echo "=== Scenario 3: changed head allows re-dispatch ==="
+echo "=== Scenario 3: changed head within cooldown skips re-dispatch ==="
 write_json "${REVIEW_LIST}" '[{"number":1,"headRefName":"feat/a","headRefOid":"'"${OID1B}"'","author":{"login":"alice"},"isCrossRepository":false,"isDraft":false}]'
 write_json "${CHECK_LIST}" '[]'
 write_json "${OID_MAP}" '{"1":"'"${OID1B}"'"}'
 run_router
-assert_line_count "S3-one-extra-turn" "${CALLS_LOG}" "turn/start" "3"
-assert_contains "S3-ledger-new-head" "${ROUTER_HOME}/state/dispatched" "1@${OID1B}:review"
+assert_line_count "S3-no-extra-turn-cooldown" "${CALLS_LOG}" "turn/start" "2"
+assert_not_contains "S3-no-ledger-new-head" "${ROUTER_HOME}/state/dispatched" "1@${OID1B}:review"
+
+echo ""
+echo "=== Scenario 3b: changed head can re-dispatch when cooldown disabled ==="
+ROUTER_COOLDOWN=0 run_router
+unset ROUTER_COOLDOWN
+assert_line_count "S3b-one-extra-turn" "${CALLS_LOG}" "turn/start" "3"
+assert_contains "S3b-ledger-new-head" "${ROUTER_HOME}/state/dispatched" "1@${OID1B}:review"
 
 echo ""
 echo "=== Scenario 4: app-server failure does not write ledger ==="
