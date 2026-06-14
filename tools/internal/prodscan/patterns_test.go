@@ -3,6 +3,7 @@ package prodscan
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -122,7 +123,10 @@ func TestPatternsWithSatellites(t *testing.T) {
 		})
 		ext := PatternsExtended(root)
 		full := PatternsWithSatellites(root)
-		if len(full) != len(ext) {
+		// Content equality, not just length: a regression that dropped a base
+		// pattern while adding a spurious one would keep the length equal but
+		// must still fail here.
+		if !slices.Equal(ext, full) {
 			t.Errorf("single-module fixture: PatternsWithSatellites must equal PatternsExtended "+
 				"(no nested go.mod → empty satellite increment); ext=%v full=%v", ext, full)
 		}

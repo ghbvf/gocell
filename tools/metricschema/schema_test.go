@@ -899,6 +899,11 @@ func TestOBS01CoverageRequiresFramework(t *testing.T) {
 		"OBS-01 production scan must cover the framework module (post-#1565 core: kernel/runtime/pkg)")
 
 	// (2) load-witness: framework layers load non-empty through OBS-01's loader.
+	// loadPackages is the SAME entry CheckOBS01 → checkOBS01WithPatterns uses; with
+	// >1 pattern it routes through loadPatternScopedPackages, where patternLoadMode
+	// auto-selects ModeWorkspace for the framework module root. So this exercises the
+	// real OBS-01 load path, not a weaker stand-in. (Non-project packages are dropped
+	// by packageHasProjectFile, so pkgs are framework project packages.)
 	frameworkPatterns := []string{
 		"./framework/kernel/...",
 		"./framework/runtime/...",
