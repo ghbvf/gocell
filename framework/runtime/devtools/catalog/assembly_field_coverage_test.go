@@ -57,6 +57,10 @@ func TestAssemblySpec_OwnerAndMaxConsistencyLevelRoundTrip(t *testing.T) {
 	assert.Equal(t, "L2", asmSpec.MaxConsistencyLevel)
 	assert.Equal(t, []string{"alpha"}, asmSpec.Cells)
 	assert.Equal(t, "k8s", asmSpec.Build.DeployTemplate)
+	// mainbundle declares no topology → mapAssemblyTopology returns the zero
+	// AssemblySpecTopology (both slices nil), omitted on the wire via omitempty.
+	assert.Nil(t, asmSpec.Topology.Colocated)
+	assert.Nil(t, asmSpec.Topology.Remote)
 }
 
 // TestAssemblySpec_TopologyRoundTrip exercises the metadata.TopologyMeta →
