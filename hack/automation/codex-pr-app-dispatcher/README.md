@@ -55,6 +55,40 @@ Dry run:
 python3 hack/automation/codex-pr-app-dispatcher/router.py --dry-run --once
 ```
 
+## Poll Interval
+
+The router polls once immediately after startup, then sleeps for `GOCELL_APP_ROUTER_INTERVAL` seconds between polls.
+
+Default:
+
+```text
+120
+```
+
+Recommended LaunchAgent value for normal operation:
+
+```bash
+export GOCELL_APP_ROUTER_INTERVAL=300
+```
+
+That means one GitHub PR information pull every 5 minutes. A normal empty poll performs two `gh pr list` calls, one for each trigger label. It performs extra `gh pr view` calls only for candidate PRs that pass initial discovery.
+
+## Active Poll Trigger
+
+The long-lived router supports an immediate poll without restarting app-server. Send `SIGUSR1` to the running router process:
+
+```bash
+bash hack/automation/codex-pr-app-dispatcher/trigger.sh
+```
+
+On macOS LaunchAgent installations this script runs:
+
+```bash
+launchctl kill SIGUSR1 gui/$(id -u)/com.ghbvf.gocell.codex-pr-app-dispatcher
+```
+
+The signal wakes the sleep loop, runs one normal `poll_once`, and then returns to the configured interval. It does not wait for Codex turns to complete and does not manage existing sessions.
+
 ## Flowchart
 
 ```mermaid
@@ -89,6 +123,7 @@ flowchart TD
     M1 --> T
     P1 --> T
     S --> T
+    U["SIGUSR1 active trigger"] --> D
     T --> D
 ```
 
@@ -349,4 +384,3 @@ Syntax check:
 ```bash
 python3 -m py_compile hack/automation/codex-pr-app-dispatcher/router.py
 ```
-

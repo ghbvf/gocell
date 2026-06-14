@@ -541,6 +541,18 @@ def poll_once(cfg: Config, client: AppServerClient | None) -> int:
     return dispatched
 
 
+def install_wake_signal(wake_event: threading.Event) -> None:
+    if not hasattr(signal, "SIGUSR1"):
+        log("SIGUSR1 is unavailable on this platform; active poll trigger disabled")
+        return
+
+    def _wake(_signum: int, _frame: object) -> None:
+        wake_event.set()
+
+    signal.signal(signal.SIGUSR1, _wake)
+    log("active poll trigger installed: send SIGUSR1 to wake the router")
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -567,12 +579,16 @@ def main(argv: list[str]) -> int:
             )
             poll_once(cfg, client)
             return 0
+        wake_event = threading.Event()
+        install_wake_signal(wake_event)
         while True:
             try:
                 poll_once(cfg, client)
             except Exception as exc:  # noqa: BLE001 - daemon should keep polling.
                 log(f"poll failed - {exc}")
-            time.sleep(cfg.interval)
+            if wake_event.wait(cfg.interval):
+                wake_event.clear()
+                log("active poll trigger received")
 
 
 if __name__ == "__main__":
