@@ -1,11 +1,13 @@
 package catalog_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
@@ -57,4 +59,72 @@ func TestAssemblySpec_OwnerAndMaxConsistencyLevelRoundTrip(t *testing.T) {
 	assert.Equal(t, "L2", asmSpec.MaxConsistencyLevel)
 	assert.Equal(t, []string{"alpha"}, asmSpec.Cells)
 	assert.Equal(t, "k8s", asmSpec.Build.DeployTemplate)
+	// mainbundle declares no topology → mapAssemblyTopology returns nil so the
+	// optional topology field is omitted from the wire entirely (not `{}`).
+	assert.Nil(t, asmSpec.Topology)
+
+	// Wire shape: a topology-less assembly must NOT emit a `topology` key in
+	// either marshal format (a value struct + omitempty would emit `{}`).
+	jsonBytes, err := json.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.NotContains(t, string(jsonBytes), "topology", "empty topology must be omitted from JSON wire")
+	yamlBytes, err := yaml.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.NotContains(t, string(yamlBytes), "topology", "empty topology must be omitted from YAML wire")
+}
+
+// TestAssemblySpec_TopologyRoundTrip exercises the metadata.TopologyMeta →
+// AssemblySpecTopology mapping. The ASSEMBLY-META-DTO-COVERAGE-01 archtest only
+// asserts the top-level `topology` field NAME is present on AssemblySpec; this
+// test guards the actual VALUE mapping (colocated + remote cells) so a future
+// edit that adds the field but forgets the buildAssemblyEntity copy is caught —
+// the same focused round-trip guard role BuildMeta carries above.
+func TestAssemblySpec_TopologyRoundTrip(t *testing.T) {
+	t.Parallel()
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"alpha": {ID: "alpha", Type: "core", ConsistencyLevel: "L2"},
+			"beta":  {ID: "beta", Type: "core", ConsistencyLevel: "L2"},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"splitbundle": {
+				ID:    "splitbundle",
+				Cells: metadata.CellRefs("alpha", "beta"),
+				Owner: metadata.OwnerMeta{Team: "platform", Role: "bundle-owner"},
+				Topology: metadata.TopologyMeta{
+					Colocated: []string{"alpha"},
+					Remote: []metadata.TopologyRemoteEntry{
+						{CellID: "beta", Endpoint: "beta.svc:8080"},
+					},
+				},
+			},
+		},
+	}
+	doc, err := catalog.BuildDocument(
+		clockmock.New(time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)),
+		pm,
+		catalog.ExportOptions{},
+	)
+	require.NoError(t, err)
+
+	var asmSpec catalog.AssemblySpec
+	for _, e := range doc.Entities {
+		if e.Kind == "Assembly" && e.Metadata.Name == "splitbundle" {
+			s, ok := e.Spec.(catalog.AssemblySpec)
+			require.True(t, ok)
+			asmSpec = s
+			break
+		}
+	}
+	require.NotNil(t, asmSpec.Topology)
+	assert.Equal(t, []string{"alpha"}, asmSpec.Topology.Colocated)
+	require.Len(t, asmSpec.Topology.Remote, 1)
+	assert.Equal(t, "beta", asmSpec.Topology.Remote[0].CellID)
+	assert.Equal(t, "beta.svc:8080", asmSpec.Topology.Remote[0].Endpoint)
+
+	// Wire shape: a topology-bearing assembly emits the field with its values.
+	jsonBytes, err := json.Marshal(asmSpec)
+	require.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), `"topology"`)
+	assert.Contains(t, string(jsonBytes), "beta.svc:8080")
 }

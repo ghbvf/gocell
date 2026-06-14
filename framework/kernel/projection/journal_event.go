@@ -31,7 +31,7 @@ import (
 // event message rather than being re-queried from the store.
 // ref: kernel/saga/sagaprojection.sagaProjectionEvent — the same carry-the-position shape.
 type JournalEvent struct {
-	entry     outbox.Entry
+	entry     ProjectionEvent
 	globalSeq int64
 }
 
@@ -39,7 +39,11 @@ type JournalEvent struct {
 // read alongside it (mem: 1-based dense index; PG: projection_events.global_seq). globalSeq
 // must be >= 1 for a real journal row; 0 is the unseeded sentinel a conforming source never
 // emits, which PositionFromCarrier rejects as a permanent error.
-func NewJournalEvent(entry outbox.Entry, globalSeq int64) *JournalEvent {
+//
+// entry is the typed cellvocab.ProjectionEvent carrier boundary (projection.ProjectionEvent
+// alias), not bare outbox.Entry, per ADR #1609 §D2: an outbox.Entry still satisfies the
+// interface, so live-bus and outbox-replay sources pass unchanged.
+func NewJournalEvent(entry ProjectionEvent, globalSeq int64) *JournalEvent {
 	return &JournalEvent{entry: entry, globalSeq: globalSeq}
 }
 

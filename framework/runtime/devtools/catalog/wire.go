@@ -270,10 +270,11 @@ type JourneyPassCrit struct {
 
 // AssemblySpec is Document.Entities[Kind=="Assembly"].Spec.
 type AssemblySpec struct {
-	Cells               []string          `json:"cells,omitempty"               yaml:"cells,omitempty"`
-	Owner               CellSpecOwner     `json:"owner"                         yaml:"owner"`
-	MaxConsistencyLevel string            `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
-	Build               AssemblySpecBuild `json:"build"                         yaml:"build"`
+	Cells               []string              `json:"cells,omitempty"               yaml:"cells,omitempty"`
+	Owner               CellSpecOwner         `json:"owner"                         yaml:"owner"`
+	MaxConsistencyLevel string                `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
+	Build               AssemblySpecBuild     `json:"build"                         yaml:"build"`
+	Topology            *AssemblySpecTopology `json:"topology,omitempty"            yaml:"topology,omitempty"`
 }
 
 // AssemblySpecBuild mirrors AssemblyBuildMeta on the wire.
@@ -281,6 +282,25 @@ type AssemblySpecBuild struct {
 	Entrypoint     string `json:"entrypoint,omitempty"     yaml:"entrypoint,omitempty"`
 	Binary         string `json:"binary,omitempty"         yaml:"binary,omitempty"`
 	DeployTemplate string `json:"deployTemplate,omitempty" yaml:"deployTemplate,omitempty"`
+}
+
+// AssemblySpecTopology mirrors metadata.TopologyMeta on the wire: the deployment
+// placement of the assembly's cells (colocated in-process vs reachable as remote
+// services). Empty => all cells co-located (zero-migration default).
+//
+// AssemblySpec references it as an OPTIONAL POINTER (nil => omitted): omitempty
+// on a value struct does NOT drop a struct whose fields are all zero (encoding/json
+// only treats false/0/nil-ptr/empty-len as empty), so a value field would emit
+// `"topology":{}` for every topology-less assembly. A nil pointer omits the field.
+type AssemblySpecTopology struct {
+	Colocated []string                     `json:"colocated,omitempty" yaml:"colocated,omitempty"`
+	Remote    []AssemblySpecTopologyRemote `json:"remote,omitempty"    yaml:"remote,omitempty"`
+}
+
+// AssemblySpecTopologyRemote mirrors metadata.TopologyRemoteEntry on the wire.
+type AssemblySpecTopologyRemote struct {
+	CellID   string `json:"cellID"   yaml:"cellID"`
+	Endpoint string `json:"endpoint" yaml:"endpoint"`
 }
 
 // ActorSpec is Document.Entities[Kind=="Actor"].Spec.
