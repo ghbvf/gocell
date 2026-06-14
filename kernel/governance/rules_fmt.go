@@ -941,6 +941,105 @@ func (v *Validator) validateFMT37Proto(c *metadata.ContractMeta, g *metadata.GRP
 	return nil
 }
 
+// fieldEndpointsGRPCMethods anchors FMT-41 findings on the user-editable overlay
+// field (endpoints.grpc.methods, #1675).
+const fieldEndpointsGRPCMethods = "endpoints.grpc.methods"
+
+// validateFMT41 validates the per-method gRPC auth overlay (endpoints.grpc.methods,
+// #1675) with the metadata-pure guards governance can decide WITHOUT reading the
+// .proto. kernel/ cannot import tools/codegen/contractgen (the proto reader), so
+// referential integrity (each name ∈ the proto's method set) is NOT here — it
+// lives in the contractgen pre-pass (checkGRPCProtoCollisions). FMT-41 owns the
+// four metadata-pure guards:
+//
+//   - non-empty name: every overlay entry must name an RPC.
+//   - no duplicate names: one annotation per method.
+//   - dead-overlay gate (methods ⇒ codegen:true): a non-empty overlay on a
+//     codegen:false contract never produces a runtime public set and skips the
+//     contractgen referential pre-pass — it is silently inert. Rejecting it keeps
+//     "every overlay has a live consumer" true and makes the referential pre-pass
+//     a guaranteed gate (no overlay can exist outside codegen).
+//   - vacuous-entry (public:true required): in #1675 public is the only flag, so
+//     a public:false entry is indistinguishable from omission — pure config noise.
+//     #2008 widens this guard to "asserts ≥1 non-default" when ABAC fields land.
+//
+// AI-robust: Medium (governance YAML-metadata validate layer, same tier as
+// FMT-37). The Hard referential gate is the contractgen pre-pass + cellgen golden.
+func (v *Validator) validateFMT41() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		// Only grpc contracts carry endpoints.grpc.methods; the kind guard is
+		// defensive (FMT-37 already rejects endpoints.grpc on non-grpc contracts)
+		// so FMT-41 is self-contained and never processes a foreign overlay.
+		if cellvocab.ContractKind(c.Kind) != cellvocab.ContractGRPC {
+			continue
+		}
+		if c.Endpoints.GRPC == nil || len(c.Endpoints.GRPC.Methods) == 0 {
+			continue
+		}
+		results = append(results, v.validateFMT41ForContract(c)...)
+	}
+	return results
+}
+
+// validateFMT41ForContract runs the FMT-41 guards for a single grpc contract that
+// declares a non-empty endpoints.grpc.methods overlay.
+func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []ValidationResult {
+	g := c.Endpoints.GRPC
+	file := contractFile(c)
+
+	if !c.Codegen {
+		// Terminal for this overlay: codegen:false makes the whole overlay inert,
+		// so the per-entry name/dup/public guards below would be redundant noise —
+		// return the single actionable finding (fix codegen first, then re-validate).
+		return []ValidationResult{v.newError(
+			codeFMT41, IssueForbidden, file, fieldEndpointsGRPCMethods,
+			fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods but has codegen:false; "+
+				"the overlay would never reach codegen and is silently inert", c.ID),
+			"set codegen:true (the default) or remove the methods overlay",
+		)}
+	}
+
+	var results []ValidationResult
+	seen := make(map[string]struct{}, len(g.Methods))
+	for i := range g.Methods {
+		m := g.Methods[i]
+		switch {
+		case m.Name == "":
+			results = append(results, v.newError(
+				codeFMT41, IssueRequired, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q has an endpoints.grpc.methods entry with an empty name", c.ID),
+				"set name to the proto RPC method's simple name (e.g. Verify)",
+			))
+		case dupKey(seen, m.Name):
+			results = append(results, v.newError(
+				codeFMT41, IssueDuplicate, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods entry %q more than once", c.ID, m.Name),
+				"remove the duplicate method entry",
+			))
+		case !m.Public:
+			results = append(results, v.newError(
+				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q asserts no non-default flag "+
+					"(public:false is equivalent to omission)", c.ID, m.Name),
+				"set public:true, or remove the entry (#1675 carries only the public flag; ABAC fields arrive in #2008)",
+			))
+		}
+	}
+	return results
+}
+
+// dupKey reports whether name is already in seen, inserting it when absent. It
+// keeps validateFMT41ForContract's per-entry switch a flat dispatch (cognitive
+// complexity ≤ 15) instead of nesting a seen-check inside the loop body.
+func dupKey(seen map[string]struct{}, name string) bool {
+	if _, ok := seen[name]; ok {
+		return true
+	}
+	seen[name] = struct{}{}
+	return false
+}
+
 // validateFMT26 checks that auth.public and auth.passwordResetExempt are not
 // both true on the same HTTP endpoint. The two flags are semantically
 // contradictory: public skips JWT entirely, while passwordResetExempt requires

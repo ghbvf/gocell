@@ -106,7 +106,6 @@ func TestDeviceIdentityRenew_V1(t *testing.T) {
 	c.ValidateErrorResponse(t, 401, validErrorBody)
 	c.ValidateErrorResponse(t, 403, validErrorBody)
 	c.ValidateErrorResponse(t, 404, validErrorBody)
-	c.ValidateErrorResponse(t, 409, validErrorBody) // idempotency conflict (framework)
 	c.ValidateErrorResponse(t, 413, validErrorBody)
 	c.ValidateErrorResponse(t, 422, validErrorBody)
 	c.ValidateErrorResponse(t, 503, validErrorBody)
@@ -150,7 +149,6 @@ func TestDeviceIdentityRevoke_V1(t *testing.T) {
 	c.ValidateErrorResponse(t, 401, validErrorBody)
 	c.ValidateErrorResponse(t, 403, validErrorBody) // cross-scope fail-closed
 	c.ValidateErrorResponse(t, 404, validErrorBody)
-	c.ValidateErrorResponse(t, 409, validErrorBody) // idempotency conflict (framework)
 	c.ValidateErrorResponse(t, 413, validErrorBody)
 	c.ValidateErrorResponse(t, 422, validErrorBody)
 	c.ValidateErrorResponse(t, 503, validErrorBody)

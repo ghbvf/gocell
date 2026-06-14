@@ -594,7 +594,7 @@ func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
 	}
-	b := reconcile.New(sweeper).
+	b := reconcile.New(sweeper, reconcile.SingleTenant()).
 		WithTrigger(reconcile.TickerTrigger(c.clk, commandSweepInterval)).
 		WithName("devicecommand.sweeper").
 		WithReconcilerID("devicecommand_sweeper"). // label-safe: [a-z0-9_], no dots
@@ -708,7 +708,7 @@ func (c *DeviceCell) buildCertRenewalSweeper() error {
 	if err != nil {
 		return fmt.Errorf("device-cert renewal reconciler: %w", err)
 	}
-	b := reconcile.New(reconciler).
+	b := reconcile.New(reconciler, reconcile.SingleTenant()).
 		WithTrigger(reconcile.TickerTrigger(c.clk, certRenewalSweepInterval)).
 		WithName("devicecert.renewal").
 		WithReconcilerID("devicecert_renewal"). // label-safe: [a-z0-9_], no dots

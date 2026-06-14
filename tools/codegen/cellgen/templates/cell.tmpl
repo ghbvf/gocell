@@ -126,6 +126,13 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 		ContractID: {{ printf "%q" .ContractID }},
 		CellID:     {{ printf "%q" $.CellID }},
 		Listener:   {{ .ListenerConst }},
+{{- if .PublicMethods }}
+		PublicMethods: []string{
+{{- range .PublicMethods }}
+			{{ printf "%q" . }},
+{{- end }}
+		},
+{{- end }}
 		Register: func(r grpc.ServiceRegistrar) {
 			{{.PbAlias}}.{{.RegisterFunc}}(r, c.{{.HandlerField}})
 		},

@@ -131,11 +131,11 @@ func TestBuilder_WithDeploymentTopology_NonEmptySpecInSharedDeps(t *testing.T) {
 	assert.Equal(t, "cell-b:9090", shared.DeploymentTopology.Remote[0].Endpoint,
 		"SharedDeps.DeploymentTopology.Remote[0].Endpoint must flow through Builder.Build unchanged")
 
-	// app.opts always contains WithControlPlaneTopology + WithDeploymentTopology
-	// (2 framework opts). With one resource (none in this test) + 0 cellOpts +
-	// 0 runtimeOpts, the total must be exactly 2.
-	assert.Len(t, app.opts, 2,
-		"Builder.Build always injects WithControlPlaneTopology + WithDeploymentTopology (2 framework opts)")
+	// app.opts always contains WithControlPlaneTopology + WithDeploymentTopology +
+	// WithInProcessTransport (3 framework opts). With no resources + 0 cellOpts +
+	// 0 runtimeOpts, the total must be exactly 3.
+	assert.Len(t, app.opts, 3,
+		"Builder.Build always injects WithControlPlaneTopology + WithDeploymentTopology + WithInProcessTransport (3 framework opts)")
 }
 
 // TestBuilder_HappyPath_SingleSourceResourceContract verifies the single-source
@@ -173,13 +173,15 @@ func TestBuilder_HappyPath_SingleSourceResourceContract(t *testing.T) {
 	require.NotNil(t, app)
 
 	// Build derived exactly one WithManagedResource opt from the single Resources
-	// entry — the module supplied no opts of its own — plus the two framework
-	// opts Build always injects (WithControlPlaneTopology, #1410 review F1; and
-	// WithDeploymentTopology, #1962). Three total: 1 resource-derived + 2 framework.
-	// A double-write of the resource (the bug this test guards) would make it 4.
-	assert.Len(t, app.opts, 3,
+	// entry — the module supplied no opts of its own — plus the three framework
+	// opts Build always injects (WithControlPlaneTopology, #1410 review F1;
+	// WithDeploymentTopology, #1962; WithInProcessTransport, #1963). Four total:
+	// 1 resource-derived + 3 framework. A double-write of the resource (the bug
+	// this test guards) would make it 5.
+	assert.Len(t, app.opts, 4,
 		"Builder derives one WithManagedResource opt from ModuleResult.Resources (single source) "+
-			"plus the always-injected WithControlPlaneTopology and WithDeploymentTopology framework opts")
+			"plus the always-injected WithControlPlaneTopology, WithDeploymentTopology and "+
+			"WithInProcessTransport framework opts")
 	// Success path never rolls back.
 	assert.Empty(t, order.calls, "no resource may be Closed on the success path")
 }

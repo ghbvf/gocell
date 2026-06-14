@@ -2,8 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/adapters/postgres/internal/pgexec"
@@ -39,48 +42,62 @@ ORDER BY global_seq`
 // migration drift a pool-level ping cannot detect (matches audit_ledger / session_store).
 const projectionJournalReadySQL = `SELECT 1 FROM projection_events WHERE false`
 
-// PGProjectionEventSource is the durable production projection.ReplaySource + projection.Cursor
-// backed by the append-only projection_events journal (EPIC #1504). Unlike the
-// outbox-backed PGProjectionReplaySource it replaces (PR-03), it reads its monotonic position
-// from projection_events.global_seq — a never-deleted journal — so a position can never depend
+// projectionEventPositionByIDSQL resolves a live-delivered entry's journal position by its
+// id. This is the live-carrier resolution lookup (ResolveCarrier): unlike the transient-outbox
+// path it replaced, it queries the never-cleaned projection_events journal, so a row committed
+// by the D4 emit-time double-write before delivery is always present (a missing row is a genuine
+// permanent error, never the spurious cleaned-row ErrNoRows that was the #1504 root bug).
+const projectionEventPositionByIDSQL = `SELECT global_seq FROM projection_events WHERE id = $1`
+
+// projectionEventLookupTimeout bounds the ResolveCarrier id→global_seq lookup. It mirrors the
+// retired PGProjectionCursor.cursorPositionTimeout (5s): a stalled DB must surface as a
+// (transient) timeout the Coordinator requeues, never hang the projection worker indefinitely.
+// The lookup is an indexed unique-key read, so this is a backstop, not a hot-path budget; a
+// PG-side statement_timeout remains a valid additional defense. context.WithTimeout honors a
+// shorter caller deadline, so a tighter delivery ctx still wins.
+const projectionEventLookupTimeout = 5 * time.Second
+
+// PGProjectionEventSource is the durable production projection.ReplaySource + projection.LiveCursor
+// backed by the append-only projection_events journal (EPIC #1504). Unlike the outbox-backed
+// replay source it replaced (deleted in PR-03), it reads its monotonic position from
+// projection_events.global_seq — a never-deleted journal — so a position can never depend
 // on a row the relay may have deleted (the #1504 root bug: a cleaned outbox row →
 // SELECT seq WHERE id=$1 → ErrNoRows → permanent error → dead-letter).
 //
 // Position reads global_seq off the JournalEvent carrier that Replay produced, with NO SQL
 // lookup. That structurally closes the REBUILD-from-0 gap, because Replay itself constructs the
-// position-bearing carrier from each row. The LIVE-path gap is NOT closed by carrier-intrinsic
-// Position alone: the live broker delivers a raw outbox.Entry that carries no global_seq, which
-// PositionFromCarrier rejects as a permanent error. Closing the live path needs the wiring that
-// makes this source the Coordinator's live Cursor (PR-03) to hand the Cursor a position-bearing
-// carrier — resolving the entry's journal global_seq at the delivery boundary. The durable
-// journal is what makes that resolution safe: the D4 same-transaction double-write commits the
-// projection_events row before the event is delivered, and the journal is never cleaned, so the
-// resolution cannot ErrNoRows (the exact failure mode that broke the transient-outbox path).
-// PR-01 ships the rebuild source + the carrier-read Position replay relies on; the live-carrier
-// resolver and its regression coverage land in PR-03 (the durable-source wiring). The live-carrier
-// protocol is recorded in ADR 202606071600-1504 §4.2.
+// position-bearing carrier from each row. The LIVE-path gap is closed by ResolveCarrier: the
+// live broker delivers a raw outbox.Entry that carries no global_seq, which PositionFromCarrier
+// would reject as a permanent error, so the Coordinator resolves it at the delivery boundary via
+// ResolveCarrier into a position-bearing JournalEvent before Position is consulted (this source
+// is wired as the Coordinator's projection.LiveCursor). The durable journal makes that resolution
+// safe: the D4 same-transaction double-write commits the projection_events row before the event
+// is delivered, and the journal is never cleaned, so the lookup cannot spuriously ErrNoRows (the
+// exact failure mode that broke the transient-outbox path). The live-carrier protocol is recorded
+// in ADR 202606071600-1504 §4.2.
 //
 // It holds a pgexec.PGExecutor (the sealed pool funnel, PG-REPO-AMBIENT-TX-01) rather than a
 // raw pool. Replay is NOT transactional: the Coordinator invokes it outside RunInTx and wraps
 // each fn callback in its own transaction. The SAME instance is wired as both the
-// Coordinator's ReplaySource and its Cursor so the global_seq encoding is consistent across
-// the two interfaces (mirrors SagaJournalSource).
+// Coordinator's ReplaySource and its LiveCursor so the global_seq encoding is consistent across
+// the interfaces (mirrors SagaJournalSource).
 //
 // ref: AxonFramework JdbcEventStore + TrackingToken — retained event store as projection source.
 type PGProjectionEventSource struct {
 	db pgexec.PGExecutor
 }
 
-// compile-time interface checks: one type satisfies both projection contracts and the
-// differentiated repo-readiness probe.
+// compile-time interface checks: one type is a ReplaySource, a full LiveCursor (Position +
+// ResolveCarrier — the Coordinator's required cursor contract), and the differentiated
+// repo-readiness probe.
 var (
 	_ projection.ReplaySource = (*PGProjectionEventSource)(nil)
-	_ projection.Cursor       = (*PGProjectionEventSource)(nil)
+	_ projection.LiveCursor   = (*PGProjectionEventSource)(nil)
 	_ healthz.RepoProber      = (*PGProjectionEventSource)(nil)
 )
 
 // NewProjectionEventSource wraps the pool in the sealed pgexec funnel. A nil pool is
-// rejected with ErrValidationFailed (same shape as NewProjectionReplaySource).
+// rejected with ErrValidationFailed (same shape as NewProjectionCheckpointStore).
 func NewProjectionEventSource(pool *pgxpool.Pool) (*PGProjectionEventSource, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -135,6 +152,59 @@ func (s *PGProjectionEventSource) Replay(ctx context.Context, fromOffset int64, 
 // delegated to the shared projection.PositionFromCarrier.
 func (s *PGProjectionEventSource) Position(entry projection.ProjectionEvent) (int64, error) {
 	return projection.PositionFromCarrier(entry)
+}
+
+// ResolveCarrier normalizes a live-delivered entry into a position-bearing carrier
+// (projection.LiveCarrierResolver). An already-positioned *JournalEvent is returned unchanged
+// (idempotent — a rebuild carrier needs no lookup). A bare live outbox.Entry is resolved by
+// querying its global_seq from the durable journal and wrapping it in a JournalEvent, so the
+// Coordinator's carrier-intrinsic Position then succeeds.
+//
+// Error semantics mirror the position lookup the transient-outbox source used, but against the
+// never-cleaned journal: pgx.ErrNoRows is a PERMANENT error (an entry genuinely absent from the
+// journal cannot be assigned a position and retry cannot fix it — the D4 emit-time double-write
+// guarantees a real projection-source event was committed before delivery, so a miss is a true
+// invariant violation, not the spurious cleaned-row case); any other query failure is transient
+// (wrapped, requeued).
+//
+// Transaction visibility: the lookup runs on the caller's ambient tx ctx (pgexec routes Query to
+// the in-flight tx when one is present). The projection_events row was committed by the producer's
+// D4 same-transaction double-write in a PRIOR transaction, before this event was delivered, so it
+// is visible regardless of the txRunner's isolation level (it predates the consumer tx snapshot
+// under REPEATABLE READ/SERIALIZABLE just as it does under READ COMMITTED). The lookup is read-only;
+// it neither needs nor takes a separate connection. It is bounded by projectionEventLookupTimeout
+// (deriving a child ctx that preserves the ambient tx value, so a stall surfaces as a transient
+// timeout the Coordinator requeues rather than hanging the worker; a shorter caller deadline wins).
+//
+// Bootstrap-gap caveat (ADR 202606071600-1504 §5/§8): events produced BEFORE the PR-02 journaling
+// decorator was deployed have no projection_events row, so a redelivery of such a historical event
+// resolves to ErrNoRows → PERMANENT → dead-letter. That is the documented v1 limitation, not a
+// system fault — the journal intentionally retains only events from the decorator's deployment
+// forward, so such a DLX entry is expected and benign, not a recoverable transient.
+func (s *PGProjectionEventSource) ResolveCarrier(
+	ctx context.Context, entry projection.ProjectionEvent,
+) (projection.ProjectionEvent, error) {
+	if _, ok := entry.(*projection.JournalEvent); ok {
+		return entry, nil
+	}
+	base, ok := entry.(kout.Entry)
+	if !ok {
+		return nil, kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection event source: ResolveCarrier requires a live outbox.Entry or a *JournalEvent carrier"))
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, projectionEventLookupTimeout)
+	defer cancel()
+	var globalSeq int64
+	err := s.db.QueryRow(lookupCtx, projectionEventPositionByIDSQL, entry.EventID()).Scan(&globalSeq)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, kout.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"projection event source: live entry not present in the projection_events journal"))
+	}
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"projection event source: resolve live carrier", err)
+	}
+	return projection.NewJournalEvent(base, globalSeq), nil
 }
 
 // RepoReady implements healthz.RepoProber. It issues a cheap non-transactional representative

@@ -31,12 +31,14 @@ func TestProjectionRuntimeOptions_MemoryMode(t *testing.T) {
 	assert.Nil(t, opts, "memory mode (shared.PG == nil) must wire no projection options")
 }
 
-// TestProjectionRuntimeOptions_PGMode verifies the C1 hard gate: in PG mode the
-// journal-backed reader is NOT wired by default (transient-outbox limitation, see
-// #1504) and is only wired under the explicit preview opt-in. The pool is
-// non-connecting: MinConns defaults to 0 so NewWithConfig opens no connection, and
-// the projection constructors only wrap the pool in pgexec (no query), so
-// 127.0.0.1:1 is never dialed.
+// TestProjectionRuntimeOptions_PGMode verifies the fail-closed gate: in PG mode the
+// durable projection_events journal source is NOT wired by default (the production
+// posture stays fail-closed — a projection declared in PG mode then fails fast in the
+// bootstrap phase6 drain) and is only wired under the explicit gate opt-in. The gated
+// source is production-safe; the gate's removal (production-default flip) lands in PR-04
+// (#1771), gated on T-06-2 e2e. The pool is non-connecting: MinConns defaults to 0 so
+// NewWithConfig opens no connection, and the projection constructor only wraps the pool
+// in pgexec (no query), so 127.0.0.1:1 is never dialed.
 func TestProjectionRuntimeOptions_PGMode(t *testing.T) {
 	cfg, err := pgxpool.ParseConfig("postgres://u:p@127.0.0.1:1/gocell_unit")
 	require.NoError(t, err)
@@ -45,20 +47,24 @@ func TestProjectionRuntimeOptions_PGMode(t *testing.T) {
 	defer pool.Close()
 	shared := &composition.SharedDeps{PG: capability.NewPGProvider(projNoopTxRunner{}, nil, pool)}
 
-	t.Run("gated off by default (not production-safe)", func(t *testing.T) {
+	t.Run("gated off by default (fail-closed posture)", func(t *testing.T) {
 		// No GOCELL_PROJECTION_PG_JOURNAL_PREVIEW → not wired; a projection declared
 		// in PG mode then fails fast in the bootstrap drain.
 		t.Setenv(envProjectionPGJournalPreview, "")
 		opts, err := projectionRuntimeOptions(shared)
 		require.NoError(t, err)
-		assert.Nil(t, opts, "PG mode must NOT wire the transient-outbox reader by default")
+		assert.Nil(t, opts, "PG mode must NOT wire the durable journal source by default (fail-closed gate)")
 	})
 
-	t.Run("preview opt-in wires four options", func(t *testing.T) {
+	t.Run("gate opt-in wires the source + readyz probe", func(t *testing.T) {
 		t.Setenv(envProjectionPGJournalPreview, "true")
 		opts, err := projectionRuntimeOptions(shared)
 		require.NoError(t, err)
-		assert.Len(t, opts, 4,
-			"preview mode wires WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor}")
+		// 5 options: WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor} +
+		// WithHealthChecker(projection_journal_ready). The durable source is wired as
+		// BOTH ReplaySource and Cursor (one instance), with the journal readyz probe
+		// registered alongside.
+		assert.Len(t, opts, 5,
+			"gate opt-in wires WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor} + WithHealthChecker")
 	})
 }

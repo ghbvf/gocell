@@ -11,6 +11,36 @@ metrics:
       labels:
         - reason
       file: runtime/auth/metrics.go
+    - name: auth_pdp_decision_duration_seconds
+      fqName: gocell_auth_pdp_decision_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: Duration of a PDP authorization decision (policy-store load + evaluate) in seconds, by decision.
+      labels:
+        - decision
+      buckets:
+        - ".0001"
+        - ".0005"
+        - ".001"
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+      file: runtime/auth/pdp_metrics.go
+    - name: auth_pdp_decision_total
+      fqName: gocell_auth_pdp_decision_total
+      namespace: gocell
+      type: counter
+      help: Total number of PDP (ABAC) authorization decisions, by action and decision (allow/deny/error).
+      labels:
+        - action
+        - decision
+      file: runtime/auth/pdp_metrics.go
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -151,6 +181,14 @@ metrics:
         - hook
         - outcome
       file: cmd/corebundle/metrics.go
+    - name: cell_transport_requests_total
+      fqName: gocell_cell_transport_requests_total
+      namespace: gocell
+      type: counter
+      help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
+      labels:
+        - transport_mode
+      file: runtime/transport/metrics.go
     - name: config_event_process_total
       fqName: gocell_config_event_process_total
       namespace: gocell

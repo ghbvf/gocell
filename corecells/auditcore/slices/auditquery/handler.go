@@ -74,12 +74,12 @@ func auditQueryPolicy(r *http.Request) error {
 // queries are silent. Factored out of List for cognitive-complexity budget.
 //
 // Super-admin access is excluded from this breadcrumb: the mandatory FR-007
-// slog.Error cross-tenant audit is already emitted inside p.RowVisibility before
-// this function is called. Emitting a second admin-breadcrumb would be redundant
-// and confusing (a lower-severity Info record for a higher-privilege event).
+// slog.Error cross-tenant audit is emitted inside p.CrossTenantVisibility on the
+// super-admin path. Emitting a second admin-breadcrumb would be redundant and
+// confusing (a lower-severity Info record for a higher-privilege event).
 func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
 	if p.HasRole(auth.RoleSuperAdmin) {
-		return // FR-007 audit already emitted inside p.RowVisibility
+		return // FR-007 audit already emitted inside p.CrossTenantVisibility
 	}
 	if !p.HasRole(auth.RoleAdmin) {
 		return
@@ -91,6 +91,40 @@ func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorID
 		slog.InfoContext(ctx, "audit: admin querying other user",
 			slog.String("admin", subject), slog.String("target_actor", actorIDFilter))
 	}
+}
+
+// auditVisibilityResult carries the outcome of deriveAuditVisibility.
+type auditVisibilityResult struct {
+	vis           tenant.RowVisibility
+	ctv           tenant.CrossTenantVisibility // non-zero only when isCrossTenant
+	isCrossTenant bool
+}
+
+// deriveAuditVisibility derives the row-visibility obligation for a single
+// audit List request, routing super-admin through CrossTenantVisibility (the
+// sole FR-007-audited funnel) and all other principals through RowVisibility.
+// Exactly one mint happens per call — calling both for the same request would
+// double the FR-007 audit record.
+//
+// Routing: super-admin calls p.CrossTenantVisibility(ctx) [emits FR-007 slog.Error];
+// all others call p.RowVisibility(ctx) [no FR-007 audit].
+func deriveAuditVisibility(ctx context.Context, p *auth.Principal) (auditVisibilityResult, error) {
+	if p.HasRole(auth.RoleSuperAdmin) {
+		ctv, err := p.CrossTenantVisibility(ctx)
+		if err != nil {
+			return auditVisibilityResult{}, err
+		}
+		return auditVisibilityResult{
+			vis:           ctv.Visibility(),
+			ctv:           ctv,
+			isCrossTenant: true,
+		}, nil
+	}
+	vis, err := p.RowVisibility(ctx)
+	if err != nil {
+		return auditVisibilityResult{}, err
+	}
+	return auditVisibilityResult{vis: vis}, nil
 }
 
 // ListAdapter wraps Service to implement auditlist.Service for http.audit.list.v1.
@@ -134,24 +168,24 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	subject := p.Subject
 
-	// Row-visibility obligation (epic #1337 PR-4/PR-5): derive from principal via
-	// the framework derivation. Super-admin → RowScopeAll, Admin → RowScopeTenant
-	// (all actors in their tenant), Non-admin → RowScopeSelf (actor_id == subject).
-	// NOTE (#1618 merge): under per-tenant FORCE RLS the audit store fail-closes
-	// RowScopeAll (RowScopeAllUnsupportedError) — cross-tenant audit read by a
-	// super-admin is deferred to backlog (the NOBYPASSRLS serving role cannot
-	// enumerate tenants); the mandatory FR-007 slog.Error audit is still emitted
-	// inside p.RowVisibility regardless. The explicit actorId filter (req.ActorID)
-	// is an additional AND predicate on top of the obligation; for non-admins
-	// auditQueryPolicy already enforces actorId == "" || == self, so the obligation
-	// is the effective enforcement gate.
-	vis, err := p.RowVisibility(ctx)
+	// Row-visibility obligation (epic #1337 PR-4/PR-5, #1810): derive EXACTLY ONE
+	// visibility mint per request via deriveAuditVisibility.
+	//
+	// super-admin path: calls p.CrossTenantVisibility(ctx) which emits the
+	//   mandatory FR-007 slog.Error audit, then routes to Service.QueryCrossTenant
+	//   (admin-pool-backed, no per-tenant GUC). No p.RowVisibility call on this path.
+	// non-super-admin path: calls p.RowVisibility(ctx) (no FR-007 audit), routes to
+	//   Service.Query with the per-tenant RunInTx wrapper.
+	//
+	// Calling both for a single request would double the FR-007 audit record;
+	// deriveAuditVisibility enforces single-mint.
+	vr, err := deriveAuditVisibility(ctx, p)
 	if err != nil {
-		// RowVisibility errors for service/anonymous/unknown principals
-		// (KindPermissionDenied). Surface as-is; callers holding a JWT-authenticated
-		// user/device principal never reach here under normal circumstances.
+		// RowVisibility / CrossTenantVisibility errors for service/anonymous/unknown
+		// principals (KindPermissionDenied). Surface as-is.
 		return nil, err
 	}
+	vis := vr.vis
 
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
@@ -160,62 +194,16 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	// (rejectMaskedFilters, below) and the response projection (NewProjectionList,
 	// below). A masked column must not be usable as a filter, else the predicate
 	// leaks a match/no-match oracle on a value the response redacts (F1).
+	// For RowScopeAll (super-admin cross-tenant) auditFieldMask returns identity
+	// mask (full column view) — same as RowScopeTenant.
 	mask := auditFieldMask(vis.Scope())
 	if err := rejectMaskedFilters(mask, req); err != nil {
 		return nil, err
 	}
 
-	// Tenant axis (#1618): the typed tenant scope, re-parsed from the
-	// authenticated principal at this repo boundary (auth.Principal.TenantID is a
-	// canonicalized string; the JWT authenticator already validated it). It is
-	// passed to Store.Query as the mandatory t param so a caller reads its OWN
-	// tenant's audit trail PLUS tenant-less system events (bootstrap.auth.fail) —
-	// never another tenant's rows. p.TenantID is guaranteed non-empty here (the
-	// empty case is rejected above — F1). This always-from-principal step is the
-	// app-layer isolation boundary; the Service wraps the read in a tenant-scoped
-	// RunInTx so DB-layer FORCE RLS is the defense-in-depth backstop.
-	tid, err := tenant.ParseTenantID(p.TenantID)
+	filters, err := buildAuditFilters(req)
 	if err != nil {
-		// Unreachable on the normal path (the JWT authenticator canonicalizes the
-		// claim); a malformed principal tenant is a server-side invariant break.
-		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
-			"audit query: principal tenant is not canonical", err)
-	}
-
-	filters := ledger.AuditFilters{
-		EventType: req.EventType,
-		// ActorID: admin's explicit actor filter (or empty = all). Non-admin
-		// callers: the row-visibility obligation (vis) above is the real
-		// enforcement gate — it restricts store results to actor_id == self
-		// regardless of this filter. The explicit filter narrows further if set.
-		// (auditQueryPolicy already gated entry: a non-admin reached here only via
-		// an explicit self-read or by holding audit:read.)
-		ActorID:   req.ActorID,
-		SubjectID: req.SubjectID,
-		TraceID:   req.TraceID,
-	}
-
-	// Inbound from/to filters parse with RFC3339Nano (RFC3339 with optional
-	// sub-second precision — the fractional-second segment is allowed, not
-	// required): the
-	// query window must resolve at the same sub-second granularity the outbound
-	// projection emits (see toListResponseDataItem), so a caller can round-trip a
-	// returned occurredAt/timestamp verbatim as a filter bound without truncation.
-	if req.From != "" {
-		t, err := time.Parse(time.RFC3339Nano, req.From)
-		if err != nil {
-			return nil, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
-				"invalid 'from' parameter: expected RFC3339 format")
-		}
-		filters.From = t
-	}
-	if req.To != "" {
-		t, err := time.Parse(time.RFC3339Nano, req.To)
-		if err != nil {
-			return nil, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
-				"invalid 'to' parameter: expected RFC3339 format")
-		}
-		filters.To = t
+		return nil, err
 	}
 
 	pageReq := query.PageParams{
@@ -223,7 +211,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		Limit:  int(req.Limit),
 	}
 
-	result, err := a.S.Query(ctx, tid, vis, filters, pageReq)
+	result, err := a.executeQuery(ctx, p, vr, vis, filters, pageReq)
 	if err != nil {
 		return nil, err
 	}
@@ -333,6 +321,105 @@ func rejectMaskedFilters(mask authz.FieldMask, req *auditlist.Request) error {
 		}
 	}
 	return nil
+}
+
+// buildAuditFilters parses the request time-range fields and constructs an
+// AuditFilters. Extracted from List to keep cognitive complexity ≤ 15.
+//
+// Inbound from/to use RFC3339Nano (optional sub-second precision) so a caller
+// can round-trip a returned occurredAt/timestamp verbatim as a filter bound
+// without truncation.
+func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
+	filters := ledger.AuditFilters{
+		EventType: req.EventType,
+		ActorID:   req.ActorID,
+		SubjectID: req.SubjectID,
+		TraceID:   req.TraceID,
+	}
+	if req.From != "" {
+		t, err := time.Parse(time.RFC3339Nano, req.From)
+		if err != nil {
+			return ledger.AuditFilters{}, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
+				"invalid 'from' parameter: expected RFC3339 format")
+		}
+		filters.From = t
+	}
+	if req.To != "" {
+		t, err := time.Parse(time.RFC3339Nano, req.To)
+		if err != nil {
+			return ledger.AuditFilters{}, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
+				"invalid 'to' parameter: expected RFC3339 format")
+		}
+		filters.To = t
+	}
+	return filters, nil
+}
+
+// requireAuditReadForCrossTenant enforces the audit:read PDP check unconditionally
+// on the cross-tenant (super-admin) path. The route-level auditQueryPolicy exempts
+// an explicit self-read (actorId == subject) from the PDP — that exemption is sound
+// for tenant-scoped reads but UNSOUND for cross-tenant reads: a super-admin with
+// ?actorId=<self> would otherwise bypass any tenant deny policy for a cross-tenant
+// operation (F1, Codex review). This helper is the defense: regardless of the
+// actorId parameter, every cross-tenant read MUST pass audit:read at the PDP.
+//
+// Mechanism: uses AuthorizerFromContext (the sole sealed reader of the authorizer
+// funnel) and evaluatePermissionDecision (the shared Decision→error mapper), both
+// from runtime/auth/permission.go, mirroring RequirePermission's decision logic but
+// callable from a handler with a plain ctx rather than *http.Request.
+const msgCrossTenantPermDenied = "cross-tenant audit read requires audit:read permission"
+
+func requireAuditReadForCrossTenant(ctx context.Context, subject string) error {
+	p := authz.PermAuditRead()
+	authorizer, ok := auth.AuthorizerFromContext(ctx)
+	if !ok {
+		// Fail-closed: an unwired PDP must never permit a cross-tenant read.
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	dec, err := authorizer.Authorize(ctx, subject, "", p.String())
+	if err != nil {
+		return err
+	}
+	if !dec.IsAllow() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	// Obligations on the cross-tenant path are not dischargeable at this gate;
+	// fail-closed if the PDP attaches any (mirrors RequirePermission's F5 rule).
+	if obl := dec.Obligations(); !obl.IsZero() {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossTenantPermDenied)
+	}
+	return nil
+}
+
+// executeQuery dispatches the paged audit query to the correct service method:
+// cross-tenant (super-admin + admin pool) or tenant-scoped (all others).
+// Extracted from List to keep cognitive complexity ≤ 15.
+func (a ListAdapter) executeQuery(
+	ctx context.Context, p *auth.Principal, vr auditVisibilityResult,
+	vis tenant.RowVisibility, filters ledger.AuditFilters, pageReq query.PageParams,
+) (query.PageResult[*ledger.Entry], error) {
+	if vr.isCrossTenant {
+		// F1: the cross-tenant path ALWAYS requires audit:read from the PDP,
+		// regardless of actorId==subject (the route-level self-read exemption is
+		// unsound here — a super-admin self-read is still cross-tenant). This check
+		// is independent of and additive to the route-level auditQueryPolicy gate.
+		if err := requireAuditReadForCrossTenant(ctx, p.Subject); err != nil {
+			return query.PageResult[*ledger.Entry]{}, err
+		}
+		return a.S.QueryCrossTenant(ctx, vr.ctv, filters, pageReq)
+	}
+	// Tenant axis (#1618): typed tenant scope re-parsed from the authenticated
+	// principal. Passed to Store.Query so a caller reads its OWN tenant's audit
+	// trail plus tenant-less system events — never another tenant's rows.
+	// p.TenantID is guaranteed non-empty (the empty case is rejected in List).
+	tid, err := tenant.ParseTenantID(p.TenantID)
+	if err != nil {
+		// Unreachable on the normal path (the JWT authenticator canonicalizes the
+		// claim); a malformed principal tenant is a server-side invariant break.
+		return query.PageResult[*ledger.Entry]{}, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit query: principal tenant is not canonical", err)
+	}
+	return a.S.Query(ctx, tid, vis, filters, pageReq)
 }
 
 // Handler is the composite route handler for the auditquery slice.

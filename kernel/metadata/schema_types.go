@@ -80,40 +80,63 @@ type HTTPIdempotencyMeta struct {
 	Exempt bool `yaml:"exempt,omitempty" json:"exempt,omitempty"`
 }
 
-// IdempotencyFrameworkStatuses returns the HTTP status codes the idempotency
-// middleware can emit for this route as a framework-injected set, analogous to
-// HTTPAuthMeta.Responses (401/429). When idempotency is default-on, a mutating
-// route (POST/PUT/PATCH/DELETE) that is not Idempotency.Exempt can return 409 on
-// an in-flight key (ClaimBusy) or 422 on a reused key with a mismatched body
-// fingerprint (ErrIdempotencyKeyReused, per IETF idempotency-key draft §2.7).
-// Returns nil for GET/HEAD and exempt routes.
+// FrameworkIdempotencyStatuses is the single literal source of the HTTP status
+// codes the idempotency middleware injects: 409 (ClaimBusy, in-flight key) and 422
+// (key reused with a different body, per IETF idempotency-key draft §2.7). The
+// auth-shape-aware oracle IdempotencyFrameworkStatuses() and the CH-07 governance
+// guard both reference this one function, so the set is declared exactly once in
+// kernel/ (no second hardcode to drift). It is re-declared here as a literal — not
+// imported — because kernel/ must not import runtime/ (layering); archtest
+// IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01 binds it to the runtime source
+// runtime/http/idempotency.FrameworkStatuses() and fails if the two diverge.
+func FrameworkIdempotencyStatuses() []int {
+	return []int{409, 422}
+}
+
+// IdempotencyFrameworkStatuses returns the framework-injected idempotency status
+// codes the middleware can emit for THIS route — the SOLE computed source of those
+// statuses, which are never hand-authored per contract (compute-only, #1591).
 //
-// This is the single-source oracle for the CH-07 governance rule (#1537 review
-// F4): CH-07 requires every contract this returns a non-empty set for to declare
-// those statuses in auth.responses, so the declaration surface cannot drift from
-// the middleware and a future mutating route is forced to declare 409/422 or set
-// idempotency.exempt. These are NOT folded into declaredErrorStatuses (that would
-// make CH-07 vacuous and has no effect on CH-04, which checks handler-emitted
-// statuses — the middleware injects 409/422, not the handler).
+// The middleware (runtime/http/idempotency.extractIdentity) only claims for a
+// PrincipalUser with a non-empty Subject; non-PrincipalUser principals are bypassed
+// (no claim, so no 409/422). A route's auth shape determines its principal kind:
 //
-// The {409, 422} set is re-declared here as an integer literal because kernel/
-// must not import runtime/ (layering); it is bound to the single runtime source
-// runtime/http/idempotency.FrameworkStatuses() by archtest
-// IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01, which fails if the two diverge.
+//   - Auth.Public         → anonymous principal           → bypass
+//   - Auth.Bootstrap      → HTTP Basic (bootstrap)         → bypass
+//   - internal HTTP path  → service token (PrincipalService) → bypass
+//   - otherwise (JWT, incl. ServiceOwned / PasswordResetExempt) → PrincipalUser → reachable
 //
-// Known reachability gap: this oracle keys only on method + Idempotency.Exempt, so
-// it also requires 409/422 on mutating routes the middleware never claims for —
-// public / bootstrap / service-token routes, whose non-PrincipalUser principals are
-// bypassed by middleware.extractIdentity. Those routes therefore declare statuses
-// they cannot emit (a pre-existing property of the 409 leg, not introduced by 422).
-// Making the oracle auth-shape-aware is tracked at gh #1591.
+// ClientsOnly is subsumed by the internal-path check (FMT-28 confines clientsOnly to
+// internal paths). So a mutating (POST/PUT/PATCH/DELETE), non-exempt,
+// PrincipalUser-reachable route returns FrameworkIdempotencyStatuses(); GET/HEAD,
+// idempotency.exempt, and non-PrincipalUser auth shapes return nil.
+//
+// Compute-only (#1591): this is THE source — the statuses are NOT declared per
+// contract. CH-07 forbids them from appearing in auth.responses, and
+// declaredErrorStatuses folds this (auth-shape-aware) set in so CH-04 sees the same
+// declared surface for a reachable route without a hand-authored copy. The drift the
+// pre-#1591 design risked (a route declaring statuses it cannot emit) is eliminated
+// by construction: there is no second copy to drift.
+//
+// INVARIANT: the auth-shape→principal-kind mapping above mirrors
+// middleware.extractIdentity. AI-robust rating: Medium — the cross-layer binding to
+// the runtime middleware is an archtest + INVARIANT-godoc contract, not a
+// type-system Hard (kernel/ must not import runtime/; the value binding shares the
+// permanent ceiling family of IDEMPOTENCY-FRAMEWORK-STATUS-ORACLE-ALIGN-01). Blind
+// spot: PrincipalDevice-resolved mutating HTTP routes (none today) are not modeled
+// here — out of #1591 scope, which covers public / bootstrap / service-token.
 func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 	if h == nil || h.Idempotency.Exempt {
 		return nil
 	}
+	// Non-PrincipalUser auth shapes are bypassed by middleware.extractIdentity, so
+	// it never injects 409/422 on them.
+	if h.Auth.Public || h.Auth.Bootstrap || IsInternalHTTPPath(h.Path) {
+		return nil
+	}
 	switch h.Method {
 	case "POST", "PUT", "PATCH", "DELETE":
-		return []int{409, 422}
+		return FrameworkIdempotencyStatuses()
 	default:
 		return nil
 	}
@@ -128,10 +151,20 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 // enumerates all RPCs from the .proto via ReadProtoServiceInfo, so contract.yaml
 // never lists individual method names.
 //
-// No per-RPC auth overlay is declared here: a service-level public flag could
-// not express per-method auth once a service owns multiple RPCs, and nothing
-// consumed it (the runtime auth predicate is wired separately). The per-method
-// auth model is deferred to #1675.
+// Methods is a SPARSE per-RPC auth overlay (#1675): only RPCs needing a
+// non-default auth flag (public:true) appear; absent methods inherit the
+// fail-closed default (authed). The .proto remains the single source for the
+// method SET — this overlay only annotates existing methods, it never declares
+// them. Referential integrity (each Name ∈ the proto's method set) is enforced
+// by the contractgen pre-pass (kernel⊥tools, so governance cannot read the
+// .proto); governance FMT-41 enforces the metadata-pure guards (non-empty name,
+// no duplicates, methods⇒codegen:true, and — in #1675 where public is the only
+// flag — each entry must assert public:true).
+//
+// #1675 carries only the public flag. ABAC fields (permission/resource/action)
+// and internalOnly are deferred to #2008, where they land together with their
+// live PDP consumer — adding them here would be dead config (the anti-pattern
+// #1672 deleted when it removed the vestigial service-level auth.public).
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — the proto service name is the wire identity.
@@ -142,6 +175,38 @@ type GRPCTransportMeta struct {
 	// Proto is the contracts-relative path to the .proto file, e.g.
 	// "contracts/grpc/device/command/v1/device_command.proto".
 	Proto string `yaml:"proto" json:"proto"`
+	// Methods is the sparse per-RPC auth overlay; nil/empty → every RPC authed.
+	// See ADR docs/architecture/202605260000-adr-grpc-transport-adapter.md
+	// §"Amendment 2026-06-13 — #1675" for the threat-matrix re-eval and the #2008
+	// extension plan.
+	Methods []GRPCMethodMeta `yaml:"methods,omitempty" json:"methods,omitempty"`
+}
+
+// GRPCMethodMeta is one entry of the per-RPC auth overlay (#1675). It annotates
+// a single proto RPC with a non-default auth flag. Only methods needing a
+// non-default appear in GRPCTransportMeta.Methods; an absent method is authed
+// (fail-closed). In #1675 the sole flag is Public; #2008 will add ABAC fields
+// (permission/resource/action) when it wires the gRPC PDP.
+//
+// ref: grpc-ecosystem/go-grpc-middleware interceptors/auth — per-method
+// AuthFuncOverride (declarative public-method exemption)
+// ref: grpc/grpc-go health/server.go — Check/Watch as the canonical public RPCs
+type GRPCMethodMeta struct {
+	// Name is the proto RPC method's simple name (e.g. "Check"). It MUST be a
+	// member of the proto service's method set (the .proto is the single source);
+	// FMT-41 + the contractgen pre-pass enforce referential integrity.
+	Name string `yaml:"name" json:"name"`
+	// Public marks this RPC as JWT-exempt. Absent (no entry) → authed. Codegen
+	// derives GRPCServiceSpec.PublicMethods from the public:true entries, which
+	// the runtime registrar aggregates into the auth interceptor's bypass set.
+	//
+	// omitempty is intentional: public:false is semantically identical to omitting
+	// the entry (both → authed), and FMT-41 rejects a public:false entry as vacuous
+	// (#1675 has no other flag). So the only meaningful value is true; the field is
+	// NOT a tri-state. #2008 adds further per-method fields, after which a
+	// public:false entry becomes meaningful (it may carry ABAC fields) and FMT-41's
+	// vacuous-entry guard widens accordingly.
+	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.
@@ -202,10 +267,15 @@ type HTTPAuthMeta struct {
 	// Responses lists HTTP status codes injected by listener-mounted middleware,
 	// NOT emitted by the handler/adapter — so they are declared here (no typed
 	// response struct) rather than in the responses map. Despite the "auth" name,
-	// this list already spans non-auth middleware: bootstrap auth 401, rate limiter
-	// 429, and HTTP-idempotency 409 (ClaimBusy) / 422 (key-reused) — both required
-	// on non-exempt mutating routes by governance rule CH-07. CH-04 treats these as
-	// declared without requiring handler AST emission.
+	// this list spans non-auth middleware the oracle does NOT compute: bootstrap
+	// auth 401, rate limiter 429. CH-04 treats these as declared without requiring
+	// handler AST emission.
+	//
+	// The HTTP-idempotency framework statuses 409 (ClaimBusy) / 422 (key-reused)
+	// MUST NOT appear here (compute-only, #1591): they are computed from method +
+	// auth shape by IdempotencyFrameworkStatuses() and folded into the declared
+	// surface by governance.declaredErrorStatuses. CH-07 forbids hand-authoring them
+	// in this list.
 	Responses []int `yaml:"responses,omitempty" json:"responses,omitempty"`
 }
 

@@ -190,8 +190,10 @@
 //     integrity (sealed httpEndpointSpec type + sole constructor/caller +
 //     handler.tmpl http.Handler emit-uniqueness across tools/codegen/**).
 //   - kernel/governance/rules_http.go — CH-04 (handler-emitted status ⊂
-//     contract.yaml.responses[] ∪ auth.responses), CH-05 (uuid path-param
-//     parse-call presence), CH-06 (contract.yaml.responses[] ∪ successStatus
+//     contract.yaml.responses[] ∪ auth.responses ∪ computed idempotency framework
+//     statuses; the framework 409/422 are compute-only per #1591 — not hand-authored
+//     in auth.responses, folded in from IdempotencyFrameworkStatuses()), CH-05 (uuid
+//     path-param parse-call presence), CH-06 (contract.yaml.responses[] ∪ successStatus
 //     = generated typed-response struct set).
 //
 // ref: oapi-codegen pkg/codegen/templates/strict — typed-response-envelope

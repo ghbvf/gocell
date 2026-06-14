@@ -120,6 +120,50 @@ func TestMemProjectionEventSource_ReplayHonorsCtxCancel(t *testing.T) {
 	}
 }
 
+// TestMemProjectionEventSource_ResolveCarrier covers the live-carrier resolver
+// (LiveCarrierResolver): a bare appended entry resolves to its position-bearing
+// JournalEvent, an already-positioned carrier is returned idempotently, and an
+// entry never journaled is a permanent error (the live-path gap closure).
+func TestMemProjectionEventSource_ResolveCarrier(t *testing.T) {
+	clk := clockmock.New(time.Now())
+	src := projection.NewMemProjectionEventSource()
+	bare := newJournalEntry(t, clk)
+	carrier := src.Append(bare) // assigns global_seq 1
+	wantPos, err := src.Position(carrier)
+	if err != nil {
+		t.Fatalf("Position(carrier): %v", err)
+	}
+
+	t.Run("bare entry resolves to its journal carrier", func(t *testing.T) {
+		resolved, rerr := src.ResolveCarrier(context.Background(), bare)
+		if rerr != nil {
+			t.Fatalf("ResolveCarrier(bare appended entry): %v", rerr)
+		}
+		gotPos, perr := src.Position(resolved)
+		if perr != nil {
+			t.Fatalf("Position(resolved): %v", perr)
+		}
+		if gotPos != wantPos {
+			t.Errorf("Position(ResolveCarrier(bare)) = %d, want %d (the appended carrier's global_seq)", gotPos, wantPos)
+		}
+	})
+
+	t.Run("already-positioned carrier is idempotent", func(t *testing.T) {
+		resolved, rerr := src.ResolveCarrier(context.Background(), carrier)
+		if rerr != nil {
+			t.Fatalf("ResolveCarrier(*JournalEvent): %v", rerr)
+		}
+		if resolved != projection.ProjectionEvent(carrier) {
+			t.Errorf("ResolveCarrier(carrier) must return the same *JournalEvent unchanged (idempotent)")
+		}
+	})
+
+	t.Run("entry never journaled is permanent", func(t *testing.T) {
+		_, rerr := src.ResolveCarrier(context.Background(), newJournalEntry(t, clk))
+		assertPermanent(t, rerr)
+	})
+}
+
 func assertPermanent(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {

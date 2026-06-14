@@ -11,6 +11,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/transport"
 )
 
 // RuntimeOptionsFunc lets the composition root supply the fully-assembled
@@ -209,6 +210,17 @@ func (b *Builder) Build(
 		return nil, err
 	}
 
+	// Mint the shared in-process CellTransport holder (Epic #1423 US4 #1963)
+	// BEFORE module resolution so each module's Provide can inject it into its
+	// cross-cell sync contract clients. Empty on construction; bootstrap phase5
+	// binds the built internal-listener handler (WithInProcessTransport below).
+	// Centralized here so every composition root shares one mint point.
+	txMetrics, err := transport.NewMetrics(shared.MetricsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("composition.Builder.Build: transport metrics: %w", err)
+	}
+	shared.InProcessTransport = transport.NewInProcess(txMetrics)
+
 	var cells []cell.Cell
 	var cellOpts []bootstrap.Option
 	// provisional holds resources opened so far; closed in reverse order if
@@ -252,9 +264,12 @@ func (b *Builder) Build(
 	//      shared.DeploymentTopology is produced by generatedDeploymentTopology().
 	// Both are appended to cellOpts — applied AFTER runtimeOpts in allOpts below —
 	// so a caller's runtimeOptsFn cannot override them.
+	//   3. WithInProcessTransport: hands bootstrap the SAME holder minted above so
+	//      phase5 binds the built internal-listener handler into it (US4 #1963).
 	cellOpts = append(cellOpts,
 		bootstrap.WithControlPlaneTopology(shared.Topology),
 		bootstrap.WithDeploymentTopology(shared.DeploymentTopology),
+		bootstrap.WithInProcessTransport(shared.InProcessTransport),
 	)
 
 	runtimeOpts, err := runtimeOptsFn(cells)

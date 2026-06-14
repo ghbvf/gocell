@@ -968,7 +968,25 @@ func buildGrpcServiceSpecFromCU(
 		ListenerConst: "cell.PrimaryListener",
 		ProtoRel:      metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
 		Service:       g.Service,
+		PublicMethods: grpcPublicMethods(g),
 	}, nil
+}
+
+// grpcPublicMethods composes the per-method public overlay (#1675) into FULL
+// method names (/{Service}/{Method}) for the public:true entries, keyed
+// identically to the runtime registrar's attribution map so a declared-public
+// method matches the served RPC exactly. Referential integrity (each name ∈ the
+// proto method set) is the contractgen pre-pass's job; here we only compose.
+// Returns nil when no method is public (the fail-closed default), so the template
+// omits the PublicMethods field.
+func grpcPublicMethods(g *metadata.GRPCTransportMeta) []string {
+	var out []string
+	for _, m := range g.Methods {
+		if m.Public {
+			out = append(out, "/"+g.Service+"/"+m.Name)
+		}
+	}
+	return out
 }
 
 // validateGrpcContractEndpoint checks that cu.Contract exists, has kind=grpc,
@@ -1063,6 +1081,42 @@ func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
 		}
 		gs.PbImportPath = info.ImportPath
 		gs.PbAlias = fmt.Sprintf("grpc%d", i)
+
+		// Referential integrity on the cellgen path (#1675 review F3): every
+		// public-method overlay entry must name an RPC that exists in the proto
+		// service. contractgen's validateGRPCMethodOverlay guards `gocell generate
+		// contract`; this mirrors it for `gocell generate cell`, which reads the same
+		// proto here. Without it, generate-cell alone could render a PublicMethods
+		// entry that matches no RPC (silently inert at runtime).
+		if err := validateGrpcPublicMethodsAgainstProto(gs, info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateGrpcPublicMethodsAgainstProto fails closed when a GrpcServiceGenSpec's
+// PublicMethods (composed /{service}/{method}) names an RPC absent from the proto
+// service's method set. The cellgen-path sibling of
+// contractgen.validateGRPCMethodOverlay (#1675 review F3).
+func validateGrpcPublicMethodsAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
+	if len(gs.PublicMethods) == 0 {
+		return nil
+	}
+	protoMethods := make(map[string]struct{}, len(info.Methods))
+	for _, pm := range info.Methods {
+		protoMethods[pm.Name] = struct{}{}
+	}
+	for _, full := range gs.PublicMethods {
+		name := full[strings.LastIndex(full, "/")+1:]
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods public entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
 	}
 	return nil
 }

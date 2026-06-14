@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -72,10 +73,36 @@ func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error
 	if err := b.phase5FinalizeAllRouters(routers); err != nil {
 		return err
 	}
+	if err := b.phase5BindInProcessTransport(routers); err != nil {
+		return err
+	}
 	s.routers = routers
 	if primaryRtr, ok := routers[cell.PrimaryListener]; ok {
 		s.rtr = primaryRtr
 	}
+	return nil
+}
+
+// phase5BindInProcessTransport binds the FINALIZED internal-listener handler into
+// the shared in-process transport (WriteOnce). It runs after
+// phase5FinalizeAllRouters so a DoContract dispatch sees the same compiled auth
+// chain (ServiceTokenMiddleware + RequireCallerCell) as a network request — the
+// in-process path short-circuits the network, not the governance stack (ADR D4).
+// No InternalListener declared → leave the holder unbound; its DoContract then
+// fail-fasts rather than silently dispatching to nil.
+func (b *Bootstrap) phase5BindInProcessTransport(routers map[cell.ListenerRef]*router.Router) error {
+	if b.inProcessTransport == nil {
+		return nil
+	}
+	rtr, ok := routers[cell.InternalListener]
+	if !ok {
+		return nil
+	}
+	if err := b.inProcessTransport.Bind(rtr.Handler(), b.wrapperTracer); err != nil {
+		return fmt.Errorf("bootstrap: bind in-process transport: %w", err)
+	}
+	slog.Info("bootstrap: in-process transport bound to internal-listener handler",
+		slog.String("listener", cell.InternalListener.String()))
 	return nil
 }
 
@@ -413,6 +440,13 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 // corebundle lazyAuthorizer), it does so now so a nil provider fails the boot
 // here rather than 503-ing on the first request. Authorizers with nothing to
 // resolve simply don't implement the interface and are skipped.
+//
+// PDP decision metrics (#2027): when a REAL metrics Provider is configured, the
+// resolved Authorizer is wrapped in auth.observableAuthorizer (via
+// NewObservableAuthorizer) so every PDP decision is counted + timed at the gate.
+// Wrapping happens AFTER ResolveAuthorizer (the decorator only fronts request-time
+// Authorize, so it need not forward ResolveAuthorizer). Without a real Provider the
+// bare Authorizer is injected — metrics are fail-open and never gate authorization.
 func (b *Bootstrap) appendPrimaryAuthorizerInjector(opts []router.Option) ([]router.Option, error) {
 	if b.primaryAuthorizer == nil {
 		return opts, nil
@@ -422,7 +456,29 @@ func (b *Bootstrap) appendPrimaryAuthorizerInjector(opts []router.Option) ([]rou
 			return nil, fmt.Errorf("bootstrap: primary Authorizer failed to resolve at startup: %w", err)
 		}
 	}
-	return append(opts, router.WithDefaultMiddleware(authorizerInjector(b.primaryAuthorizer))), nil
+	authorizer, err := b.pdpAuthorizerForInjection(b.primaryAuthorizer)
+	if err != nil {
+		return nil, err
+	}
+	return append(opts, router.WithDefaultMiddleware(authorizerInjector(authorizer))), nil
+}
+
+// pdpAuthorizerForInjection wraps a with PDP decision metrics ONLY when a real
+// metrics provider is configured. b.metricsProvider defaults to a NopProvider
+// (bootstrap.New), so a plain `!= nil` check would build a no-op PDPMetrics and an
+// observableAuthorizer wrapper even when no metrics backend is wired — bypassing the
+// bootstrap metric-autowire funnel (hasRealMetricsProvider, used by every other
+// collector). Gating on hasRealMetricsProvider keeps PDP metrics on the same funnel:
+// no real provider → return the bare Authorizer unwrapped (PR #2077 F3).
+func (b *Bootstrap) pdpAuthorizerForInjection(a auth.Authorizer) (auth.Authorizer, error) {
+	if !b.hasRealMetricsProvider() {
+		return a, nil
+	}
+	pdpMetrics, err := auth.NewPDPMetrics(b.metricsProvider)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap: register PDP decision metrics: %w", err)
+	}
+	return auth.NewObservableAuthorizer(b.clock, a, pdpMetrics), nil
 }
 
 // authorizerInjector returns a middleware that injects the given auth.Authorizer

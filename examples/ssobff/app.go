@@ -15,6 +15,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
+	cellsecrets "github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	eventtransport "github.com/ghbvf/gocell/cellmodules/eventtransport"
 	replaydeps "github.com/ghbvf/gocell/cellmodules/replaydeps"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
@@ -33,7 +34,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/migration"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/audit"
 	"github.com/ghbvf/gocell/runtime/audit/ledger"
@@ -65,6 +65,20 @@ const (
 	ssobffBootstrapUsername = "ssobff-ops"
 	// #nosec G101 -- demo fixture in examples/ssobff binary; production is env-driven (cmd/corebundle).
 	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
+)
+
+// ssobffJWTIssuer / ssobffJWTAudience are the fixed JWT issuer and audience for
+// the ssobff example. They are package consts (not inline literals) so the issuer
+// and verifier wiring in newSSOBFFJWT cannot drift between callsites — a mismatch
+// would 401 every token, with no compile error. They are identical across
+// replicas, so (unlike the signing key, #2052) they were never the multi-pod
+// hazard. ssobff is a self-contained JWT domain: unlike cmd/corebundle (which
+// reads GOCELL_JWT_ISSUER / GOCELL_JWT_AUDIENCE), the demo BFF is not federated
+// with the platform binary, so a fixed issuer is correct even in real multi-pod
+// mode.
+const (
+	ssobffJWTIssuer   = "ssobff-dev"
+	ssobffJWTAudience = "gocell"
 )
 
 // ssobffBootstrapAdminUserEnv / ssobffBootstrapAdminPassEnv name the env vars
@@ -341,6 +355,16 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, err
 	}
 
+	// JWT signing keys are topology-gated (mirrors resolveSSOBFFBootstrapCreds
+	// above): demo mints an ephemeral pair, real mode loads the shared key env
+	// pair and fails closed when missing. Resolved BEFORE the DB pool so a
+	// real-mode missing-key misconfig fails fast — never a per-pod ephemeral key
+	// that would 401 across replicas (#2052).
+	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(infra.topo, clk)
+	if err != nil {
+		return nil, err
+	}
+
 	if cfg.databaseURL == "" {
 		return nil, fmt.Errorf("ssobff: %s must be set", ssobffDatabaseURLEnv)
 	}
@@ -359,18 +383,15 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 
-	// Demo only: test keys are generated in-process, so tokens do not survive
-	// restart and cannot be verified by another replica.
-	jwtIssuer, jwtVerifier, err := newSSOBFFJWT(clk)
-	if err != nil {
-		return nil, err
-	}
-
 	// Build pgOutboxWriter + auditcore. After Wave-1 #1423 the bootstrap
 	// chain is wired internally into auditcore (WithBootstrapStore); auditcore
 	// now subscribes to event.auth.bootstrap-failed.v1 and writes the chain.
 	pgOutboxWriter := adapterpg.NewOutboxWriter(clk)
-	auc, err := buildSSOBFFAuditCore(ctx, clk, cfg.logger, infra.transport.Publisher, pgOutboxWriter, pool, txMgr)
+	auc, err := buildSSOBFFAuditCore(ctx, ssobffAuditParams{
+		clk: clk, logger: cfg.logger, eb: infra.transport.Publisher,
+		outboxWriter: pgOutboxWriter, pool: pool, txMgr: txMgr,
+		adapterMode: infra.topo.AdapterMode(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +442,21 @@ type ssobffCoreParams struct {
 func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error) {
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	var acPtr *accesscore.AccessCore
-	ipHashSalt := []byte(envOr(ssobffIPHashSaltEnv, ssobffIPHashSaltDefault))
+	// IP-hash salt is topology-gated (mirrors cellmodules/accesscore): demo falls
+	// back to the denylisted dev default; real mode requires GOCELL_ACCESSCORE_IP_HASH_SALT
+	// (fail-closed + demo-key reject + ≥32B) so the keyed client-IP hash is never reversible (#2052 F1).
+	ipHashSalt, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
+		AdapterMode: p.infra.topo.AdapterMode(),
+		EnvName:     "GOCELL_ACCESSCORE_IP_HASH_SALT",
+		Primary:     os.Getenv("GOCELL_ACCESSCORE_IP_HASH_SALT"),
+		DevDefault:  ssobffIPHashSaltDefault,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: IP-hash salt: %w", err)
+	}
+	if len(ipHashSalt) < redaction.MinIPHashSaltBytes {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: GOCELL_ACCESSCORE_IP_HASH_SALT must be at least %d bytes", redaction.MinIPHashSaltBytes)
+	}
 	authFailObserver := newSSOBFFAuthFailObserver(p.cfg.logger, &acPtr, ipHashSalt)
 
 	bootstrapMW := auth.NewBootstrapMiddleware(
@@ -446,6 +481,7 @@ func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.Consum
 		jwtIssuer: p.jwtIssuer, jwtVerifier: p.jwtVerifier,
 		bootstrapMW: bootstrapMW, sessionProto: sessionProto, logger: p.cfg.logger,
 		auc: p.auc, acRef: &acPtr, claimer: p.infra.rd.ConsumerClaimer,
+		adapterMode: p.infra.topo.AdapterMode(),
 	})
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -505,18 +541,13 @@ func closeManagedResources(ctx context.Context, rs []lifecycle.ManagedResource) 
 	}
 }
 
-// IP-hash salt for the demo (#1488). ssobff is a demo-only binary with NO
-// real/demo adapter-mode concept, so — unlike cellmodules/accesscore which goes
-// through cellsecrets.BuildHMACKey (real-mode demo-key fail-fast) — the salt is a
-// plain env-or-default. The default is still registered in
-// cellsecrets.wellKnownDemoKeys so it can never be copied into a real secret. The
-// deliberate absence of a real-mode fail-fast here is acceptable because ssobff
-// is never a production deployment; the production path (accesscore) enforces both
-// demo-key rejection and the ≥32-byte minimum.
-const (
-	ssobffIPHashSaltEnv     = "GOCELL_SSOBFF_IP_HASH_SALT"
-	ssobffIPHashSaltDefault = "dev-ip-hash-salt-ssobff-32-byte!"
-)
+// ssobffIPHashSaltDefault is the dev-only fallback for the keyed client-IP hash
+// salt (#1488). ssobff is real-capable (topology-gated JWT/replay/transport since
+// #2044/#2052), so the salt — like every other ssobff secret — routes through
+// cellsecrets.BuildHMACKey (real-mode demo-key fail-fast + ≥32B). This value is
+// registered in cellsecrets.wellKnownDemoKeys so real mode rejects it; real
+// deployments must set GOCELL_ACCESSCORE_IP_HASH_SALT.
+const ssobffIPHashSaltDefault = "dev-ip-hash-salt-ssobff-32-byte!"
 
 // newSSOBFFAuthFailObserver returns an auth.BootstrapAuthFailObserver that logs
 // the bootstrap auth failure with a hashed client IP and then (lazily) calls
@@ -558,11 +589,47 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 	}
 }
 
+// ssobffAuditParams groups buildSSOBFFAuditCore dependencies. ctx stays a
+// positional first arg; the rest are bundled so adding adapterMode keeps the
+// signature within go:S107 (mirrors the ssobffCoreParams pattern).
+type ssobffAuditParams struct {
+	clk          clock.Clock
+	logger       *slog.Logger
+	eb           outbox.Publisher
+	outboxWriter *adapterpg.OutboxWriter
+	pool         *adapterpg.Pool
+	txMgr        *adapterpg.TxManager
+	adapterMode  string
+}
+
+// buildSSOBFFAuditProtocol builds a ledger.Protocol with a topology-gated HMAC
+// key (mirrors cellmodules/auditcore.buildAuditProtocol): demo falls back to the
+// denylisted dev default, real mode requires envName and rejects demo keys.
+func buildSSOBFFAuditProtocol(adapterMode, envName, primary, devDefault string, ns ledger.NamespaceID) (*ledger.Protocol, error) {
+	hmacKey, err := cellsecrets.BuildHMACKey(cellsecrets.HMACKeyConfig{
+		AdapterMode: adapterMode,
+		EnvName:     envName,
+		Primary:     primary,
+		DevDefault:  devDefault,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer clear(hmacKey)
+	return ledger.NewProtocol(
+		ns,
+		hmacKey,
+		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
+		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
+	)
+}
+
 // buildSSOBFFAuditCore wires the ssobff auditcore Cell backed by PostgreSQL —
 // ledger.Protocol is owned by the composition root; cells never hold the raw
-// HMAC key. Mirrors cellmodules/auditcore/module.go durable path but uses
-// in-source demo HMAC keys (production deployments must inject from a secret
-// manager).
+// HMAC key. Mirrors cellmodules/auditcore/module.go durable path: cursor codec +
+// relay/bootstrap HMAC keys are topology-gated via cellsecrets (real-mode
+// demo-key fail-fast), demo falls back to denylisted dev keys, real requires the
+// GOCELL_AUDITCORE_* / GOCELL_AUDIT_BOOTSTRAP_* env vars (#2052 F1).
 //
 // Since issue #1121 (ADR 202605270230) the bootstrap auth-fail chain is
 // physically isolated from the auditcore relay chain: two independent
@@ -570,16 +637,17 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 // key. auditquery reads from both via ledger.MultiStore. The bootstrap store
 // is now wired into auditcore.WithBootstrapStore (Wave-1 #1423 event-based
 // decoupling) and is no longer returned to the caller.
-func buildSSOBFFAuditCore(
-	ctx context.Context,
-	clk clock.Clock,
-	logger *slog.Logger,
-	eb outbox.Publisher,
-	outboxWriter *adapterpg.OutboxWriter,
-	pool *adapterpg.Pool,
-	txMgr *adapterpg.TxManager,
-) (*auditcore.AuditCore, error) {
-	cursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
+func buildSSOBFFAuditCore(ctx context.Context, p ssobffAuditParams) (*auditcore.AuditCore, error) {
+	auditPrimary, auditPrevious := cellsecrets.LoadCursorKeys("AUDITCORE")
+	cursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: p.adapterMode,
+		EnvName:     "GOCELL_AUDITCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     auditPrimary,
+		Previous:    auditPrevious,
+		DevDefault:  "corebundle-audit-cursor-key-32b!",
+		Label:       "ssobff audit",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
 	}
@@ -587,33 +655,24 @@ func buildSSOBFFAuditCore(
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: parse audit namespace: %w", err)
 	}
-	// WARNING: demo keys only. Production deployments must inject from a secret manager.
-	relayProtocol, err := ledger.NewProtocol(
-		auditNS,
-		[]byte("ssobff-dev-hmac-key-32-bytes!!!!"), // #nosec G101 -- demo fixture, never used in production
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
+	relayProtocol, err := buildSSOBFFAuditProtocol(p.adapterMode, "GOCELL_AUDITCORE_HMAC_KEY",
+		cellsecrets.LoadCellHMACKey("AUDITCORE"), "dev-hmac-key-replace-in-prod!!!!", auditNS)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: build audit protocol: %w", err)
 	}
 	// Independent HMAC key for the bootstrap chain (ref: hashicorp/vault per-
 	// device Salt) so compromise of one chain's key cannot forge entries in
 	// the other.
-	bootstrapProtocol, err := ledger.NewProtocol(
-		audit.BootstrapNamespace(),
-		[]byte("ssobff-bootstrap-hmac-key-32byte"), // #nosec G101 -- demo fixture, never used in production
-		ledger.WithRestartRecovery(ledger.RestartRecoveryStrictTailVerify{}),
-		ledger.WithIdempotency(ledger.IdempotencyContentFingerprint{}),
-	)
+	bootstrapProtocol, err := buildSSOBFFAuditProtocol(p.adapterMode, "GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY",
+		cellsecrets.LoadCellHMACKey("AUDIT_BOOTSTRAP"), "dev-hmac-bootstrap-replace-32b!!", audit.BootstrapNamespace())
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: build bootstrap audit protocol: %w", err)
 	}
-	relayStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, relayProtocol, clk)
+	relayStore, err := adapterpg.NewLedgerStore(p.pool.DB(), p.txMgr, relayProtocol, p.clk)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (relay): %w", err)
 	}
-	bootstrapStore, err := adapterpg.NewLedgerStore(pool.DB(), txMgr, bootstrapProtocol, clk)
+	bootstrapStore, err := adapterpg.NewLedgerStore(p.pool.DB(), p.txMgr, bootstrapProtocol, p.clk)
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: adapterpg.NewLedgerStore (bootstrap): %w", err)
 	}
@@ -621,7 +680,7 @@ func buildSSOBFFAuditCore(
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: wrap bootstrap ledger store: %w", err)
 	}
-	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, logger); err != nil {
+	if err := audit.VerifyBootstrapTailOnStartup(ctx, bootstrapWrapped, p.logger); err != nil {
 		return nil, fmt.Errorf("ssobff: bootstrap audit tail verify: %w", err)
 	}
 	multiStore, err := ledger.NewMultiStore(relayStore, bootstrapStore)
@@ -629,14 +688,14 @@ func buildSSOBFFAuditCore(
 		return nil, fmt.Errorf("ssobff: build audit multi-store: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
-		clk,
+		p.clk,
 		auditcore.WithLedgerProtocol(relayProtocol),
 		auditcore.WithLedgerStore(relayStore),
 		auditcore.WithQueryStore(multiStore),
-		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(outboxWriter)),
-		auditcore.WithTxManager(persistence.WrapForCell(txMgr)),
+		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(p.eb), outbox.WrapWriterForCell(p.outboxWriter)),
+		auditcore.WithTxManager(persistence.WrapForCell(p.txMgr)),
 		auditcore.WithCursorCodec(cursorCodec),
-		auditcore.WithLogger(logger),
+		auditcore.WithLogger(p.logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 		// Wave-1 #1423: bootstrap store wired internally; auditappendbootstrap
 		// subscriber slice writes to it when event.auth.bootstrap-failed.v1 arrives.
@@ -676,6 +735,9 @@ type ssobffBuildParams struct {
 	// claimer is the topology-gated idempotency claimer: in-memory for demo,
 	// Redis-backed for real multi-pod (resolved by replaydeps.Resolve).
 	claimer idempotency.Claimer
+	// adapterMode is infra.topo.AdapterMode(): "" (dev) or "real". Threads the
+	// topology gate to access/config cursor secrets built in buildSSOBFFAssembly.
+	adapterMode string
 }
 
 // buildSSOBFFAssembly wires all three platform cells, registers them in a new
@@ -693,9 +755,18 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: cas.NewProtocol (accesscore): %w", err)
 	}
 	// accesscore paginates (session/identity list endpoints) so durable mode
-	// requires a cursor codec — same demo-key pattern as config/audit above.
-	// WARNING: demo key only; production deployments must inject from a secret manager.
-	accessCursorCodec, err := query.NewCursorCodec([]byte("ssobff-access-cursor-key-32bytes"))
+	// requires a cursor codec — topology-gated via cellsecrets (mirror
+	// cellmodules/accesscore): demo dev default, real requires GOCELL_ACCESSCORE_CURSOR_KEY.
+	accessPrimary, accessPrevious := cellsecrets.LoadCursorKeys("ACCESSCORE")
+	accessCursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: p.adapterMode,
+		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     accessPrimary,
+		Previous:    accessPrevious,
+		DevDefault:  "corebundle-access-cursor-key32!!",
+		Label:       "ssobff access",
+	})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: create access cursor codec: %w", err)
 	}
@@ -721,7 +792,7 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	// event.auth.bootstrap-failed.v1 and writes the chain asynchronously).
 	auc := p.auc
 
-	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(clk, p.pool)
+	configStorageOpts, err := buildSSOBFFConfigCoreStorageOpts(p.adapterMode, clk, p.pool)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -798,8 +869,19 @@ func newSSOBFFPool(ctx context.Context, databaseURL string) (*adapterpg.Pool, er
 
 // buildSSOBFFConfigCoreStorageOpts constructs the PG storage option and cursor
 // codec for configcore. Extracted to keep NewSSOBFFApp below gocognit ≤ 15.
-func buildSSOBFFConfigCoreStorageOpts(clk clock.Clock, pool *adapterpg.Pool) ([]configcore.Option, error) {
-	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
+// The cursor codec is topology-gated via cellsecrets (mirror cellmodules/configcore):
+// demo dev default, real requires GOCELL_CONFIGCORE_CURSOR_KEY (#2052 F1).
+func buildSSOBFFConfigCoreStorageOpts(adapterMode string, clk clock.Clock, pool *adapterpg.Pool) ([]configcore.Option, error) {
+	cfgPrimary, cfgPrevious := cellsecrets.LoadCursorKeys("CONFIGCORE")
+	configCursorCodec, err := cellsecrets.BuildCursorCodec(cellsecrets.CursorCodecConfig{
+		AdapterMode: adapterMode,
+		EnvName:     "GOCELL_CONFIGCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     cfgPrimary,
+		Previous:    cfgPrevious,
+		DevDefault:  "corebundle-cfg-cursor-key--32bb!",
+		Label:       "ssobff config",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
 	}
@@ -851,28 +933,29 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	}
 }
 
-// newSSOBFFJWT creates an ephemeral JWT issuer and verifier backed by a freshly
-// generated RSA key pair.
+// newSSOBFFJWT builds the JWT issuer and verifier from a topology-gated key set.
 //
-// Demo only: ephemeral in-process RSA keys; tokens invalidated on restart.
-func newSSOBFFJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
-	slog.Warn("ssobff: generating in-process JWT key — tokens become invalid on restart; do not use for multi-pod deployment")
-	privKey, pubKey, err := auth.GenerateRSAKeyPair()
+// The key source is resolved by cellsecrets.LoadKeySet (the same shared resolver
+// cmd/corebundle's buildJWTDeps uses): demo topology mints an ephemeral in-process
+// RSA pair (tokens invalidated on restart, single-pod only); real adapter mode
+// loads the shared pair from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY and
+// fails closed when missing — a per-pod ephemeral key would make one replica's
+// tokens verify as 401 against another (#2052). The issuer / audience stay fixed
+// (ssobffJWTIssuer / ssobffJWTAudience): they are identical across replicas, so
+// only the signing key was the multi-pod hazard.
+func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
+	keySet, err := cellsecrets.LoadKeySet(topo.AdapterMode(), clk)
 	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: generate RSA key pair: %w", err)
+		return nil, nil, fmt.Errorf("ssobff: load JWT key set: %w", err)
 	}
-	keySet, err := auth.NewKeySet(privKey, pubKey, clk)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)
-	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clk,
-		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, ssobffJWTIssuer, 15*time.Minute, clk,
+		auth.WithIssuerAudiencesFromSlice([]string{ssobffJWTAudience}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT issuer: %w", err)
 	}
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, clk,
-		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("ssobff-dev"))
+		auth.WithExpectedAudiences(ssobffJWTAudience),
+		auth.WithExpectedIssuer(ssobffJWTIssuer))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT verifier: %w", err)
 	}

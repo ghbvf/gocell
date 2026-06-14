@@ -90,6 +90,24 @@ func WithQueryStore(s ledger.QueryStore) Option {
 	}
 }
 
+// WithCrossTenantQueryStore injects the OPTIONAL CrossTenantQueryStore for the
+// auditquery slice (#1810). When absent (or a nil interface is passed), a
+// super-admin cross-tenant read returns RowScopeAllUnsupportedError (HTTP 501)
+// — graceful fail-closed, never fail-open.
+//
+// Only the cellmodules/auditcore composition root should call this option,
+// and only when the gocell_audit_admin credentials are provisioned
+// (GOCELL_AUDIT_ADMIN_DSN). No gocell:"required" semantics apply — absence is
+// a valid operational state.
+func WithCrossTenantQueryStore(s ledger.CrossTenantQueryStore) Option {
+	return func(c *AuditCore) {
+		if validation.IsNilInterface(s) {
+			return
+		}
+		c.crossTenantStore = s
+	}
+}
+
 // WithBootstrapStore injects the sealed *audit.BootstrapLedgerStore into the
 // Cell so the auditappendbootstrap subscriber slice can write bootstrap-chain
 // entries. This is an internal wiring option — it is only callable from the
@@ -208,6 +226,12 @@ type AuditCore struct {
 	// root. It feeds the auditappendbootstrap subscriber slice. Not exported —
 	// this is an internal wiring detail.
 	bootstrapStore *audit.BootstrapLedgerStore
+
+	// crossTenantStore is the OPTIONAL admin-pool-backed CrossTenantQueryStore
+	// for super-admin cross-tenant reads (#1810). Injected via
+	// WithCrossTenantQueryStore from the cellmodules/auditcore composition root;
+	// when nil, QueryCrossTenant returns RowScopeAllUnsupportedError (501).
+	crossTenantStore ledger.CrossTenantQueryStore
 
 	appendBootstrapSvc *auditappendbootstrap.Service
 
@@ -465,8 +489,12 @@ func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
 	if queryStore == nil {
 		queryStore = c.ledgerStore
 	}
+	svcOpts := []auditquery.ServiceOption{}
+	if c.crossTenantStore != nil {
+		svcOpts = append(svcOpts, auditquery.WithCrossTenantStore(c.crossTenantStore))
+	}
 	querySvc, err := auditquery.NewService(queryStore, c.cursorCodec, c.logger, c.txRunner,
-		query.RunModeForDemo(mode == outbox.DurabilityDemo))
+		query.RunModeForDemo(mode == outbox.DurabilityDemo), svcOpts...)
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)
 	}

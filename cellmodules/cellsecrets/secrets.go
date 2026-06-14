@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -182,21 +181,6 @@ type HMACKeyConfig struct {
 // BuildHMACKey loads and validates the HMAC key.
 func BuildHMACKey(cfg HMACKeyConfig) ([]byte, error) {
 	return ResolveAndRejectDemoKey(cfg.AdapterMode, cfg.EnvName, cfg.Primary, cfg.DevDefault)
-}
-
-// InternalAddrToBaseURL converts a bind address to an HTTP base URL for the
-// internal HTTP client. Mirrors cmd/corebundle.internalAddrToBaseURL.
-func InternalAddrToBaseURL(addr string) string {
-	if addr == "" {
-		return "http://127.0.0.1:9090"
-	}
-	if strings.HasPrefix(addr, ":") {
-		return "http://127.0.0.1" + addr
-	}
-	if after, ok := strings.CutPrefix(addr, "0.0.0.0:"); ok {
-		return "http://127.0.0.1:" + after
-	}
-	return "http://" + addr
 }
 
 // LoadKeySet returns a KeySet, preferring environment-provided keys.

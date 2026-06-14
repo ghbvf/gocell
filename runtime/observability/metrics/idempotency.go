@@ -68,9 +68,9 @@ func NewIdempotencyCollector(p kernelmetrics.Provider) (*IdempotencyCollector, e
 	// The HELP describes the {state} decision only — it deliberately does NOT
 	// embed the HTTP status each state maps to. The state→status mapping is volatile
 	// (it changed once already: key_reused moved 409→422) and is single-sourced by
-	// idemhttp.FrameworkStatuses() + the contract auth.responses; duplicating status
-	// integers in this free-form prose is a drift surface, so it is omitted entirely
-	// rather than restated here.
+	// idemhttp.FrameworkStatuses() (compute-only, #1591 — no longer hand-authored in
+	// contract auth.responses); duplicating status integers in this free-form prose
+	// is a drift surface, so it is omitted entirely rather than restated here.
 	cv, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name: "idempotency_requests_total",
 		Help: "Total HTTP idempotency decisions, labeled by terminal state " +

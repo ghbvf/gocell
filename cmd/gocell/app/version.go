@@ -21,6 +21,14 @@ import (
 // constant that could drift. In local / `go build` / go.work development builds
 // no ldflags are set, so it stays "dev" and resolveVersion falls back to the
 // VCS revision via toolVersion().
+//
+// go install path: when built via `go install
+// github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z`, no ldflags are injected, so
+// this var stays "dev". resolveVersion then calls toolVersion(), which reads
+// debug.ReadBuildInfo().Main.Version — the Go toolchain embeds the module
+// version (vX.Y.Z) into any binary built from a versioned module reference.
+// Therefore `gocell version` on a go-install binary correctly reports vX.Y.Z,
+// producing the same cli_version output as a goreleaser pre-compiled binary.
 var version = "dev"
 
 // versionInfo is the wire shape of `gocell version --format json`. The field

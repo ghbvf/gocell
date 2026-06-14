@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (22 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields (23 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -94,6 +94,7 @@ var sharedDepsFrozenExportedFields = map[string]string{
 	"NonceStore":           "auth.NonceStore",
 	"PrimaryHTTPAddr":      "string",
 	"InternalHTTPAddr":     "string",
+	"InProcessTransport":   "*transport.InProcessTransport",
 	"HealthHTTPAddr":       "string",
 	"MetricsToken":         "string",
 	"VerboseToken":         "string",
@@ -188,6 +189,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 		NonceStore           string
 		PrimaryHTTPAddr      string
 		InternalHTTPAddr     string
+		InProcessTransport   string
 		HealthHTTPAddr       string
 		MetricsToken         string
 		VerboseToken         string
@@ -197,7 +199,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
-		"%s anti-vacuity (type drift): a struct with the same 22 field names but Clock "+
+		"%s anti-vacuity (type drift): a struct with the same 23 field names but Clock "+
 			"retyped to string must NOT match the golden — proves type-string drift detection, "+
 			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
 

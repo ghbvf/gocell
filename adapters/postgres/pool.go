@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -36,6 +37,16 @@ const (
 	// runtime (#1676 [F-B11]). Registered only when Config.RequireRestrictedRole is
 	// set — a serving pool; admin/utility pools (e.g. tools/pg-migrate) leave it off.
 	ProbeAppRoleRestrictedReady healthz.ProbeName = "postgres_app_role_restricted_ready"
+	// ProbeAuditAdminRestrictedReady probes that the OPTIONAL cross-tenant audit
+	// admin pool's current_user is neither a superuser nor BYPASSRLS (#1810). The
+	// gocell_audit_admin role reads every tenant via a role-scoped permissive RLS
+	// SELECT policy (migration 065), NOT via BYPASSRLS — so it must stay NOBYPASSRLS
+	// and minimally privileged. This distinctly-named probe (vs the serving pool's
+	// postgres_app_role_restricted_ready) asserts that at runtime AND makes the
+	// optional admin pool's liveness visible on /readyz; it reuses
+	// Pool.AppRoleRestrictedCheck. Registered by the auditcore module's admin-pool
+	// ManagedResource only when GOCELL_AUDIT_ADMIN_DSN is provisioned.
+	ProbeAuditAdminRestrictedReady healthz.ProbeName = "postgres_audit_admin_restricted_ready"
 )
 
 // Default pool configuration values.
@@ -256,6 +267,120 @@ func appRoleRestrictedResult(rolsuper, rolbypassrls bool) error {
 				"serve from a NOSUPERUSER NOBYPASSRLS non-owner role")
 	}
 	return nil
+}
+
+// auditAdminRoleResult is the pure (DB-free) verdict combining role-IDENTITY,
+// role-attribute, and SELECT-capability checks for the audit admin pool. It is
+// split out so the combined decision is table-testable without a real database.
+//
+// The audit admin pool's current_user must be: (1) EXACTLY gocell_audit_admin —
+// the role the audit_admin_read_all RLS policy is scoped TO; a DSN authenticating
+// as any other role passes the attribute probe yet matches no cross-tenant policy,
+// silently reading nothing (#1810 F3); (2) non-superuser and non-BYPASSRLS (it
+// reads via that role-scoped permissive policy, NOT via privilege bypass — ADR
+// #1676); AND (3) capable of SELECT on audit_entries (a missing GRANT renders the
+// admin pool useless and must be caught at composition time — #1810 F3/F4).
+func auditAdminRoleResult(isExpectedRole, rolsuper, rolbypassrls, canSelect bool) error {
+	if !isExpectedRole {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
+			"postgres: audit admin pool connects as the wrong role; GOCELL_AUDIT_ADMIN_DSN "+
+				"must authenticate as gocell_audit_admin (the role the audit_admin_read_all "+
+				"RLS policy is scoped to) — any other role reads no cross-tenant rows")
+	}
+	if err := appRoleRestrictedResult(rolsuper, rolbypassrls); err != nil {
+		return err
+	}
+	if !canSelect {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
+			"postgres: audit admin role lacks SELECT privilege on audit_entries; "+
+				"grant SELECT on audit_entries to gocell_audit_admin (migration 065 must "+
+				"have run and the GRANT applied before the admin pool is provisioned)")
+	}
+	return nil
+}
+
+// AuditAdminReadyCheck is a combined readiness check for the optional
+// cross-tenant audit admin pool (#1810). It proves the pool's connection is the
+// EXACT admin identity the cross-tenant read relies on, asserting:
+//
+//  1. Role identity + attributes (checkAuditAdminRole): current_user is exactly
+//     gocell_audit_admin, neither superuser nor BYPASSRLS, with SELECT on
+//     audit_entries. The role must be gocell_audit_admin specifically — that is
+//     the role audit_admin_read_all is scoped TO; any other role passes the
+//     attribute probe yet reads nothing cross-tenant (#1810 F3).
+//
+//  2. Policy shape (checkAuditAdminPolicy): the audit_admin_read_all RLS policy
+//     exists on audit_entries with the full expected shape (PERMISSIVE, FOR
+//     SELECT, TO gocell_audit_admin, USING(true), no WITH CHECK) — reusing the
+//     same checkAuditAdminPolicyShape the migration-time schema guard applies. A
+//     missing or mis-shaped policy means the pool would read nothing (or the wrong
+//     scope) at runtime; readyz must catch it (#1810 F3).
+//
+// This single method is reused at both composition-time fail-fast
+// (buildCrossTenantStore calls it once on startup) and in the
+// ProbeAuditAdminRestrictedReady /readyz probe (auditAdminPoolResource.Probes).
+func (p *Pool) AuditAdminReadyCheck(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultHealthTimeout)
+	defer cancel()
+
+	if err := p.checkAuditAdminRole(ctx); err != nil {
+		return err
+	}
+	return p.checkAuditAdminPolicy(ctx)
+}
+
+// checkAuditAdminRole asserts the admin pool's current_user is exactly the
+// expected gocell_audit_admin role, is RLS-constrained (non-superuser,
+// non-BYPASSRLS), and holds SELECT on audit_entries. The pg_catalog reads are
+// SELECT-only and keyed on current_user, safe for the restricted admin role.
+func (p *Pool) checkAuditAdminRole(ctx context.Context) error {
+	var isExpected, rolsuper, rolbypassrls, canSelect bool
+	row := p.inner.QueryRow(ctx, `
+		SELECT
+			r.rolname = $1,
+			r.rolsuper,
+			r.rolbypassrls,
+			has_table_privilege(current_user, 'audit_entries', 'SELECT')
+		FROM pg_roles r
+		WHERE r.rolname = current_user
+	`, auditAdminRole)
+	if err := row.Scan(&isExpected, &rolsuper, &rolbypassrls, &canSelect); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGAuditAdminSelectCheck,
+			"postgres: audit admin role readiness probe failed", err)
+	}
+	return auditAdminRoleResult(isExpected, rolsuper, rolbypassrls, canSelect)
+}
+
+// checkAuditAdminPolicy asserts the audit_admin_read_all RLS policy is installed
+// on audit_entries with its full expected shape, reusing checkAuditAdminPolicyShape
+// (the same pure shape verdict the migration-time schema guard applies). A missing
+// policy (pgx.ErrNoRows) fails-closed — without it the admin role reads no
+// cross-tenant rows. pg_policies is a SELECT-only catalog view readable by the
+// restricted admin role (the equally-restricted serving role reads it in verifyRLS).
+func (p *Pool) checkAuditAdminPolicy(ctx context.Context) error {
+	const policyQ = `
+	SELECT policyname, permissive, cmd,
+	       COALESCE(array_to_string(roles, ','), ''),
+	       COALESCE(qual, ''),
+	       COALESCE(with_check, '')
+	  FROM pg_policies
+	 WHERE schemaname = current_schema()
+	   AND tablename  = 'audit_entries'
+	   AND policyname = $1`
+	var pol rlsPolicyRow
+	err := p.inner.QueryRow(ctx, policyQ, auditAdminPolicy).Scan(
+		&pol.name, &pol.permissive, &pol.cmd, &pol.roles, &pol.qual, &pol.withCheck)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"postgres: audit admin read policy audit_admin_read_all is absent on audit_entries; "+
+				"migration 065 must have run with gocell_audit_admin provisioned before the admin pool",
+			rlsPolicyShapeDetails(auditEntriesRLS(), "audit_admin_read_all policy not found")...)
+	}
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"postgres: audit admin policy preflight query failed", err)
+	}
+	return checkAuditAdminPolicyShape(auditEntriesRLS(), pol)
 }
 
 // Close gracefully shuts down the connection pool, bounded by ctx.

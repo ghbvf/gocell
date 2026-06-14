@@ -83,15 +83,19 @@ func WithProjectionReplaySource(replay projection.ReplaySource) Option {
 	}
 }
 
-// WithProjectionCursor injects the [projection.Cursor] used by every projection
-// Coordinator to extract a monotonic stream position from each consumed event
-// (for the exactly-once checkpoint compare). Typed-nil or bare-nil inputs are
-// not stored; the phase6 drain fails fast naming this option when a projection
-// is declared.
+// WithProjectionCursor injects the [projection.LiveCursor] used by every projection
+// Coordinator to (a) extract a monotonic stream position from each consumed event
+// for the exactly-once checkpoint compare, and (b) resolve a bare live-delivered
+// entry into a position-bearing carrier at the delivery boundary (ResolveCarrier).
+// The parameter is LiveCursor (not the narrower Cursor) so a cursor that cannot
+// resolve live carriers is rejected at COMPILE time — every projection has a live
+// push path, so live resolution is mandatory. Typed-nil or bare-nil inputs are not
+// stored; the phase6 drain fails fast naming this option when a projection is declared.
 //
-// For tests, a one-method type returning a fixed int64 ≥ 1 is sufficient (the
-// cursor must return ≥ 1; 0 is the cold-start sentinel in the checkpoint store).
-func WithProjectionCursor(cursor projection.Cursor) Option {
+// For tests, projection.NewMemProjectionEventSource() (a full LiveCursor) is
+// sufficient. Production deployments inject the postgres-backed
+// PGProjectionEventSource via the composition root.
+func WithProjectionCursor(cursor projection.LiveCursor) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(cursor) {
 			return

@@ -23,11 +23,12 @@
 // The readyz probe for each projection is registered by the framework
 // Coordinator (via Coordinator.Probes() in bootstrap), not by this Service.
 //
-// Demo note: the read model is in-memory only; events are discarded by the
-// NoopWriter, so live consumption is best-effort (in-process bus). The harness
-// cold-starts and the Coordinator registers its readyz probe automatically.
-// Faithful PG-backed replay is tracked in #1368 (production PG ReplaySource/Cursor)
-// and #1370 (real-PG integration test).
+// Demo note: the read model is in-memory only (a single MemProjectionEventSource wired
+// as both replay source and cursor); events are discarded by the NoopWriter, so live
+// consumption is best-effort (in-process bus). The harness cold-starts and the Coordinator
+// registers its readyz probe automatically. The durable PG-backed source
+// (PGProjectionEventSource) is delivered and gated in corebundle (EPIC #1504); todoorder's
+// own durable wiring is tracked in backlog.
 package orderprojection
 
 import (
