@@ -781,10 +781,18 @@ func TestAuthzFieldMaskFieldsFrozen(t *testing.T) {
 const authzPkgPath = PlatformFrameworkModulePath + "/pkg/authz"
 
 // allowDenyCallerAllowlist is the set of module-relative production files allowed
-// to reference authz.Allow / authz.Deny. PR-7 (#1345): the sole ABAC PDP engine
-// file is the only sanctioned construction site of an authorization verdict.
+// to reference authz.Allow / authz.Deny. PR-7 (#1345): the platform ABAC PDP
+// engine file is the sanctioned construction site of an authorization verdict.
+//
+// PR-10d (#1894) adds the two example-owned PDPs: iotdevice and todoorder do NOT
+// bundle accesscore, so each ships its own lightweight Authorizer (the SOLE
+// Allow/Deny caller in its example tree) wired via bootstrap.PrimaryAuthorizerOption.
+// Each is a genuine sanctioned PDP engine for its example domain — exactly the
+// "new sanctioned engine → add with rationale" case this allowlist's godoc names.
 var allowDenyCallerAllowlist = map[string]struct{}{
 	"corecells/accesscore/slices/authorizationdecide/evaluator.go": {},
+	"examples/iotdevice/cells/devicecell/authorizer.go":            {},
+	"examples/todoorder/cells/ordercell/authorizer.go":             {},
 }
 
 // TestAuthzDecisionAllowDenyCaller01 asserts every production reference to

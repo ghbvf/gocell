@@ -4,7 +4,9 @@
 //
 // PERMISSION-BASED-AUTHZ-01 forbids role-literal authorization gates
 // (auth.AnyRole / auth.SelfOr / auth.RequireAnyRole) in business handlers
-// that have NOT been migrated to ABAC permission checks.
+// that have NOT been migrated to ABAC permission checks. Scope: corecells/ AND
+// examples/ (the latter added by PR-10d #1894 once iotdevice/todoorder migrated;
+// it locks the migration so neither tree can regress to a role-literal gate).
 //
 // A "role-literal gate" is a call whose receiver resolves (via go/types) to a
 // local alias of github.com/ghbvf/gocell/framework/runtime/auth and whose selector is
@@ -16,15 +18,18 @@
 //
 // Downstream Medium: type-aware CallExpr scan via ResolvePackageRef detects
 // every call regardless of import alias; CI fails loud on any role-literal gate
-// in any corecells business handler. The rule is NOT Hard because auth.AnyRole /
-// auth.SelfOr remain callable (examples still use them pending PR-10d) so the
-// constraint cannot be expressed as a compile error — a corecells handler can
-// still type-check while calling them; only the typed scan rejects it.
+// in any corecells OR examples business handler. The rule is NOT Hard because
+// auth.AnyRole / auth.SelfOr remain callable (PR-10d removed their last callers
+// but does NOT delete the helpers — that + codegen Hard-ification is PR-13) so
+// the constraint cannot be expressed as a compile error — a handler can still
+// type-check while calling them; only the typed scan rejects it. Extending the
+// scan to examples/ (PR-10d) is a complementary Medium lock, NOT the PR-13
+// Hard-ification (codegen funnel + golden), which remains a separate mechanism.
 //
-// Upstream funnel: the allowlist is a migration ledger, now DRAINED to empty by
-// PR-10c — the rule is a zero-exception scan over all corecells handlers.
-// Hard-ification end state: permission declared in contract.yaml → cellgen-derived
-// gate + golden (Hard 范本 "codegen funnel + golden"), tracked for PR-13.
+// Upstream funnel: the allowlist is a migration ledger, DRAINED to empty by
+// PR-10c — the rule is a zero-exception scan over all corecells + examples
+// handlers. Hard-ification end state: permission declared in contract.yaml →
+// cellgen-derived gate + golden (Hard 范本 "codegen funnel + golden"), for PR-13.
 //
 // Funnel 双向锁评级 (ai-robust.md §"Funnel 双向锁评级"):
 //
@@ -38,10 +43,12 @@
 //
 // # Allowlist (empty)
 //
-// The migration ledger is EMPTY as of PR-10c (#1348): every corecells business
-// handler (auditquery, the 5 configcore slices, the 3 accesscore slices) uses a
-// permission gate and must not regress. Any auth.AnyRole/SelfOr/RequireAnyRole
-// call in a corecells handler is now an unconditional violation.
+// The migration ledger is EMPTY as of PR-10c (#1348) and stays empty through
+// PR-10d (#1894): every corecells business handler (auditquery, the 5 configcore
+// slices, the 3 accesscore slices) AND every examples handler (iotdevice
+// devicecommand/devicestatus/devicelist, todoorder order slices) uses a permission
+// gate and must not regress. Any auth.AnyRole/SelfOr/RequireAnyRole call in a
+// corecells or examples handler is now an unconditional violation.
 //
 // # Blind spots
 //
@@ -56,8 +63,9 @@
 // Reverse self-check: TestPermissionBasedAuthz_ReverseFixture asserts the scan
 // fires on testdata/permission_based_authz_red, proving the rule is not vacuous —
 // the only anti-vacuity needed now that the allowlist is empty (with no
-// allowlisted files, the production scan over ./corecells/... is itself non-vacuous
-// only if it can detect a violation, which the reverse fixture confirms).
+// allowlisted files, the production scan over ./corecells/... + ./examples/... is
+// itself non-vacuous only if it can detect a violation, which the reverse fixture
+// confirms).
 package archtest
 
 import (
@@ -153,7 +161,7 @@ func TestPermissionBasedAuthz_01(t *testing.T) {
 	// allowlist must not silently keep its exemption).
 	observed := map[string]struct{}{}
 
-	diags := Run(t, Typed(TypedOpts{}, []string{"./corecells/..."}),
+	diags := Run(t, Typed(TypedOpts{}, []string{"./corecells/...", "./examples/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
