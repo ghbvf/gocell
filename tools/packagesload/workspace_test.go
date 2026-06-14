@@ -65,6 +65,19 @@ func TestExpandParentPrefix(t *testing.T) {
 			wantOK:  false,
 		},
 		{
+			// Positive examples/ case (symmetry with cmd/adapters): when examples/
+			// holds members, the parent prefix expands to each — the OBS-01 #2147 path.
+			name: "multi-member examples prefix expands",
+			mods: []workspace.Module{
+				{Dir: "framework", ImportPath: "github.com/ghbvf/gocell/framework"},
+				{Dir: "examples/iotdevice", ImportPath: "github.com/ghbvf/gocell/examples/iotdevice"},
+				{Dir: "examples/ssobff", ImportPath: "github.com/ghbvf/gocell/examples/ssobff"},
+			},
+			pattern: "./examples/...",
+			want:    []string{"./examples/iotdevice/...", "./examples/ssobff/..."},
+			wantOK:  true,
+		},
+		{
 			name:    "single-module fixture leaves pattern verbatim",
 			mods:    []workspace.Module{{Dir: ".", ImportPath: "github.com/acme/app"}},
 			pattern: "./cmd/...",

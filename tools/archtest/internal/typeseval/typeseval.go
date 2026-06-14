@@ -111,10 +111,14 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 // the second value so callers can fail fast on type-check errors without
 // re-walking.
 //
-// The cross-module workspace scan ([LoadProductionPackages]) uses the
-// ModeWorkspace variant ([loadPackagesMode]); this single-module form is the one
-// the Typed / Fixture / StandaloneModule scopes route through, and its signature
-// is held stable so the pass / production funnel meta-archtests keep matching it.
+// The cross-module workspace scan ([LoadProductionPackages]) uses the ModeWorkspace
+// variant ([loadPackagesMode]); this ModeModule form is the one the Typed / Fixture /
+// StandaloneModule scopes route through. Its ModeModule path delegates to the shared
+// packagesload.LoadWorkspace, so a satellite parent prefix ("./cmd/...", "./adapters/...",
+// "./examples/...") is expanded to its go.work members and loaded in workspace mode —
+// the single-module name refers to the GOWORK mode requested, not a guarantee that
+// only one module loads. The signature is held stable so the pass / production funnel
+// meta-archtests keep matching it.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	return loadPackagesMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
 }

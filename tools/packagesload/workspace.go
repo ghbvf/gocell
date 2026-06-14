@@ -26,18 +26,39 @@ import (
 //   - a tree with no go.work loads as a single ModeModule module at root.
 //
 // cfgTemplate supplies Mode (the go/packages Need* bits), Tests, BuildFlags, and
-// Context; Dir/Env are owned per group (Env via [Load]'s mode handling). The returned
-// []packages.Error is the flat, dir-prefixed set collected from every loaded package
-// so callers can fail fast on type-check errors without re-walking. This is the ONLY
-// satellite-aware package loader in the repo; both the OBS-01 metric-PII scan
-// (tools/metricschema) and the archtest typed façade (tools/archtest) route through
-// it, so "spawn a second satellite loader" cannot be expressed without reaching
-// packages.Load — itself funneled here by PACKAGES-LOAD-FUNNEL-01.
+// Context; Dir/Env are owned per group (Env via [Load]'s mode handling). Do NOT set
+// packages.NeedDeps in cfgTemplate.Mode: it keeps full Syntax+TypesInfo resident for
+// every transitive dependency (~1GB RSS, the #1499 regression); the scan callers
+// deliberately omit it.
+//
+// The returned []packages.Error is the flat, dir-prefixed set collected from every
+// loaded package. Callers MUST treat any non-empty []packages.Error as a scan failure
+// and fail closed — the returned packages may be incomplete; do not scan them and
+// report "clean".
+//
+// This is the ONLY satellite-aware package loader in the repo; both the OBS-01
+// metric-PII scan (tools/metricschema) and the archtest typed façade (tools/archtest)
+// route through it. Carrier strength (per ai-robust.md, upstream vs downstream): a
+// satellite loader OUTSIDE packagesload cannot be expressed — the expansion atom
+// expandParentPrefix is package-private (unreachable) AND any reimplementation must
+// reach packages.Load, itself funneled here by PACKAGES-LOAD-FUNNEL-01 (Hard upstream).
+// WITHIN packagesload a parallel loader is only convention-guarded (Medium); this is
+// the sanctioned single home, and tightening it to a private sub-package is a tracked
+// Hard-ization follow-up.
 func LoadWorkspace(root string, cfgTemplate packages.Config, patterns ...string) ([]*packages.Package, []packages.Error, error) {
-	if groups, rootPatterns, ok := workspacePatternGroups(root, patterns); ok {
+	groups, rootPatterns, ok, err := workspacePatternGroups(root, patterns)
+	if err != nil {
+		// go.work exists but its members could not be resolved — fail closed (do NOT
+		// silently degrade to a single-module scan that drops satellite coverage).
+		return nil, nil, err
+	}
+	if ok {
 		// A span across multiple member modules, OR a single group that IS the
 		// workspace root, must load from the root in ModeWorkspace using rootPatterns
 		// (where unanchored "./parent/..." patterns are translated to import-path form).
+		// NOTE: this is the documented ModeModule→ModeWorkspace upgrade — a ModeModule
+		// caller asking for a satellite parent prefix gets a workspace-mode load of the
+		// expanded members, which is the only way those members resolve post-#1565.
 		if len(groups) > 1 || (len(groups) == 1 && groups[0].dir == root) {
 			return loadPackageGroups(ModeWorkspace, cfgTemplate, []patternGroup{{dir: root, patterns: rootPatterns}})
 		}
@@ -52,6 +73,12 @@ type patternGroup struct {
 	patterns []string
 }
 
+// loadPackageGroups loads each group's patterns with a per-group clone of cfgTemplate
+// (Dir set to the group dir) and concatenates the results. It does NOT dedup packages
+// across groups: LoadWorkspace only ever passes either ONE root-anchored ModeWorkspace
+// group or N disjoint per-member ModeModule groups, so no package is loaded twice.
+// Consumers that mix patterns hitting the same package (e.g. metricschema's
+// loadPackages) dedup by import path downstream.
 func loadPackageGroups(
 	mode Mode, cfgTemplate packages.Config, groups []patternGroup,
 ) ([]*packages.Package, []packages.Error, error) {
@@ -62,7 +89,7 @@ func loadPackageGroups(
 		cfg.Dir = g.dir
 		pkgs, err := Load(mode, &cfg, g.patterns...)
 		if err != nil {
-			return nil, nil, fmt.Errorf("packages.Load: %w", err)
+			return nil, nil, fmt.Errorf("packages.Load %s: %w", g.dir, err)
 		}
 		packages.Visit(pkgs, nil, func(p *packages.Package) {
 			for i := range p.Errors {
@@ -92,13 +119,19 @@ const skipPatternDir = "\x00skip-no-member"
 // in which any "./parent/..." pattern that spans multiple members (no single
 // member owns it) is rewritten to its import-path form so workspace mode resolves
 // it without a root module to anchor the relative dir.
-func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []string, bool) {
+//
+// The bool is true when root is a go.work workspace and the patterns were grouped;
+// false (with nil error) signals "no go.work — caller should do a single-module
+// load". A non-nil error means root IS a workspace but its members could not be
+// resolved: the caller MUST fail closed rather than fall back to a single-module
+// scan (that would silently drop the satellite coverage governance rules declare).
+func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []string, bool, error) {
 	if !workspace.HasGoWork(root) {
-		return nil, nil, false
+		return nil, nil, false, nil
 	}
 	mods, err := workspace.Modules(root)
 	if err != nil {
-		return nil, nil, false
+		return nil, nil, false, fmt.Errorf("packagesload: resolve workspace members at %s: %w", root, err)
 	}
 	// Expand satellite parent-prefixes ("./cmd/...", "./adapters/...",
 	// "./examples/...") that span multiple members into their per-member patterns
@@ -145,7 +178,7 @@ func workspacePatternGroups(root string, patterns []string) ([]patternGroup, []s
 			rootPatterns = append(rootPatterns, pattern)
 		}
 	}
-	return groups, rootPatterns, true
+	return groups, rootPatterns, true, nil
 }
 
 // splitWorkspacePattern maps a root-relative pattern to (owning member dir,

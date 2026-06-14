@@ -1016,8 +1016,8 @@ func TestCheckOBS01DetectsSatelliteMemberLeak(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "reason", diagnostics[0].Label)
-	assert.Contains(t, filepath.ToSlash(diagnostics[0].File), "examples/leakydemo",
-		"diagnostic must point at the satellite member file — proves satellite code is scanned")
+	assert.Equal(t, "examples/leakydemo/leak.go", filepath.ToSlash(diagnostics[0].File),
+		"diagnostic must point exactly at the satellite member leak file — proves satellite code is scanned")
 }
 
 func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
@@ -2336,8 +2336,12 @@ func writeSatelliteMetricsFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	mod, sum := canonicalMetricsFixtureMod(t)
-	mod = strings.Replace(mod, "module example.com/metricsfixture", "module example.com/leakydemo", 1)
-	writeFile(t, root, "go.work", "go 1.25.11\n\nuse ./examples/leakydemo\n")
+	const newModulePath = "module example.com/leakydemo"
+	mod = strings.Replace(mod, "module example.com/metricsfixture", newModulePath, 1)
+	require.Contains(t, mod, newModulePath,
+		"fixture go.mod module-path replacement failed — canonicalMetricsFixtureMod format changed?")
+	// Pin the same toolchain version as the real repo go.work (no hardcoded drift).
+	writeFile(t, root, "go.work", repoGoWorkGoDirective(t)+"\n\nuse ./examples/leakydemo\n")
 	writeFile(t, root, "examples/leakydemo/go.mod", mod)
 	writeFile(t, root, "examples/leakydemo/go.sum", sum)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", "acknowledgements: []\n")
@@ -2362,6 +2366,22 @@ func Record(err error) {
 }
 `)
 	return root
+}
+
+// repoGoWorkGoDirective returns the real repo go.work's `go X.Y.Z` line so a fixture
+// workspace pins the same toolchain version the test binary runs under — no hardcoded
+// version that drifts when the repo bumps Go.
+func repoGoWorkGoDirective(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.work"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "go ") {
+			return trimmed
+		}
+	}
+	t.Fatal("repo go.work has no `go` directive")
+	return ""
 }
 
 // writeMetricsFixtureFiles lays down the throwaway metrics-fixture module tree:

@@ -127,10 +127,14 @@ func PatternsExtended(root string) []string {
 //
 // The emitted prefixes are owned by no single go.work member and are loadable ONLY
 // through the shared satellite-aware loader packagesload.LoadWorkspace, which expands
-// each to its real members (kept honest by SATELLITE-PARENT-PREFIX-SCAN-01). Both
-// the OBS-01 metric-PII scan (#2147) and the typeseval duration gates compose this
-// increment onto their respective base scope; do NOT hand the prefixes to a loader
-// that does not go through LoadWorkspace.
+// each to its real members. Both the OBS-01 metric-PII scan (#2147) and the typeseval
+// duration gates compose this increment onto their respective base scope; do NOT hand
+// the prefixes to a loader that does not go through LoadWorkspace — a raw ModeModule
+// load hard-errors and a non-expanding workspace load match-zeroes (silent coverage
+// loss). This "must go through LoadWorkspace" is a Soft (godoc) convention: it is not
+// type-enforced, but the loader's expansion is kept honest by the Medium archtest
+// SATELLITE-PARENT-PREFIX-SCAN-01, which fails if a satellite prefix stops expanding
+// to real members.
 func SatelliteParentPatterns(root string) []string {
 	var patterns []string
 	for _, dir := range topLevelDirs {
