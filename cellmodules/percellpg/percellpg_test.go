@@ -80,8 +80,8 @@ func TestResolveAgreedConfig_DistinctDSNs(t *testing.T) {
 	topo := mkTopo(t, "real", "postgres", true)
 	cfg := Config{
 		Cells: map[string]adapterpg.Config{
-			"auditcore":  {DSN: "postgres://user:pass@host1/db1"},
-			"configcore": {DSN: "postgres://user:pass@host2/db2"},
+			"auditcore":  {DSN: "postgres://host1/db1"},
+			"configcore": {DSN: "postgres://host2/db2"},
 		},
 	}
 	_, _, err := resolveAgreedConfig(topo, cfg)
@@ -101,7 +101,7 @@ func TestResolveAgreedConfig_DistinctDSNs(t *testing.T) {
 func TestResolveAgreedConfig_SameDSN(t *testing.T) {
 	t.Parallel()
 	topo := mkTopo(t, "real", "postgres", true)
-	const dsn = "postgres://user:pass@host/db"
+	const dsn = "postgres://host/db"
 	cfg := Config{
 		Cells: map[string]adapterpg.Config{
 			"auditcore":  {DSN: dsn},
@@ -169,7 +169,7 @@ func TestResolveAgreedConfig_WhitespaceOnlyDSN(t *testing.T) {
 func TestResolveAgreedConfig_SingleCell(t *testing.T) {
 	t.Parallel()
 	topo := mkTopo(t, "real", "postgres", true)
-	const dsn = "postgres://user:pass@host/db"
+	const dsn = "postgres://host/db"
 	cfg := Config{
 		Cells: map[string]adapterpg.Config{
 			"configcore": {DSN: dsn, MaxConns: 10},
@@ -200,7 +200,7 @@ func TestResolve_MemoryTopology(t *testing.T) {
 	t.Cleanup(func() { newPool = orig })
 	newPool = func(_ context.Context, _ adapterpg.Config) (*adapterpg.Pool, error) {
 		t.Fatal("newPool must not be called in memory topology")
-		return nil, nil
+		panic("unreachable: t.Fatal above aborts the test goroutine")
 	}
 
 	topo := mkTopo(t, "", "memory", false)
