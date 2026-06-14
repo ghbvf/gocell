@@ -1544,9 +1544,15 @@ func intToStr(i int) string { // local helper avoids strconv import noise.
 	return string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
 }
 
-// CH-07 (#1537 review F4 + #1450): non-exempt mutating routes must declare the
-// framework-injected idempotency 409 (ClaimBusy) AND 422 (key-reused); exempt
-// routes / non-mutating methods / already-declared routes must not be flagged.
+// CH-07 (#1537 review F4 + #1450 + #1591, inverted to compute-only): the
+// idempotency framework statuses 409 (ClaimBusy) / 422 (key-reused) are computed
+// from method + auth shape by IdempotencyFrameworkStatuses() — the SOLE source —
+// and must NEVER be hand-authored in auth.responses. CH-07 forbids any framework
+// status appearing in auth.responses (the only middleware that injects 409/422 is
+// idempotency, so their presence there is always a hand-authored computed value).
+// Non-framework middleware statuses (bootstrap 401, rate-limit 429, 503) are
+// untouched. The forbid is method/exempt/auth-shape-agnostic: the value is computed,
+// so it is never declared anywhere.
 func ch07Contract(method string, exempt bool, authResponses []int) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:   "http.test.ch07.v1",
@@ -1554,6 +1560,7 @@ func ch07Contract(method string, exempt bool, authResponses []int) *metadata.Con
 		Endpoints: metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:      method,
+				Path:        "/api/v1/x",
 				Responses:   map[int]metadata.HTTPResponseMeta{400: {Description: "Bad Request", SchemaRef: "x"}},
 				Auth:        metadata.HTTPAuthMeta{Responses: authResponses},
 				Idempotency: metadata.HTTPIdempotencyMeta{Exempt: exempt},
@@ -1569,9 +1576,23 @@ func runCH07(t *testing.T, c *metadata.ContractMeta) []ValidationResult {
 	return NewValidator(project, "", clock.Real()).checkCH07()
 }
 
-func TestCheckCH07_MutatingNonExemptMissingBoth_Fails(t *testing.T) {
-	results := runCH07(t, ch07Contract("POST", false, nil))
-	require.Len(t, results, 2, "non-exempt mutating route missing 409 and 422 must produce two CH-07 findings")
+func TestCheckCH07_HandAuthored409_Forbidden(t *testing.T) {
+	results := runCH07(t, ch07Contract("POST", false, []int{409}))
+	require.Len(t, results, 1, "hand-authoring 409 in auth.responses must produce one CH-07 finding")
+	assert.Equal(t, codeCH07, results[0].Code)
+	assert.Equal(t, SeverityError, results[0].Severity)
+	assert.Contains(t, results[0].Message, "409")
+}
+
+func TestCheckCH07_HandAuthored422_Forbidden(t *testing.T) {
+	results := runCH07(t, ch07Contract("POST", false, []int{422}))
+	require.Len(t, results, 1, "hand-authoring 422 in auth.responses must produce one CH-07 finding")
+	assert.Contains(t, results[0].Message, "422")
+}
+
+func TestCheckCH07_HandAuthoredBoth_Forbidden(t *testing.T) {
+	results := runCH07(t, ch07Contract("POST", false, []int{409, 422}))
+	require.Len(t, results, 2, "both 409 and 422 hand-authored must each be flagged")
 	var msgs string
 	for _, r := range results {
 		assert.Equal(t, codeCH07, r.Code)
@@ -1582,23 +1603,64 @@ func TestCheckCH07_MutatingNonExemptMissingBoth_Fails(t *testing.T) {
 	assert.Contains(t, msgs, "422")
 }
 
-func TestCheckCH07_Declared409Only_Fails422(t *testing.T) {
-	results := runCH07(t, ch07Contract("POST", false, []int{409}))
-	require.Len(t, results, 1, "declaring only 409 must still flag the missing 422")
-	assert.Contains(t, results[0].Message, "422")
+func TestCheckCH07_NonFrameworkStatuses_Pass(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("POST", false, []int{401, 429, 503})),
+		"non-framework middleware statuses (bootstrap 401, rate-limit 429, 503) must not be flagged")
 }
 
-func TestCheckCH07_DeclaredBoth_Passes(t *testing.T) {
-	assert.Empty(t, runCH07(t, ch07Contract("POST", false, []int{409, 422})),
-		"declaring both 409 and 422 in auth.responses must satisfy CH-07")
+func TestCheckCH07_EmptyAuthResponses_Pass(t *testing.T) {
+	assert.Empty(t, runCH07(t, ch07Contract("POST", false, nil)),
+		"a route with no hand-authored framework status satisfies CH-07 (statuses are computed)")
 }
 
-func TestCheckCH07_Exempt_Passes(t *testing.T) {
-	assert.Empty(t, runCH07(t, ch07Contract("POST", true, nil)),
-		"idempotency.exempt route must not require 409/422 declarations")
+func TestCheckCH07_BusinessStatusInResponsesMap_NotFlagged(t *testing.T) {
+	// CH-07 scans only auth.responses. A genuine handler-emitted business 409/422 in
+	// the responses map (a typed business response) is a different concern (CH-04) and
+	// must NOT be flagged — only hand-authored framework statuses in auth.responses are.
+	c := ch07Contract("POST", false, nil) // auth.responses empty
+	c.Endpoints.HTTP.Responses[409] = metadata.HTTPResponseMeta{Description: "business conflict", SchemaRef: "x"}
+	c.Endpoints.HTTP.Responses[422] = metadata.HTTPResponseMeta{Description: "semantic validation", SchemaRef: "x"}
+	assert.Empty(t, runCH07(t, c),
+		"409/422 in the responses map (business, handler-emitted) must not be flagged by CH-07")
 }
 
-func TestCheckCH07_NonMutating_Passes(t *testing.T) {
-	assert.Empty(t, runCH07(t, ch07Contract("GET", false, nil)),
-		"GET is not idempotency-tracked; no 409/422 required")
+func TestCheckCH07_ForbidsUniversally(t *testing.T) {
+	// The forbid is method/exempt/auth-shape-agnostic: 409/422 are computed, never
+	// hand-authored, so even a GET or exempt route may not carry them in auth.responses.
+	assert.Len(t, runCH07(t, ch07Contract("GET", false, []int{409})), 1,
+		"409 in auth.responses is forbidden regardless of method")
+	assert.Len(t, runCH07(t, ch07Contract("POST", true, []int{422})), 1,
+		"422 in auth.responses is forbidden even on an exempt route")
+}
+
+// TestDeclaredErrorStatuses_FoldsAuthShapeAwareOracle verifies the compute-only
+// substitution (#1591): the framework statuses, deleted from auth.responses, are
+// folded into declaredErrorStatuses from the auth-shape-aware oracle — so CH-04 sees
+// the same declared surface for a reachable route, and correctly NOT for an
+// unreachable (public) route the middleware never claims for.
+func TestDeclaredErrorStatuses_FoldsAuthShapeAwareOracle(t *testing.T) {
+	// Reachable JWT mutating route (path /api/v1/x, no auth flags) → fold {409,422}.
+	reachable := declaredErrorStatuses(ch07Contract("POST", false, nil))
+	assert.Contains(t, reachable, 409, "reachable mutating route folds the computed 409")
+	assert.Contains(t, reachable, 422, "reachable mutating route folds the computed 422")
+
+	// Non-PrincipalUser mutating routes → oracle nil → no fold. All three bypass
+	// shapes (public/bootstrap/internal-path) must be covered.
+	public := ch07Contract("POST", false, nil)
+	public.Endpoints.HTTP.Auth.Public = true
+	pub := declaredErrorStatuses(public)
+	assert.NotContains(t, pub, 409, "public route must not fold 409 (middleware bypassed)")
+	assert.NotContains(t, pub, 422, "public route must not fold 422 (middleware bypassed)")
+
+	bootstrap := ch07Contract("POST", false, nil)
+	bootstrap.Endpoints.HTTP.Auth.Bootstrap = true
+	bs := declaredErrorStatuses(bootstrap)
+	assert.NotContains(t, bs, 409, "bootstrap route must not fold 409 (basic-auth, not PrincipalUser)")
+	assert.NotContains(t, bs, 422, "bootstrap route must not fold 422 (basic-auth, not PrincipalUser)")
+
+	internal := ch07Contract("POST", false, nil)
+	internal.Endpoints.HTTP.Path = "/internal/v1/x"
+	intl := declaredErrorStatuses(internal)
+	assert.NotContains(t, intl, 409, "internal route must not fold 409 (service-token, not PrincipalUser)")
+	assert.NotContains(t, intl, 422, "internal route must not fold 422 (service-token, not PrincipalUser)")
 }
