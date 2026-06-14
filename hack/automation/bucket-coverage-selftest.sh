@@ -30,7 +30,7 @@ FAIL_COUNT=0
 CHECK_COUNT=0
 # EXPECTED_CHECKS is the anti-vacuity anchor: if the script returns early or a
 # scenario is silently skipped, the final count won't match and the selftest
-# fails — the same false-green defence router-selftest.sh uses.
+# fails — guarding against a silently-skipped scenario going false-green.
 # Breakdown: A=1 B=2 C=1 D=1 E=1 F=3 G=1 H=1 I=2 = 13.
 EXPECTED_CHECKS=13
 
