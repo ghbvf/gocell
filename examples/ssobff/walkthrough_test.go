@@ -54,7 +54,16 @@ const (
 	ssobffTestTenantID = "00000000-0000-0000-0000-000000000001"
 )
 
-var walkthroughHTTPClient = &http.Client{Timeout: testtime.D1s}
+// walkthroughReadyClient probes /readyz with a short, fail-fast timeout so a
+// slow probe retries within waitForWalkthroughReady's EventuallyLong deadline
+// instead of blocking past it.
+var walkthroughReadyClient = &http.Client{Timeout: testtime.D1s}
+
+// walkthroughHTTPClient drives business requests. Its timeout must exceed a
+// single argon2/bcrypt password hash + DB write under CI CPU contention —
+// create-user / login deliberately run a CPU-slow KDF, so the prior 1s budget
+// flaked (#2122). D10s covers the worst-case CI hashing latency.
+var walkthroughHTTPClient = &http.Client{Timeout: testtime.D10s}
 
 type capturedLogRecords struct {
 	mu      sync.Mutex
@@ -213,7 +222,7 @@ func waitForWalkthroughReady(t *testing.T, readyzURL string, done <-chan error) 
 		case <-tick.C:
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, readyzURL, http.NoBody)
 			require.NoError(t, err)
-			resp, err := walkthroughHTTPClient.Do(req)
+			resp, err := walkthroughReadyClient.Do(req)
 			if err != nil {
 				continue
 			}
