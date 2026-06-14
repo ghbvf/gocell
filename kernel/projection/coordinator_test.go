@@ -52,6 +52,16 @@ func (f *fakeCursor) Position(_ ProjectionEvent) (int64, error) {
 	return f.pos, f.err
 }
 
+// ResolveCarrier is identity: the fake's Position accepts any carrier, so the live
+// path needs no journal lookup. This makes fakeCursor a full LiveCursor (the
+// Coordinator's required cursor contract) without changing existing test behavior.
+func (f *fakeCursor) ResolveCarrier(_ context.Context, entry ProjectionEvent) (ProjectionEvent, error) {
+	return entry, nil
+}
+
+// compile-time check: fakeCursor satisfies the Coordinator's LiveCursor contract.
+var _ LiveCursor = (*fakeCursor)(nil)
+
 // recordingApply records calls and returns an injected error.
 type recordingApply struct {
 	calls int
@@ -212,7 +222,7 @@ func minimalSpec(id string) contractspec.ContractSpec {
 	}
 }
 
-func newCoordinator(t *testing.T, reg cell.Registrar, txr persistence.TxRunner, store CheckpointStore, cur Cursor) *Coordinator {
+func newCoordinator(t *testing.T, reg cell.Registrar, txr persistence.TxRunner, store CheckpointStore, cur LiveCursor) *Coordinator {
 	t.Helper()
 	clk := clockmock.New(time.Now())
 	replay := NewMemReplaySource()
@@ -393,6 +403,78 @@ func TestCoordinator_ApplyOne(t *testing.T) {
 			t.Errorf("Disposition = %v, want Requeue", result.Disposition)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Live-carrier resolution (#1504 PR-03) — the live path resolves a bare entry
+// ---------------------------------------------------------------------------
+
+// liveEntry builds a real outbox.Entry with a stable EventID for live-path tests;
+// the zero-value outbox.Entry{} used elsewhere has an empty id the journal resolver
+// cannot match.
+func liveEntry(t *testing.T, clk *clockmock.FakeClock) outbox.Entry {
+	t.Helper()
+	e, err := outbox.NewEntry(clk, context.Background(), "ordersummary.v1", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("outbox.NewEntry: %v", err)
+	}
+	return e
+}
+
+// TestCoordinator_LivePath_ResolvesJournaledBareEntry is the #1504 PR-03 live-path
+// regression: ConsumerBase pushes a BARE outbox.Entry (no global_seq); the Coordinator
+// must resolve it to a position-bearing carrier via the LiveCursor's ResolveCarrier
+// BEFORE Position, so a carrier-intrinsic source applies it cleanly (Ack) instead of
+// dead-lettering it. The D4 emit-time double-write is modeled by appending the entry to
+// the journal before delivery.
+func TestCoordinator_LivePath_ResolvesJournaledBareEntry(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemProjectionEventSource()
+	bare := liveEntry(t, clk)
+	src.Append(bare) // journaled at global_seq 1 before delivery (D4 analog)
+
+	store := NewMemCheckpointStore()
+	apply := &recordingApply{}
+	c := newCoordinator(t, &fakeRegistrar{}, &fakeTxRunner{}, store, src)
+
+	res := c.buildHandler(apply.fn)(context.Background(), bare)
+
+	if res.Disposition != outbox.DispositionAck {
+		t.Fatalf("journaled bare entry: Disposition = %v, want Ack (ResolveCarrier closes the live-path gap, "+
+			"not a permanent dead-letter)", res.Disposition)
+	}
+	if apply.calls != 1 {
+		t.Errorf("apply.calls = %d, want 1", apply.calls)
+	}
+	off, err := store.LoadOffset(context.Background(), "testcell", "p1")
+	if err != nil {
+		t.Fatalf("LoadOffset: %v", err)
+	}
+	if off != 1 {
+		t.Errorf("checkpoint = %d, want 1 (the resolved global_seq)", off)
+	}
+}
+
+// TestCoordinator_LivePath_UnjournaledBareEntryIsPermanent asserts that a live entry
+// absent from the journal (resolution impossible) is REJECTED (permanent → DLX), not
+// requeued forever: ResolveCarrier surfaces a permanent error and classify maps it to
+// Reject, and Apply never runs.
+func TestCoordinator_LivePath_UnjournaledBareEntryIsPermanent(t *testing.T) {
+	t.Parallel()
+	clk := clockmock.New(time.Now())
+	src := NewMemProjectionEventSource() // empty: nothing journaled
+	apply := &recordingApply{}
+	c := newCoordinator(t, &fakeRegistrar{}, &fakeTxRunner{}, NewMemCheckpointStore(), src)
+
+	res := c.buildHandler(apply.fn)(context.Background(), liveEntry(t, clk))
+
+	if res.Disposition != outbox.DispositionReject {
+		t.Fatalf("unjournaled live entry: Disposition = %v, want Reject (permanent)", res.Disposition)
+	}
+	if apply.calls != 0 {
+		t.Errorf("apply.calls = %d, want 0 (Apply must not run when the carrier cannot be resolved)", apply.calls)
+	}
 }
 
 // ---------------------------------------------------------------------------

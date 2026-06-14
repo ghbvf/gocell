@@ -17,10 +17,9 @@
 // invariants documented on projection.Cursor (1-based / monotonic / gap-allowed /
 // permanent-error). Adding a new impl without enrolling it is a CI failure.
 //
-// Companion to #1368 (production PG journal-backed Cursor): PR-04c ships the
-// first non-fake Cursor (postgres.PGProjectionCursor) alongside MemCursor
-// (#1483), so a machine guard that every Cursor impl is conformance-verified is
-// now load-bearing.
+// Companion to the production PG journal-backed Cursor (postgres.
+// PGProjectionEventSource, EPIC #1504) alongside MemCursor (#1483), so a machine
+// guard that every Cursor impl is conformance-verified is load-bearing.
 //
 // # AI-robust grading
 //

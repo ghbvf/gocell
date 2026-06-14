@@ -41,6 +41,16 @@ HTTP 与 gRPC metrics 的 `cell` label 必须来自 closed set。合法值是 as
 gRPC unary 和 stream interceptor 顺序必须保证 cell attribution 在 metrics/access log
 之前完成。
 
+## Cross-cell transport
+
+跨 cell 同步（http）contract 调用经 `runtime/transport.CellTransport` seam 时，必须按
+`transport_mode ∈ {in_proc, remote}` 二值区分——`cell_transport_requests_total{transport_mode}`
+metric label + trace span attribute（ADR `202606131142-1423` D4：「透明」不得变成「不可诊断」）。
+`transport_mode` 是 sealed `transport.TransportMode`（unexported 字段 + `ModeInProc()`/`ModeRemote()`
+唯一构造），值集由类型系统闭合——包外不可 mint 第三值，metric Record 取 typed 参数故裸 string 不可
+表达（Hard）。二值天然低基数，故 metrics **可**按 transport_mode 过滤（非 trace-only）。L0 cell 不经
+此 seam 调用，豁免。新增 mode 须同步 `allTransportModes` 注册表（anti-vacuity）+ 本节。
+
 ## Redis namespace
 
 Redis key namespace 使用 owner 维度表达：cell、role、resource。禁止把 service token、

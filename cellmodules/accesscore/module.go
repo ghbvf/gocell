@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/session"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/composition"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/state/cas"
@@ -255,16 +256,57 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 		accesscell.WithPGBundle(pgBundle),
 		accesscell.WithRefreshStore(pgRefreshStore),
 	}
-	// Wire the ConfigGetter using shared.InternalHMACRing (promoted from
-	// cmd-private internalGuard.ring onto composition.SharedDeps).
+	// Wire the ConfigGetter through the in-process CellTransport seam (US4 #1963).
+	// signing uses shared.InternalHMACRing (promoted from cmd-private
+	// internalGuard.ring onto composition.SharedDeps); the transport carries the
+	// signed request to configcore's internal handler.
 	if shared.InternalHMACRing != nil {
-		internalBaseURL := cellsecrets.InternalAddrToBaseURL(shared.InternalHTTPAddr)
-		accessOpts = append(
-			accessOpts,
-			configgetter.WithHTTP(internalBaseURL, shared.InternalHMACRing, shared.Clock),
-		)
+		opts, err := wireConfigGetter(shared, accessOpts)
+		if err != nil {
+			return nil, nil, err
+		}
+		accessOpts = opts
 	}
 	return accessOpts, pgSessionStore, nil
+}
+
+// configProviderCell is the cell that provides the internal config-get contract
+// (http.config.internal.get.v1) accesscore consumes.
+const configProviderCell = "configcore"
+
+// wireConfigGetter selects the config getter transport by configcore's placement
+// in the deployment topology, reusing the SEALED topology semantics
+// (bootstrap.NewDeploymentTopology → IsColocated/RemoteEndpoint) — not a parallel
+// hand-rolled classification. US4 wires only the in-process transport:
+//   - colocated → inject the in-process transport;
+//   - remote → fail-fast (remote CellTransport is US5 #1966; never silently
+//     dispatch in-process to a cell that is not co-located);
+//   - neither (explicit topology, configcore unclassified) → fail-fast (gocell
+//     validate TOPO-11 normally prevents this; defense-in-depth).
+func wireConfigGetter(shared *composition.SharedDeps, accessOpts []accesscell.Option) ([]accesscell.Option, error) {
+	topo, err := bootstrap.NewDeploymentTopology(shared.DeploymentTopology)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: deployment topology: %w", err)
+	}
+	switch {
+	case topo.IsColocated(configProviderCell):
+		if shared.InProcessTransport == nil {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: SharedDeps.InProcessTransport must be set to wire the config getter "+
+					"(composition.Builder.Build mints it)")
+		}
+		return append(accessOpts,
+			configgetter.WithTransport(shared.InProcessTransport, shared.InternalHMACRing, shared.Clock)), nil
+	default:
+		if _, remote := topo.RemoteEndpoint(configProviderCell); remote {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"accesscore: configcore is declared remote in the deployment topology, but the remote "+
+					"CellTransport is not wired yet (US5 #1966); in-process transport cannot reach a remote cell")
+		}
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: configcore is not classified in the deployment topology (neither colocated nor "+
+				"remote); the config getter provider must be reachable (gocell validate TOPO-11)")
+	}
 }
 
 // resolveAccessStorageOpts selects postgres or memory storage options.

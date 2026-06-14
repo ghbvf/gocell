@@ -24,10 +24,6 @@ endpoints:
         type: string
         required: true
     successStatus: 202
-    auth:
-      responses:
-        - 409
-        - 422
     noContent: false
     responses:
       400:

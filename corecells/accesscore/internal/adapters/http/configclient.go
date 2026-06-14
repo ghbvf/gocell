@@ -14,16 +14,31 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/panicregister"
 	"github.com/ghbvf/gocell/pkg/tenant"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/transport"
 )
 
 const (
-	// defaultConfigClientHTTPTimeout is the default HTTP client timeout for
-	// internal configcore requests.
-	defaultConfigClientHTTPTimeout = 5 * time.Second
-
 	internalKeyQuotedFmt = "key=%q"
+
+	// configInternalGetContractID is the logical contract dispatched through the
+	// CellTransport seam — in-process it routes by request path, remotely (US5
+	// #1966) it resolves configcore's endpoint.
+	configInternalGetContractID = "http.config.internal.get.v1"
+
+	// configClientTimeout bounds a single config refetch so a long-lived caller
+	// ctx (e.g. an event-consumer ctx) cannot let an in-process/remote configcore
+	// call hang indefinitely. Restores the 5s bound the pre-transport *http.Client
+	// carried. MESSAGE-CONST-LITERAL-01 messages below are required-dep fail-fasts.
+	configClientTimeout = 5 * time.Second
+
+	msgTransportNil = "accesscore/http.NewHTTPConfigGetter: CellTransport is required (nil rejected); " +
+		"the composition root must inject the in-process or remote transport"
+	msgRingNil = "accesscore/http.NewHTTPConfigGetter: HMACKeyRing is required (nil rejected); " +
+		"the composition root must supply InternalHMACRing"
 )
 
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
@@ -38,40 +53,38 @@ type configEntryDataResponse struct {
 }
 
 // HTTPConfigGetter calls configcore's internal GET /internal/v1/config/{key}
-// endpoint. It signs every outbound request with a service token derived from
-// the provided HMACKeyRing.
+// contract through the injected [transport.CellTransport] seam. It signs every
+// outbound request with a service token derived from the provided HMACKeyRing,
+// then hands the signed request to the transport — co-located it short-circuits
+// in process (no loopback TCP), split it dials configcore remotely (US5 #1966).
+// The transport never bypasses the auth chain, so signing stays here.
 //
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
 type HTTPConfigGetter struct {
-	baseURL string
-	ring    *auth.HMACKeyRing
-	client  *http.Client
-	clock   clock.Clock
+	transport transport.CellTransport
+	ring      *auth.HMACKeyRing
+	clock     clock.Clock
 }
 
-// NewHTTPConfigGetter creates a new HTTPConfigGetter.
-// baseURL is the base address of the internal listener (e.g. "http://localhost:9090").
-// ring is used to generate the service token Authorization header.
-func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
+// NewHTTPConfigGetter creates a new HTTPConfigGetter. t is the cross-cell sync
+// transport (the composition root injects the in-process or remote impl chosen
+// from the deployment topology); ring signs the service-token Authorization
+// header.
+func NewHTTPConfigGetter(t transport.CellTransport, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
 	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetter")
-	return &HTTPConfigGetter{
-		baseURL: baseURL,
-		ring:    ring,
-		client:  &http.Client{Timeout: defaultConfigClientHTTPTimeout},
-		clock:   clk,
+	// Strong deps fail-fast at construction (programmer/wiring error), not at the
+	// first request: a nil/typed-nil transport or a nil keyring is unrecoverable.
+	if validation.IsNilInterface(t) {
+		panic(panicregister.Approved("configgetter-transport-nil", errcode.Assertion(msgTransportNil)))
 	}
-}
-
-// NewHTTPConfigGetterWithHTTPClient creates a new HTTPConfigGetter with a custom
-// *http.Client (used in tests with httptest.Server).
-func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client, clk clock.Clock) *HTTPConfigGetter {
-	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetterWithHTTPClient")
+	if ring == nil {
+		panic(panicregister.Approved("configgetter-ring-nil", errcode.Assertion(msgRingNil)))
+	}
 	return &HTTPConfigGetter{
-		baseURL: baseURL,
-		ring:    ring,
-		client:  httpClient,
-		clock:   clk,
+		transport: t,
+		ring:      ring,
+		clock:     clk,
 	}
 }
 
@@ -81,10 +94,18 @@ func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, h
 // errcode.ErrConfigRepoNotFound when the key does not exist in that tier
 // (HTTP 404).
 func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key string) (ports.ConfigEntry, error) {
-	path := "/internal/v1/config/" + url.PathEscape(key)
-	fullURL := c.baseURL + path
+	// Bound the single dispatch: a long-lived caller ctx (event-consumer ctx) must
+	// not let a configcore call hang indefinitely (restores the pre-transport 5s
+	// *http.Client timeout, now transport-agnostic).
+	ctx, cancel := context.WithTimeout(ctx, configClientTimeout)
+	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	path := "/internal/v1/config/" + url.PathEscape(key)
+
+	// The request carries only the contract path; the transport places it
+	// (in-process: routes by path against the internal handler; remote: fills
+	// configcore's host). The signed token below covers this same path.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: build request: %w", err)
 	}
@@ -100,7 +121,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	req.Header.Set(auth.HeaderTenantID, t.String())
 
-	resp, err := c.client.Do(req)
+	resp, err := c.transport.DoContract(ctx, configInternalGetContractID, req)
 	if err != nil {
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: do request: %w", err)
 	}
@@ -139,7 +160,13 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 			"configclient: 400 from configcore (invalid X-Tenant-ID)",
 			errcode.WithInternal(errcode.InternalAttr("key", key)))
 	default:
-		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)
+		// Unexpected status (e.g. 5xx). Keep the status + key on the server-only
+		// Internal channel; the message is a const literal (MESSAGE-CONST-LITERAL-01).
+		return ports.ConfigEntry{}, errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			"configclient: unexpected status from configcore",
+			errcode.WithInternal(
+				errcode.InternalAttr("status", resp.StatusCode),
+				errcode.InternalAttr("key", key)))
 	}
 
 	var env configEntryDataResponse

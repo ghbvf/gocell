@@ -260,17 +260,22 @@ func (v *Validator) dynamicWriteFindings(c *metadata.ContractMeta, relHandler st
 	return results
 }
 
-// declaredErrorStatuses returns the union of 4xx/5xx status codes declared in
-// the contract's responses map and in auth.responses. The dual source allows
-// middleware-injected codes (e.g. bootstrap auth 401, rate limiter 429,
-// idempotency 409/422) to be declared under auth.responses without requiring
-// handler AST emission (CH-04 double-source rule).
+// declaredErrorStatuses returns the union of 4xx/5xx status codes a contract
+// declares, from three sources: the responses map (handler-emitted typed
+// responses), auth.responses (listener-middleware-injected codes the oracle does
+// not compute — bootstrap auth 401, rate limiter 429), and the auth-shape-aware
+// idempotency oracle HTTPTransportMeta.IdempotencyFrameworkStatuses() (compute-only
+// framework 409/422, #1591). The triple source lets CH-04 treat all
+// middleware-injected and computed codes as declared without requiring handler AST
+// emission.
 //
-// Note: the framework-injected idempotency 409/422 are NOT folded in here — that
-// would make CH-07 vacuous. Instead each non-exempt mutating contract must
-// explicitly declare them (in responses or auth.responses), and the rule enforces
-// it against HTTPTransportMeta.IdempotencyFrameworkStatuses() as the single-source
-// oracle (#1537 review F4).
+// Compute-only (#1591): the framework idempotency 409/422 are NOT hand-authored in
+// auth.responses (CH-07 forbids that); they are folded in here from the oracle so a
+// reachable mutating route's declared surface is preserved by computation rather
+// than by a hand-authored copy. A non-PrincipalUser route (public/bootstrap/
+// internal) gets nil from the oracle, so 409/422 are correctly absent. Folding no
+// longer makes CH-07 vacuous because CH-07 no longer reads this set — it forbids
+// framework statuses in auth.responses directly.
 func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 	out := make(map[int]struct{})
 	if c.Endpoints.HTTP == nil {
@@ -286,50 +291,56 @@ func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 			out[status] = struct{}{}
 		}
 	}
+	for _, status := range c.Endpoints.HTTP.IdempotencyFrameworkStatuses() {
+		out[status] = struct{}{}
+	}
 	return out
 }
 
-// checkCH07 enforces that every non-exempt mutating HTTP contract declares the
-// framework-injected idempotency status(es) it can return to clients. With HTTP
-// idempotency default-on in production (#1469), a POST/PUT/PATCH/DELETE route
-// that is not endpoints.http.idempotency.exempt can return 409 (in-flight key,
-// ClaimBusy) or 422 (key reused with a different body) from the listener-mounted
-// middleware. The contract surface must declare both so clients can anticipate them.
+// checkCH07 enforces that the idempotency framework statuses (409 ClaimBusy / 422
+// key-reused) are NEVER hand-authored in auth.responses (compute-only, #1591). They
+// are computed from method + auth shape by the single-source oracle
+// HTTPTransportMeta.IdempotencyFrameworkStatuses() and folded into the contract's
+// declared surface by declaredErrorStatuses; auth.responses is reserved for
+// middleware-injected codes the oracle does NOT compute (bootstrap auth 401, rate
+// limiter 429). The only middleware that injects 409/422 is idempotency, so their
+// presence in auth.responses is always a hand-authored copy of a computed value —
+// the drift this rule eliminates by construction: delete the copy, keep the
+// computation. This replaces the pre-#1591 "must declare 409/422" completeness rule,
+// which forced non-PrincipalUser routes (public/bootstrap/service-token) to declare
+// statuses the middleware structurally never emits.
 //
-// The required status set is the SINGLE-SOURCE derivation
-// HTTPTransportMeta.IdempotencyFrameworkStatuses() (method + idempotency.exempt) —
-// the 409 is never re-derived ad hoc here, so the declaration requirement cannot
-// drift from middleware behavior. A future mutating route is forced to declare it
-// (or opt out via idempotency.exempt) rather than silently omitting it (#1537
-// review F4). Declaration goes in auth.responses (the listener-middleware-injected
-// status list that already holds the non-auth rate-limit 429), NOT the responses
-// map — the 409 is middleware-injected, not adapter-emitted, so it must not
-// generate a typed business-response struct.
+// The forbid is method/exempt/auth-shape-agnostic: the statuses are computed, so
+// they are declared nowhere. A genuine handler-emitted business 409/422 belongs in
+// the responses map (a typed business response), not auth.responses.
 //
-// INVARIANT: CH-07 (idempotency framework-status declaration completeness).
+// INVARIANT: CH-07 (idempotency framework status is compute-only — never
+// hand-authored in auth.responses). AI-robust rating: Medium (governance type-aware
+// scan over auth.responses; a YAML []int field cannot be type-sealed against
+// specific values).
 func (v *Validator) checkCH07() []ValidationResult {
+	framework := make(map[int]struct{}, len(metadata.FrameworkIdempotencyStatuses()))
+	for _, status := range metadata.FrameworkIdempotencyStatuses() {
+		framework[status] = struct{}{}
+	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Kind != "http" || c.Endpoints.HTTP == nil {
 			continue
 		}
-		required := c.Endpoints.HTTP.IdempotencyFrameworkStatuses()
-		if len(required) == 0 {
-			continue
-		}
-		declared := declaredErrorStatuses(c)
-		for _, status := range required {
-			if _, ok := declared[status]; ok {
+		for _, status := range c.Endpoints.HTTP.Auth.Responses {
+			if _, isFramework := framework[status]; !isFramework {
 				continue
 			}
 			results = append(results, v.newError(
-				codeCH07, IssueRequired,
+				codeCH07, IssueForbidden,
 				contractFile(c), "endpoints.http.auth.responses",
-				fmt.Sprintf("%s: non-exempt mutating route can return idempotency framework "+
-					"status %d but the contract does not declare it", c.ID, status),
-				fmt.Sprintf("add %d to endpoints.http.auth.responses (listener-middleware-injected statuses), "+
-					"or set endpoints.http.idempotency.exempt: true if this route must not be idempotency-tracked",
-					status),
+				fmt.Sprintf("%s: idempotency framework status %d must not be hand-authored in "+
+					"auth.responses — it is computed from the route's method and auth shape by "+
+					"IdempotencyFrameworkStatuses() and folded into the contract surface automatically",
+					c.ID, status),
+				fmt.Sprintf("remove %d from endpoints.http.auth.responses (if this is a genuine "+
+					"handler-emitted business status, declare it in the responses map instead)", status),
 			))
 		}
 	}

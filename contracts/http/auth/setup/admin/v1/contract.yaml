@@ -31,7 +31,6 @@ endpoints:
       responses:
         - 401
         - 429
-        - 422
     responses:
       400:
         description: "Bad request — missing or blank required fields, oversized username/email, or password outside 8-72 printable ASCII bytes"

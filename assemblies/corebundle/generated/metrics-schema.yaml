@@ -181,6 +181,14 @@ metrics:
         - hook
         - outcome
       file: cmd/corebundle/metrics.go
+    - name: cell_transport_requests_total
+      fqName: gocell_cell_transport_requests_total
+      namespace: gocell
+      type: counter
+      help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
+      labels:
+        - transport_mode
+      file: runtime/transport/metrics.go
     - name: config_event_process_total
       fqName: gocell_config_event_process_total
       namespace: gocell

@@ -241,7 +241,7 @@ func (w *journalingOutboxWriter) WriteBatch(ctx context.Context, es []outbox.Ent
 | **PR-00（本 PR）** | 本 ADR + `202605261620` §Amendment 2026-06-03 retention-boundary 段 + §6 Row 1 原地重写 + `202606051200-1609` §1.2 back-pointer + `eventbus.md` nav。`Refs #1504`（**不 Closes**，镜像 #1609 PR-00 不关闭 #1609） | D1–D9（设计） | 无；解锁 PR-01..05 |
 | **PR-01** | `projection_events` migration（only-add `global_seq IDENTITY` + `idx`）+ `schema_guard` 表注册 + mem source + PG source（`Position` 读 `global_seq`）+ 入既有 conformance（I1，**含新增 "Position 返回 carrier 自带 `global_seq`、无额外 DB 往返" 场景断言**——回归 #1504 根 fix，可经 mock tx / statement 计数）+ **`projection_journal_ready` readyz probe**（`RepoReady()` + `CELL-REPO-READYZ-PROBE-01` 入列 + `PROBENAME-SEALED-FUNNEL-01` typed const）+ **扩 `OUTBOX-RECONSTRUCTION-CALLER-01` allowlist +1**（`PGProjectionEventSource` 调 `EntryScan.ToEntry` 重建载体）+ **serving-role `REVOKE UPDATE, DELETE`（migration 058，DB 引擎 append-only Hard，I4 主守卫前移）+ append-only 集成回归**（`TestProjectionEvents_AppendOnly_ServingRoleRevoked`：catalog `has_table_privilege` + 连 `gocell_app` 实测 INSERT 过 / UPDATE·DELETE 返 42501） | D2/D3/D7 | 依赖 PR-00 |
 | **PR-02**（#1769，已落地） | emit 期同事务双写装饰器（D4，topic-filtered，**保留 `BatchWriter`**：`Write`+`WriteBatch` 经 `journalProjectionSubset` 收口）+ `PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01`（I2，Hard/Hard）+ `…-TOPIC-ALLOWLIST-DERIVED-01`（I5，**Hard**：cellgen `generatedProjectionSourceTopics()` golden + cap_wiring 消费 archtest）+ composition-root 接线（always-decorate，topic 集 corebundle 今为空）+ `NewJournalingOutboxWriter` 纳入 `CAPABILITY-PROVIDER-FUNNEL-01` + **写路径集成回归测试**（`//go:build integration`，覆盖 `Write`+`WriteBatch`，**不甩 PR-04**）：①双写原子性——回滚两表同回滚；②topic-filter——非 projection-source topic 不入 `projection_events`（含 mixed-batch 子集）；③`ON CONFLICT (id) DO NOTHING` 幂等——同 `id` 二次 append `global_seq` 不变 | D4 | 依赖 PR-01 |
-| **PR-03** | corebundle wiring：durable source 填 `WithProjection*` 槽但**仍挂既有 gate 下**（gate 现选 durable，posture **保持 fail-closed**）+ **删 outbox-backed source**（无双路径）+ **live-carrier resolver**（投递边界把裸 `outbox.Entry` 经 `id → global_seq` 查找包成 `JournalEvent`，§4.2）+ **live-path 回归**（裸 `outbox.Entry` 必须解析、不得 permanent-error）。**不删 gate**（移到 PR-04） | D5 | 依赖 PR-01+02；posture 不变 |
+| **PR-03（#1770，已落地）** | corebundle wiring：durable source 填 `WithProjection*` 槽但**仍挂既有 gate 下**（gate 现选 durable，posture **保持 fail-closed**）+ **删 outbox-backed source**（无双路径）+ **live-carrier resolver**（投递边界把裸 `outbox.Entry` 经 `id → global_seq` 查找包成 `JournalEvent`，§4.2）+ **live-path 回归**（裸 `outbox.Entry` 必须解析、不得 permanent-error）。**不删 gate**（移到 PR-04）。**载体**：resolver 落为强制 `projection.LiveCursor`（`Cursor + LiveCarrierResolver`）——`Coordinator` cursor 槽位类型化 LiveCursor → 编译期 HARD、无 type-assert 软回退；saga tailer 仍取裸 `Cursor`，唯 Coordinator-wired 的 `SagaJournalSource` 补一个协议声明式 `ResolveCarrier`（无 bare push → 仅 intrinsic 载体幂等、余者 permanent）（详见 §Amendment 2026-06-14） | D5 | 依赖 PR-01+02；posture 不变 |
 | **PR-04** | **T-06-2 PG e2e rebuild 证明 + 删 gate（production-default）+ runbook/rollback**：testcontainers cold-start / crash-restart / full-rebuild-from-0 over `projection_events` 证 cleaned-outbox 行不再破坏 rebuild；**e2e 绿后同 PR 删 gate** → fail-closed→production-safe 安全 flip（D9）→ finalize `202605261620` compensation 重写 | D1/D9（验证 + flip） | 依赖 PR-03 **+ PR-05**（no-DELETE 须先到位）；**解锁 T-06-2** |
 | **PR-05** | `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（I4 archtest，Medium **纵深防御**）+ anti-vacuity + RED/GREEN fixture——锁 code-level `DELETE`/`TRUNCATE` 字面量，补 PR-01 DB 引擎 REVOKE 够不着的 owner/migration 上下文盲区 | D7 | 依赖 PR-01；**非删 gate 阻塞前置**（该前置已由 PR-01 DB 引擎 REVOKE 满足）；纵深守卫，宜在 PR-04 前落地但不阻塞 |
 | **PR-PG（deferred）** | 多 pod fencing：定义 #1504 自己的 `AdvanceIfOwner` CAS + 激活 `projection_checkpoints.owner`（D6b）。**gated on 真实多 pod 消费者**（同 #1609 PR-PG 姿态） | D6(b) | deferred；v1 单 pod 边界保持至此 |
@@ -283,6 +283,42 @@ PR-01（#1825）落地时把 D7(iii) 的 **DB 引擎 serving-role REVOKE 前移�
 5. **F1 — §4.2 / §5 row 2 / §9 PR-03 补全**：补 live-carrier resolution 协议规约（裸 `outbox.Entry` 经 `id → global_seq` 在投递边界解析、包成 `JournalEvent`，落 PR-03），使「live Position 必然解析成功」的断言有规约支撑、PR-03（#1770）有显式验收项；统一 rebuild/live 载体协议。
 
 来源：Codex `pm:pr-review` PR #1825（F1 live 载体 / F2 append-only 权限，均 Cx3），经 `/fix #1825` 收口。
+
+---
+
+## §Amendment 2026-06-14（PR-03 #1770，原地重评）
+
+PR-03（#1770）落地 §9 PR-03 范围：corebundle 切到 durable `PGProjectionEventSource`（单实例同填
+`WithProjectionReplaySource`+`WithProjectionCursor`，挂既有 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate 下、
+posture 保持 fail-closed，并注册 `projection_journal_ready` probe）+ 删 outbox-backed
+`PGProjectionReplaySource`/`PGProjectionCursor`（无双路径）+ 落 live-carrier resolver。per `ai-robust.md`
+「ADR amendment 落地必查」，记录本次**载体决策与威胁矩阵重评**：
+
+1. **live-carrier resolver 载体 = 强制 `projection.LiveCursor`（编译期 HARD）**：§4.2 只规定协议（投递边界裸
+   `outbox.Entry` 经 `id → global_seq` 解析成 `JournalEvent`），未定 enforcement 载体。PR-03 选**新增
+   `LiveCarrierResolver` 接口 + 组合接口 `LiveCursor = Cursor + LiveCarrierResolver`**，并把
+   `Coordinator`/`CoordinatorConfig.Cursor` 与 `bootstrap.WithProjectionCursor` 的 cursor 槽位类型化为
+   `LiveCursor`。效果：任何接入 `Coordinator` 的 cursor 漏实现 `ResolveCarrier` **不编译**（最强档），
+   `buildHandler` live 路径单一调用 `c.cursor.ResolveCarrier`、**无 type-assert 软回退、无运行期 fail-fast**。
+   行为回归经既有 `RunCursorConformance`（加 resolver 一致性 sub-test，凡实现 resolver 的 enrolled impl 自动覆盖）
+   + per-impl 测试 + coordinator live-path 回归。
+2. **不折进基 `Cursor` 接口（最小化 saga 触达）**：`projection.Cursor` 被 saga 读模型复用
+   （`kernel/saga/sagaprojection.SagaJournalSource`，生产经 `runtime/saga/tailer` replay/pull-only、无 live push）。
+   组合接口 `LiveCursor` 只约束 `Coordinator` 的 cursor 槽位——故 saga **tailer**（取裸 `Cursor`）、enroll fixture、
+   tailer 测试 fake **全不受影响**；若改折进基 `Cursor` 则它们也被强制实现。**唯一例外**：`SagaJournalSource` 本身
+   在 `rebuild_wiring_test.go` 经 `projection.NewCoordinator` 装配（测 Coordinator rebuild 身份行为），故须满足
+   `LiveCursor`——为它补一个**协议声明式** `ResolveCarrier`：intrinsic `*sagaProjectionEvent` 载体幂等返回，其余
+   permanent（saga 无 bare-entry live push，非死代码而是显式声明其载体协议）。生产 saga 读模型仍走 tailer、不经
+   Coordinator，故此方法生产路径不触发但语义正确。
+3. **威胁矩阵 / 安全模型重评 = 无翻转**：resolver 协议与 §4.2 / §5 Row 2 一致（D4 双写令行投递前已提交 + journal
+   永不 cleanup → `id` 查找必命中；genuinely-absent → permanent，查询故障 → transient）。本 PR 只**指定其
+   enforcement 载体**、不改协议或位置源，故 §5 / §6 各行 `unchanged`；gate 移除仍只在 PR-04（gated on T-06-2
+   e2e）、posture 不变。
+4. **MANAGED-RESOURCE-COMPLETENESS-01 opt-out 同步**：删 `PGProjectionReplaySource`/`PGProjectionCursor` 条目；
+   补 `PGProjectionEventSource`（PR-01 漏登）。同 PR 顺带补 `WebhookSourceRepository`（#1540，pre-existing
+   nightly red、同 map、storage-facade 分类无歧义）使该 all-or-nothing 完整性规则回绿。
+
+来源：`/ship #1770`（EPIC #1504 PR-03），调整自 codex review F1（gate 移除 gated on 证明，Discovered via /fix #1765）。
 
 ---
 

@@ -86,7 +86,7 @@ type projectionCoordFixture struct {
 	ProjectionID string
 	Store        projection.CheckpointStore
 	Replay       projection.ReplaySource
-	Cursor       projection.Cursor
+	Cursor       projection.LiveCursor
 	Spec         contractspec.ContractSpec
 	Apply        projection.Apply
 	OnReset      projection.OnReset

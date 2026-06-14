@@ -45,6 +45,7 @@ import (
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/saga/tailer"
 	"github.com/ghbvf/gocell/runtime/shutdown"
+	"github.com/ghbvf/gocell/runtime/transport"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -109,6 +110,14 @@ type Bootstrap struct {
 	// read-only during serving. No atomic/mutex needed; phase0 runs synchronously
 	// before any serving goroutine is launched.
 	deploymentTopology DeploymentTopology
+
+	// inProcessTransport, when set via WithInProcessTransport, is the shared
+	// in-process CellTransport holder the composition root also handed to the
+	// consumer cell. phase5 binds the built internal-listener handler into it
+	// (WriteOnce) so co-located cross-cell sync calls short-circuit the loopback
+	// TCP hop without bypassing the auth chain. nil = no in-process transport
+	// wired (then a consumer that still holds the holder fail-fasts on DoContract).
+	inProcessTransport *transport.InProcessTransport
 
 	// --- grpc: listener declarations (server lifecycle owned by adapters/grpc,
 	// injected via the GRPCServer interface; see grpc_listener.go) ---
@@ -229,7 +238,7 @@ type Bootstrap struct {
 	projectionStore    projection.CheckpointStore
 	projectionTxRunner persistence.TxRunner
 	projectionReplay   projection.ReplaySource
-	projectionCursor   projection.Cursor
+	projectionCursor   projection.LiveCursor
 	// projectionRebuilds maps "<cellID>/<projectionID>" → the constructed
 	// rebuildController (a *projection.Coordinator), so the framework rebuild
 	// control-plane endpoint can resolve a {cell}/{name} path and trigger

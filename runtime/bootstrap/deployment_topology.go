@@ -94,6 +94,17 @@ func newDeploymentTopology(spec DeploymentTopologySpec) (DeploymentTopology, err
 	}, nil
 }
 
+// NewDeploymentTopology seals + validates a DeploymentTopologySpec into the
+// runtime-read-only DeploymentTopology. It is the SINGLE sealed-semantics entry
+// for composition-root consumers that must classify a cell's placement BEFORE
+// phase0 — e.g. accesscore selecting an in-process vs remote transport at module
+// wiring. phase0 seals the same spec via the same internal constructor, so both
+// see identical IsColocated / RemoteEndpoint semantics (no parallel topology
+// truth re-derived from the raw spec).
+func NewDeploymentTopology(spec DeploymentTopologySpec) (DeploymentTopology, error) {
+	return newDeploymentTopology(spec)
+}
+
 // buildDeployColocatedSet validates colocated entries and builds the set.
 // Extracted to keep newDeploymentTopology cognitive complexity ≤ 15.
 func buildDeployColocatedSet(colocated []string) (map[string]struct{}, error) {

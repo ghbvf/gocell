@@ -57,10 +57,15 @@ func projTestSpec() contractspec.ContractSpec {
 }
 
 // fakeProjectionCursor returns a fixed 1-based position (satisfies the Cursor
-// 1-based invariant).
+// 1-based invariant) and resolves live carriers as identity (it positions any
+// carrier the same way), making it a full projection.LiveCursor.
 type fakeProjectionCursor struct{}
 
 func (fakeProjectionCursor) Position(_ projection.ProjectionEvent) (int64, error) { return 1, nil }
+
+func (fakeProjectionCursor) ResolveCarrier(_ context.Context, entry projection.ProjectionEvent) (projection.ProjectionEvent, error) {
+	return entry, nil
+}
 
 // fakeProjectionTxRunner is a pass-through TxRunner (the mem checkpoint store
 // ignores the ambient tx).
@@ -664,7 +669,7 @@ func TestWithProjectionOptions_StoreValueAndNilIgnored(t *testing.T) {
 		cur := fakeProjectionCursor{}
 		b := New(clock.Real(), WithProjectionCursor(cur))
 		assert.NotNil(t, b.projectionCursor)
-		var nilCur projection.Cursor
+		var nilCur projection.LiveCursor
 		WithProjectionCursor(nilCur)(b)
 		assert.NotNil(t, b.projectionCursor, "typed-nil must not clear the set value")
 	})

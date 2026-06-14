@@ -11,10 +11,6 @@ endpoints:
     method: POST
     path: /api/v1/orders/
     successStatus: 201
-    auth:
-      responses:
-        - 409
-        - 422
     noContent: false
     responses:
       400:

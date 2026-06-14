@@ -220,10 +220,12 @@ func buildInternalAuthChain(shared *composition.SharedDeps) ([]auth.ListenerAuth
 	return []auth.ListenerAuth{plan}, nil
 }
 
-// projectionRuntimeOptions builds the four L3 CQRS projection-harness dependency
-// options (#1368) from the shared postgres capability: the PG-backed
-// CheckpointStore, the pool-bound TxRunner, and the journal-backed ReplaySource +
-// Cursor (the cursor delegates to the replay source — single seq-SQL holder).
+// projectionRuntimeOptions builds the L3 CQRS projection-harness dependency
+// options from the shared postgres capability: the PG-backed CheckpointStore, the
+// pool-bound TxRunner, and the durable append-only projection_events journal source
+// (PGProjectionEventSource — EPIC #1504 PR-03) wired as BOTH the ReplaySource and
+// the LiveCursor (one instance, so the global_seq encoding is consistent across
+// rebuild and live). It also registers the journal's readyz probe.
 //
 // PG mode only. In memory mode (shared.PG == nil) it returns no options: the
 // projection harness requires a durable checkpoint store, not an in-memory fake,
@@ -231,15 +233,16 @@ func buildInternalAuthChain(shared *composition.SharedDeps) ([]auth.ListenerAuth
 // (checkProjectionDeps), which is the correct outcome. corebundle ships no
 // projection cell today, so these options are dormant until one is added —
 // forward-provisioning per #1368.
-// envProjectionPGJournalPreview opts into wiring the PG journal-backed projection
-// reader. It defaults OFF (the hard gate): the reader resolves stream positions
-// from the TRANSIENT outbox relay (CleanupPublished/CleanupDead delete rows), so
-// it is NOT a durable projection journal — an event whose row is cleaned before
-// the projection consumes it resolves to a permanent error (dropped on the live
-// path, aborts a rebuild). Until a durable append-only projection journal lands
-// (#1504), the reader is dev/preview only. When OFF, a projection declared in PG
-// mode fails fast in the bootstrap phase6 drain (checkProjectionDeps) — wiring no
-// replay source is the gate, not a silent production-unsafe reader.
+//
+// envProjectionPGJournalPreview gates wiring of the durable projection source. It
+// defaults OFF: the production posture stays FAIL-CLOSED (a projection declared in
+// PG mode without the opt-in fails fast in the phase6 drain — wiring no source is
+// the gate, never a silent unsafe reader). Unlike before #1504, the gated source is
+// now the durable, production-safe projection_events journal (append-only, migration
+// 058 REVOKE; live carriers resolved by id against the never-cleaned journal), so
+// gate-on is no longer "preview/unsafe" — it is the e2e proving ground (T-06-2).
+// The gate itself is removed (production-default flip) in #1771 PR-04, gated on
+// T-06-2 e2e + PR-05 no-DELETE per ADR 202606071600-1504 §9 / D9.
 const envProjectionPGJournalPreview = "GOCELL_PROJECTION_PG_JOURNAL_PREVIEW"
 
 func projectionPGJournalPreviewEnabled() bool {
@@ -252,18 +255,39 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 		return nil, nil
 	}
 	if !projectionPGJournalPreviewEnabled() {
-		// Hard gate (C1, review #1509): do NOT silently wire a production-unsafe
-		// reader. A projection declared in PG mode without the opt-in fails fast at
-		// bootstrap; durable journal tracked in #1504.
-		slog.Warn("projection: PG journal-backed reader NOT wired — the outbox relay is transient " +
-			"(CleanupPublished/CleanupDead), so it is not a production-safe projection journal/position " +
-			"source; a projection declared in PG mode will fail fast at bootstrap. Durable journal tracked " +
-			"in gh #1504. Set " + envProjectionPGJournalPreview + "=true to opt in for dev/preview only.")
+		// Fail-closed gate: do NOT silently wire the projection source. A projection
+		// declared in PG mode without the opt-in fails fast at bootstrap (phase6
+		// checkProjectionDeps). The gated source IS production-safe (durable journal);
+		// the gate only defers the production-default flip (gate removal) until T-06-2
+		// e2e + the PR-05 no-DELETE guardrail — #1771 PR-04, per ADR 202606071600-1504 §9/D9.
+		logArgs := []any{
+			slog.String("gate_env", envProjectionPGJournalPreview),
+			slog.Bool("wired", false),
+			slog.String("gated_source", "projection_events (durable, production-safe)"),
+			slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"),
+		}
+		if len(generatedProjectionSourceTopics()) == 0 {
+			// No projection declared (corebundle's default today): gate-off is a benign
+			// empty-workload default, not actionable — log at Info to avoid startup noise
+			// on every deployment that ships no projection (controller-runtime posture:
+			// an empty workload does not warn).
+			slog.Info("projection: no durable journal source wired (no projection declared; gate off)", logArgs...)
+		} else {
+			// A projection IS declared but the gate is off, so it will fail fast in the
+			// phase6 drain. Actionable: warn so the operator sets the gate to wire it.
+			slog.Warn("projection: a projection is declared but its durable journal source is gated off; bootstrap will fail fast",
+				logArgs...)
+		}
 		return nil, nil
 	}
-	slog.Warn("projection: PG journal-backed reader wired in PREVIEW mode (" + envProjectionPGJournalPreview +
-		"=true) — NOT production-safe: positions come from the transient outbox relay; events cleaned " +
-		"before consume are dropped. Dev/preview only; durable journal tracked in gh #1504.")
+	// Info (not Warn): wiring the durable, production-safe journal source under the gate is
+	// a deliberate lifecycle opt-in, not a degraded mode — positions come from the
+	// append-only projection_events journal (never cleaned). The gate remains until PR-04.
+	slog.Info("projection: durable journal source wired under gate (positions from append-only projection_events; production-safe)",
+		slog.String("gate_env", envProjectionPGJournalPreview),
+		slog.Bool("wired", true),
+		slog.String("source", "projection_events"),
+		slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
 	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if err != nil {
 		return nil, fmt.Errorf("projection pg pool: %w", err)
@@ -272,18 +296,22 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 	if err != nil {
 		return nil, fmt.Errorf("projection checkpoint store: %w", err)
 	}
-	replaySource, err := adapterpg.NewProjectionReplaySource(pool)
+	// One PGProjectionEventSource instance is wired as BOTH the ReplaySource and the
+	// LiveCursor (it implements projection.LiveCursor: Position reads global_seq off
+	// the carrier; ResolveCarrier resolves a bare live entry by id against the durable
+	// journal). Sharing the instance keeps the global_seq encoding identical across
+	// the rebuild and live paths.
+	source, err := adapterpg.NewProjectionEventSource(pool)
 	if err != nil {
-		return nil, fmt.Errorf("projection replay source: %w", err)
-	}
-	cursor, err := adapterpg.NewProjectionCursor(replaySource)
-	if err != nil {
-		return nil, fmt.Errorf("projection cursor: %w", err)
+		return nil, fmt.Errorf("projection event source: %w", err)
 	}
 	return []bootstrap.Option{
 		bootstrap.WithProjectionCheckpointStore(checkpointStore),
 		bootstrap.WithProjectionTxRunner(shared.PG.TxManager()),
-		bootstrap.WithProjectionReplaySource(replaySource),
-		bootstrap.WithProjectionCursor(cursor),
+		bootstrap.WithProjectionReplaySource(source),
+		bootstrap.WithProjectionCursor(source),
+		// Differentiated repo-readiness probe for the journal (schema/migration drift
+		// + table-permission loss), distinct from the pool-level postgres_ready probe.
+		bootstrap.WithHealthChecker(adapterpg.ProbeProjectionJournalReady, source.RepoReady),
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // MemProjectionEventSource is an in-process, append-only durable-journal source backed by
@@ -81,8 +82,30 @@ func (m *MemProjectionEventSource) Position(entry ProjectionEvent) (int64, error
 	return PositionFromCarrier(entry)
 }
 
-// compile-time interface checks: one type satisfies both projection contracts.
+// ResolveCarrier normalizes a live-delivered entry into the position-bearing carrier this
+// source already stored (LiveCarrierResolver). An already-positioned *JournalEvent is returned
+// unchanged (idempotent — rebuild carriers re-resolve to themselves). A bare entry is matched by
+// EventID against the appended events; the in-memory mirror of the PG SELECT-by-id lookup. An
+// entry absent from the journal is a permanent error (Cursor invariant #4) — a bare entry never
+// journaled cannot be assigned a position and retry cannot fix it.
+func (m *MemProjectionEventSource) ResolveCarrier(_ context.Context, entry ProjectionEvent) (ProjectionEvent, error) {
+	if _, ok := entry.(*JournalEvent); ok {
+		return entry, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, carrier := range m.events {
+		if carrier.EventID() == entry.EventID() {
+			return carrier, nil
+		}
+	}
+	return nil, outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"projection: live entry not present in the in-memory projection journal; cannot resolve its global_seq"))
+}
+
+// compile-time interface checks: one type is a ReplaySource AND a full LiveCursor
+// (Position + ResolveCarrier).
 var (
 	_ ReplaySource = (*MemProjectionEventSource)(nil)
-	_ Cursor       = (*MemProjectionEventSource)(nil)
+	_ LiveCursor   = (*MemProjectionEventSource)(nil)
 )
