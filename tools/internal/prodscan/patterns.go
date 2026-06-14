@@ -23,7 +23,7 @@ import (
 //     root and are pruned; cmd/adapters/examples each hold SEVERAL go.work member
 //     modules (multi-member parents), so their "./<dir>/…" pattern is owned by no
 //     single member and is pruned by HasNestedModuleRoot — this broad production
-//     scan defers their coverage to gh #1590 (rules that need satellite coverage
+//     scan defers their coverage to gh #2136 (rules that need satellite coverage
 //     today hardcode the patterns + rely on the loader's workspace expansion, see
 //     the Patterns godoc). cellmodules/corecells are module roots → pruned by
 //     IsModuleRoot.
@@ -49,7 +49,7 @@ var topLevelDirs = []string{
 // fixtures can exercise the production entrypoints without synthetic dirs.
 //
 // Two kinds of top-level dir are skipped, both deferred to the ModeWorkspace
-// cross-module migration gh #1590:
+// cross-module migration gh #2136:
 //
 //   - A go.work satellite MODULE ROOT (carries its own go.mod — e.g. cellmodules/
 //     after #1559, corecells/): a single module addressed by its own member
@@ -62,7 +62,7 @@ var topLevelDirs = []string{
 //
 // Both are pruned so this PRODUCTION scan (OBS-01 + the typed governance rules that
 // consume Patterns / PatternsExtended) stays loadable and does not silently drag
-// in satellite packages whose coverage is still gh #1590. A single-module fixture
+// in satellite packages whose coverage is still gh #2136. A single-module fixture
 // writes cmd/pkg/... as part of its ONE module (no nested go.mod), so neither
 // predicate fires there and the fixture's "./cmd/..." is kept and scanned.
 //
@@ -128,7 +128,7 @@ func dirExists(path string) bool {
 // IsModuleRoot reports whether dir carries its own go.mod (a go.work satellite
 // module root). Such dirs are unaddressable by root-relative patterns under
 // ModeModule (GOWORK=off) and are skipped by Patterns / PatternsExtended — see
-// the Patterns godoc + gh #1590. Exported so coverage guards that must stay
+// the Patterns godoc + gh #2136. Exported so coverage guards that must stay
 // symmetric with the scan set (e.g. metricschema's productionGoTopLevels) share
 // this single source of truth rather than re-deriving the go.mod check.
 func IsModuleRoot(dir string) bool {
@@ -142,7 +142,7 @@ func IsModuleRoot(dir string) bool {
 // adapters/postgres …), and examples/ (over examples/<id> …) are the post-#1565
 // instances. A root-relative "./<dir>/..." pattern over such a parent is owned by
 // no single member and cannot be loaded as a ModeModule pattern (no root module to
-// anchor it); its production-scan coverage is deferred to gh #1590. Patterns skips
+// anchor it); its production-scan coverage is deferred to gh #2136. Patterns skips
 // these dirs and the OBS-01 coverage guard (metricschema's productionGoTopLevels)
 // must skip them symmetrically — exported so both share this single source rather
 // than re-deriving the nested-go.mod check. A single-module fixture has no nested

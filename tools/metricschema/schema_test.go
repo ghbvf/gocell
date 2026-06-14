@@ -2345,7 +2345,7 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 			// A top-level dir that prodscan.Patterns prunes is not required by this
 			// coverage guard either — symmetric with the scan, sharing the same
 			// prodscan single source. Two cases, both deferred to the ModeWorkspace
-			// migration gh #1590: a go.work satellite MODULE ROOT (own go.mod, e.g.
+			// migration gh #2136: a go.work satellite MODULE ROOT (own go.mod, e.g.
 			// cellmodules/ #1559 — IsModuleRoot), and a MULTI-MEMBER PARENT
 			// (cmd/adapters/examples holding member modules one level deeper —
 			// HasNestedModuleRoot), unaddressable by a root-relative ModeModule
