@@ -97,6 +97,52 @@ func TestPGProjectionEventSource_ColdStart(t *testing.T) {
 		"cursor must return a permanent error for the unseeded sentinel")
 }
 
+// TestPGProjectionEventSource_ResolveCarrier covers the live-carrier resolver (#1504 PR-03)
+// against a real journal: a bare live entry whose row was committed (D4 double-write analog)
+// resolves to its journal global_seq, an already-positioned carrier is idempotent, and a bare
+// entry absent from the journal is a permanent error — never the spurious transient ErrNoRows
+// the transient-outbox path produced for cleaned rows.
+func TestPGProjectionEventSource_ResolveCarrier_RealJournal(t *testing.T) {
+	f := newProjectionEventJournal(t)
+	ctx := context.Background()
+	clk := clockmock.New(time.Now())
+
+	bare, err := kout.NewEntry(clk, ctx, "ordersummary.v1", []byte(`{}`))
+	require.NoError(t, err)
+	var globalSeq int64
+	row := f.pool.DB().QueryRow(ctx, projectionEventInsertSQL,
+		bare.ID(), bare.AggregateID(), bare.AggregateType(), bare.EventType(), bare.Topic(), bare.Payload(),
+		bare.CreatedAt(), bare.OccurredAt())
+	require.NoError(t, row.Scan(&globalSeq), "journal the row before delivery (D4 analog)")
+
+	t.Run("bare entry resolves to journal global_seq", func(t *testing.T) {
+		resolved, rerr := f.src.ResolveCarrier(ctx, bare)
+		require.NoError(t, rerr)
+		pos, perr := f.src.Position(resolved)
+		require.NoError(t, perr)
+		assert.Equal(t, globalSeq, pos, "resolved carrier must carry the journal's global_seq")
+	})
+
+	t.Run("already-positioned carrier is idempotent", func(t *testing.T) {
+		carrier := projection.NewJournalEvent(bare, globalSeq)
+		resolved, rerr := f.src.ResolveCarrier(ctx, carrier)
+		require.NoError(t, rerr)
+		pos, perr := f.src.Position(resolved)
+		require.NoError(t, perr)
+		assert.Equal(t, globalSeq, pos, "an already-positioned carrier must be returned unchanged")
+	})
+
+	t.Run("entry absent from journal is permanent", func(t *testing.T) {
+		absent, nerr := kout.NewEntry(clk, ctx, "ordersummary.v1", []byte(`{}`))
+		require.NoError(t, nerr)
+		_, rerr := f.src.ResolveCarrier(ctx, absent)
+		require.Error(t, rerr)
+		var permErr *kout.PermanentError
+		assert.True(t, errors.As(rerr, &permErr),
+			"an entry absent from the never-cleaned journal must be a permanent error, not a transient retry")
+	})
+}
+
 // TestPGProjectionEventSource_RepoReadiness_Conformance runs the single-source RepoProber
 // harness against PGProjectionEventSource (CELL-REPO-READYZ-PROBE-01 enrollment):
 //   - healthy: RepoReady returns nil when projection_events is present.

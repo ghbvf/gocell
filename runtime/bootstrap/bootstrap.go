@@ -229,7 +229,7 @@ type Bootstrap struct {
 	projectionStore    projection.CheckpointStore
 	projectionTxRunner persistence.TxRunner
 	projectionReplay   projection.ReplaySource
-	projectionCursor   projection.Cursor
+	projectionCursor   projection.LiveCursor
 	// projectionRebuilds maps "<cellID>/<projectionID>" → the constructed
 	// rebuildController (a *projection.Coordinator), so the framework rebuild
 	// control-plane endpoint can resolve a {cell}/{name} path and trigger

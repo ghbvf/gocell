@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -21,7 +22,7 @@ import (
 // surfaces in the unit build, not only at the integration call site.
 var (
 	_ projection.ReplaySource = (*PGProjectionEventSource)(nil)
-	_ projection.Cursor       = (*PGProjectionEventSource)(nil)
+	_ projection.LiveCursor   = (*PGProjectionEventSource)(nil)
 	_ healthz.RepoProber      = (*PGProjectionEventSource)(nil)
 )
 
@@ -148,8 +149,9 @@ func TestScanProjectionEvent(t *testing.T) {
 // pool (pgexec.New(nil)) and Position is called with no ambient tx, so ANY database round-trip
 // would dereference the nil pool and panic. Position returning the carrier's seq cleanly proves
 // the structural fix — no `SELECT seq WHERE id=$1` lookup that a deleted row could break
-// (contrast the outbox-backed PGProjectionCursor it replaces, whose Position issues exactly
-// that query). pgexec.PGExecutor is a sealed interface, so a fail-on-call spy cannot be
+// (contrast the outbox-backed cursor it replaced, whose Position issued exactly that query;
+// here only the live-path ResolveCarrier does an id lookup, against the never-cleaned journal).
+// pgexec.PGExecutor is a sealed interface, so a fail-on-call spy cannot be
 // implemented out-of-package; the nil-pool executor is the sanctioned no-DB test seam (the same
 // one newEventSourceWithTx uses).
 func TestPGProjectionEventSource_PositionNoDBRoundTrip(t *testing.T) {
@@ -177,6 +179,87 @@ func TestPGProjectionEventSource_PositionRejectsForeignCarrier(t *testing.T) {
 		t.Parallel()
 		_, err := s.Position(projection.NewJournalEvent(mustEntry(t), 0))
 		assertProjPermanent(t, err)
+	})
+}
+
+// TestPGProjectionEventSource_ResolveCarrier covers the live-carrier resolver branches
+// without a real DB (the mock-tx seam): an already-positioned carrier is returned
+// idempotently with NO query; a bare entry resolves via the id→global_seq lookup; an
+// ErrNoRows miss is PERMANENT (the never-cleaned journal makes a miss a true invariant
+// violation); any other query failure is transient (wrapped ErrAdapterPGQuery, requeued).
+func TestPGProjectionEventSource_ResolveCarrier(t *testing.T) {
+	t.Parallel()
+
+	t.Run("already-positioned carrier idempotent, no query", func(t *testing.T) {
+		t.Parallel()
+		s := &PGProjectionEventSource{db: pgexec.New(nil)} // nil pool: a query would panic
+		carrier := projection.NewJournalEvent(mustEntry(t), 42)
+		resolved, err := s.ResolveCarrier(context.Background(), carrier)
+		require.NoError(t, err)
+		assert.Equal(t, projection.ProjectionEvent(carrier), resolved, "a *JournalEvent must be returned unchanged")
+	})
+	t.Run("bare entry resolves via id lookup", func(t *testing.T) {
+		t.Parallel()
+		bare := mustEntry(t)
+		tx := &mockProjTx{row: &mockProjRow{value: 7}}
+		s, ctx := newEventSourceWithTx(tx)
+		resolved, err := s.ResolveCarrier(ctx, bare)
+		require.NoError(t, err)
+		assert.Equal(t, projectionEventPositionByIDSQL, tx.row.sql)
+		assert.Equal(t, []any{bare.ID()}, tx.row.args, "lookup must be keyed by the entry's id")
+		assert.Equal(t, int64(7), resolved.(*projection.JournalEvent).GlobalSeq())
+	})
+	t.Run("ErrNoRows is permanent", func(t *testing.T) {
+		t.Parallel()
+		tx := &mockProjTx{} // nil row → QueryRow returns scanErr pgx.ErrNoRows
+		s, ctx := newEventSourceWithTx(tx)
+		_, err := s.ResolveCarrier(ctx, mustEntry(t))
+		assertProjPermanent(t, err)
+	})
+	t.Run("query failure is transient", func(t *testing.T) {
+		t.Parallel()
+		sentinel := errors.New("resolve boom")
+		tx := &mockProjTx{row: &mockProjRow{scanErr: sentinel}}
+		s, ctx := newEventSourceWithTx(tx)
+		_, err := s.ResolveCarrier(ctx, mustEntry(t))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, sentinel)
+		assert.Equal(t, ErrAdapterPGQuery, codeOf(t, err))
+		var permErr *kout.PermanentError
+		assert.False(t, errors.As(err, &permErr), "a query failure must be transient (requeue), not permanent")
+	})
+}
+
+// TestPGProjectionEventSource_ResolveCarrier_BoundedLookup verifies the live-carrier
+// id→global_seq lookup is bounded (the retired cursorPositionTimeout, restored): a caller
+// ctx without a deadline still yields a ~projectionEventLookupTimeout-bounded lookup ctx, and a
+// shorter caller deadline wins (context.WithTimeout semantics). This is the regression guard for
+// "a stalled DB hangs the projection worker indefinitely".
+func TestPGProjectionEventSource_ResolveCarrier_BoundedLookup(t *testing.T) {
+	t.Parallel()
+	t.Run("no caller deadline derives a bounded lookup ctx", func(t *testing.T) {
+		t.Parallel()
+		tx := &mockProjTx{row: &mockProjRow{value: 3}}
+		s, ctx := newEventSourceWithTx(tx) // ctx has no deadline (Background-derived)
+		_, err := s.ResolveCarrier(ctx, mustEntry(t))
+		require.NoError(t, err)
+		dl, ok := tx.lastRowCtx.Deadline()
+		require.True(t, ok, "lookup ctx must carry a deadline even when the caller has none")
+		assert.InDelta(t, projectionEventLookupTimeout.Seconds(), time.Until(dl).Seconds(), 1.0,
+			"bounded lookup deadline ≈ projectionEventLookupTimeout")
+	})
+	t.Run("shorter caller deadline wins", func(t *testing.T) {
+		t.Parallel()
+		tx := &mockProjTx{row: &mockProjRow{value: 3}}
+		s, base := newEventSourceWithTx(tx)
+		callerCtx, cancel := context.WithTimeout(base, 500*time.Millisecond)
+		defer cancel()
+		_, err := s.ResolveCarrier(callerCtx, mustEntry(t))
+		require.NoError(t, err)
+		dl, ok := tx.lastRowCtx.Deadline()
+		require.True(t, ok)
+		assert.Less(t, time.Until(dl), projectionEventLookupTimeout,
+			"a caller deadline shorter than projectionEventLookupTimeout must win")
 	})
 }
 
