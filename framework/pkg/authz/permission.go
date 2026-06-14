@@ -168,6 +168,78 @@ func PermUserWrite() Permission { return permUserWrite }
 // (PR-10c) → RequirePermissionForResource (#1977).
 func PermRoleRead() Permission { return permRoleRead }
 
+// examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its
+// own lightweight PDP (cells/devicecell/authorizer.go) whose baseline grants
+// these actions; the platform registry stays the SOLE minter (the Permission
+// seal forbids minting outside this package), so example actions enroll here
+// like every other action. Each is one orthogonal (resource, read|write,
+// coarse|ownership) class — read vs write and coarse vs ownership are NEVER
+// folded into one Permission, because a coarse-grant rule would otherwise
+// bypass an ownership rule sharing the same action (same closed-set discipline
+// as the accesscore owner-action grant surface). Same accessor-func-over-private
+// -singleton shape as the corecells perms (reassignment is a compile error →
+// Hard immutability). Migrated from auth.AnyRole / auth.SelfOr / the hand-rolled
+// gRPC role gate the devicecell slices used pre-PR-10d.
+var (
+	permDeviceCommand = newPermission("device:command")
+	permDeviceConsume = newPermission("device:consume")
+	permDeviceRead    = newPermission("device:read")
+	permDeviceList    = newPermission("device:list")
+)
+
+// PermDeviceCommand authorizes dispatching a command to a device (devicecommand
+// enqueue / enqueue-async HTTP routes + the devicecommandrpc IssueCommand /
+// WatchCommands gRPC methods). Baseline grants it to admin / operator.
+func PermDeviceCommand() Permission { return permDeviceCommand }
+
+// PermDeviceConsume authorizes a device acting on its own command lifecycle
+// (devicecommand dequeue / report / ack / extend-lease). The gate uses
+// auth.RequirePermissionForResource("id", PermDeviceConsume()); baseline grants
+// it to the device itself (subject.sub == resource.id) or to admin / operator.
+func PermDeviceConsume() Permission { return permDeviceConsume }
+
+// PermDeviceRead authorizes reading a device's status (devicestatus). The gate
+// uses auth.RequirePermissionForResource("id", PermDeviceRead()); baseline grants
+// it to the device itself (subject.sub == resource.id) or to admin / operator.
+func PermDeviceRead() Permission { return permDeviceRead }
+
+// PermDeviceList authorizes listing all devices (devicelist). Baseline grants it
+// to admin only.
+func PermDeviceList() Permission { return permDeviceList }
+
+// examples/todoorder permissions (PR-10d #1894). The todoorder example owns its
+// own lightweight PDP (cells/ordercell/authorizer.go); same registry/seal +
+// orthogonal-class rationale as the iotdevice perms above. create / list are
+// coarse (role:customer); read / update are owner-scoped (subject.sub ==
+// order.owner, owner supplied by a PIP lookup over the order repository).
+var (
+	permOrderCreate = newPermission("order:create")
+	permOrderList   = newPermission("order:list")
+	permOrderRead   = newPermission("order:read")
+	permOrderUpdate = newPermission("order:update")
+)
+
+// PermOrderCreate authorizes creating an order (ordercreate). Baseline grants it
+// to role:customer (the created order's owner is the authenticated subject).
+func PermOrderCreate() Permission { return permOrderCreate }
+
+// PermOrderList authorizes the collection-level reads that return an aggregate,
+// not a single owned order (orderquery list + orderprojection summary). Baseline
+// grants it to role:customer. Per-row owner filtering on list is a data-layer PEP
+// (RowScope), tracked for PR-11/12 — out of this route-gate migration's scope.
+func PermOrderList() Permission { return permOrderList }
+
+// PermOrderRead authorizes reading a single order (orderquery get/{id}). The gate
+// uses auth.RequirePermissionForResource("id", PermOrderRead()); baseline grants
+// it only to the order owner (subject.sub == order.owner, owner via PIP lookup).
+func PermOrderRead() Permission { return permOrderRead }
+
+// PermOrderUpdate authorizes confirming/mutating a single order
+// (orderconfirm PATCH /{id}/status). The gate uses
+// auth.RequirePermissionForResource("id", PermOrderUpdate()); baseline grants it
+// only to the order owner (subject.sub == order.owner, owner via PIP lookup).
+func PermOrderUpdate() Permission { return permOrderUpdate }
+
 // allPermissions is the closed registry of every Permission that exists. It
 // backs Permissions() and lets tests pin the closed set (anti-vacuity: a new
 // perm* var that is not added here is caught by the registry test).
@@ -184,6 +256,14 @@ var allPermissions = []Permission{
 	permUserRead,
 	permUserWrite,
 	permRoleRead,
+	permDeviceCommand,
+	permDeviceConsume,
+	permDeviceRead,
+	permDeviceList,
+	permOrderCreate,
+	permOrderList,
+	permOrderRead,
+	permOrderUpdate,
 }
 
 // String returns the action spelling carried into a PDP and stored in policy

@@ -75,6 +75,58 @@ func TestAccesscorePermissions_String(t *testing.T) {
 	}
 }
 
+// TestExamplePermissions_String pins the exact action spelling of every
+// examples permission minted in PR-10d (#1894). The action string IS the wire
+// value carried into the example's own PDP and matched against its baseline rule
+// actions, so a typo here silently breaks the gate↔baseline binding.
+func TestExamplePermissions_String(t *testing.T) {
+	cases := []struct {
+		name string
+		perm Permission
+		want string
+	}{
+		{"PermDeviceCommand", PermDeviceCommand(), "device:command"},
+		{"PermDeviceConsume", PermDeviceConsume(), "device:consume"},
+		{"PermDeviceRead", PermDeviceRead(), "device:read"},
+		{"PermDeviceList", PermDeviceList(), "device:list"},
+		{"PermOrderCreate", PermOrderCreate(), "order:create"},
+		{"PermOrderList", PermOrderList(), "order:list"},
+		{"PermOrderRead", PermOrderRead(), "order:read"},
+		{"PermOrderUpdate", PermOrderUpdate(), "order:update"},
+	}
+	for _, tc := range cases {
+		if got := tc.perm.String(); got != tc.want {
+			t.Errorf("%s.String() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestExamplePermissions_StableIdentity pins that each examples accessor returns
+// the same package-private singleton on every call (the F6 immutability contract:
+// function accessors are not reassignable, so the registry value is immutable to
+// external packages).
+func TestExamplePermissions_StableIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		got       Permission
+		singleton Permission
+	}{
+		{"PermDeviceCommand", PermDeviceCommand(), permDeviceCommand},
+		{"PermDeviceConsume", PermDeviceConsume(), permDeviceConsume},
+		{"PermDeviceRead", PermDeviceRead(), permDeviceRead},
+		{"PermDeviceList", PermDeviceList(), permDeviceList},
+		{"PermOrderCreate", PermOrderCreate(), permOrderCreate},
+		{"PermOrderList", PermOrderList(), permOrderList},
+		{"PermOrderRead", PermOrderRead(), permOrderRead},
+		{"PermOrderUpdate", PermOrderUpdate(), permOrderUpdate},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.singleton {
+			t.Errorf("%s() must return the package-private singleton (stable on every call)", tc.name)
+		}
+	}
+}
+
 // TestPermAuditRead_StableIdentity pins that the accessor returns the closed
 // registry's private singleton (the F6 immutability contract: an external package
 // cannot reassign or fork the registry value because PermAuditRead is a function,
@@ -151,9 +203,10 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// Pin the closed set. A new Perm* var that forgets to enroll in allPermissions
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
 	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
-	// (PR-10b) + 5 accesscore (PR-10c).
-	if len(perms) != 12 {
-		t.Fatalf("Permissions() len = %d, want 12 (audit:read + system:read + 5 configcore + 5 accesscore)", len(perms))
+	// (PR-10b) + 5 accesscore (PR-10c) + 4 iotdevice + 4 todoorder (PR-10d #1894).
+	if len(perms) != 20 {
+		t.Fatalf("Permissions() len = %d, want 20 "+
+			"(2 platform + 5 configcore + 5 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
@@ -161,6 +214,8 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 		"flag:read": true, "flag:write": true,
 		"policy:read": true, "policy:write": true,
 		"user:read": true, "user:write": true, "role:read": true,
+		"device:command": true, "device:consume": true, "device:read": true, "device:list": true,
+		"order:create": true, "order:list": true, "order:read": true, "order:update": true,
 	}
 	for _, p := range perms {
 		if !want[p.String()] {
