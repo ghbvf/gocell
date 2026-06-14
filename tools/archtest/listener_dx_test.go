@@ -452,3 +452,60 @@ func listenerDXViolation(root, path string, line int, msg string) string {
 	}
 	return fmt.Sprintf("%s:%d: %s", filepath.ToSlash(rel), line, msg)
 }
+
+// listenerDXLineForbiddenTerms returns every forbidden doc/godoc term contained
+// in line. It is the single per-line matcher shared by the .md, doc.go, and
+// Go-comment scanners, so the RED/GREEN guarantees in
+// TestListenerDXA52DocTermFixture apply uniformly across all three doc surfaces.
+func listenerDXLineForbiddenTerms(line string) []string {
+	var hits []string
+	for _, term := range listenerDXForbiddenDocTerms() {
+		if strings.Contains(line, term) {
+			hits = append(hits, term)
+		}
+	}
+	return hits
+}
+
+// TestListenerDXA52DocTermFixture is the anti-vacuity guard for the active
+// docs/godoc term scan. It proves the matcher still catches the deleted
+// auth.Route Delegated surface in its Go-syntax forms, and does NOT regress to
+// false-positiving on legitimate "delegated ownership" ABAC prose (live
+// vocabulary in .claude/rules/gocell/tenancy.md and ADR 202606121400-1348).
+// Without this fixture, narrowing the term set could silently become vacuous.
+func TestListenerDXA52DocTermFixture(t *testing.T) {
+	// Deleted listener/route surface as it would actually appear in docs or
+	// godoc example code — each MUST stay flagged.
+	flagged := []struct {
+		name string
+		line string
+	}{
+		{"route composite-literal key", "reg.Mount(auth.Route{Delegated: true})"},
+		{"route field access", "if route.Delegated {"},
+		{"deleted matcher helper", "auth.WithDelegatedMatcher(jwtMatcher)"},
+		{"deleted listener option", "bootstrap.WithPrimaryListener(addr)"},
+	}
+	for _, tc := range flagged {
+		t.Run("flagged/"+tc.name, func(t *testing.T) {
+			assert.NotEmpty(t, listenerDXLineForbiddenTerms(tc.line),
+				"%s: deleted surface %q must be flagged", ruleListenerDXA52, tc.line)
+		})
+	}
+
+	// Legitimate live vocabulary that merely contains the English word
+	// "delegated" — each MUST pass. The bare-substring guard false-positived here.
+	allowed := []struct {
+		name string
+		line string
+	}{
+		{"ADR ownership heading", "- **Delegated ownership** (MDM, future): the resource has a *separate* owner"},
+		{"lowercase abac prose", "delegated ownership (owner != id, e.g. a device) uses subject.sub == resource.owner"},
+		{"owner attribute comparison", "`subject.sub == resource.owner`, where `resource.owner` is supplied by a PIP"},
+	}
+	for _, tc := range allowed {
+		t.Run("allowed/"+tc.name, func(t *testing.T) {
+			assert.Empty(t, listenerDXLineForbiddenTerms(tc.line),
+				"%s: legitimate prose %q must not be flagged", ruleListenerDXA52, tc.line)
+		})
+	}
+}
