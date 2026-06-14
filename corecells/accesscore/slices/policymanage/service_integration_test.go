@@ -96,8 +96,6 @@ func TestL2Atomicity_policymanage_RollsBack(t *testing.T) {
 		"Create error must wrap the injected outbox sentinel (proves Write was invoked)")
 
 	// Policy row must NOT exist (transaction rolled back atomically).
-	_, getErr := bundle.repo.ListByTenant(context.Background(), integTestTenant)
-	require.NoError(t, getErr)
 	// ListByTenant returns empty slice when tenant has no policies; the rollback
 	// proof is that we see zero rows, not a not-found error.
 	policies, listErr := bundle.repo.ListByTenant(context.Background(), integTestTenant)
