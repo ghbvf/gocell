@@ -13,7 +13,10 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
-// updateGolden regenerates this package's byte goldens when set (-update).
+// updateGolden regenerates this package's byte goldens when set (-update). It is the
+// package-level golden-regeneration flag for package assembly; any new golden test in
+// this package should reference this var rather than declare a second "-update" flag
+// (a duplicate flag registration would panic at test startup).
 var updateGolden = flag.Bool("update", false, "regenerate golden files")
 
 // TestGenerateEntrypoint_FrameworkImportModuleIndependent is the Hard golden guard
@@ -50,8 +53,12 @@ func TestGenerateEntrypoint_FrameworkImportModuleIndependent(t *testing.T) {
 	if !bytes.Equal(out, golden) {
 		t.Errorf("generated main.go diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
 	}
-	// Belt: the framework import must NOT carry the consumer module path (issue #2126
-	// regression) — grouping-independent semantic check that complements the byte golden.
+	// Belt: framework import must be the fixed gocell path AND must NOT carry the
+	// consumer module path (issue #2126) — grouping-independent semantic checks that
+	// complement the byte golden (so a carelessly emptied golden cannot pass silently).
+	if !bytes.Contains(out, []byte("github.com/ghbvf/gocell/framework/runtime/shutdown")) {
+		t.Errorf("generated main.go missing the fixed framework import (issue #2126):\n%s", out)
+	}
 	if bytes.Contains(out, []byte("github.com/acme/app/framework")) {
 		t.Errorf("framework import leaked consumer module path (issue #2126):\n%s", out)
 	}

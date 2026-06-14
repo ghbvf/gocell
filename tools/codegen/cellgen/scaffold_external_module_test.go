@@ -52,8 +52,12 @@ func TestScaffoldCell_FrameworkImportModuleIndependent(t *testing.T) {
 	if !bytes.Equal(got, golden) {
 		t.Errorf("scaffold cell.go diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", got, golden)
 	}
-	// Belt: the framework import must NOT carry the consumer module path (issue #2126
-	// regression) — grouping-independent semantic check that complements the byte golden.
+	// Belt: framework import must be the fixed gocell path AND must NOT carry the
+	// consumer module path (issue #2126) — grouping-independent semantic checks that
+	// complement the byte golden (so a carelessly emptied golden cannot pass silently).
+	if !bytes.Contains(got, []byte("github.com/ghbvf/gocell/framework/kernel/cell")) {
+		t.Errorf("scaffold cell.go missing the fixed framework import (issue #2126):\n%s", got)
+	}
 	if bytes.Contains(got, []byte("example.com/external/framework")) {
 		t.Errorf("framework import leaked consumer module path (issue #2126):\n%s", got)
 	}

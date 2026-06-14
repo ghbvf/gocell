@@ -328,7 +328,7 @@ func TestVerifyAllowsHandwrittenSiblingOfEntrypoint(t *testing.T) {
 	artifacts := writeExpectedArtifacts(t, root, project)
 
 	// cmd/fixture/run.go is created by newGeneratedFixture and is hand-written.
-	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "framework/runtime/shutdown/shutdown.go")
+	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "gocellframework/runtime/shutdown/shutdown.go")
 	gitInitAndCommit(t, root, allCommitted)
 
 	result, err := Verify(t.Context(), root, fixtureModule, project)
@@ -717,7 +717,14 @@ func newGeneratedFixture(t *testing.T) (string, *metadata.ProjectMeta) {
 	t.Helper()
 
 	root := t.TempDir()
-	writeFile(t, root, "go.mod", []byte("module "+fixtureModule+"\n\ngo 1.25.0\n"))
+	// issue #2126: the generated assembly main.go imports the gocell framework at its
+	// FIXED module path (github.com/ghbvf/gocell/framework/runtime/...), orthogonal to
+	// the consumer's own module. Provide that module via require + replace to a local
+	// stub module (gocellframework/) — mirroring how a real external consumer wires the
+	// framework dependency. (Pre-fix the template emitted {{.Module}}/framework/... so a
+	// stub under the fixture's own module tree sufficed; that masked the bug.)
+	writeFile(t, root, "go.mod", []byte("module "+fixtureModule+"\n\ngo 1.25.0\n\nrequire github.com/ghbvf/gocell/framework v0.0.0\n\nreplace github.com/ghbvf/gocell/framework => ./gocellframework\n"))
+	writeFile(t, root, "gocellframework/go.mod", []byte("module github.com/ghbvf/gocell/framework\n\ngo 1.25.0\n"))
 	writeFile(t, root, "framework/kernel/depgraph/depgraph.go", []byte(`package depgraph
 
 type Graph struct {
@@ -738,7 +745,7 @@ func FromNodes(module string, nodes []*Node) *Graph {
 	return &Graph{Module: module, Packages: nodes}
 }
 `))
-	writeFile(t, root, "framework/runtime/shutdown/shutdown.go", []byte(`package shutdown
+	writeFile(t, root, "gocellframework/runtime/shutdown/shutdown.go", []byte(`package shutdown
 
 import "context"
 
@@ -746,10 +753,12 @@ func NotifyContext(parent context.Context) (context.Context, context.CancelFunc)
 	return context.WithCancel(parent)
 }
 `))
-	// The assembly main.go template imports {{.Module}}/framework/runtime/observability/logging
-	// for the sink-side redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated
-	// segment). Provide a minimal stub so the generated main compiles.
-	writeFile(t, root, "framework/runtime/observability/logging/logging.go", []byte(`package logging
+	// The assembly main.go template imports
+	// github.com/ghbvf/gocell/framework/runtime/observability/logging for the sink-side
+	// redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment). Provide a
+	// minimal stub under the replaced framework stub module so the generated main
+	// compiles (issue #2126).
+	writeFile(t, root, "gocellframework/runtime/observability/logging/logging.go", []byte(`package logging
 
 import (
 	"log/slog"
