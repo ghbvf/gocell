@@ -12,7 +12,6 @@
 package archtest
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,12 +29,18 @@ import (
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	// Since #1565/#2125 golangci-lint runs via the shared funnel — the
+	// golangci-lint-action `version:` input in _build-lint.yml was removed and
+	// the pin now lives solely in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION
+	// (resolved by gocell::golangci_lint::ensure). That constant is the single
+	// source of the CI lint pin; CI-PINNING-WORKFLOW-DIGEST-01 guards it stays
+	// patch-pinned (not bare major.minor).
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "hack", "lib", "golangci-lint.sh")))
 	require.NoError(t, err)
 
-	re := regexp.MustCompile(`(?m)^\s*version:\s*(v[0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$`)
+	re := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION="(v[0-9]+\.[0-9]+(?:\.[0-9]+)?)"\s*$`)
 	matches := re.FindStringSubmatch(string(body))
-	require.Len(t, matches, 2, "golangci-lint action version input must be present")
+	require.Len(t, matches, 2, "hack/lib/golangci-lint.sh must declare GOLANGCI_LINT_VERSION")
 	assert.Regexp(t, regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`), matches[1],
 		"golangci-lint must be pinned to patch version, not only major.minor")
 }
@@ -145,56 +150,6 @@ func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
 	require.NoError(t, validateLocalUsesResolve(root, "fixture.yml", body))
 }
 
-func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
-	require.NoError(t, err)
-
-	require.NoError(t, validateGeneratedArtifactGates(body))
-}
-
-func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
-	// Fixture: verify-codegen job exists but step uses forbidden producer-defined
-	// scope pattern (git diff, generated_entrypoints, etc.).
-	body := []byte(`jobs:
-  verify-codegen:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        run: |
-          go run ./cmd/gocell verify generated
-          entrypoints_file="$(mktemp)"
-          go run ./cmd/gocell generate assembly --id "$(basename "$d")"
-          echo "Generated: cmd/corebundle/main.go"
-          generated_entrypoints=()
-          while IFS= read -r entrypoint; do
-            [ -n "$entrypoint" ] || continue
-            generated_entrypoints+=("$entrypoint")
-          done < "$entrypoints_file"
-          diff_paths=(assemblies/)
-          diff_paths+=("${generated_entrypoints[@]}")
-          git diff --exit-code -- "${diff_paths[@]}"
-          git ls-files --others --exclude-standard -- "${generated_entrypoints[@]}"
-          git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-`)
-	require.Error(t, validateGeneratedArtifactGates(body))
-}
-
-func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
-	// Fixture: verify-codegen job exists but step uses legacy cmd/*/main.go glob.
-	body := []byte(`jobs:
-  verify-codegen:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        run: |
-          go run ./cmd/gocell verify generated
-          go run ./cmd/gocell generate assembly --id "$(basename "$d")"
-          git diff --exit-code assemblies/ cmd/*/main.go
-          git ls-files --others --exclude-standard cmd/*/main.go
-          git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-`)
-	require.Error(t, validateGeneratedArtifactGates(body))
-}
-
 func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "dependabot.yml")))
@@ -287,9 +242,8 @@ updates:
 // orchestration fields the guard does not assert on — ignore (with full
 // dependency-name/versions/update-types), open-pull-requests-limit, labels.
 // The validator must check only the coverage invariant (root github-actions
-// covers golangci + root gomod) and stay tolerant of schema growth, matching
-// the other validators in this file (validateGeneratedArtifactGates /
-// validateCodegenJobStructure). A strict KnownFields(true) decode here would
+// covers golangci + root gomod) and stay tolerant of schema growth. A strict
+// KnownFields(true) decode here would
 // red on every new dependabot field while adding nothing to the assertion —
 // that fragility caused #925 (trigger: #911 added `ignore:`). This test
 // prevents a "helpful" reintroduction of strict decode: with strict decode
@@ -428,8 +382,8 @@ updates:
 // does not care about, and strict decode would red on each one while adding
 // nothing to the assertion (a typo in a field the guard *does* read collapses
 // it to its zero value, so the pattern match fails and the guard reds anyway).
-// Matches the tolerant decode in validateGeneratedArtifactGates /
-// validateCodegenJobStructure. See #925.
+// The tolerant-decode contract is locked by the fixtures above
+// (ToleratesUnmodeledFields + RejectsGroupsFieldTypo). See #925.
 type dependabotConfig struct {
 	Updates []dependabotUpdate `yaml:"updates"`
 }
@@ -437,7 +391,20 @@ type dependabotConfig struct {
 type dependabotUpdate struct {
 	PackageEcosystem string                     `yaml:"package-ecosystem"`
 	Directory        string                     `yaml:"directory"`
+	Directories      []string                   `yaml:"directories"`
 	Groups           map[string]dependabotGroup `yaml:"groups"`
+}
+
+// coversRoot reports whether the update targets the repo root ("/"). dependabot
+// natively supports BOTH the singular `directory:` field (one dir — used by the
+// github-actions / docker blocks) and the plural `directories:` list (a list /
+// glob — used by the gomod block to cover the workspace's many sub-modules), so
+// the guard must accept either form. Modeling only `directory:` made the gomod
+// root check silently fail once dependabot.yml moved gomod to the list form
+// (#2113). Both branches are load-bearing — they model dependabot's real schema
+// union, not a legacy/new compat shim.
+func (u dependabotUpdate) coversRoot() bool {
+	return u.Directory == "/" || slices.Contains(u.Directories, "/")
 }
 
 // dependabotGroup deliberately models only Patterns. The guard asks whether a
@@ -459,14 +426,14 @@ func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 	for _, update := range cfg.Updates {
 		switch update.PackageEcosystem {
 		case "github-actions":
-			if update.Directory == "/" {
+			if update.coversRoot() {
 				hasGitHubActions = true
 				if rootGitHubActionsUpdateCoversGolangCI(update) {
 					return validateDependabotHasGoModRoot(cfg)
 				}
 			}
 		case "gomod":
-			if update.Directory == "/" {
+			if update.coversRoot() {
 				hasGoMod = true
 			}
 		}
@@ -491,27 +458,11 @@ func rootGitHubActionsUpdateCoversGolangCI(update dependabotUpdate) bool {
 
 func validateDependabotHasGoModRoot(cfg dependabotConfig) error {
 	for _, update := range cfg.Updates {
-		if update.PackageEcosystem == "gomod" && update.Directory == "/" {
+		if update.PackageEcosystem == "gomod" && update.coversRoot() {
 			return nil
 		}
 	}
 	return fmt.Errorf("dependabot must update Go module pins from directory /")
-}
-
-type workflowConfig struct {
-	Jobs map[string]workflowJob `yaml:"jobs"`
-}
-
-type workflowJob struct {
-	Uses  string         `yaml:"uses"`
-	Steps []workflowStep `yaml:"steps"`
-}
-
-type workflowStep struct {
-	Name string `yaml:"name"`
-	If   string `yaml:"if"`
-	Uses string `yaml:"uses"`
-	Run  string `yaml:"run"`
 }
 
 func validateWorkflowUsesPinned(path string, body []byte) error {
@@ -678,184 +629,4 @@ func dockerDigestPinned(uses string) bool {
 	}
 	digest := rest[at+1:]
 	return regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(digest)
-}
-
-func validateGeneratedArtifactGates(body []byte) error {
-	var cfg workflowConfig
-	dec := yaml.NewDecoder(bytes.NewReader(body))
-	if err := dec.Decode(&cfg); err != nil {
-		return fmt.Errorf("parse _build-lint.yml: %w", err)
-	}
-	// After SEC-SETUP-CLOSURE F2, the generated-artifact gate lives in the
-	// independent verify-codegen job, not in build-test.
-	job, ok := cfg.Jobs["verify-codegen"]
-	if !ok {
-		return fmt.Errorf("verify-codegen job missing")
-	}
-	assemblyStep, ok := findWorkflowStep(job.Steps, "Verify generated artifacts are up-to-date")
-	if !ok {
-		return fmt.Errorf("generated artifact gate missing from verify-codegen")
-	}
-	if strings.TrimSpace(assemblyStep.Run) == "" {
-		return fmt.Errorf("generated artifact gate: run block missing")
-	}
-	if !strings.Contains(assemblyStep.Run, "go run ./cmd/gocell verify generated") {
-		return fmt.Errorf("generated artifact gate must call gocell verify generated")
-	}
-	for _, forbidden := range []string{
-		"Generated:",
-		"entrypoints_file",
-		"generated_entrypoints",
-		"go run ./cmd/gocell generate assembly",
-		"go run ./cmd/gocell generate metrics-schema",
-		"git diff",
-		"git ls-files",
-		"cmd/*/main.go",
-		"--boundary-only",
-	} {
-		if strings.Contains(assemblyStep.Run, forbidden) {
-			return fmt.Errorf("generated artifact gate must not contain %q", forbidden)
-		}
-	}
-	return nil
-}
-
-func findWorkflowStep(steps []workflowStep, name string) (workflowStep, bool) {
-	for _, step := range steps {
-		if step.Name == name {
-			return step, true
-		}
-	}
-	return workflowStep{}, false
-}
-
-// --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 17-18) ---
-// These tests verify that the three codegen verify steps move from build-test
-// into a new independent verify-codegen job (no needs: build-test).
-// They are RED because the workflow currently has all three steps inside
-// build-test, and no verify-codegen job exists yet.
-// After the workflow migration (Batch 1 / Agent-C), they will turn GREEN.
-
-// codegenStepNames are the codegen verify step names that must live in
-// verify-codegen, not in build-test, after the SEC-SETUP-CLOSURE workflow
-// refactor. Adding a new codegen subsystem (K#04 cell, K#06 contract,
-// K#10 assembly, …) means adding the step here so the SEC-SETUP-CLOSURE
-// archtest covers it.
-var codegenStepNames = []string{
-	"Verify generated artifacts are up-to-date",
-	"Verify cell codegen (K#04)",
-	"Verify contract codegen (K#06)",
-	"Verify assembly codegen (K#10)",
-	"Verify shared-schema codegen",
-}
-
-// TestVerifyCodegenJobIsIndependent asserts:
-//  1. jobs.verify-codegen exists in _build-lint.yml
-//  2. jobs.verify-codegen.needs does NOT contain "build-test" (runs in parallel)
-//  3. jobs.build-test does NOT contain any of the three codegen verify steps
-//  4. jobs.verify-codegen contains all three codegen verify steps
-//
-// RED: verify-codegen job does not exist yet; all three steps are in build-test.
-func TestVerifyCodegenJobIsIndependent(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
-	require.NoError(t, err)
-
-	require.NoError(t, validateCodegenJobStructure(body))
-}
-
-// TestVerifyCodegenGateRejectsStepsInBuildTest is a negative-fixture unit test
-// for validateCodegenJobStructure. It verifies the checker correctly flags a
-// workflow where the three steps remain in build-test.
-// This test itself is GREEN (it validates checker logic); the real-workflow
-// assertion above (TestVerifyCodegenJobIsIndependent) is RED.
-func TestVerifyCodegenGateRejectsStepsInBuildTest(t *testing.T) {
-	// Fixture: three codegen steps are still in build-test, no verify-codegen job.
-	body := []byte(`jobs:
-  build-test:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        if: matrix.static_checks
-        run: go run ./cmd/gocell verify generated
-      - name: Verify cell codegen (K#04)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-cell.sh
-      - name: Verify contract codegen (K#06)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-contract.sh
-      - name: Verify assembly codegen (K#10)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-assembly.sh
-`)
-	require.Error(t, validateCodegenJobStructure(body),
-		"checker must reject when codegen steps are still in build-test")
-}
-
-// workflowJobWithNeeds extends workflowJob with a Needs field for the
-// verify-codegen independence check.
-type workflowJobWithNeeds struct {
-	Needs interface{}    `yaml:"needs"`
-	Steps []workflowStep `yaml:"steps"`
-}
-
-type workflowConfigWithNeeds struct {
-	Jobs map[string]workflowJobWithNeeds `yaml:"jobs"`
-}
-
-// validateCodegenJobStructure enforces the SEC-SETUP-CLOSURE CI split:
-//   - verify-codegen job must exist
-//   - verify-codegen must not depend on build-test (parallel execution)
-//   - build-test must not contain any of the three codegen verify steps
-//   - verify-codegen must contain all three codegen verify steps
-func validateCodegenJobStructure(body []byte) error {
-	var cfg workflowConfigWithNeeds
-	dec := yaml.NewDecoder(bytes.NewReader(body))
-	if err := dec.Decode(&cfg); err != nil {
-		return fmt.Errorf("parse _build-lint.yml: %w", err)
-	}
-
-	// 1. verify-codegen job must exist.
-	vcJob, ok := cfg.Jobs["verify-codegen"]
-	if !ok {
-		return fmt.Errorf("verify-codegen job missing from _build-lint.yml")
-	}
-
-	// 2. verify-codegen must not depend on build-test.
-	if jobNeeds(vcJob.Needs, "build-test") {
-		return fmt.Errorf("verify-codegen must not have needs: build-test (must run in parallel)")
-	}
-
-	// 3. build-test must not contain the three codegen steps.
-	if btJob, hasBT := cfg.Jobs["build-test"]; hasBT {
-		for _, stepName := range codegenStepNames {
-			if _, found := findWorkflowStep(btJob.Steps, stepName); found {
-				return fmt.Errorf("build-test must not contain step %q (must move to verify-codegen)", stepName)
-			}
-		}
-	}
-
-	// 4. verify-codegen must contain all three codegen steps.
-	for _, stepName := range codegenStepNames {
-		if _, found := findWorkflowStep(vcJob.Steps, stepName); !found {
-			return fmt.Errorf("verify-codegen must contain step %q", stepName)
-		}
-	}
-
-	return nil
-}
-
-// jobNeeds reports whether the given needs value (string, []interface{}, or nil)
-// contains the target job name.
-func jobNeeds(needs interface{}, target string) bool {
-	switch v := needs.(type) {
-	case string:
-		return v == target
-	case []interface{}:
-		for _, item := range v {
-			if s, ok := item.(string); ok && s == target {
-				return true
-			}
-		}
-	}
-	return false
 }

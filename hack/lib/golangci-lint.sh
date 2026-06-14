@@ -9,14 +9,15 @@
 # locally vs CI — exactly the failure mode the gofumpt rollout was meant
 # to prevent on the producer side.
 #
-# Sync requirements (manual, not statically enforced):
+# Since #1565/#2125 GOLANGCI_LINT_VERSION below is the SOLE source of the CI
+# lint pin: the golangci-lint-action step (which replicated the version literal
+# in _build-lint.yml) was removed and CI resolves the binary via
+# gocell::golangci_lint::ensure. Patch-pinning of this constant is archtest-
+# guarded by CI-PINNING-WORKFLOW-DIGEST-01 (tools/archtest/ci_pinning_test.go).
 #
-#   1. .github/workflows/_build-lint.yml's golangci-lint-action `version:`
-#      MUST equal GOLANGCI_LINT_VERSION below. The lint-action is kept for
-#      its build cache and `config verify`; the version literal is the
-#      source of truth replicated there.
+# Sync requirement (manual, not statically enforced):
 #
-#   2. The repo's go.mod `mvdan.cc/gofumpt` version MUST equal the version
+#   1. The repo's go.mod `mvdan.cc/gofumpt` version MUST equal the version
 #      vendored by the pinned golangci-lint release (v2.11.4 vendors
 #      mvdan.cc/gofumpt v0.9.2). Producer-side round-trip tests in
 #      tools/codegen call gofumpt.Source via the project lib, while the CI
@@ -27,8 +28,10 @@
 #      mvdan.cc/gofumpt v0.9.2 — invariant satisfied (PR #534 restored it
 #      from a stray v0.10.0).
 #
-# Reviewer-enforced sync — no archtest because both upstreams are yaml /
-# go.mod literals shellcheck/Go can't cross-reference cleanly.
+# The remaining gofumpt↔golangci-lint cross-version sync (#1 above) is
+# reviewer-enforced — no archtest, because it cross-references a go.mod literal
+# against the gofumpt version vendored inside the golangci-lint release —
+# static analysis (Go / shellcheck) can't resolve cleanly.
 #
 # ref: kubernetes/kubernetes hack/verify-golangci-lint.sh — same
 # go-install-from-pinned-version pattern; we omit the docker fallback

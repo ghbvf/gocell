@@ -96,6 +96,25 @@ func fileHasExclusivelyTag(path, tag string) (bool, error) {
 	return withTagCtx && !withoutTagCtx, nil
 }
 
+// workflowConfig / workflowJob / workflowStep model the subset of GitHub Actions
+// workflow YAML these archtests parse (jobs → steps → name/if/uses/run). Shared
+// by readWorkflowStep below.
+type workflowConfig struct {
+	Jobs map[string]workflowJob `yaml:"jobs"`
+}
+
+type workflowJob struct {
+	Uses  string         `yaml:"uses"`
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowStep struct {
+	Name string `yaml:"name"`
+	If   string `yaml:"if"`
+	Uses string `yaml:"uses"`
+	Run  string `yaml:"run"`
+}
+
 // readWorkflowStep reads <workflowFile> under .github/workflows/ and returns
 // the named step from the named job. Step + job + workflow names are coupled
 // to the YAML by string; renaming any of them is a coordinated change with

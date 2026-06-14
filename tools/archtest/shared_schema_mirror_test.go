@@ -52,9 +52,14 @@
 //     allowlist. Validated by TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (production)
 //     and TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral (matcher).
 //
-//   - ③ CI step "Verify shared-schema codegen" omitted from the verify-codegen
-//     workflow job: covered by ci_pinning_test.go codegenStepNames (the step
-//     name was added there as part of this PR's TDD RED wave).
+//   - ③ Mirror byte-equality gate stops running in CI: covered in-process by
+//     TestSharedSchemaMirrorByteCurrent (SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01),
+//     which runs sharedschema.Verify directly in the archtest process — drift
+//     reds regardless of whether any shell script (hack/verify-codegen-shared-
+//     schema.sh) or workflow step exists. (#1817 deleted the verify-codegen
+//     workflow job that the old ci_pinning_test.go codegenStepNames step-name
+//     lock guarded; #2113 re-anchored this invariant here, strictly stronger.
+//     The shell gate still routes via `# verify-bucket: codegen` for `make verify`.)
 //
 //   - ④ Headerless set via field assignment (var o codegen.WriteOptions;
 //     o.Headerless = true) rather than a composite literal: NOT caught by A2
@@ -169,7 +174,7 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 // a stale checked-in JSON file unrepresentable, but the diff is computed in-process
 // every archtest run, so drift cannot pass silently.
 //
-// INVARIANT: SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01
+// INVARIANT: SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01 — in-process byte diff.
 func TestSharedSchemaMirrorByteCurrent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

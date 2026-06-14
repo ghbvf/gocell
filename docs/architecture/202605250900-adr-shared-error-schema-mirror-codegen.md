@@ -133,7 +133,7 @@ Hard 化方向（gh issue `#954` 跟踪）：
 | AI 直接编辑某 mirror 副本，绕过 canonical | 低 | A1 reverse-enum archtest 全量扫 repo，但只检测"副本存在"而非"内容对齐"——内容对齐由 `gocell verify codegen-shared-schema` verify gate 守护（CI 强制） |
 | 新增第 4 个 mirror 副本未进 `sharedschema.Mirrors` 声明 | 低 | A1 archtest：未声明副本即 CI 红（reverse-enum 无枚举漏洞） |
 | `Headerless: true` 被其他包滥用绕过 generated header 门 | 低 | A2 archtest：caller-allowlist 类型感知扫描，composite literal 包外即 CI 红 |
-| verify gate 被跳过（CI 步骤被删除） | 低 | `tools/archtest/ci_pinning_test.go` 的 `codegenStepNames` 常量集锁 verify 步骤名（blind-spot ③），步骤被删即 archtest CI 红 |
+| 镜像字节相等 gate 不再被 CI 跑到（blind-spot ③） | 低 | `tools/archtest/TestSharedSchemaMirrorByteCurrent`（`SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01`）在 archtest 进程内直跑 `sharedschema.Verify` 做 in-process 字节 diff，drift 即 CI 红——**不依赖**任何 shell 脚本或 workflow step 存在（严于 #1817 前由已删 `codegenStepNames` step-name 锁守的旧形态）。shell gate 仍经 `# verify-bucket: codegen` 路由供 `make verify` |
 | reader allowlist 升级后（Hard 化）引入 symlink 逃逸 | 低（当前不适用） | 当前 reader allowlist 结构决定必须保持物理副本；Hard 化时需同步审查 allowlist 逻辑 |
 
 ## Related
