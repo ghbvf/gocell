@@ -1,6 +1,7 @@
 //go:build archtest
 
 // INVARIANT: CI-INTEGRATION-DISCOVERY-01: integration-test discovers via go list over the go.work module funnel, not hardcoded globs
+// INVARIANT: CI-INTEGRATION-SHARD-PARTITION-01: every discovered integration package routes to exactly one run_main_integration shard filter (exhaustive + disjoint)
 package archtest
 
 import (
@@ -399,6 +400,125 @@ func TestArchtest_CIIntegrationDiscovery_FixtureMetaTest(t *testing.T) {
 		e2eHit := slices.Contains(e2ePkgs, fx.name)
 		assert.Equal(t, fx.wantInt, intHit, "integration discovery for fixture %s", fx.name)
 		assert.Equal(t, fx.wantE2E, e2eHit, "e2e discovery for fixture %s", fx.name)
+	}
+}
+
+// integrationShardFilter is a parsed run_main_integration:true matrix entry of
+// the integration-test job: the (shard, filter) pairs that actually route the
+// discovered package set through an import-path regex.
+type integrationShardFilter struct {
+	shard  string
+	filter string
+}
+
+// readIntegrationShardFilters decodes the integration-test job's
+// strategy.matrix.include[] and returns the (shard, filter) pairs that carry
+// run_main_integration: true with a non-empty filter. The adapters-race leg
+// (empty filter, run_main_integration: false) is excluded by construction: it
+// re-spins curated -run race steps and routes none of the discovered set.
+//
+// The local YAML shape is decoupled from ci_pinning_test.go's workflowStep
+// (mirrors archtest_ci_shard_count_test.go's archtestWorkflowConfig rationale)
+// so adding matrix fields here cannot regress the pin / step archtests.
+func readIntegrationShardFilters(t *testing.T, root string) []integrationShardFilter {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	require.NoError(t, err)
+
+	var cfg struct {
+		Jobs map[string]struct {
+			Strategy struct {
+				Matrix struct {
+					Include []struct {
+						Shard              string `yaml:"shard"`
+						Filter             string `yaml:"filter"`
+						RunMainIntegration bool   `yaml:"run_main_integration"`
+					} `yaml:"include"`
+				} `yaml:"matrix"`
+			} `yaml:"strategy"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.NewDecoder(bytes.NewReader(body)).Decode(&cfg))
+
+	job, ok := cfg.Jobs["integration-test"]
+	require.True(t, ok, "integration-test job missing from _build-lint.yml")
+
+	var out []integrationShardFilter
+	for _, inc := range job.Strategy.Matrix.Include {
+		if inc.RunMainIntegration && inc.Filter != "" {
+			out = append(out, integrationShardFilter{shard: inc.Shard, filter: inc.Filter})
+		}
+	}
+	return out
+}
+
+// TestArchtest_CIIntegrationShardPartition_01 — INVARIANT: CI-INTEGRATION-SHARD-PARTITION-01
+//
+// CI-INTEGRATION-DISCOVERY-01 is the UPSTREAM half of the integration coverage
+// funnel: it proves the package set is *discovered* via the go.work module
+// funnel (no hardcoded globs, every module iterated). But discovery only
+// produces a candidate set — the integration-test job then *routes* each
+// candidate to a matrix shard via that shard's import-path `filter` regex, and
+// nothing asserted those filters actually cover the discovered set. This is the
+// DOWNSTREAM half: every discovered integration package must match EXACTLY ONE
+// run_main_integration shard filter.
+//
+//   - exhaustive (≥1): a package matched by no shard is silently dropped — no
+//     leg runs it, yet the per-shard `-gt 0` empty-guard (GuardsEmptyDiscovery)
+//     stays green because the OTHER packages under that shard's prefix still
+//     match. This is exactly the F9 / #1565 regression: the `tests` filter
+//     `(tests|framework/|tools)` carried a stray slash inside the `framework/`
+//     alternative, so with the regex's own trailing `/` it required `framework//`
+//     and matched zero `framework/...` packages — 4 framework integration
+//     packages (kernel/governance, kernel/metadata, runtime/bootstrap,
+//     runtime/webhook) went dark from the module split until this guard.
+//   - disjoint (≤1): a package matched by two shards is run (and coverage-billed)
+//     twice — wasted wall-time and double-counted profiles.
+//
+// Together with CI-INTEGRATION-DISCOVERY-01 this closes the loop:
+// discovered ⟹ routed-to-exactly-one-shard.
+//
+// AI-robust rating: Medium. The filters are YAML regex strings with no Go type
+// system to seal them; the ceiling is a string-anchored cross-check (same as
+// the sibling IteratesModuleFunnel / CI-RACE-LANE-SUBSET-01 invariants, same
+// archtest-nightly cadence). Anti-vacuity: both the parsed filter set and the
+// discovered package set are require.NotEmpty, so a YAML-shape change or a
+// broken walker fails loud instead of vacuously passing.
+func TestArchtest_CIIntegrationShardPartition_01(t *testing.T) {
+	root := findModuleRoot(t)
+
+	filters := readIntegrationShardFilters(t, root)
+	require.NotEmpty(t, filters,
+		"no run_main_integration:true shard filters parsed from the integration-test "+
+			"matrix — the strategy.matrix.include shape changed; update this archtest")
+
+	type compiledShard struct {
+		shard string
+		re    *regexp.Regexp
+	}
+	compiled := make([]compiledShard, 0, len(filters))
+	for _, f := range filters {
+		compiled = append(compiled, compiledShard{shard: f.shard, re: regexp.MustCompile(f.filter)})
+	}
+
+	pkgs, err := discoverPackagesUnderTag(root, "integration")
+	require.NoError(t, err)
+	require.NotEmpty(t, pkgs, "no integration packages discovered — walker likely broken")
+
+	const modPrefix = "github.com/ghbvf/gocell/"
+	for _, pkg := range pkgs {
+		importPath := modPrefix + filepath.ToSlash(pkg)
+		var hits []string
+		for _, sf := range compiled {
+			if sf.re.MatchString(importPath) {
+				hits = append(hits, sf.shard)
+			}
+		}
+		assert.Lenf(t, hits, 1,
+			"integration package %q must route to exactly one run_main_integration shard "+
+				"filter, got shards %v; 0 = silently dropped (no leg runs it — the F9 / #1565 "+
+				"framework double-slash regression class), >1 = double-run/double-billed across "+
+				"shards. See CI-INTEGRATION-SHARD-PARTITION-01.", importPath, hits)
 	}
 }
 
