@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,25 +10,24 @@ import (
 )
 
 // repoRootForEquivalence walks up from the test's working directory to the
-// repository root, identified as the directory whose go.mod declares the
-// platform module path. The nested fixture modules under tools/*/testdata/
-// declare other module paths, so the exact-match is unambiguous.
+// repository root, identified as the directory holding the go.work workspace
+// file. Since #1565 moved the core layers into the framework/ module, the repo
+// root no longer carries a go.mod (it is a pure go.work workspace); go.work is
+// the unambiguous root marker — nested modules and tools/*/testdata fixtures
+// have their own go.mod but never a go.work.
 func repoRootForEquivalence(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	const wantModuleLine = "module github.com/ghbvf/gocell\n"
 	for {
-		//nolint:gosec // G304: repo-root walk reads go.mod; path is os.Getwd() ancestry, not user input
-		data, readErr := os.ReadFile(filepath.Join(dir, "go.mod"))
-		if readErr == nil && bytes.HasPrefix(data, []byte(wantModuleLine)) {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.work")); statErr == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("repo root (go.mod with module github.com/ghbvf/gocell) not found above " + dir)
+			t.Fatal("repo root (go.work workspace file) not found above " + dir)
 		}
 		dir = parent
 	}

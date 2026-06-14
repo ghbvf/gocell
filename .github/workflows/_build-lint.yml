@@ -110,16 +110,19 @@ jobs:
           # (make verify → governance.yml); per-module example build runs in
           # hack/verify-workspace.sh — both iterate the go.work module funnel.
           # Likewise cmd/gocell (#1557) and cmd/corebundle (#1559) are each their
-          # own go.work module now: the `./cmd/...` pattern in the others-light
-          # shard below stops at each nested-module boundary and matches only
-          # cmd/internal. cmd/gocell + cmd/corebundle unit tests run in
+          # own go.work module: a root `./cmd/...` pattern matches zero packages
+          # (cmd carries no root-module code), so cmd unit tests run in
           # hack/verify-workspace-test.sh and their builds in hack/verify-workspace.sh
-          # — the same go.work funnel as examples/*.
+          # — the same go.work funnel as examples/*. Since #1565 the former
+          # root-module `tests/` subtree is itself a go.work module
+          # (github.com/ghbvf/gocell/tests); like adapters it needs the import-path
+          # pattern to resolve in workspace mode — a root `./tests/...` would stop
+          # at the nested-module boundary and match zero. contracts/ holds no Go.
           - shard: adapters
             pkgs: github.com/ghbvf/gocell/adapters/...
             static_checks: false
           - shard: others-light
-            pkgs: ./cmd/... ./tests/... ./contracts/...
+            pkgs: github.com/ghbvf/gocell/tests/...
             static_checks: false
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -145,15 +148,18 @@ jobs:
       # golangci-lint v2's default linter set — see the absence-rationale
       # comment between Build and golangci-lint below.)
       - name: Build
-        # `go build ./...` stops at nested-module boundaries: examples/* (#1556)
-        # and cmd/gocell (#1557) are not compiled here. Their per-module
-        # release-consistency build runs in hack/verify-workspace.sh (GOWORK=off);
+        # `go build ./framework/...` compiles the framework module (kernel /
+        # runtime / pkg, #1565). The repo root is a pure go.work workspace with
+        # no root module, so a bare `go build ./...` from root matches no module;
+        # the framework module is the core-layer compile surface this gate owns.
+        # The other go.work modules (corecells / adapters / examples/* / cmd/*)
+        # are compiled per-module in hack/verify-workspace.sh (GOWORK=off);
         # cmd/gocell additionally compiles via `gocell verify generated` /
         # `gocell verify codegen-*` in the Governance Strict `codegen` bucket
         # (hack/verify-generated.sh + hack/verify-codegen-*.sh; the dedicated
         # verify-codegen job here was removed in #1817 — see NOTE at file end).
         if: matrix.static_checks
-        run: go build ./...
+        run: go build ./framework/...
 
       # `go vet ./...` is intentionally absent here: golangci-lint v2 has
       # `govet` in its default-enabled linter set (see .golangci.yml line 4

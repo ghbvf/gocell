@@ -9,8 +9,10 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 RUN apk add --no-cache git
-COPY go.mod go.sum ./
-RUN go mod download
+# Since #1565 the repo root is a pure go.work workspace (no root go.mod/go.sum),
+# so the former `COPY go.mod go.sum` + `go mod download` pre-warm layer no longer
+# applies — `go -C cmd/corebundle build` resolves and downloads via the copied
+# go.work workspace (GOWORK auto-detected from /src).
 # Recursive COPY is intentional and bounded by the repo-root .dockerignore
 # (.git, .claude, docs/, worktrees/, bak/, *.env, coverage*.out filtered).
 # Multi-stage isolation: the build stage filesystem is discarded after
