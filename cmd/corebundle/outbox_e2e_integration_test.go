@@ -33,7 +33,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +64,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/capability"
 	"github.com/ghbvf/gocell/runtime/composition"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/transport"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -523,7 +523,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		tenantHeader string
 	}
 	refetchCh := make(chan refetchCall, 8)
-	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	internalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		refetchCh <- refetchCall{
 			path:         r.URL.Path,
 			method:       r.Method,
@@ -537,8 +537,13 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		// Asserting the refetch consumer can decode the full contract payload
 		// guards against stub/contract drift.
 		_, _ = w.Write([]byte(`{"data":{"id":"cfg-refetch-test","key":"refetch.test.key","value":"refetch-value","sensitive":false,"version":1,"createdAt":"2026-04-26T00:00:00Z","updatedAt":"2026-04-26T00:00:00Z"}}`))
-	}))
-	t.Cleanup(internalSrv.Close)
+	})
+	// In-process transport bound to the stub configcore internal handler: the
+	// accesscore config refetch dispatches in memory through the CellTransport
+	// seam (US4 #1963) — no loopback server — while the stub still records the
+	// call for the header assertions below.
+	inProcTransport := transport.NewInProcess(nil)
+	require.NoError(t, inProcTransport.Bind(internalHandler, nil), "bind in-process transport")
 
 	// Create a test HMAC ring for service-token signing in HTTPConfigGetter.
 	// The stub server does not verify the token; it just records the call.
@@ -563,9 +568,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
-	// After receiving an entry-upserted event, configreceive will call
-	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
+	// Wire accesscore's ConfigGetter through the in-process transport bound to
+	// the stub configcore handler. After receiving an entry-upserted event,
+	// configreceive calls /internal/v1/config/{key} via the seam, and the stub
+	// records it.
 	refetchBootstrapMW := auth.NewBootstrapMiddleware(
 		auth.BootstrapCredentials{
 			Username: []byte(e2eAdminUsername),
@@ -581,7 +587,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(refetchBootstrapMW),
-		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
+		configgetter.WithTransport(inProcTransport, testRing, clock.Real()),
 
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)...)

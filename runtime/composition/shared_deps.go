@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/capability"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/transport"
 )
 
 // SharedDeps holds the cross-cutting dependencies consumed by every CellModule.
@@ -161,6 +162,14 @@ type SharedDeps struct {
 
 	// InternalHTTPAddr is the bind address for the internal HTTP listener.
 	InternalHTTPAddr string
+
+	// InProcessTransport is the shared, empty-on-construction in-process
+	// CellTransport holder (Epic #1423 US4 #1963). Genuinely cross-cutting: the
+	// composition root mints ONE holder and hands the SAME pointer to both the
+	// consumer cell (which dispatches co-located cross-cell http calls through it)
+	// and bootstrap (WithInProcessTransport), which binds the built
+	// internal-listener handler into it at phase5. Build always populates it.
+	InProcessTransport *transport.InProcessTransport
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener.
 	HealthHTTPAddr string
