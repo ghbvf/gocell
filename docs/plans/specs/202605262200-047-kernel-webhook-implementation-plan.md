@@ -498,15 +498,16 @@ make verify
 ### 相对计划的偏离（激进自审 + 开源对标）
 
 - **healthz probes 全删**（计划列为 in-scope）：`webhook_receiver_ready`/`webhook_dispatcher_ready` 在当前架构 vacuous/synonymous（依赖已被 `redis_ready`/`postgres_ready`/`rabbitmq_ready` 覆盖，source store 启动期 eager 校验且运行时不可变），违反 observability.md「禁止同义/vacuous probe」。carve 到 follow-up（store 变运行时可变时加 `webhook_source_store_ready`）。
-- **result label status-aware 5 值**（非计划隐含的 disposition 折叠）：开源对标 Alertmanager（clientError/serverError 分）/ K8s admission（error_type）/ Convoy（Discarded）均保留 status 维度，折叠 4xx/5xx 丢 SLO 信号。值集 `{success, client_error, server_error, transport_error, blocked}`，时延 buckets 到 30s（standard-webhooks 超时量级）。
+- **result label status-aware 6 值**（非计划隐含的 disposition 折叠）：开源对标 Alertmanager（clientError/serverError 分）/ K8s admission（error_type）/ Convoy（Discarded）均保留 status 维度，折叠 4xx/5xx 丢 SLO 信号。值集 `{success, client_error, server_error, transport_error, blocked, circuit_open}`（`circuit_open` 由 #1541 熔断器 fast-fail 新增），时延 buckets 到 30s（standard-webhooks 超时量级）。
 - **不做 auditcore webhook 二次 redaction**（计划「若适用」行）：auditcore 已对所有订阅事件 payload 在 auditquery 出口统一 `RedactPayload`，webhook 敏感 key 已在 PR-1 入 pattern——无需额外工作。
 - **examples 真实 demo carve 到 follow-up**：webhook receiver `buildRouteGroup` 硬编 `cell.PrimaryListener`（JWT-gated）且未标 `Public`，故真实 assembly 中 webhook 路径被 JWT 拦截——可运行的真实 demo 需 webhook 专属 listener 或 Public 标记，属 PR-3 运行时范围而非 PR-6。cellgen→drain→RouteGroup→Router→signed-200 全链路已由 `TestPhase5DrainWebhookReceivers_EndToEnd`（真实链 + 合成 cell）+ cellgen golden fixtures 覆盖。
 
 ### Follow-up issues（已开）
 
 1. #1539 Ed25519 / Vault Transit KMS 签名（pri-p3）
-2. #1540 Source secret 持久化 configcore/vault（pri-p2）
-3. #1541 Circuit-breaker 全状态机（pri-p3）
+2. #1540 Source secret 持久化 configcore/vault（pri-p2）✅ 已交付（ADR 202606122050）
+3. #1541 Circuit-breaker 全状态机（pri-p3）✅ 已交付（ADR 202606140035；per-endpoint
+   Closed/Open/HalfOpen 接入 dispatcher，复用 kernel/circuitbreaker）
 4. #1542 Per-contract Claim TTL 配置（pri-p2，`receiver.go` 固定 24h doneTTL < provider 重试窗口）
 5. #1543 `webhook_source_store_ready` probe（pri-p3，store 变运行时可变时开）
 6. **#1544 webhook receiver 在 JWT-gated PrimaryListener 上不可运行（功能阻断，非仅 demo）+ examples demo**（pri-p2）

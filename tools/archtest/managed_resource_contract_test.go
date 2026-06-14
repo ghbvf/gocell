@@ -27,10 +27,6 @@ type adapterExportedType struct {
 }
 
 var adapterManagedResourceOptOut = map[string]string{
-	"adapters/circuitbreaker.Adapter":             "stateless-adapter: no owned external connection or background worker",
-	"adapters/circuitbreaker.Config":              "config: construction input value",
-	"adapters/circuitbreaker.Counts":              "value-object: breaker statistics snapshot",
-	"adapters/circuitbreaker.State":               "value-object: breaker enum",
 	"adapters/grpc.Config":                        "config: construction input value",
 	"adapters/grpc.TLSConfig":                     "config: construction input value",
 	"adapters/mqtt.AuthConfig":                    "config: construction input value",
@@ -60,6 +56,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/otel.MetricProvider":                "stateless-adapter: emits metrics through caller-owned SDK/provider",
 	"adapters/otel.Tracer":                        "stateless-adapter: tracer facade, provider lifecycle is caller-owned",
 	"adapters/otel.TracerConfig":                  "config: construction input value",
+	"adapters/postgres.AuditCrossTenantStore":     "subresource-not-owner: storage facade over caller-owned admin pool",
 	"adapters/postgres.Config":                    "config: construction input value",
 	"adapters/postgres.DestructiveDownPermit":     "value-object: explicit migration rollback permit",
 	"adapters/postgres.ForwardRebuildPermit":      "value-object: explicit forward-rebuild permit",

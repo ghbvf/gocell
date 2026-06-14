@@ -62,6 +62,11 @@ const (
 	// deliveryBlocked: SSRF pre-flight reject or a permanent prepare failure
 	// (Disposition=Reject → DLX).
 	deliveryBlocked webhookDeliveryResult = "blocked"
+	// deliveryCircuitOpen: the endpoint's circuit breaker is open, so the
+	// delivery was fast-failed without an HTTP attempt (Disposition=Requeue,
+	// no delivery-duration sample). Distinct from transport_error: no POST was
+	// made at all, so it tracks breaker fast-fail volume, not in-flight faults.
+	deliveryCircuitOpen webhookDeliveryResult = "circuit_open"
 )
 
 // SignatureFailureReason is the exported sealed string type for the
