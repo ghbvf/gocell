@@ -3,11 +3,6 @@
 
 set -euo pipefail
 
-LABEL="${GOCELL_APP_ROUTER_LAUNCHD_LABEL:-com.ghbvf.gocell.codex-pr-app-dispatcher}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-if ! command -v launchctl >/dev/null 2>&1; then
-    echo "trigger: launchctl is required on this host" >&2
-    exit 1
-fi
-
-launchctl kill SIGUSR1 "gui/$(id -u)/${LABEL}"
+exec "${SCRIPT_DIR}/monitor.sh" trigger

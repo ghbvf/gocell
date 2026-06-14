@@ -58,6 +58,32 @@ Dry run:
 python3 hack/automation/codex-pr-app-dispatcher/router.py --dry-run --once
 ```
 
+## Monitor Control
+
+When installed as a macOS LaunchAgent, use the repository control script:
+
+```bash
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh start
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh stop
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh restart
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh status
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh logs
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh trigger
+```
+
+The script defaults to:
+
+```text
+~/Library/LaunchAgents/com.ghbvf.gocell.codex-pr-app-dispatcher.plist
+```
+
+Override with:
+
+```bash
+export GOCELL_APP_ROUTER_LAUNCHD_LABEL=com.ghbvf.gocell.codex-pr-app-dispatcher
+export GOCELL_APP_ROUTER_LAUNCHD_PLIST="${HOME}/Library/LaunchAgents/com.ghbvf.gocell.codex-pr-app-dispatcher.plist"
+```
+
 ## Poll Interval
 
 The router polls once immediately after startup, then sleeps for `GOCELL_APP_ROUTER_INTERVAL` seconds between polls.
@@ -112,7 +138,7 @@ codex-pr-dispatcher
 From a shell, run:
 
 ```bash
-bash hack/automation/codex-pr-app-dispatcher/trigger.sh
+bash hack/automation/codex-pr-app-dispatcher/monitor.sh trigger
 ```
 
 On macOS LaunchAgent installations this script runs:
