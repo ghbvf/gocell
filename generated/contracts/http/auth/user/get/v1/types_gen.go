@@ -140,3 +140,16 @@ func (r Get404ErrorResponse) visitGetResponse(ctx context.Context, w http.Respon
 	httputil.WriteErrorWithStatus(ctx, w, 404, &r.Body)
 	return nil
 }
+
+// Get501ErrorResponse renders an HTTP 501 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Get501ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Get501ErrorResponse) visitGetResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 501, &r.Body)
+	return nil
+}

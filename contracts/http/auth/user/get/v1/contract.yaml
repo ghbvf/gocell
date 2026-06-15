@@ -33,6 +33,9 @@ endpoints:
       404:
         description: "Not found — user with given id does not exist"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      501:
+        description: "Not Implemented — a super-admin's principal derives cross-tenant (RowScopeAll) row visibility, but accesscore has no cross-tenant read pool (unlike audit's gocell_audit_admin, #1810): its tables are served only by the app pool under FORCE RLS, so this read fail-closes unconditionally (ports.RowScopeAllUnsupportedError, #1709). Distinct from 404, which signals the specific row is absent."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

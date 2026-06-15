@@ -77,6 +77,35 @@ func TestRowVisibility_ZeroValueInvalid(t *testing.T) {
 	}
 }
 
+// TestSystemRowVisibility asserts the trusted-SYSTEM-read helper (#1709) yields a
+// canonical-valid tenant-wide obligation: RowScopeTenant, empty subject, no owner
+// predicate (Allows always true) — behaviorally identical to a pre-obligation
+// tenant-scoped read.
+func TestSystemRowVisibility(t *testing.T) {
+	t.Parallel()
+	v := SystemRowVisibility()
+	if v.Scope() != RowScopeTenant {
+		t.Errorf("Scope() = %v, want %v", v.Scope(), RowScopeTenant)
+	}
+	if v.Subject() != "" {
+		t.Errorf("Subject() = %q, want empty", v.Subject())
+	}
+	if err := v.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil (must be canonical-valid)", err)
+	}
+	if !v.Allows("anyone") {
+		t.Error("Allows() = false, want true (tenant scope applies no owner predicate)")
+	}
+	// Equivalent to the explicit NewRowVisibility(RowScopeTenant, "") construction.
+	want, err := NewRowVisibility(RowScopeTenant, "")
+	if err != nil {
+		t.Fatalf("NewRowVisibility(RowScopeTenant, \"\") unexpected err: %v", err)
+	}
+	if v != want {
+		t.Errorf("SystemRowVisibility() = %+v, want %+v", v, want)
+	}
+}
+
 func TestRowVisibility_SQLPredicate(t *testing.T) {
 	t.Parallel()
 	tests := []sqlPredicateCase{

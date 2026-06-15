@@ -67,7 +67,11 @@ func NewService(
 }
 
 // HasRole checks if a user has the specified role within the caller's tenant.
-func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
+// vis is the principal-derived row-visibility obligation: the subject-self read
+// endpoint passes the caller's RowVisibility so a non-admin only sees their own
+// roles — a non-self userID collapses to an empty result. SYSTEM callers must
+// pass tenant.SystemRowVisibility().
+func (s *Service) HasRole(ctx context.Context, vis tenant.RowVisibility, userID, roleName string) (bool, error) {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
@@ -82,7 +86,7 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 	}
 
 	roles, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) ([]*domain.Role, error) {
-		return s.roleRepo.GetByUserID(txCtx, tid, userID)
+		return s.roleRepo.GetByUserID(txCtx, tid, vis, userID)
 	})
 	if err != nil {
 		return false, fmt.Errorf("rbac-check: has role: %w", err)
@@ -97,7 +101,16 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 }
 
 // ListRoles returns a paginated page of roles assigned to userID.
-func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.PageParams) (query.PageResult[*domain.Role], error) {
+// vis is the principal-derived row-visibility obligation: the subject-self read
+// endpoint passes the caller's RowVisibility so a non-admin only sees their own
+// roles — a non-self userID collapses to an empty page. SYSTEM callers must
+// pass tenant.SystemRowVisibility().
+func (s *Service) ListRoles(
+	ctx context.Context,
+	vis tenant.RowVisibility,
+	userID string,
+	pageReq query.PageParams,
+) (query.PageResult[*domain.Role], error) {
 	if err := validation.RequireNotEmpty(
 		errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
@@ -118,7 +131,7 @@ func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.Pa
 		QueryCtx:   qctx,
 		Fetch: func(fetchCtx context.Context, params query.ListParams) ([]*domain.Role, error) {
 			roles, err := scopedtx.Do(fetchCtx, txRunner, tid, func(txCtx context.Context) ([]*domain.Role, error) {
-				return s.roleRepo.ListByUserID(txCtx, tid, userID, params)
+				return s.roleRepo.ListByUserID(txCtx, tid, vis, userID, params)
 			})
 			if err != nil {
 				return nil, fmt.Errorf("rbac-check: list roles: %w", err)

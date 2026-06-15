@@ -506,7 +506,7 @@ type brokenRoleRepo struct {
 	err error
 }
 
-func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return nil, b.err
 }
 
@@ -681,7 +681,9 @@ type refreshUnavailableUserRepo struct{}
 
 var _ ports.UserRepository = (*refreshUnavailableUserRepo)(nil)
 
-func (refreshUnavailableUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+func (refreshUnavailableUserRepo) GetByIDInTenant(
+	_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string,
+) (*domain.User, error) {
 	return nil, errcode.New(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable,
 		"user store unavailable")
 }
@@ -1660,7 +1662,7 @@ func TestRefresh_AccessJWT_NoAuthzEpochClaim(t *testing.T) {
 	for range 4 {
 		_, _ = userRepo.BumpAuthzEpoch(context.Background(), testTenantID, "usr-epoch-ref", credentialfence.Mint())
 	}
-	u, _ = userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-epoch-ref")
+	u, _ = userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-epoch-ref")
 
 	refreshStore := newTestRefreshStore()
 	svc := mustNewService(sessionStore, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
@@ -1750,7 +1752,7 @@ func TestRefresh_StaleEpoch_CascadeRevokesSessionOnly(t *testing.T) {
 		_, bumpErr := userRepo.BumpAuthzEpoch(context.Background(), testTenantID, "usr-stale-epoch", credentialfence.Mint())
 		require.NoError(t, bumpErr)
 		// Reload so u.AuthzEpoch() == 2.
-		u, err = userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-stale-epoch")
+		u, err = userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-stale-epoch")
 		require.NoError(t, err)
 		require.Equal(t, int64(2), u.AuthzEpoch(), "setup: user epoch must be 2 after bump")
 

@@ -142,7 +142,7 @@ func TestEnsure_DuplicateUsername_Returns409(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 	// Existing user must be untouched.
-	refreshed, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, "usr-existing")
+	refreshed, getErr := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-existing")
 	require.NoError(t, getErr)
 	assert.Equal(t, "$2a$10$identityhash", refreshed.PasswordHash, "existing user hash must not change")
 }
@@ -350,7 +350,7 @@ func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
 	cnt, err := roleRepo.CountByRole(context.Background(), testTenantID, auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "role assignment removed")
-	_, err = userRepo.GetByIDInTenant(context.Background(), testTenantID, user.ID)
+	_, err = userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.Error(t, err, "user row removed")
 }
 
@@ -438,7 +438,7 @@ func (r *duplicateUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID,
 	return 0, nil
 }
 
-func (r *duplicateUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+func (r *duplicateUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) (*domain.User, error) {
 	panic("duplicateUserRepo.GetByIDInTenant: unexpected call")
 }
 
@@ -480,7 +480,7 @@ func (r *scriptedRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ s
 	return v, nil
 }
 
-func (r *scriptedRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (r *scriptedRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -496,7 +496,9 @@ func (r *scriptedRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, id stri
 	return &domain.Role{ID: id}, nil
 }
 
-func (r *scriptedRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
+func (r *scriptedRoleRepo) ListByUserID(
+	_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string, _ query.ListParams,
+) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -549,7 +551,7 @@ func (r *errRoleRepo) CountByRole(_ context.Context, _ tenant.TenantID, _ string
 	return 0, r.countErr
 }
 
-func (r *errRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (r *errRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -565,7 +567,9 @@ func (r *errRoleRepo) GetByID(_ context.Context, _ tenant.TenantID, id string) (
 	return &domain.Role{ID: id}, nil
 }
 
-func (r *errRoleRepo) ListByUserID(_ context.Context, _ tenant.TenantID, _ string, _ query.ListParams) ([]*domain.Role, error) {
+func (r *errRoleRepo) ListByUserID(
+	_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string, _ query.ListParams,
+) ([]*domain.Role, error) {
 	return nil, nil
 }
 
@@ -647,7 +651,7 @@ func (r *errUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ str
 	return 0, nil
 }
 
-func (r *errUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+func (r *errUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) (*domain.User, error) {
 	panic("errUserRepo.GetByIDInTenant: unexpected call")
 }
 

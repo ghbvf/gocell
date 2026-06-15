@@ -52,7 +52,17 @@ type UserRepository interface {
 	// This is the only by-PK read path after PR-3b. The former tenant-less
 	// GetByID carve-out (sessionrefresh) is replaced by deriving tenant from
 	// session.ValidateView.TenantID (sessions.tenant_id carrier, migration 054).
-	GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error)
+	//
+	// Row-visibility obligation (#1709, ROWSCOPE-REPO-PARAM-FUNNEL-01): vis is the
+	// principal-derived owner-dimension obligation (owner column = users.id). The
+	// subject-self read endpoint GET /api/v1/access/users/{id} passes the principal's
+	// RowVisibility (RowScopeSelf for a normal user) so a non-admin who passes the
+	// coarse route gate still only sees their own row — a non-self id IDOR-collapses
+	// to ErrAuthUserNotFound. SYSTEM callers (login / refresh / validate / admin)
+	// pass tenant.SystemRowVisibility() (RowScopeTenant, no owner predicate). vis is
+	// validated fail-closed; RowScopeAll fail-closes with RowScopeAllUnsupportedError
+	// (no cross-tenant accesscore read path).
+	GetByIDInTenant(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*domain.User, error)
 	GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error)
 	Delete(ctx context.Context, t tenant.TenantID, id string) error
 

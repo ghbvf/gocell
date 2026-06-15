@@ -359,7 +359,7 @@ func (r *stubUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID, _ st
 	panic("not implemented")
 }
 
-func (r *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
+func (r *stubUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, id string) (*domain.User, error) {
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
@@ -544,7 +544,7 @@ func (r *capturingUserRepo) BumpAuthzEpoch(_ context.Context, _ tenant.TenantID,
 	return 0, nil
 }
 
-func (r *capturingUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, id string) (*domain.User, error) {
+func (r *capturingUserRepo) GetByIDInTenant(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, id string) (*domain.User, error) {
 	if r.getErr != nil {
 		return nil, r.getErr
 	}
@@ -1061,7 +1061,9 @@ type scopeCapturingUserRepo struct {
 
 var _ ports.UserRepository = (*scopeCapturingUserRepo)(nil)
 
-func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, _ tenant.TenantID, _ string) (*domain.User, error) {
+func (r *scopeCapturingUserRepo) GetByIDInTenant(
+	ctx context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string,
+) (*domain.User, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
 	if r.user == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",

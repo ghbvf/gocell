@@ -95,7 +95,7 @@ func seedActiveUser(t testing.TB, store *mem.Store, userID string) {
 	// Idempotent: a roster pre-seed (seedTestUserRoster) plus explicit per-test
 	// seeds (assignActiveAdmin, table-case setups) can both target the same user;
 	// skip if already present so the second Create does not hit ErrAuthUserDuplicate.
-	if _, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, userID); err == nil {
+	if _, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), userID); err == nil {
 		return
 	}
 	u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
@@ -159,7 +159,7 @@ func TestNewService_InvalidatorRequired(t *testing.T) {
 // list for userID.
 func assertRoleAssigned(t *testing.T, store *mem.Store, userID, roleID string) {
 	t.Helper()
-	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, userID)
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, tenant.SystemRowVisibility(), userID)
 	for _, r := range roles {
 		if r.ID == roleID {
 			return
@@ -367,7 +367,7 @@ func TestService_Revoke(t *testing.T) {
 			if !tc.wantErr {
 				require.NoError(t, err)
 				// Verify removal persisted.
-				roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, tc.userID)
+				roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, tenant.SystemRowVisibility(), tc.userID)
 				for _, r := range roles {
 					assert.NotEqual(t, tc.roleID, r.ID, "role %s should not be assigned to user %s after revoke", tc.roleID, tc.userID)
 				}
@@ -502,8 +502,10 @@ func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID,
 	return r.inner.GetByID(ctx, t, id)
 }
 
-func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
-	return r.inner.GetByUserID(ctx, t, userID)
+func (r *scopeCapturingRoleRepo) GetByUserID(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string,
+) ([]*domain.Role, error) {
+	return r.inner.GetByUserID(ctx, t, vis, userID)
 }
 
 func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
@@ -536,8 +538,8 @@ func (r *scopeCapturingRoleRepo) EffectiveAdminExists(ctx context.Context, t ten
 	return r.inner.EffectiveAdminExists(ctx, t)
 }
 
-func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test stub matching interface signature
-	return r.inner.ListByUserID(ctx, t, userID, params)
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test stub matching interface signature
+	return r.inner.ListByUserID(ctx, t, vis, userID, params)
 }
 
 // TestAssignRole_IsRLSScoped asserts that Assign wraps the AssignToUser call in
@@ -616,7 +618,7 @@ func TestRevoke_WrongTenant_Returns404NotSilentSuccess(t *testing.T) {
 
 	// Proof the no-op did not leak as success: the role still exists in the
 	// user's real tenant.
-	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, "usr-wrongtenant")
+	roles, _ := store.RoleRepository().GetByUserID(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-wrongtenant")
 	stillHeld := false
 	for _, r := range roles {
 		if r.ID == "editor" {

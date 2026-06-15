@@ -1369,7 +1369,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	assert.Equal(t, bcrypt.MinCost, hashCost)
 
 	// Role assigned.
-	roles, err := roleRepo.GetByUserID(ctx, testTenantID, user.ID)
+	roles, err := roleRepo.GetByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), user.ID)
 	require.NoError(t, err)
 	require.Len(t, roles, 1)
 	assert.Equal(t, "admin", roles[0].Name)

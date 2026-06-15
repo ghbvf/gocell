@@ -20,14 +20,27 @@ import (
 //
 // # Sealed construction
 //
-// RowVisibility's fields are unexported and the only constructor is
-// NewRowVisibility, which validates the obligation. A populated RowVisibility{…}
-// literal is not expressible outside this package, so a caller cannot FORGE a
-// RowScopeAll (cross-tenant) obligation by struct literal — mirroring the
+// RowVisibility's fields are unexported, so a populated RowVisibility{…} literal
+// is not expressible outside this package — a caller cannot FORGE an obligation
+// (in particular a RowScopeAll cross-tenant one) by struct literal, mirroring the
 // errcode.PublicDetail / outbox.Entry sealed-construction pattern. Combined with
 // RowVisibility being a mandatory typed positional parameter on the repo
 // interfaces (ROWSCOPE-REPO-PARAM-FUNNEL-01), "forget the obligation" and "forge
 // the obligation" are both compile-time impossible.
+//
+// Three in-package constructors mint a RowVisibility — all validated, none
+// forgeable from outside:
+//   - NewRowVisibility(scope, subject) — the self / device / tenant constructor.
+//     It REJECTS RowScopeAll (see next section).
+//   - SystemRowVisibility() — a named alias for the tenant-wide (no owner
+//     predicate) obligation used by trusted SYSTEM reads. It is NOT a privilege
+//     escalation (RowScopeTenant is already mintable via NewRowVisibility) but it
+//     IS a footgun on subject-facing paths, so its production callsites are pinned
+//     by archtest SYSTEM-ROWVISIBILITY-CALLSITE-01: subject-self / device handlers
+//     must derive the obligation from the principal, never call it. See the
+//     SystemRowVisibility doc below.
+//   - NewCrossTenantVisibility().Visibility() — the sealed RowScopeAll
+//     (cross-tenant) funnel, audited at its sole super-admin caller (next section).
 //
 // # RowScopeAll is sealed behind CrossTenantVisibility (#1760)
 //
@@ -120,6 +133,41 @@ func NewRowVisibility(scope RowScope, subject string) (RowVisibility, error) {
 		return RowVisibility{}, err
 	}
 	return v, nil
+}
+
+// SystemRowVisibility returns the tenant-wide (no owner predicate) obligation for
+// trusted SYSTEM reads: auth-internal credential / identity lookups (login,
+// refresh, validate, rbac enforcement, admin provisioning) that are scoped by
+// tenant but carry NO subject-owner dimension. It is the named, greppable
+// alternative to inlining NewRowVisibility(RowScopeTenant, "") at every such call
+// site — the name declares "this read is intentionally unfiltered within the
+// tenant", distinguishing a deliberate system read from a forgotten obligation.
+//
+// # FOOTGUN: never use on subject-scoped read paths
+//
+// Subject-self endpoints (e.g. GET /api/v1/access/users/{id}) and device-scoped
+// endpoints MUST derive the obligation from the authenticated principal via
+// runtime/auth.Principal.RowVisibility(ctx), NOT by calling SystemRowVisibility().
+// Calling SystemRowVisibility() on a subject-self or device read silently removes
+// the owner predicate and leaks every row in the tenant to ANY authenticated caller
+// who passes the coarse PDP route gate — the row-scope PEP (the only defense-in-
+// depth control on the data layer) is bypassed entirely.
+//
+// Legitimate SYSTEM callers (reads that are intentionally tenant-wide, not
+// subject-scoped): session login credential lookup, session refresh/validate
+// re-fetch, rbac enforcement (HasRole / ListRoles called by the auth middleware),
+// admin provisioning reads, and credential-mutation re-fetch paths
+// (ChangePassword, BumpAuthzEpoch). These reads are all performed by the framework
+// or privileged internal paths that carry no end-user subject dimension.
+//
+// It is NOT a privilege escalation: RowScopeTenant is already mintable via
+// NewRowVisibility, and the resulting obligation applies no owner predicate
+// (Allows is always true, SQLPredicate emits nothing) — identical to the
+// pre-obligation behavior of these tenant-scoped reads. The returned value is
+// canonical-valid (RowScopeTenant with an empty subject), so a PEP applies it
+// unchanged.
+func SystemRowVisibility() RowVisibility {
+	return RowVisibility{scope: RowScopeTenant, subject: ""}
 }
 
 // CrossTenantVisibility is the sealed carrier of the cross-tenant (RowScopeAll)

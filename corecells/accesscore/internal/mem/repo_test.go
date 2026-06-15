@@ -62,7 +62,7 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 	for r := range readers {
 		wg.Go(func() {
 			for range iterations {
-				_, _ = repo.GetByIDInTenant(ctx, testTenantID, "uid-w0-i0")
+				_, _ = repo.GetByIDInTenant(ctx, testTenantID, tenant.SystemRowVisibility(), "uid-w0-i0")
 				_, _ = repo.GetByUsername(ctx, testTenantID, "user-w0-i0")
 			}
 			_ = r
@@ -85,7 +85,7 @@ func TestUserRepository_NotFoundErrors(t *testing.T) {
 		{
 			name: "get by id in tenant",
 			call: func() error {
-				_, err := repo.GetByIDInTenant(ctx, testTenantID, "usr-missing")
+				_, err := repo.GetByIDInTenant(ctx, testTenantID, tenant.SystemRowVisibility(), "usr-missing")
 				return err
 			},
 			wantCode:     errcode.ErrAuthUserNotFound,
@@ -166,7 +166,7 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 		wg.Go(func() {
 			for range iterations {
 				_, _ = repo.GetByID(ctx, testTenantID, "role-0")
-				_, _ = repo.GetByUserID(ctx, testTenantID, "uid-w0-i0")
+				_, _ = repo.GetByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), "uid-w0-i0")
 			}
 			_ = r
 		})
@@ -270,7 +270,7 @@ func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 	ctx := context.Background()
 
-	roles, err := repo.GetByUserID(ctx, testTenantID, "user-with-no-roles")
+	roles, err := repo.GetByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), "user-with-no-roles")
 	require.NoError(t, err)
 	require.NotNil(t, roles, "empty result must be non-nil slice")
 	require.Empty(t, roles)
@@ -279,7 +279,7 @@ func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
 func TestRoleRepository_ListByUserID_NoRoles(t *testing.T) {
 	repo := NewStore(clock.Real()).RoleRepository()
 
-	roles, err := repo.ListByUserID(context.Background(), testTenantID, "user-with-no-roles", query.ListParams{
+	roles, err := repo.ListByUserID(context.Background(), testTenantID, tenant.SystemRowVisibility(), "user-with-no-roles", query.ListParams{
 		Limit: 2,
 		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 	})
@@ -311,7 +311,7 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	page, err := repo.ListByUserID(ctx, testTenantID, "user-1", params)
+	page, err := repo.ListByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), "user-1", params)
 	require.NoError(t, err)
 	require.Len(t, page, 3, "repository returns Limit+1 rows for page-result hasMore detection")
 	assert.Equal(t, []string{"admin", "operator", "viewer"}, []string{page[0].Name, page[1].Name, page[2].Name})
@@ -322,7 +322,7 @@ func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
 	assert.Equal(t, "write", got.Permissions[0].Action, "listed roles must be cloned from repository state")
 
 	params.CursorValues = []any{"operator", "role-b"}
-	nextPage, err := repo.ListByUserID(ctx, testTenantID, "user-1", params)
+	nextPage, err := repo.ListByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), "user-1", params)
 	require.NoError(t, err)
 	require.Len(t, nextPage, 1)
 	assert.Equal(t, "viewer", nextPage[0].Name)
@@ -335,7 +335,7 @@ func TestRoleRepository_ListByUserID_InvalidCursorParams(t *testing.T) {
 	// SeedUserRoleAssignment bypasses the F4 user-in-tenant check.
 	repo.SeedUserRoleAssignment(testTenantID, "user-1", "role-a")
 
-	_, listErr := repo.ListByUserID(ctx, testTenantID, "user-1", query.ListParams{
+	_, listErr := repo.ListByUserID(ctx, testTenantID, tenant.SystemRowVisibility(), "user-1", query.ListParams{
 		Limit:        2,
 		Sort:         []query.SortColumn{{Name: "name", Direction: query.SortASC}},
 		CursorValues: []any{"admin", "role-a"},

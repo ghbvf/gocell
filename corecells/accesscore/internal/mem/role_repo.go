@@ -99,12 +99,31 @@ func (r *RoleRepository) GetByID(ctx context.Context, t tenant.TenantID, id stri
 	return &clone, nil
 }
 
-// GetByUserID returns all roles assigned to userID within the tenant. Safe to
-// call both inside and outside a RunInTx closure; see the lock contract on
-// UserRepository.
-func (r *RoleRepository) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+// GetByUserID returns all roles assigned to userID within the tenant.
+// vis enforces the owner-dimension obligation (owner column = role_assignments.user_id).
+// A non-matching userID under RowScopeSelf/Device collapses to an empty slice
+// (IDOR-safe: a user cannot enumerate roles belonging to a different user).
+// Safe to call both inside and outside a RunInTx closure; see the lock contract
+// on UserRepository.
+func (r *RoleRepository) GetByUserID(
+	ctx context.Context,
+	t tenant.TenantID,
+	vis tenant.RowVisibility,
+	userID string,
+) ([]*domain.Role, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ports.RowScopeAllUnsupportedError()
+	}
+	// Owner-dimension enforcement: all returned roles belong to userID, so a
+	// self/device obligation that does not match userID collapses to empty.
+	if !vis.Allows(userID) {
+		return []*domain.Role{}, nil
 	}
 	if !r.store.inLiveTx(ctx) {
 		r.store.mu.Lock()
@@ -237,10 +256,26 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(ctx context.Context, t tenant.T
 }
 
 // ListByUserID returns paginated roles for userID within the tenant sorted per
-// params. Safe to call both inside and outside a RunInTx closure.
+// params. vis enforces the owner-dimension obligation (owner column =
+// role_assignments.user_id); a non-matching userID collapses to an empty page.
+// Safe to call both inside and outside a RunInTx closure.
 func (r *RoleRepository) ListByUserID(
-	ctx context.Context, t tenant.TenantID, userID string, params query.ListParams,
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string, params query.ListParams,
 ) ([]*domain.Role, error) {
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ports.RowScopeAllUnsupportedError()
+	}
+	// Owner-dimension enforcement: all roles in the result belong to userID, so
+	// a self/device obligation that does not match userID collapses to empty page.
+	if !vis.Allows(userID) {
+		return []*domain.Role{}, nil
+	}
 	roles, err := r.rolesByUserSnapshot(ctx, t, userID)
 	if err != nil {
 		return nil, err

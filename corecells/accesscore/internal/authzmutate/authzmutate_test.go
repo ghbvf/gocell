@@ -189,7 +189,7 @@ func TestApply_AllMutations(t *testing.T) {
 			seedUser(t, store, "usr-1", tt.initialStatus)
 
 			// Track initial epoch.
-			u, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, "usr-1")
+			u, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-1")
 			require.NoError(t, err)
 			initialEpoch := u.AuthzEpoch()
 
@@ -201,7 +201,7 @@ func TestApply_AllMutations(t *testing.T) {
 			require.NoError(t, err)
 
 			// Read back from repo.
-			got, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, "usr-1")
+			got, err := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), "usr-1")
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantStatus, got.Status(), "Status mismatch")

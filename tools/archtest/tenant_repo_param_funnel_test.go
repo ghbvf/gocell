@@ -100,7 +100,9 @@ import (
 const (
 	// Derived from PlatformModulePath (ARCHTEST-MODULE-PATH-FUNNEL-01) so a
 	// module rename updates exactly one place — never a bare literal.
-	tenantPkgPath      = PlatformFrameworkModulePath + "/pkg/tenant"
+	tenantPkgPath = PlatformFrameworkModulePath + "/pkg/tenant"
+	// accesscorePortsPkg is also reused by rowscope_repo_param_funnel_test.go
+	// (ROWSCOPE-REPO-PARAM-FUNNEL-01, #1709) — update both files if this path changes.
 	accesscorePortsPkg = PlatformCellsModulePath + "/accesscore/internal/ports"
 	configcorePortsPkg = PlatformCellsModulePath + "/configcore/internal/ports"
 	// tenantRepoParamFixPkg is a relative load path for go/packages — NOT a

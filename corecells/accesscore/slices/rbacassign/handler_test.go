@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 func setupHandler(t *testing.T) (http.Handler, *mem.Store) {
@@ -60,7 +61,9 @@ func seedActiveAdminInStore(t *testing.T, store *mem.Store, userID string) {
 	t.Helper()
 	// Idempotent on the user row: setupHandler pre-seeds a roster, so the user
 	// may already exist; only the admin-role assignment is unconditional.
-	if _, gerr := store.UserRepository().GetByIDInTenant(context.Background(), testTenantID, userID); gerr != nil {
+	if _, gerr := store.UserRepository().GetByIDInTenant(
+		context.Background(), testTenantID, tenant.SystemRowVisibility(), userID,
+	); gerr != nil {
 		u, err := domain.NewUser(userID, userID+"@test.local", "$2a$12$hash", time.Now())
 		require.NoError(t, err)
 		u.ID = userID

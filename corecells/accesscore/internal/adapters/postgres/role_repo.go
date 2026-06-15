@@ -214,11 +214,34 @@ func (r *PGRoleRepo) GetByID(ctx context.Context, t tenant.TenantID, id string) 
 
 // GetByUserID returns all roles assigned to the user in the given tenant.
 // Returns an empty slice when the user has no roles (mirrors mem behavior).
-func (r *PGRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+// vis enforces the owner-dimension obligation (owner column = role_assignments.user_id).
+func (r *PGRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string) ([]*domain.Role, error) {
 	if err := t.Validate(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgRoleInvalidTenant, err)
 	}
-	rows, err := r.db.Query(ctx, selectRolesByUserIDSQL, string(t), userID)
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ports.RowScopeAllUnsupportedError()
+	}
+	pred, err := vis.SQLPredicate("user_id")
+	if err != nil {
+		return nil, err
+	}
+	// selectRolesByUserIDSQL binds $1=tenant_id, $2=user_id. The owner predicate
+	// appends $3=subject when pred.Apply (RowScopeSelf/Device). The column is
+	// qualified as ra.user_id (role_assignments alias) to remove dependence on the
+	// implicit "roles has no user_id" invariant — SQLPredicate rejects dotted
+	// identifiers, so the qualified fragment is built directly here while still
+	// binding the subject as a bound parameter ($3), never interpolated.
+	sqlStr := selectRolesByUserIDSQL
+	args := []any{string(t), userID}
+	if pred.Apply {
+		sqlStr += " AND ra.user_id = $3"
+		args = append(args, pred.Arg)
+	}
+	rows, err := r.db.Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "role_repo: get-by-user-id", err)
 	}
@@ -473,8 +496,16 @@ func (r *PGRoleRepo) EffectiveAdminExists(ctx context.Context, t tenant.TenantID
 // ListByUserID returns a paginated, sorted list of roles assigned to userID.
 // Mirrors the mem implementation: loads all roles for the user, then applies
 // query.Sort and query.ApplyCursor in Go.
-func (r *PGRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) {
-	roles, err := r.GetByUserID(ctx, t, userID)
+// vis enforces the owner-dimension obligation (owner column = role_assignments.user_id)
+// by delegating to GetByUserID which applies the predicate at query time.
+func (r *PGRoleRepo) ListByUserID(
+	ctx context.Context,
+	t tenant.TenantID,
+	vis tenant.RowVisibility,
+	userID string,
+	params query.ListParams,
+) ([]*domain.Role, error) {
+	roles, err := r.GetByUserID(ctx, t, vis, userID)
 	if err != nil {
 		return nil, fmt.Errorf("role_repo: list-by-user: %w", err)
 	}

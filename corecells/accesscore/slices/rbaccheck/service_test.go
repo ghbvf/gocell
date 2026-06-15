@@ -94,7 +94,7 @@ func TestService_HasRole(t *testing.T) {
 			svc, repo := newTestService(t)
 			tt.setup(repo)
 
-			has, err := svc.HasRole(tenantCtx(), tt.userID, tt.roleName)
+			has, err := svc.HasRole(tenantCtx(), tenant.SystemRowVisibility(), tt.userID, tt.roleName)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -115,13 +115,13 @@ func TestService_ListRoles(t *testing.T) {
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "operator")
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "viewer")
 
-	result, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{Limit: 2})
+	result, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.True(t, result.HasMore)
 	require.NotEmpty(t, result.NextCursor)
 
-	next, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
+	next, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{
 		Limit:  2,
 		Cursor: result.NextCursor,
 	})
@@ -133,7 +133,7 @@ func TestService_ListRoles(t *testing.T) {
 
 func TestService_ListRolesEmptyInput(t *testing.T) {
 	svc, _ := newTestService(t)
-	_, err := svc.ListRoles(tenantCtx(), "", query.PageParams{})
+	_, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "", query.PageParams{})
 	assert.Error(t, err)
 }
 
@@ -142,7 +142,7 @@ func TestService_ListRoles_ProdMode_BadCursor_ReturnsError(t *testing.T) {
 	repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
 	repo.SeedUserRoleAssignment(testTenantID, "usr-1", "admin")
 
-	_, err := svc.ListRoles(tenantCtx(), "usr-1", query.PageParams{
+	_, err := svc.ListRoles(tenantCtx(), tenant.SystemRowVisibility(), "usr-1", query.PageParams{
 		Limit:  50,
 		Cursor: "not-a-valid-cursor",
 	})
@@ -168,14 +168,16 @@ func (r *scopeCapturingRoleRepo) GetByID(ctx context.Context, t tenant.TenantID,
 	return r.inner.GetByID(ctx, t, id)
 }
 
-func (r *scopeCapturingRoleRepo) GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error) {
+func (r *scopeCapturingRoleRepo) GetByUserID(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string,
+) ([]*domain.Role, error) {
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
-	return r.inner.GetByUserID(ctx, t, userID)
+	return r.inner.GetByUserID(ctx, t, vis, userID)
 }
 
-func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
+func (r *scopeCapturingRoleRepo) ListByUserID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string, params query.ListParams) ([]*domain.Role, error) { //nolint:lll // test fake stub signature; cannot be meaningfully split
 	r.capturedScope, r.capturedOK = tenant.ScopeFromContext(ctx)
-	return r.inner.ListByUserID(ctx, t, userID, params)
+	return r.inner.ListByUserID(ctx, t, vis, userID, params)
 }
 
 func (r *scopeCapturingRoleRepo) Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error {
@@ -220,7 +222,7 @@ func TestListRoles_IsRLSScoped(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
-	result, err := svc.ListRoles(ctx, "usr-rls-list", query.PageParams{Limit: 10})
+	result, err := svc.ListRoles(ctx, tenant.SystemRowVisibility(), "usr-rls-list", query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 1)
 
@@ -247,7 +249,7 @@ func TestHasRole_IsRLSScoped(t *testing.T) {
 
 	// Use a context that carries ctxkeys.TenantID (post-auth path).
 	ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
-	has, err := svc.HasRole(ctx, "usr-rls", "admin")
+	has, err := svc.HasRole(ctx, tenant.SystemRowVisibility(), "usr-rls", "admin")
 	require.NoError(t, err)
 	assert.True(t, has)
 
@@ -255,4 +257,80 @@ func TestHasRole_IsRLSScoped(t *testing.T) {
 		"GetByUserID must run inside a scoped tx (tenant.ScopeFromContext must be set)")
 	assert.Equal(t, testTenantID, cap.capturedScope,
 		"GetByUserID scope must equal the request tenant")
+}
+
+// rbacSvcRowScopeCase describes one cell of a service × RowScopeSelf matrix.
+type rbacSvcRowScopeCase struct {
+	name       string
+	userID     string
+	subject    string // vis subject: match → equal to userID, mismatch → different
+	wantResult bool   // true → expect role(s) present; false → expect empty/false
+}
+
+func rbacSelfMatchAndMismatch(matchUserID, mismatchUserID, mismatchSubject string) []rbacSvcRowScopeCase {
+	return []rbacSvcRowScopeCase{
+		{
+			name:       "SelfMatch",
+			userID:     matchUserID,
+			subject:    matchUserID, // subject == userID → owner predicate matches
+			wantResult: true,
+		},
+		{
+			name:       "SelfMismatch_IDORCollapse",
+			userID:     mismatchUserID,
+			subject:    mismatchSubject, // subject ≠ userID → IDOR collapse
+			wantResult: false,
+		},
+	}
+}
+
+// TestService_HasRole_RowScope (#1709): table-driven proof that service threads
+// RowVisibility correctly to the repo PEP for HasRole.
+func TestService_HasRole_RowScope(t *testing.T) {
+	for _, tc := range rbacSelfMatchAndMismatch("usr-self-match", "usr-victim-role", "attacker-subject") {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+			repo.SeedUserRoleAssignment(testTenantID, tc.userID, "admin")
+
+			vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, tc.subject)
+			require.NoError(t, err)
+
+			ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+			has, err := svc.HasRole(ctx, vis, tc.userID, "admin")
+			require.NoError(t, err)
+			if tc.wantResult {
+				assert.True(t, has, "RowScopeSelf matching own userID must find the seeded role")
+			} else {
+				assert.False(t, has,
+					"RowScopeSelf mismatch must IDOR-collapse: attacker must not see victim's role")
+			}
+		})
+	}
+}
+
+// TestService_ListRoles_RowScope (#1709): table-driven proof that service threads
+// RowVisibility correctly to the repo PEP for ListRoles.
+func TestService_ListRoles_RowScope(t *testing.T) {
+	for _, tc := range rbacSelfMatchAndMismatch("usr-list-self-match", "usr-list-victim", "attacker-list-subject") {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, repo := newTestService(t)
+			repo.SeedRole(testTenantID, &domain.Role{ID: "admin", Name: "admin"})
+			repo.SeedUserRoleAssignment(testTenantID, tc.userID, "admin")
+
+			vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, tc.subject)
+			require.NoError(t, err)
+
+			ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+			result, err := svc.ListRoles(ctx, vis, tc.userID, query.PageParams{Limit: 10})
+			require.NoError(t, err)
+			if tc.wantResult {
+				assert.NotEmpty(t, result.Items,
+					"RowScopeSelf matching own userID must return the seeded role")
+			} else {
+				assert.Empty(t, result.Items,
+					"RowScopeSelf mismatch must IDOR-collapse to empty page for ListRoles")
+			}
+		})
+	}
 }

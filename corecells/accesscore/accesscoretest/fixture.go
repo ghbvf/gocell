@@ -176,9 +176,10 @@ func (f *AccessFixture) SeedAssignment(ctx context.Context, userID, roleID strin
 
 // GetUser returns the seeded user as a SeededUserView. External tests use
 // this to assert that service operations updated user state without needing
-// to import internal/domain.
+// to import internal/domain. Uses SystemRowVisibility — fixture reads are
+// trusted test infrastructure with no subject-self filtering.
 func (f *AccessFixture) GetUser(ctx context.Context, id string) (SeededUserView, error) {
-	u, err := f.bundle.UserRepository().GetByIDInTenant(ctx, f.TenantID, id)
+	u, err := f.bundle.UserRepository().GetByIDInTenant(ctx, f.TenantID, tenant.SystemRowVisibility(), id)
 	if err != nil {
 		return SeededUserView{}, err
 	}
@@ -194,9 +195,11 @@ func (f *AccessFixture) GetRole(ctx context.Context, id string) (SeededRoleView,
 	return SeededRoleView{ID: r.ID, Name: r.Name}, nil
 }
 
-// UserRoles returns the roles currently assigned to the given user.
+// UserRoles returns the roles currently assigned to the given user. Uses
+// SystemRowVisibility — fixture reads are trusted test infrastructure with no
+// subject-self filtering.
 func (f *AccessFixture) UserRoles(ctx context.Context, userID string) ([]SeededRoleView, error) {
-	roles, err := f.bundle.RoleRepository().GetByUserID(ctx, f.TenantID, userID)
+	roles, err := f.bundle.RoleRepository().GetByUserID(ctx, f.TenantID, tenant.SystemRowVisibility(), userID)
 	if err != nil {
 		return nil, err
 	}

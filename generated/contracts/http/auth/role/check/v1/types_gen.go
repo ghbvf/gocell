@@ -116,3 +116,16 @@ func (r Check403ErrorResponse) visitCheckResponse(ctx context.Context, w http.Re
 	httputil.WriteErrorWithStatus(ctx, w, 403, &r.Body)
 	return nil
 }
+
+// Check501ErrorResponse renders an HTTP 501 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Check501ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Check501ErrorResponse) visitCheckResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 501, &r.Body)
+	return nil
+}

@@ -589,7 +589,7 @@ type brokenRoleRepo struct {
 	err error
 }
 
-func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ string) ([]*domain.Role, error) {
+func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string) ([]*domain.Role, error) {
 	return nil, b.err
 }
 
@@ -1364,7 +1364,7 @@ func TestLogin_WrongPassword_CounterPersistsAcrossTx(t *testing.T) {
 		"the login write-tx must commit so the auto-lockout counter UPDATE persists "+
 			"(PG ROLLBACK on error would silently drop the counter — PR #585 review P1#1)")
 
-	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), uid)
 	require.NoError(t, err)
 	assert.Equal(t, 1, persisted.FailedLoginCount(),
 		"failed_login_count must advance to 1 even though Login returned 401")
@@ -1392,7 +1392,7 @@ func TestLogin_ThresholdReached_AccountLocks(t *testing.T) {
 		assert.True(t, ok, "tx #%d must commit so the counter advances", i+1)
 	}
 
-	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), uid)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusLocked, persisted.Status(),
 		"after %d wrong attempts the account must be auto-locked", accountlockout.Threshold)
@@ -1420,7 +1420,7 @@ func TestLogin_SuspendedUser_DoesNotIncrementCounter(t *testing.T) {
 		require.Error(t, err, "attempt %d: suspended user rejected", i+1)
 	}
 
-	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, uid)
+	persisted, err := userRepo.GetByIDInTenant(context.Background(), testTenantID, tenant.SystemRowVisibility(), uid)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusSuspended, persisted.Status(),
 		"suspended user must remain Suspended; the failure counter must not "+
@@ -1500,8 +1500,10 @@ func (r *scopeCapturingUserRepo) Create(ctx context.Context, t tenant.TenantID, 
 	return r.inner.Create(ctx, t, user)
 }
 
-func (r *scopeCapturingUserRepo) GetByIDInTenant(ctx context.Context, t tenant.TenantID, id string) (*domain.User, error) {
-	return r.inner.GetByIDInTenant(ctx, t, id)
+func (r *scopeCapturingUserRepo) GetByIDInTenant(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*domain.User, error) {
+	return r.inner.GetByIDInTenant(ctx, t, vis, id)
 }
 
 func (r *scopeCapturingUserRepo) GetByUsername(ctx context.Context, t tenant.TenantID, username string) (*domain.User, error) {

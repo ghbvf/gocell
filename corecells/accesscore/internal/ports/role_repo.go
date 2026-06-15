@@ -18,7 +18,17 @@ import (
 // (PG) / tenant filtering (mem) and reject an invalid tenant via tenant.Validate.
 type RoleRepository interface {
 	GetByID(ctx context.Context, t tenant.TenantID, id string) (*domain.Role, error)
-	GetByUserID(ctx context.Context, t tenant.TenantID, userID string) ([]*domain.Role, error)
+	// GetByUserID returns the roles assigned to userID within tenant t.
+	//
+	// Row-visibility obligation (#1709, ROWSCOPE-REPO-PARAM-FUNNEL-01): vis is the
+	// principal-derived owner-dimension obligation (owner column = role_assignments.user_id).
+	// The subject-self read endpoints GET /api/v1/access/roles/{userID} (list + check)
+	// pass the principal's RowVisibility so a non-admin who passes the coarse route
+	// gate still only reads their own roles — a non-self userID IDOR-collapses to an
+	// empty result. SYSTEM callers (rbac enforcement, admin provisioning) pass
+	// tenant.SystemRowVisibility(). vis is validated fail-closed; RowScopeAll
+	// fail-closes with RowScopeAllUnsupportedError.
+	GetByUserID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, userID string) ([]*domain.Role, error)
 	Create(ctx context.Context, t tenant.TenantID, role *domain.Role) error
 	// AssignToUser assigns the role to the user. Idempotent.
 	// Returns changed=true when the user did not previously hold the role
@@ -66,5 +76,15 @@ type RoleRepository interface {
 	EffectiveAdminExists(ctx context.Context, t tenant.TenantID) (bool, error)
 	// ListByUserID returns a paginated list of roles assigned to userID,
 	// sorted and filtered per params.
-	ListByUserID(ctx context.Context, t tenant.TenantID, userID string, params query.ListParams) ([]*domain.Role, error)
+	//
+	// Row-visibility obligation (#1709, ROWSCOPE-REPO-PARAM-FUNNEL-01): same
+	// owner-dimension contract as GetByUserID (owner column = role_assignments.user_id);
+	// a non-self userID under RowScopeSelf/Device collapses to an empty page.
+	ListByUserID(
+		ctx context.Context,
+		t tenant.TenantID,
+		vis tenant.RowVisibility,
+		userID string,
+		params query.ListParams,
+	) ([]*domain.Role, error)
 }
