@@ -181,9 +181,9 @@ const cursorInvalidMsg = "invalid cursor; restart from first page (client should
 // message. The reason is set as an InternalDetail under the "_" sentinel key so
 // it appears in server-side logs via Error() but is never emitted on the wire.
 //
-// Note: cursorInvalidExtra has been deleted (#1103). There is intentionally no
-// API to attach public details to a cursor-invalid error — this makes the
-// keyset-structure leak non-expressible.
+// By design there is no API to attach public wire details to a cursor-invalid
+// error — all diagnostic detail goes to WithInternal only, making keyset-structure
+// leaks non-expressible (#1103).
 func cursorInvalid(reason string) error {
 	return errcode.New(
 		errcode.KindInvalid,

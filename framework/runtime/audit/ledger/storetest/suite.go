@@ -387,6 +387,7 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_ByTraceID", func(t *testing.T) { runQueryByTraceID(t, factory) })
 	t.Run("Query_VisibilityObligations", func(t *testing.T) { runQueryVisibilityObligations(t, factory) })
 	t.Run("GetBySeq_VisibilityObligations", func(t *testing.T) { runGetBySeqVisibilityObligations(t, factory) })
+	t.Run("Query_InvalidCharFilter_Rejected", func(t *testing.T) { runQueryInvalidCharFilterRejected(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -1768,6 +1769,9 @@ func RunCrossTenantQueryConformance(t *testing.T, factory CrossTenantFactory) {
 	t.Run("CrossTenant_Filter_TraceID", func(t *testing.T) {
 		runCTFilterTraceID(t, factory)
 	})
+	t.Run("CrossTenant_InvalidCharFilter_Rejected", func(t *testing.T) {
+		runCTInvalidCharFilterRejected(t, factory)
+	})
 }
 
 // conformance tenant UUIDs for cross-tenant tests (distinct from the existing
@@ -2129,4 +2133,48 @@ func runCTFilterTraceID(t *testing.T, factory CrossTenantFactory) {
 	if len(traceYRows) != 1 {
 		t.Errorf("TraceID filter: got %d rows for trace-Y, want 1", len(traceYRows))
 	}
+}
+
+// runQueryInvalidCharFilterRejected asserts that Store.Query rejects an
+// AuditFilters with an unsafe char in ActorID (ValidateQueryFilters defense-in-depth,
+// #1742 / #2199). This is a cross-backend conformance case: every backend that
+// adds a Store.Query implementation must call ValidateQueryFilters or this test
+// catches the omission. At least one entry is seeded so MemStore's path actually
+// reaches the validation gate.
+func runQueryInvalidCharFilterRejected(t *testing.T, factory Factory) {
+	t.Helper()
+	store, _, fc, cleanup := factory(t)
+	defer cleanup()
+
+	// Seed one entry so the store is non-empty (anti-vacuity: rejection must come
+	// from ValidateQueryFilters, not from "zero rows returned").
+	e := NewEntryFixture(t, "invalid-filter-evt", "filter.test", "actor", fc.Now())
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// '@' is outside the SafeID charset — ValidateQueryFilters must reject it.
+	_, err := store.Query(context.Background(), tenant.TenantID(""),
+		mustRowVisibility(t, tenant.RowScopeTenant, ""),
+		ledger.AuditFilters{ActorID: "actor@injection"},
+		query.ListParams{Limit: 10, Sort: ledger.QuerySort()})
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+}
+
+// runCTInvalidCharFilterRejected asserts that CrossTenantQueryStore.QueryCrossTenant
+// rejects an AuditFilters with an unsafe char in ActorID (ValidateQueryFilters
+// defense-in-depth, F1 of #2199 review). Seeds real entries so the rejection is
+// non-vacuous (the store must actively reject, not merely return zero rows).
+func runCTInvalidCharFilterRejected(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	seed := ctSeed(epochAnchor) // seed real entries (anti-vacuity)
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	// '@' is outside the SafeID charset — ValidateQueryFilters must reject it.
+	_, err := store.QueryCrossTenant(context.Background(), ctv,
+		ledger.AuditFilters{ActorID: "actor@injection"},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }

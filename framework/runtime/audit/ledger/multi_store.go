@@ -76,6 +76,9 @@ func (m *MultiStore) Query(
 	if err := ValidateQueryFilters(filters); err != nil {
 		return nil, err
 	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: query requires a non-empty sort")

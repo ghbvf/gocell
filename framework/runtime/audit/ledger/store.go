@@ -117,11 +117,13 @@ func ValidateQueryTenant(t tenant.TenantID) error {
 }
 
 // ValidateQueryFilters is the single fail-closed filter validation chokepoint
-// shared by every Store.Query backend (MemStore / PG LedgerStore / MultiStore).
-// It is the defense-in-depth counterpart to ValidateQueryTenant: just as every
-// backend calls ValidateQueryTenant to reject a garbage tenant, every backend
-// calls ValidateQueryFilters to reject garbage ID filters before they reach SQL
-// predicates or logs (CWE-117 log injection + unbounded input to SQL predicate).
+// shared by every Store.Query backend (MemStore / PG LedgerStore / MultiStore)
+// AND by every CrossTenantQueryStore.QueryCrossTenant backend (MemCrossTenantStore
+// / AuditCrossTenantStore). It is the defense-in-depth counterpart to
+// ValidateQueryTenant: just as every backend calls ValidateQueryTenant to reject a
+// garbage tenant, every backend calls ValidateQueryFilters to reject garbage ID
+// filters before they reach SQL predicates or logs (CWE-117 log injection +
+// unbounded input to SQL predicate).
 //
 // Rules per field:
 //   - ActorID, SubjectID, TraceID: validated via idutil.SafeID.Validate (SafeID

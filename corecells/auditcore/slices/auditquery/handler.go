@@ -74,11 +74,18 @@ func auditQueryPolicy(r *http.Request) error {
 // ledger (all actors, or a specific other user). Non-admins and admin-self
 // queries are silent. Factored out of List for cognitive-complexity budget.
 //
+// The logger parameter is the Service's injected *slog.Logger (not the global
+// slog default). Using the injected logger ensures that tests capturing the
+// injected logger can observe — and therefore guard — the CWE-117 ordering
+// invariant (validate before log). Using the global slog default would make
+// the TestHandleQuery_FilterValidation_ValidationBeforeLogging test vacuous:
+// breadcrumbs would go to global slog while the test watches the injected handler.
+//
 // Super-admin access is excluded from this breadcrumb: the mandatory FR-007
 // slog.Error cross-tenant audit is emitted inside p.CrossTenantVisibility on the
 // super-admin path. Emitting a second admin-breadcrumb would be redundant and
 // confusing (a lower-severity Info record for a higher-privilege event).
-func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+func logAdminAuditQuery(ctx context.Context, logger *slog.Logger, p *auth.Principal, subject, actorIDFilter string) {
 	if p.HasRole(auth.RoleSuperAdmin) {
 		return // FR-007 audit already emitted inside p.CrossTenantVisibility
 	}
@@ -87,9 +94,9 @@ func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorID
 	}
 	switch {
 	case actorIDFilter == "":
-		slog.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
+		logger.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
 	case actorIDFilter != subject:
-		slog.InfoContext(ctx, "audit: admin querying other user",
+		logger.InfoContext(ctx, "audit: admin querying other user",
 			slog.String("admin", subject), slog.String("target_actor", actorIDFilter))
 	}
 }
@@ -197,7 +204,7 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 		return nil, err
 	}
 
-	logAdminAuditQuery(ctx, p, subject, req.ActorID)
+	logAdminAuditQuery(ctx, a.S.logger, p, subject, req.ActorID)
 
 	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the mask obligation
 	// from the row-visibility scope ONCE here — it gates both the query predicates
@@ -380,22 +387,36 @@ func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
 //
 // Empty values are allowed ("no filter"). Violations yield KindInvalid /
 // ErrValidationFailed → HTTP 400 (already declared in contract.yaml).
+//
+// INTENTIONAL TWO-LAYER DESIGN: this function is the wire-boundary gate (layer 1).
+// It runs at the handler before any logging (CWE-117: never log unvalidated input)
+// and returns a client-facing 400. ledger.ValidateQueryFilters is the store-layer
+// defense-in-depth chokepoint (layer 2) shared by all backends including
+// CrossTenantQueryStore, guarding non-handler callers such as internal tooling,
+// direct store access, and cross-tenant read paths. Both layers call the same
+// idutil.SafeID validation and MaxMetadataIDLen cap — they must NOT be merged
+// (the handler layer must stay at the wire boundary; the ledger layer must stay
+// at the store entry). The apparent duplication is load-bearing security layering.
 func validateIDFilters(req *auditlist.Request) error {
 	if err := idutil.SafeID(req.ActorID).Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid query parameter: actorId format")
+			"invalid query parameter: actorId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "actorId")))
 	}
 	if err := idutil.SafeID(req.SubjectID).Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid query parameter: subjectId format")
+			"invalid query parameter: subjectId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "subjectId")))
 	}
 	if err := idutil.SafeID(req.TraceID).Validate(); err != nil {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid query parameter: traceId format")
+			"invalid query parameter: traceId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "traceId")))
 	}
 	if len(req.EventType) > idutil.MaxMetadataIDLen {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"invalid query parameter: eventType too long")
+			"invalid query parameter: eventType too long",
+			errcode.WithInternal(errcode.InternalAttr("field", "eventType")))
 	}
 	return nil
 }

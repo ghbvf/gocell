@@ -589,10 +589,14 @@ func TestCursorCodec_Decode_MaxLengthBoundary(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	// Must not be rejected by the length guard.
-	if reasonAttr, ok := ecErr.FindAttr("reason"); ok {
-		if s, ok := reasonAttr.Value().(string); ok {
-			assert.NotEqual(t, "cursor token exceeds maximum length", s)
-		}
-	}
+	// Regression guard (#1103): reason must not be in public Details (wire-leaking).
+	// After #1103 reason lives in WithInternal (key "_"), so FindAttr on public
+	// Details must always return ok==false.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	// The boundary semantic: an at-limit token is NOT rejected by the length guard,
+	// so its error reason must not be "cursor token exceeds maximum length".
+	// After #1103 the reason is in Error() (server-log surface), not in public details.
+	assert.NotContains(t, ecErr.Error(), "cursor token exceeds maximum length",
+		"at-limit cursor must not be rejected by the length guard; only the signature check fails")
 }
