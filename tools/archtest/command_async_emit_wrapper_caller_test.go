@@ -25,6 +25,7 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,30 +75,42 @@ func commandEmitExitCallee(p *Pass, call *ast.CallExpr) (name string, ok bool) {
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
-//   - Upstream (wrapper existence): HARD — the generated EmitAsync wrapper is
-//     codegen + golden-locked (command.tmpl render golden + `gocell generate
-//     contract --all --verify` in CI). A wrapper that fails to bake DispatchID /
-//     the typed *Request cannot be expressed through the generated path.
-//   - Downstream (this archtest): MEDIUM — caller-allowlist type-aware scan, a
+// Label convention matches the ADR §4 matrix row (上游 Medium / 下游 Hard) and the
+// sibling CALLER-family godocs (EMIT-FUNNEL / DISPATCH-CALLER): Upstream = this
+// caller-allowlist archtest; Downstream = the structural backstop.
+//
+//   - Upstream (caller-allowlist, this archtest): MEDIUM — type-aware scan, a
 //     GO-LANGUAGE CEILING, not a deferred TODO. Go cannot express "only
 //     generated/contracts/command/** may call this exported func". Same permanent
 //     ceiling documented for COMMAND-ASYNC-EMIT-FUNNEL-01 /
 //     COMMAND-ASYNC-DISPATCH-CALLER-01 / #851 / #893 / #1282. No fake Hard-upgrade
 //     issue is opened.
+//   - Downstream (wrapper existence, codegen + golden): HARD — the generated
+//     EmitAsync / EmitAsyncFromIdempotencyKey wrappers are codegen + golden-locked
+//     (command.tmpl render golden + `gocell generate contract --all --verify` in
+//     CI). A wrapper that fails to bake DispatchID / the typed *Request cannot be
+//     expressed through the generated path (symmetric to the Hard half of
+//     COMMAND-GEN-FUNNEL-SOLE-EMITTER-01).
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
 //  1. generated/contracts/command/** packages ARE sanctioned callers but are
 //     excluded by Production() scope regardless — so the Production scan never
 //     observes a sanctioned caller; the anti-vacuity anchor scans generated/
-//     separately for the wrapper's existence.
+//     separately for both wrappers' existence.
 //  2. Both exits have live production callers post-migration (#2059): EmitAsync
 //     (device bootstrap + cert-renewal reconcile producers) and
 //     EmitAsyncFromIdempotencyKey (the devicecmd HTTP EnqueueAsync bridge, #1610).
 //     Both arms are therefore non-vacuous and both typed wrappers are generated —
-//     neither is dead code. The anti-vacuity anchor below checks the EmitAsync
-//     wrapper's existence, which is sufficient to prove the codegen funnel is wired.
-//  3. Build-tag-gated production files under a non-default tag are not scanned by
+//     neither is dead code. The anti-vacuity anchor below checks BOTH wrappers'
+//     existence so a template regression dropping either arm fails closed.
+//  3. _test.go files — including build-tag-gated tests such as `integration` — are
+//     EXCLUDED from the Production() scan (TypedOpts.Tests defaults false). A direct
+//     command.EmitAsync / EmitAsyncFromIdempotencyKey call in a test helper or
+//     integration test is therefore NOT caught; such calls should still be migrated
+//     to the generated wrapper for production↔test funnel consistency (the #2059
+//     migration covers the iotdevice durable integration test for this reason).
+//  4. Build-tag-gated production files under a non-default tag are not scanned by
 //     the default-tags Production scan (same posture as the sibling funnels).
 func TestCommandAsyncEmitCaller01(t *testing.T) {
 	t.Parallel()
@@ -143,48 +156,64 @@ func TestCommandAsyncEmitCaller01(t *testing.T) {
 		return d
 	})
 
-	// Anti-vacuity: at least one generated command package must declare an
-	// EmitAsync wrapper that calls runtime command.EmitAsync, else the funnel
-	// guards nothing — the Production scan above can never observe a sanctioned
-	// caller because generated/ is excluded from Production() scope.
-	if !observedGeneratedEmitWrapperPresent(t) {
+	// Anti-vacuity: a generated command package must declare BOTH wrappers
+	// (EmitAsync + EmitAsyncFromIdempotencyKey), each calling its runtime exit,
+	// else the funnel guards nothing — the Production scan above can never observe
+	// a sanctioned caller because generated/ is excluded from Production() scope.
+	// Both arms are checked so a template regression dropping either wrapper (whose
+	// exit this rule also locks) fails closed, not just the EmitAsync arm.
+	if missing := missingGeneratedEmitWrappers(t); len(missing) > 0 {
 		diags = append(diags, Diagnostic{
 			Message: "COMMAND-ASYNC-EMIT-CALLER-01 anti-vacuity: no generated command package " +
-				"declares an EmitAsync wrapper calling runtime command.EmitAsync. Either the " +
-				"producer codegen (command.tmpl) was removed/renamed or the scanner regressed — " +
-				"the wrapper funnel guards nothing without it.",
+				"declares a wrapper calling runtime command." + strings.Join(missing, " / command.") +
+				". Either the producer codegen (command.tmpl) was removed/renamed or the scanner " +
+				"regressed — the wrapper funnel guards nothing without it.",
 		})
 	}
 
 	Report(t, "COMMAND-ASYNC-EMIT-CALLER-01", diags)
 }
 
-// observedGeneratedEmitWrapperPresent verifies a generated command package
-// declares an EmitAsync free function whose body calls runtime command.EmitAsync
-// — the structural anti-vacuity anchor (the Production scan cannot see generated
-// packages because they are excluded from Production() scope).
-func observedGeneratedEmitWrapperPresent(t *testing.T) bool {
+// missingGeneratedEmitWrappers returns the runtime emit-exit names for which NO
+// generated command package declares a same-named wrapper free function whose
+// body calls that runtime exit — the structural anti-vacuity anchor (the
+// Production scan cannot see generated packages because they are excluded from
+// Production() scope). Both exits are checked so a template regression dropping
+// either wrapper is caught; an empty result means both wrappers are wired.
+func missingGeneratedEmitWrappers(t *testing.T) []string {
 	t.Helper()
-	var found bool
+	expected := []string{"EmitAsync", "EmitAsyncFromIdempotencyKey"}
+	found := map[string]bool{}
 	_ = Run(t, Typed(TypedOpts{}, []string{"./generated/contracts/command/..."}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
 		for _, file := range p.Files {
 			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				if fd.Recv != nil || fd.Name == nil || fd.Name.Name != "EmitAsync" {
+				if fd.Recv != nil || fd.Name == nil {
 					return
 				}
+				wrapperName := fd.Name.Name
+				if wrapperName != "EmitAsync" && wrapperName != "EmitAsyncFromIdempotencyKey" {
+					return
+				}
+				// The wrapper must delegate to the SAME-named runtime exit.
 				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
-					if name, ok := commandEmitExitCallee(p, call); ok && name == "EmitAsync" {
-						found = true
+					if name, ok := commandEmitExitCallee(p, call); ok && name == wrapperName {
+						found[wrapperName] = true
 					}
 				})
 			})
 		}
 		return nil
 	})
-	return found
+	var missing []string
+	for _, name := range expected {
+		if !found[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 // TestCommandAsyncEmitCaller01_RedFixture verifies the scanner fires against a

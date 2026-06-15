@@ -274,7 +274,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 // into, the ConsumerBase that idempotency-guards the device-registered
 // subscriber, the relay that polls the outbox store and dispatches command
 // entries in-process, and the CellTxManager the bootstrap slice uses to wrap
-// command.EmitAsync in a real transaction in durable mode (#1698).
+// cmdenqueue.EmitAsync in a real transaction in durable mode (#1698).
 type commandRelaySubsystem struct {
 	bootstrapEmitter   outbox.CellEmitter
 	bootstrapTxManager persistence.CellTxManager
@@ -318,7 +318,7 @@ func buildCommandRelaySubsystem(
 	} else {
 		store = adapterpg.NewOutboxStore(pool.DB(), clk)
 		writer = adapterpg.NewOutboxWriter(clk)
-		// Durable mode: wrap PG TxManager so command.EmitAsync gets a real tx in
+		// Durable mode: wrap PG TxManager so cmdenqueue.EmitAsync gets a real tx in
 		// ctx — adapterpg.OutboxWriter.Write calls persistence.TxFromContext[pgx.Tx]
 		// and returns ErrAdapterPGNoTx without one.
 		bootstrapTxManager = persistence.WrapForCell(adapterpg.NewTxManager(pool))
