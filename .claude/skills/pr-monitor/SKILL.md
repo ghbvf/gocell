@@ -1,20 +1,17 @@
 ---
 name: pr-monitor
-description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（ship/fix 收尾自动启动；每 tick 无状态，只读 label + 机器块）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭时报告终止。"
+description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。无状态单 tick（每次调用只查一次，只读 label + 机器块）；ship/fix 收尾延迟约 30min 单次启动 auto 模式（跑完即止，非循环），手动单次默认 report，也可由 `/loop` 持续观察；human-in-loop 可随时中断。pr-status/ready、PR 关闭或熔断时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
 ---
 
 # pr-monitor — PR 状态单 tick 检查器（fix 侧）
 
-> **适用场景**：ship/fix 推完 PR 后，持续观察 review/check 侧进展，在满足条件时自动（或提示人工）调用 `/fix`。
+> **适用场景**：ship/fix 推完 PR 后，单次观察 review/check 侧进展，在满足条件时自动（或提示人工）调用 `/fix`。
 >
-> **loop 模型（简单）**：本技能是**无状态单 tick**——每次调用只做一次检查就返回。循环交给内建 `/loop` 原语：
-> `/loop 20m /pr-monitor <PR#>` 每 20min 重放同一行命令再调用一次（flag 随命令行原样保留，无需跨 tick 携带状态）。
-> **不自己调 ScheduleWakeup、不携带 tick payload、不写文件**——每 tick 的状态全部从 PR 实时读取（label + 最新机器块）。
-> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`；约 2 次无进展即转人工（轻提示，不加跨 tick 计数）。
+> **单 tick 模型（简单）**：本技能是**无状态单 tick**——每次调用只做一次检查就返回，**不自己调 ScheduleWakeup、不携带 tick payload、不写文件**，状态全部从 PR 实时读取（label + 最新机器块）。
 >
-> **如何启动**：ship/fix 收尾**自动启动** `/loop 20m /pr-monitor <PR#>`（交互会话内常驻；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管）。手动单次 `/pr-monitor <PR#>` 也合法——只做一次检查就返回。
+> **如何启动**：ship/fix 收尾**延迟约 30 分钟后单次启动** `/pr-monitor <PR#> --mode=auto`——给 review/check 时间响应后单次检查，**跑完即止、之后交人工**（非 /loop 循环、无轮巡上限）。交互会话用一次延迟唤醒（ScheduleWakeup，跑完不再调度）实现；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管。手动单次 `/pr-monitor <PR#>` 也合法（默认 report 模式）；需持续观察可自行 `/loop <interval> /pr-monitor <PR#>`（用户 Esc 停）。
 
 ---
 
@@ -49,7 +46,7 @@ esac; shift; done
 
 ## §2 每 tick 逻辑（顶层控制流）
 
-每次 `/pr-monitor` 调用（= 一个 `/loop` tick）按序执行，做完即返回：
+每次 `/pr-monitor` 调用（一次检查；若由 `/loop` 驱动则为一个 tick）按序执行，做完即返回：
 
 1. **读 PR 状态（一次 gh，兼存在性校验）**：
    ```bash
@@ -58,7 +55,7 @@ esac; shift; done
    ```
 2. **§3.1 终止检查**（优先；命中即打印结束语并返回，提示用户停 `/loop`）。
 3. 按 `$ROLE` 分支：`--role=review` → §4；否则按 `$MODE` → report（§3.2）或 auto（§3.3-3.6）。
-4. 返回（**不调 ScheduleWakeup**）；下一 tick 由 `/loop` 调度。
+4. 返回（pr-monitor 本身**不调 ScheduleWakeup**）；单次调用到此结束，之后交人工（若由 `/loop` 驱动则下一 tick 由 `/loop` 调度）。
 
 > **无 cursor / 无时间戳追增量**：「有无待修 findings」由 **label + 最新机器块**判定（§3.2/§3.3）——`pr-status/needs-fix` 在即「review 给了结论待修」，幂等可重报，不怕 `/loop` 重放。
 
@@ -74,7 +71,7 @@ esac; shift; done
 | PR state != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），请停止 /loop" |
 | §3.3 熔断触发 | block `cycle.exhausted` / round≥3 | 见 §3.3 |
 
-> 无 tickCount 跨 tick 状态——ready/closed 是唯一正常出口；约 2 次无进展即转人工（轻提示，不加计数），嫌久直接停 `/loop`。
+> ready/closed/熔断 是终止出口。ship/fix 经延迟单次调用本技能、跑完即止（无 loop、无轮巡计数）；手动 `/loop` 持续观察时可随时 Esc 停。
 
 ### §3.2 report 模式（默认）
 
@@ -125,9 +122,9 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 Skill("fix", args="<N>")
 ```
 
-> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级 instruction-level 自限双重收窄 + 3 轮熔断 + 约 2 次无进展转人工。
+> auto 模式的 `Skill("fix")` 是 pr-monitor 单次调用内的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级 instruction-level 自限双重收窄 + 3 轮 review↔fix 熔断（Hard 机器读）兜底。
 
-fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
+fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；pr-monitor 本次单次调用到此结束——后续 `/pr-review --check` 进展由 fix 收尾自己再调度的延迟单次检查接力（baton 交接），不在本次调用内等待。
 
 ### §3.5 不自动修的情况（报告 + 建议人工，不 AskUserQuestion）
 

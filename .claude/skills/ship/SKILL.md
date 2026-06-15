@@ -161,7 +161,7 @@ GoCell 六维度 = 架构合规 / 安全 / 测试 / 运维可观测 / DX / 产�
 7. **CI 异步收敛（非阻塞收尾，切 label 后执行）**：按 `issues` B5 ② 等 CI 收敛 + 失败回 `fix` 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `.github/project-template/pr-comment.md` 的 `<!-- pm:ci -->` 模板）：
    - 全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。
    - **追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[{"name":"…","url":"…"},…],"passedChecks":<n>,"totalChecks":<m>}'`（verdict 由 failedChecks 派生、round carry），输出追加到 pm:ci body 末尾，再走 `issues` B4 贴评论。
-8. **自动启动监控**：所有评论 + label 操作完成后，**自动启动** `/loop 20m /pr-monitor <PR#>`（review-side；每 20min 调一次**无状态**的 `/pr-monitor` 跟 review 进展，约 2 次无进展即转人工，human-in-loop 可随时停）。交互会话内常驻；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管。
+8. **延迟单次启动监控**：所有评论 + label 操作完成后，**延迟约 30 分钟后单次启动** `/pr-monitor <PR#> --mode=auto`（review-side；给 review 时间响应后**单次**检查——auto 模式在 needs-fix + 机器可判定 Cx1/Cx2 + 未熔断 时自动 dispatch `/fix`（不再 report+等人确认），Cx3+ 仍转人工；单次跑完即止、之后交人工，非 /loop 循环）。交互会话用一次延迟唤醒实现；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管。
 
 > **收尾不变式（artifact-before-trigger）**：OOS 留痕（建 issue + 贴 pm:oos）必须在切 `needs-review-again`（步骤 6）**之前**完成——切 label 即触发 review-side 执行器，pm:ship 的 `🚦 OUT_OF_SCOPE` 指针在那一刻必须已指向真实的 pm:oos/issue，不得悬空；CI（步骤 7）异步在后，不阻塞 backlog 落地。`/fix` 4.6 step 3 同序（pm:fix → OOS 留痕 → 切 `needs-check-fix` → CI）。
 

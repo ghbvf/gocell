@@ -129,7 +129,7 @@
 /ship <issue>
   实施 → PR 创建 → 贴 pr-status/in-progress
   → ship：内置 6 维 reviewer + /fix Cx1/Cx2 → 贴 pm:ship → 冲突预检 + CI 绿
-  → 切 pr-status/needs-review-again → 自动启动 pr-monitor 监听交接（首审唯一使用点）
+  → 切 pr-status/needs-review-again（首审唯一使用点）→ 延迟 ~30min 单次启动 pr-monitor --mode=auto 监听交接（needs-fix 自动 /fix；单次跑完即止）
 
 [review 轮] codex review 或 /pr-review <PR#>
   → 贴 findings 评论（codex / pm:pr-review）
