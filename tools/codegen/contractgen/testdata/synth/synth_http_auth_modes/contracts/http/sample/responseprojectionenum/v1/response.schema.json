@@ -1,15 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "http.sample.responseprojection.v1.response",
+  "title": "http.sample.responseprojectionenum.v1.response",
   "type": "object",
   "properties": {
     "data": {
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "label": { "type": "string" },
-        "score": { "type": "integer" },
-        "tags": { "type": "array", "items": { "type": "string" } }
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive", "pending"]
+        },
+        "label": { "type": "string" }
       },
       "required": ["id"]
     }

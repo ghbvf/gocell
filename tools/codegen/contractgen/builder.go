@@ -1462,7 +1462,7 @@ func schemaToDTOs(rootName string, s *Schema) ([]DTOSpec, error) {
 // for minimum/maximum, *bool for optional booleans). Splitting would only
 // push the same shape × pointer-policy matrix into helpers.
 //
-//nolint:gocognit // structural schema-shape × pointer-policy matrix; see godoc above.
+//nolint:gocognit,cyclop // structural schema-shape × pointer-policy matrix; see godoc above.
 func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 	dto := DTOSpec{Name: name, Doc: s.Title}
 
@@ -1503,6 +1503,23 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 		// (responseProjection item DTOs) uses it so the projected column map keys
 		// equal the wire field names.
 		field.BareJSONTag = key
+		// OmitEmpty mirrors the ",omitempty" presence so types.tmpl can emit a
+		// conditional zero-value guard in the generated ToMap, making the projection
+		// path wire-equivalent to the struct json.Marshal path.
+		field.OmitEmpty = !required
+		// ZeroValueExpr provides structured zero-value information for optional
+		// fields whose underlying kind cannot be inferred from GoType alone.
+		// Named string enum types (e.g. "DeviceStatus") have GoType != "string"
+		// but their underlying kind is still string — omitEmptyCheck would
+		// otherwise emit "!= nil" (the default/pointer branch), producing
+		// uncompilable code. We derive ZeroValueExpr from the schema type here,
+		// where schema type information is available.
+		// Only set for optional (OmitEmpty) fields; required fields never hit
+		// omitEmptyCheck so leaving ZeroValueExpr empty is safe.
+		if !required && prop.Type == "string" && len(prop.Enum) > 0 {
+			// Named string enum: underlying kind is string, zero value is "".
+			field.ZeroValueExpr = `""`
+		}
 		// Structured projection-item metadata (F5): nestedName is the generated
 		// item DTO name when the property is an object or array-of-object (empty
 		// for scalars / arrays-of-scalar). Captured here so applyResponseProjection

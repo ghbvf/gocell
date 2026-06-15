@@ -732,6 +732,14 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		// drops the rewrite (re-exposing a full *ResponseData view) trips the golden.
 		{"http.sample.responseprojection.v1", "synth_http_auth_modes_responseprojection"},
 		{"http.sample.responseprojectionlist.v1", "synth_http_auth_modes_responseprojectionlist"},
+		// responseprojectionenum (#2159): byte-locks the fix for optional string enum
+		// fields in responseProjection DTOs. The fixture adds status (string enum,
+		// optional) alongside id (string, required) and label (string, optional).
+		// Before the fix, omitEmptyCheck emitted "!= nil" for the named string type
+		// (ResponseDataStatus), producing uncompilable code. The golden locks that
+		// the generated ToMap contains `!= ""` for the enum field, matching the
+		// underlying string zero value.
+		{"http.sample.responseprojectionenum.v1", "synth_http_auth_modes_responseprojectionenum"},
 	}
 
 	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
@@ -888,6 +896,127 @@ func TestRenderTypes_EnumValueQuoted(t *testing.T) {
 	const want = `PayloadOutcomeWeird PayloadOutcome = "a\"b\\c"`
 	if !strings.Contains(norm, want) {
 		t.Errorf("enum value not Go-literal quoted.\n got: %s\nwant substring: %s", norm, want)
+	}
+}
+
+// TestOmitEmptyCheck_NamedStringEnum locks the F1 fix (#2159): omitEmptyCheck
+// must emit `!= ""` for an optional named string enum field (GoType = named
+// type, ZeroValueExpr = `""`), not `!= nil` (the pre-fix default/pointer
+// branch which produces uncompilable code for a non-nil-able named string).
+//
+// This test exercises omitEmptyCheck in isolation (no full render pass) so a
+// regression is caught before the golden test even runs. The builder-derive path
+// (collectDTOs → ZeroValueExpr = `""` for optional string enum) is exercised by
+// TestRender_Golden_Synth_HTTPAuthModes/http.sample.responseprojectionenum.v1.
+func TestOmitEmptyCheck_NamedStringEnum(t *testing.T) {
+	cases := []struct {
+		name          string
+		field         DTOField
+		wantSubstring string
+		wantNotNil    bool // true = must NOT contain "!= nil"
+	}{
+		{
+			name: "named string enum with ZeroValueExpr",
+			field: DTOField{
+				Name:          "Status",
+				GoType:        "ResponseDataStatus",
+				ZeroValueExpr: `""`,
+				OmitEmpty:     true,
+			},
+			wantSubstring: `i.Status != ""`,
+			wantNotNil:    true,
+		},
+		{
+			name: "plain string without ZeroValueExpr",
+			field: DTOField{
+				Name:      "Label",
+				GoType:    "string",
+				OmitEmpty: true,
+			},
+			wantSubstring: `i.Label != ""`,
+			wantNotNil:    false, // string never hits != nil anyway
+		},
+		{
+			name: "pointer type without ZeroValueExpr falls back to != nil",
+			field: DTOField{
+				Name:      "Nested",
+				GoType:    "*ResponseNested",
+				OmitEmpty: true,
+			},
+			wantSubstring: `i.Nested != nil`,
+			wantNotNil:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := omitEmptyCheck(tc.field)
+			if !strings.Contains(got, tc.wantSubstring) {
+				t.Errorf("omitEmptyCheck(%+v) = %q, want substring %q", tc.field, got, tc.wantSubstring)
+			}
+			if tc.wantNotNil && strings.Contains(got, "!= nil") {
+				t.Errorf("omitEmptyCheck(%+v) = %q: must NOT contain '!= nil' for named string enum", tc.field, got)
+			}
+		})
+	}
+}
+
+// TestRender_OptionalEnumToMap_CompilesAndGuards exercises the full builder →
+// render pipeline for an optional string enum field in a responseProjection DTO,
+// asserting that: (1) renderTypes succeeds (no gofmt error that would indicate
+// uncompilable code like "!= nil" on a named string), (2) the generated ToMap
+// contains `!= ""` for the enum field, and (3) does NOT contain `!= nil` for
+// that field. This is the regression test for the latent bug where optional
+// string enum in responseProjection produced uncompilable code.
+func TestRender_OptionalEnumToMap_CompilesAndGuards(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.sample.responseprojectionenum.v1"]
+	if contract == nil {
+		t.Fatal("http.sample.responseprojectionenum.v1 not found in synth fixture")
+	}
+
+	spec, err := buildContractSpec(absTestDir, p, "http.sample.responseprojectionenum.v1")
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+
+	// renderTypes applies gofmt; if the template emitted "!= nil" for the named
+	// string type ResponseDataStatus, gofmt would still succeed (it is syntactically
+	// valid Go), but the generated package would not compile. We therefore check
+	// the rendered source substring directly.
+	content, err := renderTypes(spec)
+	if err != nil {
+		t.Fatalf("renderTypes: %v (gofmt rejected the output)", err)
+	}
+	src := string(content)
+
+	// The enum field "status" is optional — its ToMap guard must use the string
+	// zero value, not a pointer nil-check.
+	if !strings.Contains(src, `i.Status != ""`) {
+		t.Errorf("generated ToMap should contain `i.Status != \"\"` for optional string enum field, got:\n%s", src)
+	}
+	// Explicit regression: the old code emitted "!= nil"; that must be absent for
+	// the Status field. (Other pointer fields like *ResponseDataNested would still
+	// emit != nil, but this fixture has none.)
+	// We check that the exact bad expression is not present anywhere in the ToMap.
+	if strings.Contains(src, "i.Status != nil") {
+		t.Errorf("generated ToMap must NOT contain `i.Status != nil` for named string enum: got:\n%s", src)
+	}
+
+	// Sanity: the named type and const block are present.
+	norm := strings.Join(strings.Fields(src), " ")
+	if !strings.Contains(norm, "type ResponseDataStatus string") {
+		t.Errorf("expected named enum type ResponseDataStatus, got:\n%s", src)
 	}
 }
 
@@ -2423,5 +2552,47 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 	// A responseProjection contract must be skippable: specEmitsTS must return false.
 	if specEmitsTS(spec) {
 		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
+	}
+}
+
+// TestOmitEmptyCheck pins the type-dispatch logic of omitEmptyCheck, which is
+// the funcMap function that generates the zero-value guard in the ToMap method.
+// The receiver variable is always "i", matching the template.
+//
+// The bool branch is a defensive fallback: optional bools in EmitToMap DTOs
+// are always *bool (the builder converts them in collectDTOs), so "bool" is
+// not reachable from the production builder pipeline. The test still exercises
+// the branch directly so a future change to the plain-bool path produces a
+// compilable expression (not `i.X != nil` which would be a type error on bool).
+func TestOmitEmptyCheck(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		goType string
+		want   string
+	}{
+		{"string", "string", `i.X != ""`},
+		{"int64", "int64", `i.X != 0`},
+		{"float64", "float64", `i.X != 0`},
+		// bool: plain bool omitempty → `if i.X {` equivalent; false is omitted.
+		// In practice optional bools are *bool, but the branch must be compilable.
+		{"bool", "bool", `i.X`},
+		{"slice of string", "[]string", `len(i.X) > 0`},
+		{"slice of pointer", "[]*ResponseItem", `len(i.X) > 0`},
+		{"pointer to struct", "*ResponseMeta", `i.X != nil`},
+		{"any", "any", `i.X != nil`},
+		// []T and *T coverage for other numeric-like types via default branch.
+		{"pointer to bool", "*bool", `i.X != nil`},
+		{"any interface", "interface{}", `i.X != nil`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := DTOField{Name: "X", GoType: tc.goType}
+			got := omitEmptyCheck(f)
+			if got != tc.want {
+				t.Errorf("omitEmptyCheck(%q) = %q, want %q", tc.goType, got, tc.want)
+			}
+		})
 	}
 }

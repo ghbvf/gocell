@@ -172,6 +172,23 @@ type DTOField struct {
 	// Used by the generated toMap() (EmitToMap DTOs) so the projection column map
 	// keys match the wire JSON field names exactly.
 	BareJSONTag string
+	// OmitEmpty is true when the field carries ",omitempty" in its JSON tag (i.e.
+	// the field is not in the schema's required list). The generated ToMap
+	// (EmitToMap DTOs) emits a conditional entry for these fields so the
+	// projection path omits zero-value optional fields, matching the struct JSON
+	// serialization path.
+	OmitEmpty bool
+	// ZeroValueExpr is the Go expression that represents the zero value for this
+	// field's underlying kind, used by omitEmptyCheck to emit a correct "!= zero"
+	// guard in the generated ToMap. It is set by the builder for types whose
+	// underlying kind is not directly readable from GoType — in particular, named
+	// string enum types (GoType = "FooStatus", underlying = string, zero = "").
+	// When non-empty, omitEmptyCheck uses this expression directly instead of
+	// falling back to the GoType-string heuristic (which would wrongly emit
+	// "!= nil" for named string types, producing uncompilable code).
+	// Scalar primitives (string, int64, float64, bool, []T) leave this empty and
+	// are handled by the existing GoType-string branches in omitEmptyCheck.
+	ZeroValueExpr string
 	// GoType is the Go type expression, e.g. "string", "int64", "*ResponseData".
 	GoType string
 	// ItemDTO is the generated resource item DTO name when this field is an

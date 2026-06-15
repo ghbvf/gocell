@@ -1,0 +1,20 @@
+id: http.sample.responseprojectionenum.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L0
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  http:
+    method: GET
+    path: /api/v1/sample/projection-enum
+    successStatus: 200
+    noContent: false
+    responseProjection: true
+    responses:
+      404:
+        description: Not Found
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json
