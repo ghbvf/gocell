@@ -689,16 +689,19 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 //     broker is actually wired (runtime concern, enforced by the bootstrap
 //     runtime gate). This causes TOPO-13 to over-constrain future broker-backed
 //     split topologies (US7 #1967 reconciliation tracked separately).
-//  3. When pub and sub are BOTH Remote from this assembly's perspective,
-//     pubLoc.IsLocal() != subLoc.IsLocal() evaluates to false != false == false
-//     and TOPO-13 does NOT fire. This is correct per-assembly behavior: if this
-//     assembly is not the host of either party, the cross-process concern belongs
-//     to the assembly that IS the publisher's local host — TOPO-13 will fire
-//     there. Intentional non-firing confirmed by TestTOPO13_BothRemote_NotFired.
+//
+// Cross-process detection is per-assembly and self-contained: a pub/sub pair is
+// cross-process unless both cells share a process within THIS assembly — i.e.
+// both colocated, or both remote at the SAME endpoint (deployed together). Two
+// remote cells at DIFFERENT endpoints are different processes and DO fire (see
+// isCrossProcessEventPair); each assembly fail-closes its own cross-process
+// events rather than relying on another assembly to catch them.
 //
 // Skip conditions (delegated to other rules or out-of-scope):
 //   - assembly has no topology.remote (all-colocated → no cross-process boundary)
 //   - contract kind != event (HTTP/command/etc. are out of scope for broker rule)
+//   - contract lifecycle != active (draft/deprecated events are not served, so
+//     they carry no live broker requirement — same active-only scope as ADV-05)
 //   - framework-owned contract (provider-agnostic; c.Owner().IsFramework())
 //   - publisher cell not found in project.Cells (external actor — topology governs cells only)
 //   - ClassifyCell(asm, publisher).IsMissing() (not in this assembly — TOPO-11 covers reachability)
@@ -746,6 +749,11 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 	if cellvocab.ContractKind(c.Kind) != cellvocab.ContractEvent {
 		return nil
 	}
+	// Only active contracts are served — draft/deprecated events carry no live
+	// broker requirement (same active-only scope as ADV-05's dead-event check).
+	if c.Lifecycle != lifecycleActive {
+		return nil
+	}
 	// Framework-owned contracts are provider-agnostic — skip.
 	if c.Owner().IsFramework() {
 		return nil
@@ -772,16 +780,15 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 		if subLoc.IsMissing() {
 			continue // subscriber not in this assembly — TOPO-11 covers reachability
 		}
-		if pubLoc.IsLocal() != subLoc.IsLocal() {
-			// One side is Local, the other is Remote — cross-process boundary.
+		if isCrossProcessEventPair(pubLoc, subLoc) {
 			results = append(results, v.newError(
 				codeTOPO13, IssueForbidden,
 				assemblyFile(asm),
 				"topology",
 				fmt.Sprintf(
 					"assembly %q splits event contract %q across processes:"+
-						" publisher cell %q and subscriber cell %q are on opposite sides"+
-						" of the process boundary;"+
+						" publisher cell %q and subscriber cell %q are not co-located"+
+						" in the same process;"+
 						" the in-memory EventBus cannot deliver events across processes"+
 						" — a real broker is required",
 					asm.ID, c.ID, pub, sub,
@@ -795,6 +802,30 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 		}
 	}
 	return results
+}
+
+// isCrossProcessEventPair reports whether an event published by a cell at pubLoc
+// and consumed by a cell at subLoc crosses a process boundary within the
+// assembly being checked — in which case the in-memory EventBus cannot deliver
+// it and a real broker is required. Two cells share a process iff they are both
+// colocated (this assembly's process) OR both remote at the SAME endpoint
+// (deployed together). Any other combination (one local + one remote, or two
+// remotes at DIFFERENT endpoints) is cross-process.
+//
+// Callers pre-filter Missing locations (TOPO-11 covers reachability), so only
+// Local/Remote pairs reach here. Endpoint comparison is raw string equality:
+// non-normalized but equivalent endpoint forms compare unequal and therefore
+// fail-closed (over-flag rather than under-flag), the safe direction.
+func isCrossProcessEventPair(pubLoc, subLoc metadata.CellLocation) bool {
+	if pubLoc.IsLocal() && subLoc.IsLocal() {
+		return false // both in this assembly's process
+	}
+	if pubLoc.IsRemote() && subLoc.IsRemote() {
+		pubEP, _ := pubLoc.RemoteEndpoint()
+		subEP, _ := subLoc.RemoteEndpoint()
+		return pubEP != subEP // same remote endpoint = same process
+	}
+	return true // one local + one remote → cross-process
 }
 
 // validateTOPO12 is the INTERIM fail-close gate for topology.remote.

@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/healthz"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/config"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	obshealthz "github.com/ghbvf/gocell/framework/runtime/observability/healthz"
@@ -135,10 +136,16 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 // Split topology additionally requires explicit broker publisher/subscriber
 // injection; a nil publisher or subscriber causes phase2InitPubSub to fall back
 // to the in-memory EventBus regardless of StorageBackend, so this gate also
-// rejects that combination. Residual blind-spot: StorageBackend==postgres with
-// a hand-injected in-memory publisher/subscriber instance is not caught here;
-// that is prevented by the #1940 eventtransport funnel + depguard at the
-// composition root layer.
+// rejects that combination. The nil check uses validation.IsNilInterface so a
+// typed-nil interface value (e.g. WithPublisher((*T)(nil))) cannot slip past a
+// bare == nil comparison — the same defense SharedDeps applies to its
+// Publisher/Subscriber. Residual blind-spot: StorageBackend==postgres with a
+// hand-injected non-nil in-memory publisher/subscriber instance is not caught
+// here (non-nil ≠ real broker); that hole is closed by the
+// COREBUNDLE-EVENTBUS-FUNNEL-01 depguard (in-memory bus is import-banned in the
+// production composition roots, reachable only via eventtransport.Resolve's
+// non-postgres branch). Promoting this gate to a sealed broker-kind check is
+// tracked as a follow-up (#1965 review F2).
 //
 // Medium gate (Hard unreachable: compares two runtime values). Coarse proxy:
 // fires on ANY remote cell — even one with only sync (HTTP/CellTransport)
@@ -146,12 +153,12 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 // per-assembly signal, not a per-contract signal (US7 #1967 refines this).
 // Fail-closed: an un-injected controlPlaneTopology reads as memory, so a split
 // topology that forgot to declare postgres storage is correctly rejected; a nil
-// publisher or subscriber is also rejected (phase2 would degrade to in-memory
-// bus). See also DeploymentTopology.HasRemoteCells for the blind-spot note.
+// (or typed-nil) publisher or subscriber is also rejected (phase2 would degrade
+// to in-memory bus). See also DeploymentTopology.HasRemoteCells for the blind-spot.
 func (b *Bootstrap) validateSplitTopologyBroker() error {
 	if b.deploymentTopology.HasRemoteCells() &&
 		(b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres ||
-			b.publisher == nil || b.subscriber == nil) {
+			validation.IsNilInterface(b.publisher) || validation.IsNilInterface(b.subscriber)) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgSplitTopologyRequiresBroker,
 			errcode.WithInternal(errcode.InternalAttr("storageBackend", b.controlPlaneTopology.StorageBackend())))

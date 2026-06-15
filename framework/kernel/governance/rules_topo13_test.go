@@ -285,25 +285,14 @@ func TestTOPO13_PublisherRemote_SubscriberLocal(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 }
 
-// TestTOPO13_BothRemote_NotFired documents and locks the intentional per-assembly
-// skip when BOTH publisher and subscriber are in topology.remote from THIS
-// assembly's perspective.
-//
-// Per-assembly semantics: when this assembly is not the local host of either the
-// pub or the sub, pubLoc.IsLocal() == false and subLoc.IsLocal() == false, so
-// the cross-process condition (IsLocal() != IsLocal()) evaluates false — TOPO-13
-// does NOT fire here. The violation is detected by whichever assembly IS the
-// publisher's local host. This is correct non-missing behavior, not a detector
-// defect. See validateTOPO13 godoc Blind-spots §3.
-func TestTOPO13_BothRemote_NotFired(t *testing.T) {
+// topo13BothRemoteProject builds a split assembly where pub and sub are BOTH in
+// topology.remote (at the given endpoints) plus a colocated bystander so the
+// assembly counts as split.
+func topo13BothRemoteProject(pubEndpoint, subEndpoint string) *metadata.ProjectMeta {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB
-	// A third bystander cell is colocated so the assembly counts as split
-	// (has topology.remote), but both pub and sub are in remote from this
-	// assembly's perspective.
 	bystander := "cellC"
-
-	pm := &metadata.ProjectMeta{
+	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			pub:       topoTestCell(pub),
 			sub:       topoTestCell(sub),
@@ -320,22 +309,67 @@ func TestTOPO13_BothRemote_NotFired(t *testing.T) {
 		Journeys: map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{pub, sub, bystander}, metadata.TopologyMeta{
-				Colocated: []string{bystander}, // only bystander is local
+				Colocated: []string{bystander},
 				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: pub, Endpoint: "pub.svc:9090"},
-					{CellID: sub, Endpoint: "sub.svc:9090"},
+					{CellID: pub, Endpoint: pubEndpoint},
+					{CellID: sub, Endpoint: subEndpoint},
 				},
 			}),
 		},
 	}
-	val := NewValidator(pm, ".", clock.Real())
-	got := findByCode(val.validateTOPO13(), codeTOPO13)
-	// INTENTIONAL zero findings: both pub and sub are Remote → IsLocal()==false for
-	// both → IsLocal()!=IsLocal() is false → no cross-process split detected from
-	// THIS assembly's viewpoint (per-assembly semantics; see godoc Blind-spots §3).
+}
+
+// TestTOPO13_BothRemote_DifferentEndpoint_Fired locks the fix for the both-remote
+// blind-spot: two remote cells at DIFFERENT endpoints are different processes, so
+// their cross-process event pub/sub DOES require a broker (each assembly
+// fail-closes its own cross-process events; #2188 review F1).
+func TestTOPO13_BothRemote_DifferentEndpoint_Fired(t *testing.T) {
+	pm := topo13BothRemoteProject("pub.svc:9090", "sub.svc:9090")
+	got := findByCode(NewValidator(pm, ".", clock.Real()).validateTOPO13(), codeTOPO13)
+	assert.NotEmpty(t, got,
+		"both-remote pub/sub at different endpoints are different processes → TOPO-13 must fire")
+}
+
+// TestTOPO13_BothRemote_SameEndpoint_NotFired: two remote cells at the SAME
+// endpoint are deployed together (same process), so in-memory delivery between
+// them is fine — no broker required, no finding.
+func TestTOPO13_BothRemote_SameEndpoint_NotFired(t *testing.T) {
+	pm := topo13BothRemoteProject("colo.svc:9090", "colo.svc:9090")
+	got := findByCode(NewValidator(pm, ".", clock.Real()).validateTOPO13(), codeTOPO13)
 	assert.Empty(t, got,
-		"both-remote pub/sub should produce 0 TOPO-13 findings from this assembly's perspective "+
-			"(per-assembly semantics: cross-process concern belongs to the publisher's host assembly)")
+		"both-remote pub/sub at the SAME endpoint share a process → TOPO-13 must NOT fire")
+}
+
+// TestTOPO13_DraftEvent_Skipped: a cross-process event whose contract is not
+// active (draft/deprecated) is not served, so it carries no live broker
+// requirement — TOPO-13 skips it (active-only scope, #2188 review F4).
+func TestTOPO13_DraftEvent_Skipped(t *testing.T) {
+	pub := metadatatest.CellIDCellA
+	sub := metadatatest.CellIDCellB
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			pub: topoTestCell(pub),
+			sub: topoTestCell(sub),
+		},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"event.data.v1": func() *metadata.ContractMeta {
+				c := topoTestContract("event.data.v1", "event", pub)
+				c.Lifecycle = "draft" // not active → not served
+				c.Endpoints.Subscribers = []string{sub}
+				return c
+			}(),
+		},
+		Journeys: map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{pub, sub}, metadata.TopologyMeta{
+				Colocated: []string{pub}, // pub local, sub remote → cross-process
+				Remote:    []metadata.TopologyRemoteEntry{{CellID: sub, Endpoint: "sub.svc:9090"}},
+			}),
+		},
+	}
+	got := findByCode(NewValidator(pm, ".", clock.Real()).validateTOPO13(), codeTOPO13)
+	assert.Empty(t, got, "draft (non-active) cross-process event must be skipped by TOPO-13")
 }
 
 // TestTOPO13_AntiVacuity: explicit RED/GREEN fixture pair confirming the

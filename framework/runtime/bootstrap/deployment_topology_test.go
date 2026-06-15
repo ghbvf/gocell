@@ -622,6 +622,11 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	// nonNilBus is used for the GREEN cases that require non-nil publisher/subscriber.
 	nonNilBus := eventbus.New(clock.Real())
 
+	// typedNilPub is a typed-nil interface value (non-nil interface header, nil
+	// concrete pointer). A bare == nil check would MISS it; the gate uses
+	// validation.IsNilInterface so it is correctly rejected (#2188 review F3).
+	var typedNilPub outbox.Publisher = (*eventbus.InMemoryEventBus)(nil)
+
 	cases := []struct {
 		name               string
 		deploymentTopology DeploymentTopology
@@ -688,6 +693,18 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			name:               "RED: split topology + zero Topology{} (StorageBackend==\"\") → rejected (fail-closed)",
 			deploymentTopology: splitDT,
 			controlPlaneTopo:   Topology{}, // true zero value — StorageBackend()==""
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			// F3: typed-nil publisher (non-nil interface, nil concrete pointer)
+			// must be rejected — a bare == nil check would let it pass and phase2
+			// would degrade to the in-memory bus. validation.IsNilInterface closes it.
+			name:               "RED: split topology + postgres + typed-nil publisher → rejected (F3 typed-nil)",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   postgresTopo,
+			publisher:          typedNilPub,
+			subscriber:         nonNilBus,
 			wantErr:            true,
 			wantErrCode:        errcode.ErrValidationFailed,
 		},

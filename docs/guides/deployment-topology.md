@@ -122,11 +122,12 @@ split topology in production. `topology.remote` is fail-closed until US4 lands.
 
 **Diagnosing broker status via `/readyz?verbose`**: the framework-level
 `Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres
-topology, the composition root (`cmd/corebundle`) overrides this value with the
-actual broker descriptor (e.g. `"rabbitmq:<amqp-url>"`). When interpreting the
-`event_bus` field in verbose readyz output, use the value reported by the
-composition root override — the framework default is not meaningful in a
-postgres deployment.
+topology, the composition root (`cmd/corebundle`) overrides the `event_bus`
+value with the broker kind — currently the literal `"rabbitmq"` (the broker
+*kind*, never the connection URL, which would leak the AMQP credentials). When
+interpreting the `event_bus` field in verbose readyz output, use the value
+reported by the composition root override — the framework default is not
+meaningful in a postgres deployment.
 
 ## ADR reference
 
