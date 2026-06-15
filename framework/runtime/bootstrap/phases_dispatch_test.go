@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	"github.com/ghbvf/gocell/framework/runtime/eventrouter"
 )
@@ -273,7 +274,7 @@ func TestDrainWebhookDispatchers_HappyPath_RegistersHandler(t *testing.T) {
 // phase6 drainWebhookDispatchers.
 func TestWithWebhookCircuitBreaker_StoresSettingsWithoutValidation(t *testing.T) {
 	t.Parallel()
-	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: 30 * time.Second, HalfOpenProbes: 2}
+	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: testtime.D30s, HalfOpenProbes: 2}
 
 	// Apply option — must NOT panic even though we haven't called phase6 yet.
 	b := New(clockmock.New(whFixedNow), WithWebhookCircuitBreaker(custom))
@@ -290,7 +291,7 @@ func TestDrainWebhookDispatchers_CustomCBSettings_Propagated(t *testing.T) {
 	dc := newWebhookDispatchCell()
 	s := buildPhaseStateWithWebhookCells(t, dc)
 
-	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: 30 * time.Second, HalfOpenProbes: 2}
+	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: testtime.D30s, HalfOpenProbes: 2}
 	clk := clockmock.New(whFixedNow)
 	b := New(clk,
 		WithConsumerBase(newTestConsumerBase(t)),

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // TestCircuitBreakerSettings_Defaults verifies that DefaultCircuitBreakerSettings
@@ -19,7 +20,7 @@ import (
 func TestCircuitBreakerSettings_Defaults(t *testing.T) {
 	s := DefaultCircuitBreakerSettings()
 	assert.Equal(t, 5, s.TripThreshold, "default TripThreshold must equal original const 5")
-	assert.Equal(t, 60*time.Second, s.OpenTimeout, "default OpenTimeout must equal original const 60s")
+	assert.Equal(t, testtime.D60s, s.OpenTimeout, "default OpenTimeout must equal original const 60s")
 	assert.Equal(t, 1, s.HalfOpenProbes, "default HalfOpenProbes must equal original const 1")
 }
 
@@ -83,7 +84,7 @@ func TestCircuitBreakerSettings_Validate_NonPositiveHalfOpenProbes(t *testing.T)
 // TestCircuitBreakerSettings_Validate_Valid verifies that a valid settings struct
 // passes validation without error.
 func TestCircuitBreakerSettings_Validate_Valid(t *testing.T) {
-	s := CircuitBreakerSettings{TripThreshold: 3, OpenTimeout: 30 * time.Second, HalfOpenProbes: 2}
+	s := CircuitBreakerSettings{TripThreshold: 3, OpenTimeout: testtime.D30s, HalfOpenProbes: 2}
 	require.NoError(t, s.Validate())
 }
 
@@ -102,7 +103,7 @@ func TestCircuitBreakerSettings_Validate_AboveUpperBound(t *testing.T) {
 		},
 		{
 			"OpenTimeout above max",
-			CircuitBreakerSettings{TripThreshold: 1, OpenTimeout: 2 * time.Hour, HalfOpenProbes: 1},
+			CircuitBreakerSettings{TripThreshold: 1, OpenTimeout: testtime.D2h, HalfOpenProbes: 1},
 			"OpenTimeout",
 		},
 		{
@@ -168,7 +169,7 @@ func TestWithCircuitBreakerSettings_CustomTripThreshold(t *testing.T) {
 
 	customSettings := CircuitBreakerSettings{
 		TripThreshold:  2,
-		OpenTimeout:    30 * time.Second,
+		OpenTimeout:    testtime.D30s,
 		HalfOpenProbes: 1,
 	}
 	d, err := NewDispatcher(
@@ -203,7 +204,7 @@ func TestWithCircuitBreakerSettings_CustomOpenTimeout(t *testing.T) {
 
 	customSettings := CircuitBreakerSettings{
 		TripThreshold:  2,
-		OpenTimeout:    10 * time.Second,
+		OpenTimeout:    testtime.D10s,
 		HalfOpenProbes: 1,
 	}
 	fc := clockmock.New(time.Unix(dispatchTestTS, 0))
@@ -219,7 +220,7 @@ func TestWithCircuitBreakerSettings_CustomOpenTimeout(t *testing.T) {
 	requireCircuitOpen(t, d.Handle(context.Background(), newTestEntry(t, []byte(`{}`))))
 
 	// Advancing less than OpenTimeout → still open.
-	fc.Advance(5 * time.Second)
+	fc.Advance(testtime.D5s)
 	requireCircuitOpen(t, d.Handle(context.Background(), newTestEntry(t, []byte(`{}`))))
 
 	// Advancing past OpenTimeout → half-open; probe is admitted, reaches server.

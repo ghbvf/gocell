@@ -34,6 +34,10 @@ const (
 	// HalfOpenProbes > 100 would flood a recovering endpoint with probes,
 	// defeating the purpose of the half-open state.
 	cbMaxHalfOpenProbes = 100
+	// defaultCBOpenTimeout is the default OpenTimeout used by
+	// DefaultCircuitBreakerSettings. A named const (not an inline literal) is
+	// required by the PROD-DURATION-CONST invariant for production duration values.
+	defaultCBOpenTimeout = 60 * time.Second
 )
 
 // noTenantSentinel is the breaker-key tenant segment for a tenantless (system)
@@ -139,7 +143,7 @@ type CircuitBreakerSettings struct {
 func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
 	return CircuitBreakerSettings{
 		TripThreshold:  5,
-		OpenTimeout:    60 * time.Second,
+		OpenTimeout:    defaultCBOpenTimeout,
 		HalfOpenProbes: 1,
 	}
 }
