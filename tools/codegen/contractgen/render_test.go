@@ -2425,3 +2425,33 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
 	}
 }
+
+// TestOmitEmptyCheck pins the type-dispatch logic of omitEmptyCheck, which is
+// the funcMap function that generates the zero-value guard in the ToMap method.
+// The receiver variable is always "i", matching the template.
+func TestOmitEmptyCheck(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		goType string
+		want   string
+	}{
+		{"string", "string", `i.X != ""`},
+		{"int64", "int64", `i.X != 0`},
+		{"float64", "float64", `i.X != 0`},
+		{"slice of string", "[]string", `len(i.X) > 0`},
+		{"slice of pointer", "[]*ResponseItem", `len(i.X) > 0`},
+		{"pointer to struct", "*ResponseMeta", `i.X != nil`},
+		{"any", "any", `i.X != nil`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := DTOField{Name: "X", GoType: tc.goType}
+			got := omitEmptyCheck(f)
+			if got != tc.want {
+				t.Errorf("omitEmptyCheck(%q) = %q, want %q", tc.goType, got, tc.want)
+			}
+		})
+	}
+}

@@ -1503,6 +1503,10 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 		// (responseProjection item DTOs) uses it so the projected column map keys
 		// equal the wire field names.
 		field.BareJSONTag = key
+		// OmitEmpty mirrors the ",omitempty" presence so types.tmpl can emit a
+		// conditional zero-value guard in the generated ToMap, making the projection
+		// path wire-equivalent to the struct json.Marshal path.
+		field.OmitEmpty = !required
 		// Structured projection-item metadata (F5): nestedName is the generated
 		// item DTO name when the property is an object or array-of-object (empty
 		// for scalars / arrays-of-scalar). Captured here so applyResponseProjection

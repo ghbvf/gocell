@@ -61,22 +61,38 @@ type ResponseDataItem struct {
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
 // Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set.
+// DTO's field set. Optional fields (omitempty) are only included when non-zero,
+// matching the struct json.Marshal serialization path.
 func (i ResponseDataItem) ToMap() map[string]any {
-	return map[string]any{
-		"id":            i.ID,
-		"eventId":       i.EventID,
-		"eventType":     i.EventType,
-		"actorId":       i.ActorID,
-		"subjectId":     i.SubjectID,
-		"tenantId":      i.TenantID,
-		"correlationId": i.CorrelationID,
-		"traceId":       i.TraceID,
-		"occurredAt":    i.OccurredAt,
-		"timestamp":     i.Timestamp,
-		"scope":         i.Scope,
-		"payload":       i.Payload,
+	m := map[string]any{
+		"id":        i.ID,
+		"eventId":   i.EventID,
+		"eventType": i.EventType,
+		"actorId":   i.ActorID,
+		"timestamp": i.Timestamp,
 	}
+	if i.SubjectID != "" {
+		m["subjectId"] = i.SubjectID
+	}
+	if i.TenantID != "" {
+		m["tenantId"] = i.TenantID
+	}
+	if i.CorrelationID != "" {
+		m["correlationId"] = i.CorrelationID
+	}
+	if i.TraceID != "" {
+		m["traceId"] = i.TraceID
+	}
+	if i.OccurredAt != "" {
+		m["occurredAt"] = i.OccurredAt
+	}
+	if i.Scope != "" {
+		m["scope"] = i.Scope
+	}
+	if i.Payload != nil {
+		m["payload"] = i.Payload
+	}
+	return m
 }
 
 // ListResponseObject is the typed response envelope for

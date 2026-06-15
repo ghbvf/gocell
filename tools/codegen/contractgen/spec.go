@@ -172,6 +172,12 @@ type DTOField struct {
 	// Used by the generated toMap() (EmitToMap DTOs) so the projection column map
 	// keys match the wire JSON field names exactly.
 	BareJSONTag string
+	// OmitEmpty is true when the field carries ",omitempty" in its JSON tag (i.e.
+	// the field is not in the schema's required list). The generated ToMap
+	// (EmitToMap DTOs) emits a conditional entry for these fields so the
+	// projection path omits zero-value optional fields, matching the struct JSON
+	// serialization path.
+	OmitEmpty bool
 	// GoType is the Go type expression, e.g. "string", "int64", "*ResponseData".
 	GoType string
 	// ItemDTO is the generated resource item DTO name when this field is an

@@ -62,17 +62,21 @@ const (
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
 // Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set.
+// DTO's field set. Optional fields (omitempty) are only included when non-zero,
+// matching the struct json.Marshal serialization path.
 func (i ResponseData) ToMap() map[string]any {
-	return map[string]any{
-		"deviceId":    i.DeviceID,
-		"certRef":     i.CertRef,
-		"status":      i.Status,
-		"notBefore":   i.NotBefore,
-		"notAfter":    i.NotAfter,
-		"epoch":       i.Epoch,
-		"renewalTime": i.RenewalTime,
+	m := map[string]any{
+		"deviceId":  i.DeviceID,
+		"certRef":   i.CertRef,
+		"status":    i.Status,
+		"notBefore": i.NotBefore,
+		"notAfter":  i.NotAfter,
+		"epoch":     i.Epoch,
 	}
+	if i.RenewalTime != "" {
+		m["renewalTime"] = i.RenewalTime
+	}
+	return m
 }
 
 // ResponseDataCertRef — deviceidentity.certificateIdentity

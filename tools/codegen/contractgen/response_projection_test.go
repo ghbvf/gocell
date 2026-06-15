@@ -156,3 +156,109 @@ func TestIndexOfDTO(t *testing.T) {
 		t.Errorf("indexOfDTO(Missing) = %d, want -1", got)
 	}
 }
+
+// TestCollectDTOs_OmitEmptyField verifies that DTOField.OmitEmpty is set for
+// non-required fields and unset for required fields. This is the source signal
+// that drives the conditional ToMap entry generation.
+func TestCollectDTOs_OmitEmptyField(t *testing.T) {
+	root := &Schema{
+		Type:          "object",
+		Required:      []string{"id"},
+		PropertyOrder: []string{"id", "label", "count"},
+		Properties: map[string]*Schema{
+			"id":    {Type: "string"},
+			"label": {Type: "string"},
+			"count": {Type: "integer"},
+		},
+	}
+	dtos, err := schemaToDTOs("ResponseData", root)
+	if err != nil {
+		t.Fatalf("schemaToDTOs: %v", err)
+	}
+	if len(dtos) == 0 {
+		t.Fatal("expected at least one DTO")
+	}
+	byName := map[string]DTOField{}
+	for _, f := range dtos[0].Fields {
+		byName[f.Name] = f
+	}
+	cases := []struct {
+		field         string
+		wantOmitEmpty bool
+	}{
+		{"ID", false},   // in required → no omitempty
+		{"Label", true}, // not required → omitempty
+		{"Count", true}, // not required → omitempty
+	}
+	for _, c := range cases {
+		f, ok := byName[c.field]
+		if !ok {
+			t.Errorf("field %s not found", c.field)
+			continue
+		}
+		if f.OmitEmpty != c.wantOmitEmpty {
+			t.Errorf("field %s: OmitEmpty=%v, want %v", c.field, f.OmitEmpty, c.wantOmitEmpty)
+		}
+	}
+}
+
+// TestToMap_OmitEmptyBehavior verifies that the generated ToMap omits zero-value
+// optional fields, matching the struct json.Marshal serialization path (the delta
+// bug in #2159). This test operates at the render level: it builds a spec that has
+// an EmitToMap DTO with mixed required/optional fields, renders types.tmpl, and
+// checks the rendered output for conditional guards.
+func TestToMap_OmitEmptyBehavior(t *testing.T) {
+	// Build a minimal spec with an EmitToMap DTO that has one required string
+	// field and one optional string field.
+	spec := &ContractGenSpec{
+		PackageName: "testpkg",
+		ContractID:  "http.test.x.v1",
+		Kind:        "http",
+		Endpoint:    &httpEndpointSpec{ResponseProjection: true},
+		DTOs: []DTOSpec{
+			{
+				Name: "Response",
+				Fields: []DTOField{
+					{Name: "Data", JSONTag: "data", BareJSONTag: "data", GoType: "projection.ResourceProjection"},
+				},
+			},
+			{
+				Name:      "ResponseData",
+				EmitToMap: true,
+				Fields: []DTOField{
+					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string", OmitEmpty: false},
+					{Name: "Description", JSONTag: "description,omitempty", BareJSONTag: "description", GoType: "string", OmitEmpty: true},
+					{Name: "Tags", JSONTag: "tags,omitempty", BareJSONTag: "tags", GoType: "[]string", OmitEmpty: true},
+					{Name: "Meta", JSONTag: "meta,omitempty", BareJSONTag: "meta", GoType: "*ResponseDataMeta", OmitEmpty: true},
+				},
+			},
+		},
+	}
+
+	out, err := renderTypes(spec)
+	if err != nil {
+		t.Fatalf("renderTypes: %v", err)
+	}
+	rendered := string(out)
+
+	// Required field must be unconditional in the initial map literal.
+	if !strings.Contains(rendered, `"id": i.ID,`) {
+		t.Error(`want unconditional "id": i.ID, in map literal`)
+	}
+	// Optional string field must use != "" guard.
+	if !strings.Contains(rendered, `i.Description != ""`) {
+		t.Error(`want conditional guard i.Description != ""`)
+	}
+	// Optional slice field must use len() > 0 guard.
+	if !strings.Contains(rendered, `len(i.Tags) > 0`) {
+		t.Error(`want conditional guard len(i.Tags) > 0`)
+	}
+	// Optional pointer field must use != nil guard.
+	if !strings.Contains(rendered, `i.Meta != nil`) {
+		t.Error(`want conditional guard i.Meta != nil`)
+	}
+	// Optional fields must NOT appear unconditionally in the map literal.
+	if strings.Contains(rendered, `"description": i.Description,`) {
+		t.Error(`must not have unconditional "description" entry in map literal`)
+	}
+}

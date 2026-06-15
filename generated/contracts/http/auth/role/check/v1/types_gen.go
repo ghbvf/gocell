@@ -39,11 +39,13 @@ type ResponseData struct {
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
 // Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set.
+// DTO's field set. Optional fields (omitempty) are only included when non-zero,
+// matching the struct json.Marshal serialization path.
 func (i ResponseData) ToMap() map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"hasRole": i.HasRole,
 	}
+	return m
 }
 
 // CheckResponseObject is the typed response envelope for

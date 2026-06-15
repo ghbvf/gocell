@@ -85,13 +85,20 @@ const (
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
 // Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set.
+// DTO's field set. Optional fields (omitempty) are only included when non-zero,
+// matching the struct json.Marshal serialization path.
 func (i {{.Name}}) ToMap() map[string]any {
-	return map[string]any{
-{{- range .Fields}}
+	m := map[string]any{
+{{- range .Fields}}{{if not .OmitEmpty}}
 		"{{.BareJSONTag}}": i.{{.Name}},
-{{- end}}
+{{- end}}{{end}}
 	}
+{{- range .Fields}}{{if .OmitEmpty}}
+	if {{omitEmptyCheck .}} {
+		m["{{.BareJSONTag}}"] = i.{{.Name}}
+	}
+{{- end}}{{end}}
+	return m
 }
 {{- end}}
 {{end}}
