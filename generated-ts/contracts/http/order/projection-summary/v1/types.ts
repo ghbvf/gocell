@@ -18,5 +18,4 @@ export interface ResponseData {
 export interface ResponseDataStatusesItem {
   status?: string;
   count?: number;
-  orderIds?: string[];
 }

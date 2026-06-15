@@ -12,10 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
+
+// testListOwner is the principal subject the list tests authenticate as; seeded
+// orders carry it as Owner so the owner-scoped list returns them.
+const testListOwner = "usr-list-test"
+
+// listCtx returns a context carrying a customer principal whose subject is
+// testListOwner — list is owner-scoped, so the fetch only returns orders the
+// principal owns.
+func listCtx() context.Context {
+	return auth.TestContext(testListOwner, []string{dto.RoleCustomer})
+}
 
 func testCodec() *query.CursorCodec {
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
@@ -98,6 +111,7 @@ func TestService_List_FirstPage(t *testing.T) {
 	for i := range 5 {
 		seed = append(seed, &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
+			Owner:     testListOwner,
 			Item:      "item",
 			Status:    "pending",
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
@@ -106,7 +120,7 @@ func TestService_List_FirstPage(t *testing.T) {
 	repo := seedRepo(seed...)
 	svc := mustNewService(repo, testCodec())
 
-	result, err := svc.list(context.Background(), query.PageParams{Limit: 3})
+	result, err := svc.list(listCtx(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -115,12 +129,39 @@ func TestService_List_FirstPage(t *testing.T) {
 	assert.Equal(t, "ord-04", result.Items[0].ID)
 }
 
+// TestService_List_OwnerScoped verifies list returns ONLY the calling principal's
+// orders even though the route gate (RequirePermission(order:list)) is coarse: a
+// repo holding two owners' orders must yield only the caller's. This is the F1
+// data-visibility fix — owner scoping is enforced at the data source, not the gate.
+func TestService_List_OwnerScoped(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	repo := seedRepo(
+		&domain.Order{ID: "ord-mine-1", Owner: testListOwner, Item: "a", Status: "pending", CreatedAt: base},
+		&domain.Order{ID: "ord-mine-2", Owner: testListOwner, Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
+		&domain.Order{ID: "ord-other", Owner: "usr-someone-else", Item: "c", Status: "pending", CreatedAt: base.Add(2 * time.Hour)},
+	)
+	svc := mustNewService(repo, testCodec())
+
+	result, err := svc.list(listCtx(), query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2)
+	for _, o := range result.Items {
+		assert.NotEqual(t, "ord-other", o.ID, "another owner's order must not appear")
+	}
+
+	// No principal → fail-closed empty (not a global read).
+	anon, err := svc.list(context.Background(), query.PageParams{Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, anon.Items, "no principal must yield an empty list, never a global read")
+}
+
 func TestService_List_WithCursor(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
 	for i := range 10 {
 		seed = append(seed, &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
+			Owner:     testListOwner,
 			Item:      "item",
 			Status:    "pending",
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
@@ -130,12 +171,12 @@ func TestService_List_WithCursor(t *testing.T) {
 	svc := mustNewService(repo, testCodec())
 
 	// Get first page
-	page1, err := svc.list(context.Background(), query.PageParams{Limit: 3})
+	page1, err := svc.list(listCtx(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
 	// Get second page using cursor
-	page2, err := svc.list(context.Background(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.list(listCtx(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
 	// Second page should continue where first left off
@@ -156,13 +197,13 @@ func TestService_List_InvalidCursor(t *testing.T) {
 func TestService_List_LastPage(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	seed := []*domain.Order{
-		{ID: "ord-00", Item: "a", Status: "pending", CreatedAt: base},
-		{ID: "ord-01", Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
+		{ID: "ord-00", Owner: testListOwner, Item: "a", Status: "pending", CreatedAt: base},
+		{ID: "ord-01", Owner: testListOwner, Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
 	}
 	repo := seedRepo(seed...)
 	svc := mustNewService(repo, testCodec())
 
-	result, err := svc.list(context.Background(), query.PageParams{Limit: 10})
+	result, err := svc.list(listCtx(), query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)

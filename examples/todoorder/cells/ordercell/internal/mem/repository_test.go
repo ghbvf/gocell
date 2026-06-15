@@ -147,6 +147,10 @@ var defaultSort = []query.SortColumn{
 	{Name: "id", Direction: query.SortASC},
 }
 
+// memListOwner is the owner the repo List tests query as; seeded orders carry it
+// so the owner-scoped List returns them.
+const memListOwner = "usr-mem-owner"
+
 func TestOrderRepository_List(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -160,9 +164,9 @@ func TestOrderRepository_List(t *testing.T) {
 		{
 			name: "multiple orders",
 			setup: func(r *OrderRepository) {
-				_ = r.Create(context.Background(), &domain.Order{ID: "ord-a", Item: "a"})
-				_ = r.Create(context.Background(), &domain.Order{ID: "ord-b", Item: "b"})
-				_ = r.Create(context.Background(), &domain.Order{ID: "ord-c", Item: "c"})
+				_ = r.Create(context.Background(), &domain.Order{ID: "ord-a", Owner: memListOwner, Item: "a"})
+				_ = r.Create(context.Background(), &domain.Order{ID: "ord-b", Owner: memListOwner, Item: "b"})
+				_ = r.Create(context.Background(), &domain.Order{ID: "ord-c", Owner: memListOwner, Item: "c"})
 			},
 			wantCount: 3,
 		},
@@ -176,11 +180,33 @@ func TestOrderRepository_List(t *testing.T) {
 			}
 
 			params := query.ListParams{Limit: 100, Sort: defaultSort}
-			orders, err := repo.List(context.Background(), params)
+			orders, err := repo.List(context.Background(), memListOwner, params)
 			require.NoError(t, err)
 			assert.Len(t, orders, tt.wantCount)
 		})
 	}
+}
+
+func TestOrderRepository_List_OwnerScoped(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "ord-mine-1", Item: "a"})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "ord-mine-2", Item: "b"})
+	_ = repo.Create(ctx, &domain.Order{Owner: "usr-other", ID: "ord-other", Item: "c"})
+
+	params := query.ListParams{Limit: 100, Sort: defaultSort}
+
+	mine, err := repo.List(ctx, memListOwner, params)
+	require.NoError(t, err)
+	assert.Len(t, mine, 2, "List must return only the queried owner's orders")
+	for _, o := range mine {
+		assert.Equal(t, memListOwner, o.Owner)
+	}
+
+	// Empty owner matches nothing (fail-closed) — never a global read.
+	none, err := repo.List(ctx, "", params)
+	require.NoError(t, err)
+	assert.Empty(t, none, "empty owner must match nothing")
 }
 
 func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
@@ -189,6 +215,7 @@ func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
 	for i := range 10 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
+			Owner:     memListOwner,
 			Item:      fmt.Sprintf("item-%d", i),
 			Status:    "pending",
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
@@ -199,7 +226,7 @@ func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
 		Limit: 3,
 		Sort:  defaultSort,
 	}
-	orders, err := repo.List(context.Background(), params)
+	orders, err := repo.List(context.Background(), memListOwner, params)
 	require.NoError(t, err)
 	// FetchLimit = 3+1 = 4
 	assert.Len(t, orders, 4)
@@ -214,6 +241,7 @@ func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
 	for i := range 10 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
+			Owner:     memListOwner,
 			Item:      fmt.Sprintf("item-%d", i),
 			Status:    "pending",
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
@@ -227,7 +255,7 @@ func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
 		CursorValues: []any{cursorTime, "ord-07"},
 		Sort:         defaultSort,
 	}
-	orders, err := repo.List(context.Background(), params)
+	orders, err := repo.List(context.Background(), memListOwner, params)
 	require.NoError(t, err)
 	// After ord-07 (DESC): ord-06, ord-05, ord-04, ord-03 (4 = limit+1)
 	assert.Len(t, orders, 4)
@@ -241,6 +269,7 @@ func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
 	for i := range 5 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
+			Owner:     memListOwner,
 			Item:      fmt.Sprintf("item-%d", i),
 			Status:    "pending",
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
@@ -254,7 +283,7 @@ func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
 		CursorValues: []any{cursorTime, "ord-01"},
 		Sort:         defaultSort,
 	}
-	orders, err := repo.List(context.Background(), params)
+	orders, err := repo.List(context.Background(), memListOwner, params)
 	require.NoError(t, err)
 	// Only 1 item left, less than FetchLimit(4) → last page
 	assert.Len(t, orders, 1)
@@ -264,7 +293,7 @@ func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
 func TestOrderRepository_ListPaged_Empty(t *testing.T) {
 	repo := NewOrderRepository()
 	params := query.ListParams{Limit: 10, Sort: defaultSort}
-	orders, err := repo.List(context.Background(), params)
+	orders, err := repo.List(context.Background(), memListOwner, params)
 	require.NoError(t, err)
 	assert.Empty(t, orders)
 }
@@ -274,9 +303,9 @@ func TestOrderRepository_ListPaged_SortByItem(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "banana", Status: "pending", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "apple", Status: "pending", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "cherry", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "banana", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "apple", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "3", Item: "cherry", Status: "pending", CreatedAt: now})
 
 	params := query.ListParams{
 		Limit: 10,
@@ -285,7 +314,7 @@ func TestOrderRepository_ListPaged_SortByItem(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 3)
 	assert.Equal(t, "apple", orders[0].Item)
@@ -298,8 +327,8 @@ func TestOrderRepository_ListPaged_SortByStatus(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", Status: "pending", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", Status: "confirmed", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "a", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "b", Status: "confirmed", CreatedAt: now})
 
 	params := query.ListParams{
 		Limit: 10,
@@ -308,7 +337,7 @@ func TestOrderRepository_ListPaged_SortByStatus(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 2)
 	assert.Equal(t, "confirmed", orders[0].Status)
@@ -320,14 +349,14 @@ func TestOrderRepository_ListPaged_UnknownField(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "a", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "b", CreatedAt: now})
 
 	params := query.ListParams{
 		Limit: 10,
 		Sort:  []query.SortColumn{{Name: "unknown", Direction: query.SortASC}},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	assert.Len(t, orders, 2)
 }
@@ -337,7 +366,7 @@ func TestOrderRepository_ListPaged_CursorPastEnd(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "a", CreatedAt: base})
 
 	params := query.ListParams{
 		Limit:        10,
@@ -347,7 +376,7 @@ func TestOrderRepository_ListPaged_CursorPastEnd(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	assert.Empty(t, orders)
 }
@@ -357,8 +386,8 @@ func TestOrderRepository_ListPaged_SortByItemDESC(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "apple", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "cherry", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "apple", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "cherry", CreatedAt: now})
 
 	params := query.ListParams{
 		Limit: 10,
@@ -367,7 +396,7 @@ func TestOrderRepository_ListPaged_SortByItemDESC(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 2)
 	assert.Equal(t, "cherry", orders[0].Item)
@@ -379,9 +408,9 @@ func TestOrderRepository_ListPaged_CursorItemField(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "apple", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "banana", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "cherry", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "apple", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "banana", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "3", Item: "cherry", CreatedAt: now})
 
 	// Cursor after "banana", ASC -> only cherry
 	params := query.ListParams{
@@ -392,7 +421,7 @@ func TestOrderRepository_ListPaged_CursorItemField(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	assert.Equal(t, "cherry", orders[0].Item)
@@ -403,8 +432,8 @@ func TestOrderRepository_ListPaged_CursorStatusField(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", Status: "confirmed", CreatedAt: now})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "a", Status: "confirmed", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "b", Status: "pending", CreatedAt: now})
 
 	// Cursor after "confirmed", ASC -> only pending
 	params := query.ListParams{
@@ -415,7 +444,7 @@ func TestOrderRepository_ListPaged_CursorStatusField(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	assert.Equal(t, "pending", orders[0].Status)
@@ -426,9 +455,9 @@ func TestOrderRepository_ListPaged_SubsecondPrecision(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base.Add(orderNs100)})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: base.Add(orderNs200)})
-	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "c", CreatedAt: base.Add(orderNs300)})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "1", Item: "a", CreatedAt: base.Add(orderNs100)})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "2", Item: "b", CreatedAt: base.Add(orderNs200)})
+	_ = repo.Create(ctx, &domain.Order{Owner: memListOwner, ID: "3", Item: "c", CreatedAt: base.Add(orderNs300)})
 
 	// Cursor at order 2 (200ns), ASC → should return order 3 only.
 	cursorTS := base.Add(orderNs200).Format(time.RFC3339Nano)
@@ -440,7 +469,7 @@ func TestOrderRepository_ListPaged_SubsecondPrecision(t *testing.T) {
 			{Name: "id", Direction: query.SortASC},
 		},
 	}
-	orders, err := repo.List(ctx, params)
+	orders, err := repo.List(ctx, memListOwner, params)
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	assert.Equal(t, "3", orders[0].ID)
@@ -454,6 +483,7 @@ func orderConcurrentWriterN(ctx context.Context, repo *OrderRepository, id, iter
 	for i := range iterations {
 		_ = repo.Create(ctx, &domain.Order{
 			ID:        fmt.Sprintf("ord-w%d-i%d", id, i),
+			Owner:     memListOwner,
 			Item:      "item",
 			Status:    "pending",
 			CreatedAt: time.Now(),
@@ -474,7 +504,7 @@ func orderConcurrentReaderN(t *testing.T, ctx context.Context, repo *OrderReposi
 		},
 	}
 	for range iterations {
-		items, err := repo.List(ctx, params)
+		items, err := repo.List(ctx, memListOwner, params)
 		if err != nil {
 			readErrors.Add(1)
 			continue

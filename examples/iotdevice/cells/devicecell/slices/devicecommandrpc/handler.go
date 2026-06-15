@@ -23,7 +23,9 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
@@ -49,8 +51,24 @@ type Server struct {
 // through the same Enqueue path the HTTP devicecommand slice uses. authorizer is
 // the iotdevice example PDP (deviceAuthorizer), injected by DeviceCell so the
 // gRPC handler participates in the same ABAC decision as the HTTP route gates.
+//
+// authorizer is a mandatory dependency, fail-fast at construction
+// (validation.IsNilInterface, mirroring clock.MustHaveClock and the saga.md
+// required-interface-positional-param convention): unlike the HTTP route gate —
+// which reads the Authorizer from the request context and fail-closes (403) when
+// AuthorizerFromContext returns ok=false — the gRPC server holds the authorizer
+// as a field, so a nil/typed-nil here would panic inside authorize() at request
+// time (after authentication) on the very next RPC. Rejecting it at construction
+// surfaces the mis-wire at startup, consistent with the framework preference for
+// startup fail-fast over per-request silent failure (tenancy.md).
 func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, authorizer auth.Authorizer) *Server {
 	clock.MustHaveClock(clk, "devicecommandrpc.NewServer")
+	if validation.IsNilInterface(authorizer) {
+		panic(panicregister.Approved("devicecommandrpc-nil-authorizer", errcode.Assertion(
+			"devicecommandrpc.NewServer: auth.Authorizer is required (nil/typed-nil rejected); "+
+				"the PDP enforces device:command on every RPC, so a nil authorizer would panic at "+
+				"request time after authentication — fail fast at construction instead")))
+	}
 	return &Server{clk: clk, cmdSvc: cmdSvc, authorizer: authorizer}
 }
 

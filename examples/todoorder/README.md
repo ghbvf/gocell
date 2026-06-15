@@ -14,7 +14,7 @@ creating a business Cell with HTTP endpoints and a switchable event emission pat
 
 - **ordercell** (L2 OutboxFact): manages order lifecycle
   - **ordercreate** slice: POST creates an order and emits the order creation event
-  - **orderquery** slice: GET retrieves orders by ID or lists all
+  - **orderquery** slice: GET retrieves an order by ID or lists the caller's own orders (owner-scoped)
 
 ## Runtime Modes
 
@@ -86,16 +86,25 @@ RS256 JWT. Authorization rules:
 | Endpoint | Required permission | Who is allowed |
 |----------|---------------------|----------------|
 | `POST /orders/` | `order:create` | role:customer |
-| `GET /orders/` | `order:list` | role:customer |
+| `GET /orders/` | `order:list` | role:customer — returns only the caller's own orders |
 | `GET /orders/{id}` | `order:read` | order creator only (JWT subject == order.Owner) |
 | `PATCH /orders/{id}/status` | `order:update` | order creator only (JWT subject == order.Owner) |
-| `GET /orders/projection/summary` | `order:list` | role:customer |
+| `GET /orders/projection/summary` | `order:list` | role:customer — aggregate counts only (no per-order ids) |
 
 `get/{id}` and `confirm/{id}` are owner-scoped: only the JWT subject that created
 the order (`order.Owner`) may access it. A cross-owner request receives `403
-Forbidden`. Row-level owner filtering on `list` and `projection/summary` (so each
-customer sees only their own orders) is a data-layer concern (RowScope PEP) tracked
-for PR-11/12 — those endpoints currently return all orders to any `role:customer`.
+Forbidden` (uniform for "missing" and "not yours", so it doubles as anti-enumeration —
+the contract still declares a `404` as the handler-level not-found semantic, but the
+owner gate shadows it with `403` in production).
+
+`GET /orders/` is **owner-scoped at the data source**: the `order:list` route gate is
+coarse (any `role:customer`), so the query service filters by the caller's JWT subject
+(`order.Owner`) — each customer lists only their own orders. `GET /orders/projection/summary`
+exposes only the per-status aggregate counts and the global total; it no longer returns
+per-order ids (a coarse-gated endpoint must not leak order existence across owners).
+Tenant-policy-driven row visibility (RowScope PEP) for richer multi-tenant scenarios
+remains a data-layer concern tracked for PR-11/12; this example demonstrates the
+self-scoping baseline.
 
 > **Note**: this example ships a self-contained lightweight PDP (no dependency on
 > the platform `accesscore` cell). Production deployments should wire `accesscore`'s
@@ -129,7 +138,10 @@ Response (201):
 {"data":{"id":"ord-...","item":"test","status":"pending"}}
 ```
 
-### List all orders
+### List your orders
+
+Returns only the orders owned by the calling JWT subject (owner-scoped, see
+Authorization above).
 
 ```bash
 curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
@@ -179,10 +191,13 @@ The loop has four parts, all inside `ordercell`:
    `projection.order.status-summary.v1` contract (GoCell's first `kind: projection`
    instance). The read model is a *derived view* (per-status counts + order IDs)
    the write-side `orders` map cannot cheaply serve — `GET /api/v1/orders/`
-   returns a flat list of complete order records; `GET
+   returns a flat list of the caller's own order records; `GET
    /api/v1/orders/projection/summary` returns a server-side aggregated-by-status
-   read model (`{statuses:[{status,count,orderIds}]}`) that the write-side by-id
-   map cannot provide without a full scan.
+   read model (`{statuses:[{status,count}],totalOrders}`) that the write-side by-id
+   map cannot provide without a full scan. The internal read model indexes per-status
+   order IDs, but the HTTP summary exposes only the aggregate counts — the endpoint is
+   coarse-gated (`order:list`), so emitting every owner's order ids would leak order
+   existence across owners.
    This is the canonical **multi-stream fan-in within the single-stream harness**
    (#1482): each projection owns a *disjoint* sub-view with its own checkpoint and
    `onReset`, so rebuilding one never clears the other's data, and the framework's
@@ -233,7 +248,7 @@ curl -X PATCH -H "Authorization: Bearer $TODOORDER_TOKEN" \
 # Query the status-grouped read model (eventually consistent; empty in demo mode)
 curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
   http://localhost:8082/api/v1/orders/projection/summary
-# {"data":{"statuses":[{"status":"confirmed","count":1,"orderIds":["ord-..."]}],"totalOrders":1}}
+# {"data":{"statuses":[{"status":"confirmed","count":1}],"totalOrders":1}}
 
 # Rebuild the projection read model via the operator control-plane endpoint
 # (loopback AdminListener 127.0.0.1:9093, framework-owned). Coordinator drives onReset+replay.

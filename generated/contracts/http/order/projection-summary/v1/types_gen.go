@@ -30,9 +30,8 @@ type ResponseData struct {
 
 // ResponseDataStatusesItem is a generated DTO for contract http.order.projection-summary.v1.
 type ResponseDataStatusesItem struct {
-	Status   string   `json:"status,omitempty"`
-	Count    int64    `json:"count,omitempty"`
-	OrderIds []string `json:"orderIds,omitempty"`
+	Status string `json:"status,omitempty"`
+	Count  int64  `json:"count,omitempty"`
 }
 
 // ProjectionSummaryResponseObject is the typed response envelope for

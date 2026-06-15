@@ -27,6 +27,13 @@ func NewSummaryAdapter(s *Service) *SummaryAdapter {
 }
 
 // ProjectionSummary implements projectionsummary.Service.
+//
+// The response exposes only the per-status aggregate (status + count) and the
+// global TotalOrders — NOT the per-order ids. This endpoint is coarse-gated
+// (RequirePermission(order:list)) rather than owner-scoped, so emitting every
+// owner's order ids here would leak order existence across owners; the aggregate
+// counts are non-identifying and keep the CQRS read-model demo intact. The internal
+// projection still tracks ids (Service.Query), they are simply not put on the wire.
 func (a *SummaryAdapter) ProjectionSummary(
 	ctx context.Context, _ *projectionsummary.Request,
 ) (projectionsummary.ProjectionSummaryResponseObject, error) {
@@ -34,12 +41,9 @@ func (a *SummaryAdapter) ProjectionSummary(
 
 	statuses := make([]*projectionsummary.ResponseDataStatusesItem, 0, len(summary.Statuses))
 	for _, b := range summary.Statuses {
-		ids := make([]string, len(b.OrderIDs))
-		copy(ids, b.OrderIDs)
 		statuses = append(statuses, &projectionsummary.ResponseDataStatusesItem{
-			Status:   b.Status,
-			Count:    b.Count,
-			OrderIds: ids,
+			Status: b.Status,
+			Count:  b.Count,
 		})
 	}
 

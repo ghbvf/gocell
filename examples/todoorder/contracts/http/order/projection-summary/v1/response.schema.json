@@ -17,13 +17,6 @@
               },
               "count": {
                 "type": "integer"
-              },
-              "orderIds": {
-                "type": "array",
-                "maxItems": 500,
-                "items": {
-                  "type": "string"
-                }
               }
             }
           }

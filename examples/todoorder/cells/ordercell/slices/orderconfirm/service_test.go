@@ -268,7 +268,7 @@ func (r *conflictingUpdateRepo) GetByID(ctx context.Context, id string) (*domain
 	return r.inner.GetByID(ctx, id)
 }
 
-func (r *conflictingUpdateRepo) List(_ context.Context, _ query.ListParams) ([]*domain.Order, error) {
+func (r *conflictingUpdateRepo) List(_ context.Context, _ string, _ query.ListParams) ([]*domain.Order, error) {
 	panic("not used in this test")
 }
 

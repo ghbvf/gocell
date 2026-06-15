@@ -42,7 +42,11 @@ func (o *Order) Confirm() error {
 type OrderRepository interface {
 	Create(ctx context.Context, order *Order) error
 	GetByID(ctx context.Context, id string) (*Order, error)
-	List(ctx context.Context, params query.ListParams) ([]*Order, error)
+	// List returns the orders owned by owner (Order.Owner == owner), paginated per
+	// params. Owner is applied at the data source so list is owner-scoped: the route
+	// gate (RequirePermission(order:list)) is coarse, so without this filter a customer
+	// would page over every owner's orders. An empty owner matches nothing (fail-closed).
+	List(ctx context.Context, owner string, params query.ListParams) ([]*Order, error)
 	// UpdateStatus performs a conditional (compare-and-swap) status transition.
 	// The update is applied only when the current persisted status equals
 	// expectedStatus; if the actual status differs, UpdateStatus returns a

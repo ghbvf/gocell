@@ -86,15 +86,24 @@ func (r *OrderRepository) UpdateStatus(_ context.Context, id, expectedStatus, ne
 	return nil
 }
 
-// List returns orders sorted and paginated according to params.
-// It applies keyset cursor filtering and returns up to FetchLimit() rows
-// for N+1 hasMore detection.
-func (r *OrderRepository) List(_ context.Context, params query.ListParams) ([]*domain.Order, error) {
+// List returns the orders owned by owner, sorted and paginated according to params.
+// It applies keyset cursor filtering and returns up to FetchLimit() rows for N+1
+// hasMore detection.
+//
+// Owner filtering happens here, at the data source, BEFORE sort/cursor — so the
+// keyset cursor and hasMore detection operate only on the caller's own rows. Owner-
+// scoping at the route gate alone would still leak other owners' rows into the page.
+// An empty owner matches nothing (fail-closed): the order:list gate guarantees a
+// principal, so "" only arises from a misconfigured chain and must not read globally.
+func (r *OrderRepository) List(_ context.Context, owner string, params query.ListParams) ([]*domain.Order, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	all := make([]*domain.Order, 0, len(r.orders))
 	for _, o := range r.orders {
+		if owner == "" || o.Owner != owner {
+			continue
+		}
 		cp := *o
 		all = append(all, &cp)
 	}

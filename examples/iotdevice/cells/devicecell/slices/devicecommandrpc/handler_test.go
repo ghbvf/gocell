@@ -75,6 +75,57 @@ func newTestServer(t *testing.T) *Server {
 	return NewServer(clockmock.New(fixedTime), svc, testRPCAuthorizer{})
 }
 
+// newCmdServiceForTest builds the device-command domain service used by the
+// constructor guard tests (no authorizer, no seeded device — these tests only
+// exercise NewServer's dependency validation, not the RPC path).
+func newCmdServiceForTest(t *testing.T) *devicecmd.Service {
+	t.Helper()
+	codec, err := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	if err != nil {
+		t.Fatalf("cursor codec: %v", err)
+	}
+	svc, err := devicecmd.NewService(
+		clockmock.New(fixedTime), commandtest.NewInMemQueue(), mem.NewDeviceRepository(),
+		codec, slog.Default(), query.RunModeProd, devicecmd.WithSliceName("devicecommandrpc"),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	return svc
+}
+
+// TestServer_NewServer_NilAuthorizer_Panics asserts NewServer fail-fasts on a
+// missing PDP. The authorizer is a mandatory field — a nil/typed-nil would panic
+// inside authorize() at request time (after authentication), so the constructor
+// rejects it at startup (mirrors clock.MustHaveClock). Covers both the plain-nil
+// interface and the typed-nil pointer (var a *T; the interface carries a non-nil
+// type descriptor, which a bare == nil check would miss).
+func TestServer_NewServer_NilAuthorizer_Panics(t *testing.T) {
+	t.Parallel()
+	svc := newCmdServiceForTest(t)
+
+	t.Run("nil interface", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic: NewServer must reject a nil authorizer")
+			}
+		}()
+		_ = NewServer(clockmock.New(fixedTime), svc, nil)
+	})
+
+	t.Run("typed-nil interface", func(t *testing.T) {
+		t.Parallel()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic: NewServer must reject a typed-nil authorizer")
+			}
+		}()
+		var typedNil *testRPCAuthorizer
+		_ = NewServer(clockmock.New(fixedTime), svc, typedNil)
+	})
+}
+
 // operatorCtx adds an operator principal (authorized to enqueue) to ctx,
 // preserving any deadline already on ctx (the over-grpc test relies on this).
 func operatorCtx(ctx context.Context) context.Context {

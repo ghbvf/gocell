@@ -152,7 +152,8 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	// postgres TxManager, the entire transaction (including repo.Create)
 	// would be rolled back. This assertion captures the current demo-mode
 	// behavior and will fail-safe if stubTxRunner gains rollback semantics.
-	orders, listErr := repo.List(context.Background(), query.ListParams{Limit: 10})
+	// List as the creating owner ("test-user" from testCtx) — List is owner-scoped.
+	orders, listErr := repo.List(context.Background(), "test-user", query.ListParams{Limit: 10})
 	require.NoError(t, listErr)
 	assert.Len(t, orders, 1, "stubTxRunner: order persists despite outbox failure (no rollback in demo mode)")
 }
