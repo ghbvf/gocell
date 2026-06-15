@@ -1,0 +1,22 @@
+# Stable release tag set — DERIVED: bare vX.Y.Z marker FIRST + publishable library tags.
+# Rendered at version v1.2.3. Regenerate intentionally: make update-modrelease-golden
+v1.2.3
+adapters/adapterutil/v1.2.3
+adapters/grpc/v1.2.3
+adapters/mqtt/v1.2.3
+adapters/oidc/v1.2.3
+adapters/otel/v1.2.3
+adapters/postgres/v1.2.3
+adapters/prometheus/v1.2.3
+adapters/rabbitmq/v1.2.3
+adapters/ratelimit/v1.2.3
+adapters/redis/v1.2.3
+adapters/s3/v1.2.3
+adapters/vault/v1.2.3
+adapters/websocket/v1.2.3
+cellmodules/v1.2.3
+corecells/v1.2.3
+framework/v1.2.3
+generated/v1.2.3
+tests/v1.2.3
+tools/v1.2.3

@@ -716,7 +716,7 @@ GoCell supports three Cell development modes:
 | Mode | Repository shape | Configuration |
 |------|-----------------|--------------|
 | **Monorepo** (gocell itself) | Same `go.mod` | Default conventional layout (no `.gocell/manifest.yaml`) |
-| **Operator-SDK** | External repo `go get github.com/ghbvf/gocell` | Place `.gocell/manifest.yaml` at the repo root with 1 module entry |
+| **Operator-SDK** | External repo `go get github.com/ghbvf/gocell/framework` | Place `.gocell/manifest.yaml` at the repo root with 1 module entry |
 | **Workspace** | `go.work` aggregating gocell + multiple cell modules | Place `.gocell/manifest.yaml` at the workspace root with multiple module entries |
 
 ### Conventional Layout (Default)

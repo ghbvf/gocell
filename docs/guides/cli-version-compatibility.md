@@ -1,6 +1,6 @@
 # CLI ↔ Framework 版本兼容性
 
-本文档说明 `gocell` CLI 与 `github.com/ghbvf/gocell` framework module 的版本对应关系。
+本文档说明 `gocell` CLI 与 `github.com/ghbvf/gocell/framework` framework module 的版本对应关系。
 
 ## 发布模型：原子同 tag
 
@@ -106,7 +106,7 @@ framework 版本超出声明范围将不被支持，届时 CLI 可能在启动�
 下表记录每次 stable release 的 CLI ↔ framework 兼容关系。**每次 stable release 追加一行**；
 不删除历史行（历史行是消费方升级决策的参考）。
 
-| gocell CLI version | Compatible framework (`github.com/ghbvf/gocell`) | Notes |
+| gocell CLI version | Compatible framework (`github.com/ghbvf/gocell/framework`) | Notes |
 |--------------------|-------------------------------------------------|-------|
 | v0.1.0 | >=v0.1.0 <v0.2.0 | First stable release（co-tagged，best-effort intent；预编译产物自首个搭载发布流水线的 release 起提供，此 tag 不含；`go install @version` 自首个搭载 #2045 流水线的 release 起可用，v0.1.0 本身可能早于该流水线） |
 
@@ -126,7 +126,7 @@ framework 版本超出声明范围将不被支持，届时 CLI 可能在启动�
 gocell version
 
 # 查看项目当前依赖的 framework 版本
-go list -m github.com/ghbvf/gocell
+go list -m github.com/ghbvf/gocell/framework
 
 # 确认 framework 版本在 compatible_framework_range 内
 ```

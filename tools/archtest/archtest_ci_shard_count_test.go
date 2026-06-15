@@ -315,11 +315,14 @@ func stripInlineComment(line string) string {
 
 // runCommandLines splits a workflow step's `run:` block into logical shell
 // command lines: shell comments are stripped (stripInlineComment) and backslash
-// line-continuations are joined. The shard-denominator assertion binds to these
-// — NOT the raw run string — so (a) a commented example above a real shard-less
-// invocation cannot false-green the guard, and (b) the real archtest-nightly.yml
-// invocation, which puts `verify archtest` and `--shard=N/24` on separate
-// continued lines, is still seen as ONE command line.
+// line-continuations are joined. It is the shared comment-stripping/line-joining
+// helper for the workflow-scanning archtests (ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01
+// here, plus archtest_ci_gowork_test.go and RELEASE-STABLE-MARKER-TAG-01's marker
+// scan): they all bind to these logical lines — NOT the raw run string — so
+// (a) a commented example above a real invocation cannot false-green the guard,
+// and (b) a real invocation split across backslash-continued lines (e.g.
+// archtest-nightly.yml's `verify archtest` + `--shard=N/24`) is still seen as ONE
+// command line.
 func runCommandLines(run string) []string {
 	var cmds []string
 	var cur strings.Builder

@@ -597,16 +597,20 @@ length before injection into context.
 
 ## Using in Your Project
 
-GoCell is a public Go module — no `GOPRIVATE` or auth setup is required.
+GoCell is public — no `GOPRIVATE` or auth setup is required. Post-#1565 the
+framework core is the dedicated `github.com/ghbvf/gocell/framework` submodule (the
+repo root holds only `go.work`, no module); pin every gocell satellite at the same
+synchronized `vX.Y.Z`.
 
 ```bash
 # Add the framework to your project (or pin a stable tag, e.g. @v0.1.0)
-go get github.com/ghbvf/gocell@latest
+go get github.com/ghbvf/gocell/framework@latest
 ```
 
-The `gocell` governance/codegen CLI is currently installed from source
-(`git clone … && go install ./cmd/gocell`); a standalone
-`go install github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` entry point is planned. See
+The `gocell` governance/codegen CLI installs via `go install
+github.com/ghbvf/gocell/cmd/gocell@vX.Y.Z` from any stable tag that ships the #2045
+release pipeline; for earlier tags or unreleased code, install from source (`git
+clone … && go install ./cmd/gocell`). See
 [docs/guides/cell-external-repo-quickstart.md](docs/guides/cell-external-repo-quickstart.md).
 
 ## Project Templates
