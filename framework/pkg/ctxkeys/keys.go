@@ -159,6 +159,16 @@ func WithTenantID(ctx context.Context, id string) context.Context {
 }
 
 // TenantIDFrom extracts the tenant identifier from ctx. The boolean indicates presence.
+//
+// INVARIANT (CTXKEYS-TENANT-READ-CALLER-01): this raw reader is bypass-face funneled.
+// Business / Apply / handler code MUST derive its tenant scope via the fail-closed
+// typed accessor tenant.FromContext (which routes the value through ParseTenantID and
+// rejects empty/nil → 403), NOT by reading the raw key here and branching on "".
+// During saga-journal replay the system principal carries an empty tenant
+// (kernel/projection.InstallSystemPrincipal; ADR #1609 §5); treating that empty value
+// as cross-tenant authority is an implicit privilege escalation the global journal
+// makes reachable (#1882 / #1883). Raw readers are pinned to a small infra allowlist
+// by the archtest; a new business reader fails CI.
 func TenantIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(tenantID).(string)
 	return v, ok
