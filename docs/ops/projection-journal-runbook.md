@@ -204,4 +204,4 @@ v1 投影运行在 **单 pod** 边界（继承 #1100 Q5）：
 
 **影响**：重启后 `registry-summary` 等查询可能在一段时间内**低估**（如 `totalSessions` 偏低），直到 live 事件追平或人工 rebuild。`session_registry` 当前是 `experimental` 投影，此为已知文档化限制。
 
-启动自动 rebuild（`WithProjectionAutoRebuildOnStartup` + readyz 在 `Phase()==Live` 前 gate）是独立 follow-up（见对应 backlog issue），durable journal 已具备 rebuild 能力，落地后重启即可恢复完整读模型。
+启动自动 rebuild（`WithProjectionAutoRebuildOnStartup` + readyz 在 `Phase()==Live` 前 gate）是独立 follow-up（#2223），durable journal 已具备 rebuild 能力，落地后重启即可恢复完整读模型。
