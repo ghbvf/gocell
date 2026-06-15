@@ -259,7 +259,10 @@ func TestBumpTree(t *testing.T) {
 
 	// pin set ⊇ tag set: every publishable (tag-set) member appears in the
 	// pin-set results, so the pin commit can never be a strict subset of the
-	// tagged tree (the #2212 failure mode).
+	// tagged tree (the #2212 failure mode). Both BumpTree results and
+	// PublishableModules derive Dir from the same workspace.Modules enumeration
+	// (go.work use-dirs, filepath.Clean'd — no "./" prefix), so the map lookup
+	// keys align and this comparison is not vacuous.
 	pub, err := PublishableModules(root)
 	if err != nil {
 		t.Fatalf("PublishableModules: %v", err)

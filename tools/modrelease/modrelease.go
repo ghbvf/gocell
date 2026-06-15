@@ -292,6 +292,15 @@ func bumpRequireLine(line []byte, re *regexp.Regexp, version string) ([]byte, st
 // pinned-but-not-tagged member (e.g. cmd/gocell, which the separate
 // [StripReplaceAndPin] installable path tags from its own stripped tree) keeps
 // its develop-branch replaces intact.
+//
+// go.sum is unaffected: every internal require carries a local `replace … =>
+// ../relative`, so the bumped require resolves to the on-disk sibling, not the
+// module proxy — no checksum is computed or recorded for it. The full-member pin
+// therefore leaves BOTH go.mod (require versions already at the release version)
+// and go.sum (no internal sum entries) matching what `go work sync` would write,
+// so the workflow's drift check (hack/verify-workspace.sh diffs go.mod AND
+// go.sum) is clean. The release-verification drift gate empirically confirms
+// this on the real tree.
 func BumpTree(root, version string) ([]Result, error) {
 	if err := validReleaseVersion(version); err != nil {
 		return nil, err
