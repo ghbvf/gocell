@@ -10,12 +10,15 @@
 // domain (corecells/ + examples/) MUST satisfy exactly one of:
 //
 //   - its string value carries the "role:" prefix  (e.g. "role:operator"), OR
-//   - its value is a sanctioned platform-reserved bare name: "admin" or "superadmin"
-//     (a business cell aliasing the platform role defined in
-//     framework/runtime/auth/roles.go).
+//   - it is a canonical platform-alias: the identifier name AND value together
+//     match an entry in rolePrefixPlatformAlias (e.g. name "RoleAdmin" with
+//     value "admin", or name "RoleSuperAdmin" with value "superadmin").
 //
-// A const that fails both tests — a bare name like "operator" with no prefix and
-// not a platform alias — is a violation.
+// A const that fails both tests is a violation.  This includes the privilege-
+// escalation vector: a business cell writing `RoleOperator = "admin"` carries
+// a sanctioned platform value under a non-canonical name, which would silently
+// grant platform-admin semantics.  The name↔value binding closes that false-
+// negative (PR #2214 F1).
 //
 // # Why this rule exists
 //
@@ -61,11 +64,11 @@
 //     the scanner.
 //   - Business role constants defined outside the scan domain (corecells/ +
 //     examples/) — for instance in cellmodules/ or adapters/ — are not covered.
-//   - The allowlist {"admin", "superadmin"} is manually kept in sync with
-//     framework/runtime/auth/roles.go. ROLE-ADMIN-LITERAL-01 provides indirect
-//     coverage for "admin"; "superadmin" has no separate literal guard (residual
-//     blind spot — this godoc is the authoritative blind-spot record;
-//     ADR 202606151430-639 §3.1 summarizes enforcement).
+//   - The alias map {RoleAdmin→"admin", RoleSuperAdmin→"superadmin"} is manually
+//     kept in sync with framework/runtime/auth/roles.go. ROLE-ADMIN-LITERAL-01
+//     provides indirect coverage for "admin"; "superadmin" has no separate literal
+//     guard (residual blind spot — this godoc is the authoritative blind-spot
+//     record; ADR 202606151430-639 §3.1 summarizes enforcement).
 //
 // # Anti-vacuity
 //
@@ -76,7 +79,7 @@
 //   - role:operator  (examples/iotdevice)
 //   - role:device    (examples/iotdevice)
 //   - role:customer  (examples/todoorder)
-//   - admin          (examples/iotdevice, platform alias)
+//   - admin          (examples/iotdevice, canonical alias RoleAdmin)
 //
 // If the scan domain drifts (directory renamed, constants renamed away from the
 // "Role" prefix) and no longer reaches these definitions, the count falls below the
@@ -91,6 +94,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -99,24 +103,85 @@ const (
 	// rolePrefixMinKnownRoles is the anti-vacuity floor: the number of known
 	// business Role* string-literal constants in the scan domain as of
 	// 2026-06-15 (role:operator, role:device, role:customer, plus the
-	// admin alias in iotdevice). Adding new Role* consts to corecells/ or
-	// examples/ will keep the count above this floor; removing / renaming
-	// enough consts to drop below it is the scanner drift signal this guard
-	// is designed to detect.
+	// canonical alias RoleAdmin="admin" in iotdevice). Adding new Role* consts
+	// to corecells/ or examples/ will keep the count above this floor;
+	// removing / renaming enough consts to drop below it is the scanner drift
+	// signal this guard is designed to detect.
 	rolePrefixMinKnownRoles = 4
 )
 
-// rolePrefixPlatformAllowlist is the set of bare role values that a business
-// cell is permitted to use when aliasing a platform-reserved role. These
-// values are sourced from framework/runtime/auth/roles.go (RoleAdmin /
-// RoleSuperAdmin) and kept in sync here manually.
+// rolePrefixPlatformAlias maps the canonical constant identifier name to its
+// sanctioned bare platform value. Only when BOTH name AND value match an entry
+// here is the const accepted as a legitimate platform-role alias.
 //
-// Blind spot: if roles.go gains a new reserved name it must also be added
-// here; there is no compile-time enforcement of that sync (residual Medium
-// ceiling documented in ADR 202606151430-639 §3.1).
-var rolePrefixPlatformAllowlist = map[string]struct{}{
-	"admin":      {},
-	"superadmin": {},
+// This replaces the former value-only rolePrefixPlatformAllowlist (which
+// accepted any identifier named "Role*" carrying "admin", enabling the
+// privilege-escalation false-negative `RoleOperator = "admin"`).
+//
+// Blind spot: if roles.go gains a new reserved name, it must be added here
+// together with its canonical identifier name; there is no compile-time
+// enforcement of that sync (residual Medium ceiling documented in ADR
+// 202606151430-639 §3.1).
+var rolePrefixPlatformAlias = map[string]string{
+	"RoleAdmin":      "admin",
+	"RoleSuperAdmin": "superadmin",
+}
+
+// rolePrefixDiagnostics is the shared scanning core used by both the
+// production test and the RED fixture self-check.  Separating the scan logic
+// from the test runner ensures that the fixture exercises the same code path
+// as production — a previously independent re-implementation in the fixture
+// could pass while the production path was broken (F2, PR #2214).
+//
+// It returns every Diagnostic produced by the scan plus the count of Role*
+// string-literal constants observed (used for anti-vacuity in production).
+func rolePrefixDiagnostics(p *Pass) (diags []Diagnostic, seen int) {
+	for _, f := range p.Files {
+		EachInSubtree[ast.GenDecl](f, func(genDecl *ast.GenDecl) {
+			if genDecl.Tok != token.CONST {
+				return
+			}
+
+			var lastValues []ast.Expr
+			EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
+				values := vs.Values
+				if values == nil {
+					values = lastValues
+				} else {
+					lastValues = values
+				}
+				for i, name := range vs.Names {
+					if !isRoleIdent(name.Name) {
+						continue
+					}
+					if i >= len(values) {
+						continue
+					}
+					lit, ok := values[i].(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					v, ok := StringLitValue(lit)
+					if !ok {
+						continue
+					}
+					seen++
+					if isValidBusinessRole(name.Name, v) {
+						continue
+					}
+					diags = append(diags, Diagnostic{
+						Rel:  p.Rel(f),
+						Line: p.Fset.Position(name.Pos()).Line,
+						Message: ruleRolePrefixNamespaced01 + `: business role const must be ` +
+							`"role:"-namespaced or use a canonical platform alias ` +
+							`(RoleAdmin="admin" / RoleSuperAdmin="superadmin"); ` +
+							`got ` + name.Name + ` = ` + v,
+					})
+				}
+			})
+		})
+	}
+	return diags, seen
 }
 
 // TestRolePrefixNamespaced01 enforces ROLE-PREFIX-NAMESPACED-01.
@@ -127,7 +192,8 @@ var rolePrefixPlatformAllowlist = map[string]struct{}{
 // constant it asserts:
 //
 //   - strings.HasPrefix(value, "role:"), OR
-//   - value ∈ {"admin", "superadmin"} (sanctioned platform role aliases).
+//   - name AND value together match a rolePrefixPlatformAlias entry
+//     (e.g. name="RoleAdmin", value="admin").
 //
 // Any constant that fails both checks is reported as a violation.
 //
@@ -141,52 +207,9 @@ func TestRolePrefixNamespaced01(t *testing.T) {
 
 	var seenCount int
 	diags := Run(t, AST(scope), func(p *Pass) []Diagnostic {
-		var out []Diagnostic
-		for _, f := range p.Files {
-			EachInSubtree[ast.GenDecl](f, func(genDecl *ast.GenDecl) {
-				if genDecl.Tok != token.CONST {
-					return
-				}
-
-				var lastValues []ast.Expr
-				EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
-					values := vs.Values
-					if values == nil {
-						values = lastValues
-					} else {
-						lastValues = values
-					}
-					for i, name := range vs.Names {
-						if !isRoleIdent(name.Name) {
-							continue
-						}
-						if i >= len(values) {
-							continue
-						}
-						lit, ok := values[i].(*ast.BasicLit)
-						if !ok {
-							continue
-						}
-						v, ok := StringLitValue(lit)
-						if !ok {
-							continue
-						}
-						seenCount++
-						if isValidBusinessRole(v) {
-							continue
-						}
-						out = append(out, Diagnostic{
-							Rel:  p.Rel(f),
-							Line: p.Fset.Position(name.Pos()).Line,
-							Message: ruleRolePrefixNamespaced01 + `: business role const must be ` +
-								`"role:"-namespaced or alias a reserved platform role ` +
-								`(admin/superadmin); got ` + v,
-						})
-					}
-				})
-			})
-		}
-		return out
+		d, s := rolePrefixDiagnostics(p)
+		seenCount += s
+		return d
 	})
 
 	// Anti-vacuity: the scan must have reached enough known Role* consts.
@@ -208,61 +231,38 @@ func TestRolePrefixNamespaced01(t *testing.T) {
 }
 
 // TestRolePrefixNamespaced01_RedFixture is the negative control: the scanner
-// run against roleprefixfixture must fire on exactly the one RED case
-// (RoleBad = "operator") and leave the three GREEN Role* cases (RoleGood /
-// RoleAdminAlias / RoleSuperAdmin) untouched; the non-Role* notARole is
-// ignored by the naming filter.
+// run against roleprefixfixture must fire on exactly the two RED cases
+// (RoleBad = "operator" and RoleOperator = "admin") and leave the three GREEN
+// Role* cases (RoleGood / RoleAdmin / RoleSuperAdmin) untouched; the non-Role*
+// notARole is ignored by the naming filter.
+//
+// The fixture is scanned via the shared rolePrefixDiagnostics function (same
+// code path as production) — not via an independent re-implementation — so a
+// regression in the production path is also caught here (F2, PR #2214).
 func TestRolePrefixNamespaced01_RedFixture(t *testing.T) {
 	t.Parallel()
 
 	fixturePkg := "./tools/archtest/internal/roleprefixfixture"
 
-	var found int
+	var allDiags []Diagnostic
 	_ = Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg}),
 		func(p *Pass) []Diagnostic {
-			for _, f := range p.Files {
-				EachInSubtree[ast.GenDecl](f, func(genDecl *ast.GenDecl) {
-					if genDecl.Tok != token.CONST {
-						return
-					}
-					var lastValues []ast.Expr
-					EachInChildren[ast.ValueSpec](genDecl, func(vs *ast.ValueSpec) {
-						values := vs.Values
-						if values == nil {
-							values = lastValues
-						} else {
-							lastValues = values
-						}
-						for i, name := range vs.Names {
-							if !isRoleIdent(name.Name) {
-								continue
-							}
-							if i >= len(values) {
-								continue
-							}
-							lit, ok := values[i].(*ast.BasicLit)
-							if !ok {
-								continue
-							}
-							v, ok := StringLitValue(lit)
-							if !ok {
-								continue
-							}
-							if !isValidBusinessRole(v) {
-								found++
-							}
-						}
-					})
-				})
-			}
+			d, _ := rolePrefixDiagnostics(p)
+			allDiags = append(allDiags, d...)
 			return nil
 		})
 
-	assert.Equal(t, 1, found,
-		"ROLE-PREFIX-NAMESPACED-01 RED fixture self-check FAILED: expected exactly 1 "+
-			"violation (RoleBad = \"operator\"). Got %d — "+
-			"found<1 means the scanner missed the bare-name RED case; "+
-			"found>1 means it over-matched a GREEN case (role:-prefixed or platform alias).", found)
+	require.Len(t, allDiags, 2,
+		"ROLE-PREFIX-NAMESPACED-01 RED fixture self-check FAILED: expected exactly 2 "+
+			"violations (RoleBad=\"operator\" and RoleOperator=\"admin\"). Got %d — "+
+			"<2 means the scanner missed a RED case; >2 means it over-matched a GREEN case.",
+		len(allDiags))
+
+	// Verify each diagnostic targets the expected constant.
+	assert.Contains(t, allDiags[0].Message+allDiags[1].Message, "RoleBad",
+		"expected one diagnostic to mention RoleBad")
+	assert.Contains(t, allDiags[0].Message+allDiags[1].Message, "RoleOperator",
+		"expected one diagnostic to mention RoleOperator")
 }
 
 // isRoleIdent reports whether name is an exported identifier that starts
@@ -272,12 +272,20 @@ func isRoleIdent(name string) bool {
 	return strings.HasPrefix(name, "Role")
 }
 
-// isValidBusinessRole reports whether v satisfies the naming convention:
-// either a "role:"-prefixed business role, or a sanctioned platform bare name.
-func isValidBusinessRole(v string) bool {
-	if strings.HasPrefix(v, "role:") {
+// isValidBusinessRole reports whether the constant with the given identifier
+// name and string value satisfies the naming convention:
+//
+//   - the value carries a "role:" prefix (business role), OR
+//   - name AND value together match a canonical platform-alias entry in
+//     rolePrefixPlatformAlias (e.g. name="RoleAdmin", value="admin").
+//
+// The second condition binds both name and value, preventing the privilege-
+// escalation false-negative where any arbitrary name (e.g. "RoleOperator")
+// could carry a sanctioned platform value ("admin") and be silently accepted.
+func isValidBusinessRole(name, value string) bool {
+	if strings.HasPrefix(value, "role:") {
 		return true
 	}
-	_, ok := rolePrefixPlatformAllowlist[v]
-	return ok
+	want, ok := rolePrefixPlatformAlias[name]
+	return ok && want == value
 }

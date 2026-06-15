@@ -47,6 +47,8 @@ GoCell 在 corecells 与 examples 中存在两类 role 字符串常量：
 
    alias 不引入新含义，只是在本地给平台保留值一个有意义的常量名。alias 的合法用途仅限把平台保留常量引入本 cell 的常量域（如作 `auth.RequireRole` 入参或常量引用）；禁止用作手写字符串比较的授权分支（由 `PERMISSION-BASED-AUTHZ-01` 覆盖）。
 
+   **alias 必须复用 canonical 常量名**：允许的 alias 组合精确为 `RoleAdmin = "admin"` 和 `RoleSuperAdmin = "superadmin"`——常量名与值必须同时匹配。以其它标识符名承载裸平台值（如 `RoleOperator = "admin"`）被 `ROLE-PREFIX-NAMESPACED-01` 判为违规（权限提升守卫）：此类写法让任意业务常量静默获得平台 admin 语义，是 false-negative 提权向量。
+
 4. **`"role:"` 前缀命名空间与 permission action 命名空间正交**：`framework/pkg/authz/permission.go` 中的 `"role:read"` 是 permission action（动词：读取 role 资源），不是 role 字符串，不受本约定约束。
 
 ### 2.2 Alternatives Considered
