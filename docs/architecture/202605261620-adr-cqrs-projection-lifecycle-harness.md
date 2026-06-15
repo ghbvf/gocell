@@ -712,45 +712,11 @@ wrong foundation; this is the "transient outbox vs retained event store" gap tha
 tracking tokens / Marten high-water marks sit on a retained event store, not on a
 publish-transit outbox).
 
-**Compensation (no un-mitigated ⚠️).** Rather than a doc note, the production
-wiring now **fails closed**: `cmd/corebundle` does **not** wire the PG
-journal-backed reader by default — a projection declared in PG mode then fails
-fast in the phase6 drain (`checkProjectionDeps`). The reader is only wired under
-an explicit `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true` opt-in (dev/preview only,
-with a NOT-production-safe startup WARN). So no production projection can silently
-run on the unsound foundation. The durable append-only projection journal that
-removes the limitation now has an **accepted design** — ADR
-`202606071600-1504-adr-projection-event-journal.md` (a dedicated append-only
-`projection_events` table, model-a, mirroring #1609's saga journal; this hard
-outbox-backed reader is deleted by its PR-03, and this fail-closed gate is
-removed only by its **PR-04 — after** the T-06-2 PG e2e rebuild proof + the
-no-DELETE guard land (the production-default flip is gated on proof, not done in
-PR-03), after which the production wiring is durable-by-default and this "fails
-closed" compensation is **superseded**. The capability is delivered by that ADR's
-PR-01..04 (PR-00 is the ADR only); the real PG e2e rebuild test T-06-2 is the
-gating proof in its PR-04. (Per-spec
-replay filtering — #1482 — has since **landed** at the Coordinator level,
-decoupled from the PG reader and the durable journal; see §Amendment 2026-06-04.)
-The review also hardened the adapter: a schema_guard
-IDENTITY guard on `seq` (F5), a bounded-ctx position lookup (F6), rebuild ctx
-identity restore (F4), and a no-duplicate conformance assertion (F7).
+**Compensation (已被 PR-04 #1771 supersede).** 此前的 fail-closed compensation（`GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true` opt-in，生产默认不接 PG journal-backed reader）**已由 PR-04（#1771，EPIC #1504）删除**：durable append-only `projection_events` journal（ADR `202606071600-1504-adr-projection-event-journal.md`）在 T-06-2 PG e2e 证明通过后成为生产默认；`GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate 已从 `cmd/corebundle` 删除，无 env opt-out（per 不留软回退宪法）。当声明了 projection 时，PG 模式自动接 durable source + `projection_journal_ready` readyz probe；无投影则不接（无空转 probe）。fail-closed phase6 drain（`checkProjectionDeps`）作为安全网全程保留。Per-spec replay filtering（#1482）已落（Coordinator 层，与位置源正交）；outbox-backed `PGProjectionReplaySource`/`PGProjectionCursor` 已在 PR-03 删除（无双路径）。adapter 加固（F4/F5/F6/F7）保持不变。
 
 ### Threat-matrix re-evaluation (ai-robust ADR-amendment requirement — 逐行重评)
 
-- **Row 1** (exactly-once / production Cursor): ✅ → **✅ (delivered, gated)**. The
-  compare/skip mechanism is unchanged; PR-04c supplies the production position
-  source, and the cursor↔replay single-holder structure makes position agreement
-  structural rather than conventional. The transient-journal risk (cleaned row →
-  live event dropped / rebuild abort) is **not** an un-mitigated regression: the
-  corebundle hard gate keeps the PG reader off by default (fail-fast if a
-  projection is declared), so no production projection runs on it until the
-  durable journal lands. That journal now has an **accepted design** — ADR
-  `202606071600-1504-adr-projection-event-journal.md` (dedicated append-only
-  `projection_events`, position from the row's own `global_seq`, never cleaned).
-  When its **PR-04** removes the gate (after the T-06-2 e2e proof + no-DELETE
-  guard) and the durable source becomes the default, Row 1 **strengthens**
-  transient → durable (position no longer sourced from a relay-deletable row); it
-  does **not** flip to ⚠️/❌. See the Retention-boundary compensation above.
+- **Row 1** (exactly-once / production Cursor): ✅ → **✅ (strengthened, durable)**. 位置源已从 relay-deletable `outbox_entries.seq` 升为 durable `projection_events.global_seq`（永不 cleanup，DB 引擎 `REVOKE UPDATE, DELETE` Hard 守卫，migration 058）。PR-04（#1771）已删 gate，durable source 现为生产默认；position 不再来自 relay-deletable 行，cleaned-outbox 行无法导致 live event dropped / rebuild abort，#1504 根 bug 结构性闭合。compare/skip 机制及 cursor↔replay single-holder 结构不变。Row 1 从「delivered, gated」升为「durable, ungated」，不翻 ⚠️/❌（是加强）。
 - **Row 2** (crash recovery): unchanged. Checkpoint persistence semantics are
   independent of the position source; resume-at-offset+1 now runs over a durable
   `seq` (within the retention window).

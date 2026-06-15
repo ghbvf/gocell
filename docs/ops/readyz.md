@@ -504,26 +504,13 @@ developer test, not production behaviour.
 
 ## Projection probes
 
-### projection_journal_ready (gate-conditional, #1504 PR-03)
+### projection_journal_ready (#1504 PR-01，PG 模式 + 声明了 projection 时注册)
 
-The `projection_journal_ready` ProbeName is declared in `adapters/postgres`
-(`ProbeProjectionJournalReady`, EPIC #1504 PR-01) and implemented by
-`PGProjectionEventSource.RepoReady`. As of #1504 PR-03 the composition root
-(`cmd/corebundle`) registers it via `bootstrap.WithHealthChecker` — but **only when the
-durable projection source is wired**, i.e. when `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW=true`
-in PG mode (the fail-closed gate). When the gate is off, `projectionRuntimeOptions` returns
-no options at all, so the probe is **not** registered and does **not** appear in
-`/readyz?verbose`.
+`projection_journal_ready` ProbeName 在 `adapters/postgres` 声明（`ProbeProjectionJournalReady`，EPIC #1504 PR-01），由 `PGProjectionEventSource.RepoReady` 实现。自 PR-04（#1771）删除 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate 后，composition root（`cmd/corebundle`）在 **PG 模式且声明了 projection**（`generatedProjectionSourceTopics()` 非空）时自动注册此 probe；无投影声明则不注册（无空转 probe，不会出现在 `/readyz?verbose`）。
 
-**Operator caveat**: do NOT target this probe with a dependency-availability alert in
-environments where the gate is off — its absence there is expected, not a fault. The
-production-default flip that removes the gate (so the probe is always present in PG mode)
-lands in #1771 PR-04, gated on T-06-2 e2e.
+该 probe 报告 `projection_events` 表可达性 + 表级权限（`SELECT 1 FROM projection_events WHERE false` 代表性查询），暴露 pool-level `postgres_ready` ping 无法检测的 schema/migration drift——与 `*_repo_ready` 系列 cell probe 同语义。
 
-When registered it reports `projection_events` table reachability + table-level permissions
-(a `SELECT 1 FROM projection_events WHERE false` representative query), surfacing
-schema/migration drift that the pool-level `postgres_ready` ping cannot detect — same
-semantics as the `*_repo_ready` cell probes.
+**运维注意**：在未声明任何 projection 的部署中，该 probe 不出现是预期行为，不是故障。若需对此 probe 设依赖可用性告警，确保部署确实声明了 projection。
 
 ## Saga probes
 
