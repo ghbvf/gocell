@@ -141,6 +141,31 @@ func TestResolve_Postgres_RabbitMQ_BundlesConnAsResource(t *testing.T) {
 	require.NoError(t, tr.Resources[0].Close(context.Background()))
 }
 
+// TestResolve_TransportKind verifies Resolve stamps the sealed
+// bootstrap.EventTransportKind that the phase0 broker-mandatory gate trusts
+// (#2211): demo/memory → not a real broker; postgres rabbitmq → real broker.
+// This sealed fact is what replaces the gate's StorageBackend()=="postgres"
+// proxy — the eventtransport resolver is the single sanctioned minter of the
+// real-broker variant (EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01).
+func TestResolve_TransportKind(t *testing.T) {
+	t.Parallel()
+
+	demo, err := Resolve(clock.Real(), mkTopo(t, "memory"), Config{})
+	require.NoError(t, err)
+	assert.False(t, demo.Kind.IsRealBroker(),
+		"demo/memory transport must not report a real broker (in-process bus)")
+
+	pg, err := Resolve(
+		clock.Real(),
+		mkTopo(t, "postgres"),
+		Config{AMQPURL: "amqp://localhost:5672/", connOpts: []rabbitmq.ConnectionOption{rabbitmq.WithDialFunc(okDial)}},
+	)
+	require.NoError(t, err)
+	assert.True(t, pg.Kind.IsRealBroker(),
+		"postgres rabbitmq transport must report a real broker")
+	require.NoError(t, pg.Resources[0].Close(context.Background()))
+}
+
 func TestDLXExchange_StableName(t *testing.T) {
 	t.Parallel()
 	// The DLX exchange name is an operations contract (broker topology); pin it so

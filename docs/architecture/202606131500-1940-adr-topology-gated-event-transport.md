@@ -107,6 +107,22 @@ PR 范围。
 - **权威语义**：`cellmodules/replaydeps/doc.go`（§INVARIANT REPLAYDEPS-INMEM-FUNNEL-01）+
   `tools/archtest/replaydeps_inmem_funnel.go`。
 
+## Amendment 2026-06-15（#2211）：`Transport.Kind` sealed broker-kind 事实
+
+`Resolve` 现给每个 `Transport` 盖一个 sealed `bootstrap.EventTransportKind`（`Transport.Kind`）：
+postgres → RabbitMQ 分支 mint `RealBrokerEventTransport()`，demo 分支 mint `InMemoryEventTransport()`。
+这是 #1423 US3 phase0 broker-mandatory 闸的输入升级——闸由 `StorageBackend()=="postgres"` 代理改查
+sealed `IsRealBroker()`（«non-nil ≠ real broker» 收口，见 ADR 1423 的 2026-06-15 amendment）。
+
+- **本包是 real-broker 变体的唯一 sanctioned minter**：composition root 透传 `Transport.Kind` 到
+  `bootstrap.WithEventTransportKind`，自身不调构造器。由新 archtest
+  `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01`（call-level scan，allowlist 本包）守。
+- **评级**：sealed 构造 Hard；minter-单调用方结构性 Medium（跨模块 `framework`↔`cellmodules`，
+  `internal/` 不可桥接 → 无低成本 Hard 路径，不立 issue，与 REPLAYDEPS-INMEM-FUNNEL-01 同族 Go 天花板）；
+  生产端到端「split ⇏ in-mem」仍由本 ADR 的 `COREBUNDLE-EVENTBUS-FUNNEL-01` depguard 保 Hard。
+- **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01）+
+  `framework/runtime/bootstrap/event_transport_kind.go`。
+
 ## 参考
 
 - 对称 funnel：`kernel/outbox/mode_resolver.go`（`ResolveEmitter`）、`cellmodules/replaydeps`（#825/#2017）

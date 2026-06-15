@@ -423,6 +423,7 @@ func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 		WithControlPlaneTopology(postgresTopo),
 		WithPublisher(brokerBus),
 		WithSubscriber(brokerBus),
+		WithEventTransportKind(RealBrokerEventTransport()),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -465,6 +466,7 @@ func TestBootstrap_DeploymentTopologyGetter_BeforePhase0(t *testing.T) {
 		WithControlPlaneTopology(postgresTopo),
 		WithPublisher(brokerBus),
 		WithSubscriber(brokerBus),
+		WithEventTransportKind(RealBrokerEventTransport()),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -585,12 +587,16 @@ func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 
 // TestValidateSplitTopologyBroker exercises the phase0 broker-mandatory gate
 // (validateSplitTopologyBroker) directly, without starting a full Bootstrap.
+// Since #2211 the gate keys off the sealed EventTransportKind fact (minted only
+// by eventtransport.Resolve) rather than the StorageBackend()=="postgres" proxy.
 // The gate must:
-//   - reject split topology (≥1 remote) + in-memory bus (storage != postgres)
-//   - reject split topology + postgres storage but nil publisher or subscriber
-//     (F1: phase2 would degrade to in-memory bus — same security gap)
-//   - accept split topology + postgres storage + non-nil publisher + non-nil subscriber
-//   - accept colocated topology + in-memory bus (no remote cells, no broker needed)
+//   - reject split topology (≥1 remote) + in-memory kind
+//   - reject split topology + UNSET kind (composition root forgot the option →
+//     fail-closed, same posture as a forgotten publisher/subscriber)
+//   - reject split topology + real-broker kind but nil/typed-nil publisher or
+//     subscriber (phase2 would degrade to in-memory bus — same security gap)
+//   - accept split topology + real-broker kind + non-nil publisher + subscriber
+//   - accept colocated / zero topology regardless of kind (gate does not fire)
 func TestValidateSplitTopologyBroker(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
@@ -610,14 +616,6 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newDeploymentTopology(colocated): %v", err)
 	}
-	memoryTopo, err := NewTopology("", "memory", false)
-	if err != nil {
-		t.Fatalf("NewTopology(memory): %v", err)
-	}
-	postgresTopo, err := NewTopology("real", "postgres", false)
-	if err != nil {
-		t.Fatalf("NewTopology(postgres): %v", err)
-	}
 
 	// nonNilBus is used for the GREEN cases that require non-nil publisher/subscriber.
 	nonNilBus := eventbus.New(clock.Real())
@@ -630,93 +628,94 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	cases := []struct {
 		name               string
 		deploymentTopology DeploymentTopology
-		controlPlaneTopo   Topology
+		kind               EventTransportKind
 		publisher          outbox.Publisher
 		subscriber         outbox.Subscriber
 		wantErr            bool
 		wantErrCode        errcode.Code
 	}{
 		{
-			name:               "RED: split topology + in-memory bus → rejected",
+			name:               "RED: split topology + in-memory kind → rejected",
 			deploymentTopology: splitDT,
-			controlPlaneTopo:   memoryTopo,
+			kind:               InMemoryEventTransport(),
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
 			wantErr:            true,
 			wantErrCode:        errcode.ErrValidationFailed,
 		},
 		{
-			// F1: split topology + postgres storage but nil publisher → rejected.
-			// phase2InitPubSub falls back to in-memory bus when publisher==nil,
-			// so this combination must be fail-closed even though StorageBackend==postgres.
-			name:               "RED: split topology + postgres + nil publisher → rejected (F1 nil guard)",
+			// Composition root forgot WithEventTransportKind → zero value (unset).
+			// IsRealBroker()==false → fail-closed, exactly like a forgotten broker.
+			name:               "RED: split topology + UNSET kind → rejected (fail-closed)",
 			deploymentTopology: splitDT,
-			controlPlaneTopo:   postgresTopo,
+			kind:               EventTransportKind{}, // unset
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			// real-broker kind but nil publisher → rejected. phase2InitPubSub falls
+			// back to in-memory bus when publisher==nil, so this stays fail-closed
+			// (independent invariant: a real-broker kind with a nil sink is broken wiring).
+			name:               "RED: split topology + real-broker kind + nil publisher → rejected (nil guard)",
+			deploymentTopology: splitDT,
+			kind:               RealBrokerEventTransport(),
 			publisher:          nil,
 			subscriber:         nonNilBus,
 			wantErr:            true,
 			wantErrCode:        errcode.ErrValidationFailed,
 		},
 		{
-			// F1: split topology + postgres storage but nil subscriber → rejected.
-			name:               "RED: split topology + postgres + nil subscriber → rejected (F1 nil guard)",
+			name:               "RED: split topology + real-broker kind + nil subscriber → rejected (nil guard)",
 			deploymentTopology: splitDT,
-			controlPlaneTopo:   postgresTopo,
+			kind:               RealBrokerEventTransport(),
 			publisher:          nonNilBus,
 			subscriber:         nil,
 			wantErr:            true,
 			wantErrCode:        errcode.ErrValidationFailed,
 		},
 		{
-			name:               "GREEN: split topology + postgres storage + non-nil pub/sub → accepted",
+			// F3: typed-nil publisher (non-nil interface, nil concrete pointer) must
+			// be rejected — a bare == nil check would let it pass and phase2 would
+			// degrade to the in-memory bus. validation.IsNilInterface closes it.
+			name:               "RED: split topology + real-broker kind + typed-nil publisher → rejected (F3 typed-nil)",
 			deploymentTopology: splitDT,
-			controlPlaneTopo:   postgresTopo,
+			kind:               RealBrokerEventTransport(),
+			publisher:          typedNilPub,
+			subscriber:         nonNilBus,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			name:               "GREEN: split topology + real-broker kind + non-nil pub/sub → accepted",
+			deploymentTopology: splitDT,
+			kind:               RealBrokerEventTransport(),
 			publisher:          nonNilBus,
 			subscriber:         nonNilBus,
 			wantErr:            false,
 		},
 		{
-			name:               "GREEN: colocated topology + in-memory bus → accepted (no remote cells)",
+			name:               "GREEN: colocated topology + in-memory kind → accepted (no remote cells)",
 			deploymentTopology: colocatedDT,
-			controlPlaneTopo:   memoryTopo,
+			kind:               InMemoryEventTransport(),
 			wantErr:            false,
 		},
 		{
-			name:               "GREEN: zero deployment topology + in-memory bus → accepted (all-colocated default)",
+			name:               "GREEN: zero deployment topology + unset kind → accepted (all-colocated default)",
 			deploymentTopology: DeploymentTopology{},
-			controlPlaneTopo:   memoryTopo,
+			kind:               EventTransportKind{},
 			wantErr:            false,
-		},
-		{
-			// F6: zero-value Topology{} (StorageBackend()=="") combined with a split
-			// deployment topology must be fail-closed rejected. This locks the
-			// invariant that a zero Topology does not accidentally read as postgres
-			// and let an un-configured split deployment pass the broker gate.
-			name:               "RED: split topology + zero Topology{} (StorageBackend==\"\") → rejected (fail-closed)",
-			deploymentTopology: splitDT,
-			controlPlaneTopo:   Topology{}, // true zero value — StorageBackend()==""
-			wantErr:            true,
-			wantErrCode:        errcode.ErrValidationFailed,
-		},
-		{
-			// F3: typed-nil publisher (non-nil interface, nil concrete pointer)
-			// must be rejected — a bare == nil check would let it pass and phase2
-			// would degrade to the in-memory bus. validation.IsNilInterface closes it.
-			name:               "RED: split topology + postgres + typed-nil publisher → rejected (F3 typed-nil)",
-			deploymentTopology: splitDT,
-			controlPlaneTopo:   postgresTopo,
-			publisher:          typedNilPub,
-			subscriber:         nonNilBus,
-			wantErr:            true,
-			wantErrCode:        errcode.ErrValidationFailed,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &Bootstrap{
-				deploymentTopology:   tc.deploymentTopology,
-				controlPlaneTopology: tc.controlPlaneTopo,
-				publisher:            tc.publisher,
-				subscriber:           tc.subscriber,
+				deploymentTopology: tc.deploymentTopology,
+				eventTransportKind: tc.kind,
+				publisher:          tc.publisher,
+				subscriber:         tc.subscriber,
 			}
 			err := b.validateSplitTopologyBroker()
 			if tc.wantErr {
@@ -797,6 +796,7 @@ func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
 		WithControlPlaneTopology(postgresTopo),
 		WithPublisher(brokerBus),
 		WithSubscriber(brokerBus),
+		WithEventTransportKind(RealBrokerEventTransport()),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)

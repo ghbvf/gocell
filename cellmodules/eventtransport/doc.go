@@ -25,6 +25,25 @@
 // configured: a missing GOCELL_AMQP_URL is a startup error, never a silent
 // degrade back to in-memory.
 //
+// # INVARIANT: EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01
+//
+// Resolve stamps each [Transport] with a sealed [runtime/bootstrap.EventTransportKind]
+// (Transport.Kind): RealBrokerEventTransport() on the postgres → RabbitMQ branch,
+// InMemoryEventTransport() on the demo branch. This package is the SINGLE
+// sanctioned minter of the real-broker variant — the composition root threads
+// Transport.Kind into bootstrap.WithEventTransportKind so the phase0
+// broker-mandatory gate (validateSplitTopologyBroker) trusts a type-system fact
+// instead of the older StorageBackend()=="postgres" proxy ("non-nil ≠ real
+// broker" closed, #2211). bootstrap (framework module) must export the
+// constructor for this package (root module) to call it, and a
+// framework/.../internal/ package cannot bridge that cross-module import, so the
+// caller restriction is a structural Medium ceiling enforced by archtest
+// EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01 (a call-level AST scan, same family as the
+// RowScopeAll minter and COMMAND-ASYNC-EMIT-CALLER-01). The production end-to-end
+// guarantee remains Hard via COREBUNDLE-EVENTBUS-FUNNEL-01 above: an in-memory bus
+// is import-unexpressible in the production roots, so a forged real-broker kind
+// cannot be paired with one there.
+//
 // # Broker connection is intentionally assembly-level (not per-cell)
 //
 // The broker (RabbitMQ, GOCELL_AMQP_URL) is the cross-cell event bus: its

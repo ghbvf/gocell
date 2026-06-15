@@ -30,10 +30,19 @@ const dlxExchange = "gocell.events.dlx"
 // real broker's publisher/subscriber backed by one shared connection, and
 // Resources holds that connection (a lifecycle.ManagedResource) so bootstrap can
 // close it during shutdown.
+//
+// Kind is the sealed bootstrap.EventTransportKind fact stating whether the
+// resolved transport is a real cross-process broker (postgres → RabbitMQ) or an
+// in-process bus (demo). This package is the SINGLE sanctioned minter of the
+// real-broker variant (EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01); the composition
+// root threads Kind into bootstrap.WithEventTransportKind so the phase0
+// broker-mandatory gate trusts a type-system fact instead of a StorageBackend
+// proxy (#2211).
 type Transport struct {
 	Publisher  outbox.Publisher
 	Subscriber outbox.Subscriber
 	Resources  []lifecycle.ManagedResource
+	Kind       bootstrap.EventTransportKind
 }
 
 // Config carries the composition-root-read configuration for the transport. The
@@ -116,7 +125,7 @@ func dispatchTransport(clk clock.Clock, spec brokerSpec, cfg Config) (Transport,
 	switch spec.kind {
 	case brokerInMemory:
 		eb := eventbus.New(clk)
-		return Transport{Publisher: eb, Subscriber: eb}, nil
+		return Transport{Publisher: eb, Subscriber: eb, Kind: bootstrap.InMemoryEventTransport()}, nil
 	case brokerRabbitMQ:
 		return resolveRabbitMQ(clk, spec, cfg)
 	default:
@@ -148,5 +157,8 @@ func resolveRabbitMQ(clk clock.Clock, spec brokerSpec, cfg Config) (Transport, e
 		// timeouts) keep their adapter defaults.
 		Subscriber: rabbitmq.NewSubscriber(clk, conn, rabbitmq.SubscriberConfig{DLXExchange: dlxExchange}),
 		Resources:  []lifecycle.ManagedResource{conn},
+		// Sole sanctioned mint of the real-broker kind (EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01):
+		// only reached on the postgres → RabbitMQ branch.
+		Kind: bootstrap.RealBrokerEventTransport(),
 	}, nil
 }
