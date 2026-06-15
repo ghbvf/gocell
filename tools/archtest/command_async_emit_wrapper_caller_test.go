@@ -94,10 +94,13 @@ func commandEmitExitCallee(p *Pass, call *ast.CallExpr) (name string, ok bool) {
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//  1. generated/contracts/command/** packages ARE sanctioned callers but are
-//     excluded by Production() scope regardless — so the Production scan never
-//     observes a sanctioned caller; the anti-vacuity anchor scans generated/
-//     separately for both wrappers' existence.
+//  1. generated/ is excluded from Production() scope, so the Production scan never
+//     observes a generated caller. Generated packages are handled by two separate
+//     typed scans over generated/: (a) the anti-vacuity anchor verifies the
+//     command wrappers exist (both arms); (b) nonCommandGeneratedEmitCallers flags
+//     any NON-command generated package calling a runtime emit exit (#2059 F2) —
+//     so the stated allowlist {generated/contracts/command/**, runtime/command} is
+//     actually enforced, not assumed. (b) is vacuous-green today (no such caller).
 //  2. Both exits have live production callers post-migration (#2059): EmitAsync
 //     (device bootstrap + cert-renewal reconcile producers) and
 //     EmitAsyncFromIdempotencyKey (the devicecmd HTTP EnqueueAsync bridge, #1610).
@@ -171,6 +174,14 @@ func TestCommandAsyncEmitCaller01(t *testing.T) {
 		})
 	}
 
+	// Generated-scope enforcement (#2059 F2): the stated allowlist is
+	// {generated/contracts/command/**, runtime/command}. The Production scan above
+	// excludes ALL generated/, so a NON-command generated package directly calling a
+	// runtime emit exit would slip through. Scan generated/contracts/** and flag any
+	// emit-exit caller whose package is not under generated/contracts/command/, so the
+	// enforcement matches the allowlist the rule claims (not just command anti-vacuity).
+	diags = append(diags, nonCommandGeneratedEmitCallers(t)...)
+
 	Report(t, "COMMAND-ASYNC-EMIT-CALLER-01", diags)
 }
 
@@ -214,6 +225,55 @@ func missingGeneratedEmitWrappers(t *testing.T) []string {
 		}
 	}
 	return missing
+}
+
+// generatedCommandPkgInfix is the import-path infix marking the SOLE sanctioned
+// generated caller of the runtime emit exits — the per-command generated wrappers
+// under generated/contracts/command/**. Any OTHER generated/contracts/** package
+// calling a runtime emit exit is a funnel bypass (#2059 F2).
+const generatedCommandPkgInfix = "/generated/contracts/command/"
+
+// nonCommandGeneratedEmitCallers scans generated/contracts/** and returns a
+// diagnostic for every direct runtime emit-exit call (command.EmitAsync /
+// command.EmitAsyncFromIdempotencyKey) made from a generated package NOT under
+// generated/contracts/command/. The Production scan in the main test excludes all
+// of generated/ by scope; this closes that hole so the rule actually enforces its
+// stated allowlist for generated packages, not only the command anti-vacuity.
+// Reuses the production-proven commandEmitExitCallee detector (RED-fixture covered),
+// so only the package-prefix gate is new; today this is vacuous-green (no
+// non-command generated package calls the exits).
+func nonCommandGeneratedEmitCallers(t *testing.T) []Diagnostic {
+	t.Helper()
+	var diags []Diagnostic
+	_ = Run(t, Typed(TypedOpts{}, []string{"./generated/contracts/..."}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		if strings.Contains(p.Pkg.Path(), generatedCommandPkgInfix) {
+			return nil // sanctioned generated caller
+		}
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				name, ok := commandEmitExitCallee(p, call)
+				if !ok {
+					return
+				}
+				pos := p.Fset.Position(call.Pos())
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"COMMAND-ASYNC-EMIT-CALLER-01: %s is a NON-command generated package "+
+							"calling runtime command.%s directly. Only generated/contracts/command/** "+
+							"per-command wrappers may call the runtime emit exits (#2059 F2).",
+						rel, name),
+				})
+			})
+		}
+		return nil
+	})
+	return diags
 }
 
 // TestCommandAsyncEmitCaller01_RedFixture verifies the scanner fires against a

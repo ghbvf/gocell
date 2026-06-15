@@ -217,7 +217,16 @@ func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry)
 // to opt into queue active-uniqueness. The funnel is locked by archtest
 // COMMAND-ASYNC-EMIT-CALLER-01 (symmetric to the consumer-side
 // COMMAND-ASYNC-DISPATCH-CALLER-01).
+//
+// Returns KindInvalid / ErrValidationFailed when req is nil (mirrors Dispatch):
+// a nil *Request would otherwise marshal to a `null` payload
+// and enter the outbox as a poison entry that only fails at the relay
+// (DispatchAsync schema-validate → MarkDead). Fail fast at the producer instead.
 func EmitAsync(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject, commandID string, req *Request, opts ...command.EmitOption) error {
+	if req == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.devicecommand.enqueue.v1 emit async: request must not be nil")
+	}
 	return command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)
 }
 
@@ -228,6 +237,14 @@ func EmitAsync(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subje
 // because commandID is derived from the sealed ctx identity, the subject/commandID
 // transpose footgun is structurally inexpressible on this HTTP-sourced path.
 // Callers are locked by archtest COMMAND-ASYNC-EMIT-CALLER-01.
+//
+// Returns KindInvalid / ErrValidationFailed when req is nil (mirrors Dispatch and
+// EmitAsync): a nil request must fail fast at the producer, not become a `null`
+// outbox poison entry.
 func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject string, req *Request, opts ...command.EmitOption) error {
+	if req == nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command.devicecommand.enqueue.v1 emit async (idempotency-key): request must not be nil")
+	}
 	return command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)
 }

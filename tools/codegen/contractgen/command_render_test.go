@@ -133,6 +133,10 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		{"EmitAsync bakes DispatchID", "command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)"},
 		{"EmitFromIdemKey wrapper", "func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock,"},
 		{"EmitFromIdemKey bakes DispatchID", "command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)"},
+		// #2059 F1: both producer wrappers fail-fast on nil request (mirror Dispatch)
+		// so a nil *Request never becomes a `null` outbox poison entry.
+		{"EmitAsync nil-req guard", `"command.synth.do.v1 emit async: request must not be nil"`},
+		{"EmitFromIdemKey nil-req guard", `"command.synth.do.v1 emit async (idempotency-key): request must not be nil"`},
 		{"clock import", `"github.com/ghbvf/gocell/framework/kernel/clock"`},
 		// #1588 value funnel: unconditional request-schema embed + validator +
 		// the DispatchAsync Validate call (the async command-entry value check).
