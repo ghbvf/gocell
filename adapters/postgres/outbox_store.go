@@ -149,7 +149,7 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 // $5 baseDelayMicros, $6 kout.StateClaiming.String(), $7 maxDelayMicros, $8 batchSize.
 const reclaimStaleQuery = `WITH picked AS (
 		SELECT id, lease_id, attempts FROM outbox_entries
-		WHERE status = $6 AND claimed_at < now() - $1
+		WHERE status = $6 AND claimed_at < now() - $1::interval
 		ORDER BY claimed_at
 		FOR UPDATE SKIP LOCKED
 		LIMIT $8
@@ -299,6 +299,13 @@ func (s *PGOutboxStore) ReclaimStale(
 	// interval (SQLSTATE 42846). Pass claimTTL as a typed pgtype.Interval (pgx/v5
 	// idiomatic, aligns with saga #2058); baseDelay and maxDelay stay int64
 	// microseconds multiplied by interval '1 microsecond' in SQL.
+	//
+	// The SQL keeps `$1::interval` even though the value is already interval-typed:
+	// `now() - $1` is ambiguous (timestamptz - interval = timestamptz OR
+	// timestamptz - timestamptz = interval), so PG would otherwise infer $1 as
+	// timestamptz and `claimed_at < (interval)` fails (42883). The cast pins the
+	// overload at parse time. (MarkRetry's `now() + $3` needs no cast — `+` only
+	// has the timestamptz+interval overload, so it is unambiguous.)
 	claimTTLInterval := pgtype.Interval{Microseconds: claimTTL.Microseconds(), Valid: true}
 
 	ct, err := s.db.Exec(ctx, reclaimStaleQuery,
