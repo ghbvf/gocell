@@ -224,7 +224,7 @@ func TestCachingSessionRevoke_01(t *testing.T) {
 // method to its rule: RevokeForSubject → delegate-only; Revoke → after-commit.
 func scanCachingRevokeViolations(p *Pass, file *ast.File, rel string) []string {
 	var out []string
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		recvName, ok := cachingStoreReceiver(fn)
 		if !ok {
 			return
@@ -459,7 +459,7 @@ func TestCachingSessionRevoke_BlindSpot_RevokeForSubjectSingleStmt(t *testing.T)
 			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if _, ok := cachingStoreReceiver(fn); !ok || fn.Name.Name != delegateOnlyMethod {
 					return
 				}

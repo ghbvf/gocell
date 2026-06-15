@@ -512,7 +512,7 @@ func collectA1bRanges(files []*ast.File) (ctor posRange, callers []posRange, typ
 		if hasTypeSpecNamed(f, codegenSealedSpecType) {
 			typeFound = true
 		}
-		EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Recv != nil || fd.Name == nil || fd.Body == nil {
 				return
 			}

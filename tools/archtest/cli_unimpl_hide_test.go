@@ -179,7 +179,7 @@ func TestCLIUnimplHide01(t *testing.T) {
 // dispatcher (dispatchFuncs), so resolving over a parallel/wrong slice fails.
 func scanDispatchViaRegistry(p *Pass, f *ast.File, rel string) []Diagnostic {
 	var d []Diagnostic
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Body == nil {
 			return
 		}
@@ -449,7 +449,7 @@ func containsMsg(diags []Diagnostic, sub string) bool {
 // blacklist but is an extra/foreign statement here).
 func scanPrintUsageDerived(p *Pass, f *ast.File, rel string) []Diagnostic {
 	var d []Diagnostic
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Name.Name != "PrintUsage" || fn.Body == nil {
 			return
 		}

@@ -83,7 +83,7 @@ func checkVisitBufferThenCommit(t *testing.T, path string) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || len(fn.Recv.List) == 0 {
 			return
 		}

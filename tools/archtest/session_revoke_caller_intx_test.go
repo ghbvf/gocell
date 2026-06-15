@@ -323,7 +323,7 @@ func scanSessionRevokeCallsites(
 			continue
 		}
 		funcRefOffsets := map[int]bool{}
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}
@@ -433,7 +433,7 @@ func scanSessionRevokeHelperCallsites(
 		if len(rel) > 8 && rel[len(rel)-8:] == "_test.go" {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}

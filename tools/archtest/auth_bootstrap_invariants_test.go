@@ -217,7 +217,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
-			EachInSubtree[ast.FuncDecl](f, func(node *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(node *ast.FuncDecl) {
 				if node.Name == nil || node.Name.Name != "NewHandler" || node.Recv != nil {
 					return
 				}

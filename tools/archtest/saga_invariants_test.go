@@ -2307,7 +2307,7 @@ func sfcCollectSwitchStatusCases(p *Pass, fnName, recvType string) (set map[stri
 		if strings.HasSuffix(p.Rel(f), "_test.go") {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Name.Name != fnName {
 				return
 			}
@@ -2382,7 +2382,7 @@ func sfcCollectDeclaredConsts(p *Pass, pkgPath, typeName string) (values map[int
 		if strings.HasSuffix(p.Rel(f), "_test.go") {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 			if fd.Name.Name != "Valid" || !sfcReceiverIsType(fd, p.TypesInfo, pkgPath, typeName) {
 				return
 			}
@@ -3391,7 +3391,7 @@ func TestSagaSlogInstanceFieldsCaller_B3_CarrierNameUniqueInRuntimeSaga(t *testi
 			if !isRuntimeSagaProductionFile(rel) {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Name != nil && fn.Name.Name == sagaInstanceFieldsFuncName {
 					decls = append(decls, rel)
 				}

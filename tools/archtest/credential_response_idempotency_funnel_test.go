@@ -138,7 +138,7 @@ func TestCredentialIdempotencyFunnel_CallSiteAllowlist(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Body == nil || fn.Name == nil {
 					return
 				}

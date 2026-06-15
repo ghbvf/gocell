@@ -114,7 +114,7 @@ func TestParserMatcherSymmetry_BlindSpot_VariableIndex(t *testing.T) {
 			if p.Rel(f) != parserMatcherLocatorFile {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
 					return
 				}
@@ -181,7 +181,7 @@ func TestParserMatcherSymmetry_BlindSpot_SwitchStmt(t *testing.T) {
 			if p.Rel(f) != parserMatcherLocatorFile {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || !matchYAMLFuncRE.MatchString(fn.Name.Name) {
 					return
 				}

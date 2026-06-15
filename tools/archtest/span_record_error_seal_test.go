@@ -135,7 +135,7 @@ const violSealB = "otelSpan.RecordError body: inner.RecordError arg must be" +
 // distinguish "inside the sanctioned implementation" vs "outside it".
 func collectOtelSpanRecordErrorBodyRanges(file *ast.File) []token.Pos {
 	var ranges []token.Pos
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || fn.Name == nil || fn.Recv == nil {
 			return
 		}
@@ -272,7 +272,7 @@ func sealBViolationsInFile(fset *token.FileSet, file *ast.File, redactionLocal, 
 // in file. Returns (decl, true) if found.
 func findOtelSpanRecordErrorDecl(file *ast.File) (*ast.FuncDecl, bool) {
 	var found *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || fn.Name == nil || fn.Recv == nil {
 			return
 		}

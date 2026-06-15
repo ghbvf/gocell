@@ -253,7 +253,7 @@ func routeBindingFromLiteral(fset *token.FileSet, lit *ast.CompositeLit, rel str
 
 func collectQueryParamUses(file *ast.File, rel string) map[string]map[string]struct{} {
 	out := map[string]map[string]struct{}{}
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}

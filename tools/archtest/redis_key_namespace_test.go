@@ -88,7 +88,7 @@ func TestRedisConstructorsRequireKeyNamespace(t *testing.T) {
 
 func findRedisConstructorDecl(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found != nil {
 			return // first-match wins; EachInSubtree has no break
 		}

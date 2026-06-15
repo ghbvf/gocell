@@ -199,7 +199,7 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 	// the helper call.
 	chunkCallsEncoder := false
 
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil || fn.Body == nil {
 			return
 		}
@@ -331,7 +331,7 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 
 	// Walk Entry.Validate body for any reference to MaxPayloadBytes.
 	var validate *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if validate != nil {
 			return
 		}
@@ -483,7 +483,7 @@ func TestOutboxRelayLostMetric01_HandleFailedEntryReadsUpdated(t *testing.T) {
 	}
 
 	var handle *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "handleFailedEntry" && fd.Recv != nil {
 			handle = fd
 		}
@@ -745,13 +745,13 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 
 	// OUTBOX-SERVICE-01 requires knowing the enclosing FuncDecl to distinguish
 	// constructor fail-fast (allowed) from runtime-method nil fallback (forbidden).
-	// We use EachInSubtree[ast.FuncDecl] to iterate FuncDecls and check FuncDecl-level
-	// violations plus the BinaryExpr within each body. All other node types that
+	// We use EachInChildren[ast.FuncDecl] to iterate top-level FuncDecls and check
+	// FuncDecl-level violations plus the BinaryExpr within each body. All other node types that
 	// appear anywhere in the file (including struct fields, top-level declarations)
 	// are scanned on the full file.
 
 	// FuncDecl-level checks and BinaryExpr within each function body.
-	EachInSubtree[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(enclosing *ast.FuncDecl) {
 		if isWithOutboxWriterFunc(enclosing) {
 			violations = append(violations, outboxServiceViolation{
 				Rule:    outboxServiceRuleWriterAdapter,
@@ -1696,7 +1696,7 @@ func TestOutboxtestCloseViaBudget01(t *testing.T) {
 	// checks whether pos is within [body.Lbrace, body.Rbrace].
 	enclosingFuncName := func(file *ast.File, pos token.Pos) string {
 		name := ""
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil {
 				return
 			}

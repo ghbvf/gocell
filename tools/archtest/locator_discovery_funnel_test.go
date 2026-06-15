@@ -256,7 +256,7 @@ func TestLOCATOR_DISCOVERY_FUNNEL_01_A1_WalkdirCallerAllowlist(t *testing.T) {
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+				EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 					if fn.Body == nil || locatorAllowedWalkCallers[fn.Name.Name] {
 						return
 					}

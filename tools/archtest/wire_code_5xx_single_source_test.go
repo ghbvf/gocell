@@ -171,7 +171,7 @@ func collectSwitchCases(t *testing.T, f *ast.File, funcName string) map[int]stri
 	t.Helper()
 	result := make(map[int]string)
 
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		// Match both top-level func and method by name.
 		if fn.Name.Name != funcName {
 			return

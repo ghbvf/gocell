@@ -361,7 +361,7 @@ func collectPkgCtxkeysIdentifiers(
 			})
 		}
 	})
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil || fd.Name.Name == "_" {
 			return
 		}

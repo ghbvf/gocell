@@ -85,7 +85,7 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 		)
 	}
 	found := false
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Recv == nil && fn.Name.Name == "NewSubscription" {
 			found = true
 		}

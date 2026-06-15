@@ -1,6 +1,28 @@
 //go:build archtest
 
-// INVARIANT: INTEGRATION-GUARD-01: vault integration container failures must fail-fast without hanging
+// invariants asserted in this file:
+//   - INVARIANT: INTEGRATION-GUARD-01
+//   - INVARIANT: INTEGRATION-GUARD-POSTGRES-NO-ENVGATE-01
+//   - INVARIANT: INTEGRATION-GUARD-COREBUNDLE-SELF-DSN-01
+//   - INVARIANT: INTEGRATION-GUARD-DOCKER-BEFORE-RUN-01
+//
+// integration_guard_invariants_test.go consolidates the integration-test
+// hygiene invariants — integration containers/tests must self-provision and
+// fail-fast, never skip or env-gate. Promoted from integration_guard_test.go
+// per ai-robust.md §"archtest 文件命名" (≥3 同主题 invariants →
+// {theme}_invariants_test.go, each ID listed). The four guards were previously
+// filed under the single vault-specific INTEGRATION-GUARD-01 header even
+// though three cover postgres / corebundle / docker (#1491):
+//   - INTEGRATION-GUARD-01: vault integration container failures must
+//     fail-fast without hanging — TestVaultContainerStartersFailFast.
+//   - INTEGRATION-GUARD-POSTGRES-NO-ENVGATE-01: postgres-unreachable tests
+//     must not be env-gated; they run unconditionally —
+//     TestPostgresUnreachableHostIsNotEnvGated.
+//   - INTEGRATION-GUARD-COREBUNDLE-SELF-DSN-01: corebundle outbox wiring must
+//     self-provision, not gate on an external DSN —
+//     TestCorebundleOutboxWiringDoesNotUseExternalDSNGate.
+//   - INTEGRATION-GUARD-DOCKER-BEFORE-RUN-01: testcontainer helpers must check
+//     RequireDocker before Run — TestTestcontainerHelpersRequireDockerBeforeRun.
 package archtest
 
 import (
@@ -90,7 +112,7 @@ func TestVaultContainerStartersFailFast(t *testing.T) {
 		if len(aliases.core)+len(aliases.modules) == 0 {
 			continue
 		}
-		scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			if fn.Body == nil || !firstTestcontainerRunPos(fn.Body, aliases).IsValid() {
 				return
 			}
@@ -248,7 +270,7 @@ func testcontainerDockerGuardFindingsForFile(path string) ([]string, error) {
 	}
 
 	var findings []string
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -316,7 +338,7 @@ func importSelectorName(imp *ast.ImportSpec, defaultName string) string {
 
 func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found == nil && fn.Name.Name == name {
 			found = fn
 		}

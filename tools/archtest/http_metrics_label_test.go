@@ -296,7 +296,7 @@ func TestHTTPMetricsLabelNoAssemblyDerive01(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var fn *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(f *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(f *ast.FuncDecl) {
 		if fn == nil && f.Name.Name == "autoWireHTTPMetricsCollector" {
 			fn = f
 		}
@@ -380,7 +380,7 @@ func slashRel(t *testing.T, root, target string) string {
 func findHTTPMetricsFuncDecl(t *testing.T, file *ast.File, name string) *ast.FuncDecl {
 	t.Helper()
 	var result *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if result == nil && fn.Name.Name == name {
 			result = fn
 		}

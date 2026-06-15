@@ -1298,7 +1298,7 @@ func scanEmitterFuncValueUsages(f *ast.File) []token.Pos {
 			selSel[x.Sel] = true
 		}
 	})
-	scanner.EachInSubtree[ast.FuncDecl](f, func(x *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(x *ast.FuncDecl) {
 		if x.Name != nil {
 			declName[x.Name] = true
 		}

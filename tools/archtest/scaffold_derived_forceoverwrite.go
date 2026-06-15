@@ -145,7 +145,7 @@ func isDerivedCtorSite(pkgPath, rel, fnName string) bool {
 // sanctioned planDerivedArtifact@stage_render.go site.
 func derivedForwardViolations(p *Pass, file *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}

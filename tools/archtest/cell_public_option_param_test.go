@@ -352,7 +352,7 @@ func scanPassForRawPublicOption(p *Pass, restrictToCellRoots bool) []rawPublicOp
 		if restrictToCellRoots && !isCellSubtreeFile(relSlash, inPlatformCellModule) {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			if fn.Recv != nil || !fn.Name.IsExported() ||
 				!strings.HasPrefix(fn.Name.Name, "With") {
 				return

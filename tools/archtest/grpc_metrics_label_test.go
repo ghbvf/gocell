@@ -276,7 +276,7 @@ func cellLabelFromResolve(info *types.Info, body ast.Node, argExpr ast.Expr) boo
 func findMetricsFuncDecl(files []*ast.File, name string) *ast.FuncDecl {
 	var result *ast.FuncDecl
 	for _, f := range files {
-		EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 			if result == nil && fn.Recv == nil && fn.Name.Name == name {
 				result = fn
 			}

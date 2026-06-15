@@ -224,7 +224,7 @@ func sealStatusInFunc(info *types.Info, f *ast.File, funcName, loggingPkgPath st
 		return false, false, token.NoPos
 	}
 	funcPos = token.NoPos
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Body == nil || fn.Name.Name != funcName {
 			return
 		}
@@ -550,7 +550,7 @@ func TestSlogHandlerSealedFunnel_A2_HandleFormLock(t *testing.T) {
 			if !strings.HasPrefix(rel, "framework/"+slogFunnelLoggingPkgRelDir) {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Body == nil {
 					return
 				}
@@ -988,7 +988,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 			}
 
 			var viols []Diagnostic
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Body == nil {
 					return
 				}
@@ -1015,7 +1015,7 @@ func (h *contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	var handleChecked bool
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, f := range p.Files {
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Body == nil {
 					return
 				}
@@ -1121,7 +1121,7 @@ func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 				Rel:   func(*ast.File) string { return "logging.go" },
 			}
 			var viols []Diagnostic
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Name == nil || fn.Body == nil {
 					return
 				}
@@ -1199,7 +1199,7 @@ func run() {
 			file, err := parser.ParseFile(fset, "main.go", tc.src, parser.SkipObjectResolution)
 			require.NoError(t, err, "synthetic fixture must parse: %s", tc.desc)
 			var got bool
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Name != nil && fn.Name.Name == "run" && fn.Body != nil {
 					got = firstCallBearingStmtSatisfies(fn.Body, isSetDefault)
 				}

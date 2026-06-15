@@ -119,7 +119,7 @@ func scanRefreshCrossStoreTX(p *Pass) []Diagnostic {
 		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			if !isServiceRefreshMethod(fn) {
 				return
 			}
@@ -438,7 +438,7 @@ func CheckRefreshInvalidIndexSingleSource01(t *testing.T, cfg ConfigForExternalC
 	scope := ModuleScope(root)
 	_ = Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				if fd.Name.Name != "DetectInvalidIndexes" {
 					return
 				}

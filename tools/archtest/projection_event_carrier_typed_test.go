@@ -243,7 +243,7 @@ func scanProjectionCarrierViolations(p *Pass, restrict bool) []projCarrierViolat
 		if strings.HasSuffix(rel, "_test.go") || strings.HasSuffix(rel, "_gen.go") {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			if !fn.Name.IsExported() || fn.Type.Params == nil {
 				return
 			}

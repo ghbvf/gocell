@@ -86,7 +86,7 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, perr)
 	}
 	var found *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if found != nil || fd.Recv != nil || fd.Name == nil {
 			return
 		}

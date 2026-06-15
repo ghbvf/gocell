@@ -1161,7 +1161,7 @@ func asnCheckSource(label, src string) ([]string, error) {
 
 func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	var violations []string
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}

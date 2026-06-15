@@ -318,7 +318,7 @@ type Subscription struct {
 // letting `return other.CellID` read a foreign value while still passing the
 // field-name check. An anonymous receiver is therefore a violation outright.
 func collectObservabilityIDViolations(f *ast.File, fset *token.FileSet, label string) (found bool, violations []string) {
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Name.Name != "ObservabilityID" {
 			return
 		}
@@ -854,7 +854,7 @@ func diffMethodSet(label, typeName string, got map[string]ast.Expr, want []strin
 func collectSubscriptionBuilderShapeViolations(_ *token.FileSet, f *ast.File, label string) []string {
 	draft := map[string]ast.Expr{}
 	builder := map[string]ast.Expr{}
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		name, ok := receiverBaseName(fd)
 		if !ok {
 			return
@@ -892,7 +892,7 @@ func collectSubscriptionBuilderShapeViolations(_ *token.FileSet, f *ast.File, la
 // from collapsing the builder to a single type with an optional CellID, which
 // would demote the contract from compile-time to runtime fail-fast.
 //
-// Detector blind spots (vs scanner.EachInSubtree[ast.FuncDecl] + AST receiver
+// Detector blind spots (vs scanner.EachInChildren[ast.FuncDecl] + AST receiver
 // resolution): the collector keys on the receiver's pointer-stripped *ast.Ident
 // name, so a value receiver `func (b subscriptionBuilder)` is also counted
 // (covered — receiverBaseName strips no Star but matches the Ident); an embedded
