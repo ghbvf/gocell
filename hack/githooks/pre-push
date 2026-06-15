@@ -47,8 +47,9 @@
 #     `bash hack/verify-archtest.sh` or `make verify` explicitly.
 #   - golangci-lint runs CI-faithfully —
 #     `golangci-lint run --new-from-merge-base=origin/develop` with the
-#     version pinned by hack/lib/golangci-lint.sh (the project's single
-#     source of truth, reviewer-synced with _build-lint.yml; NOT go.mod
+#     version pinned by hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (the
+#     project's single source of truth, which CI's lint step sources via the
+#     same gocell::golangci_lint::ensure; NOT go.mod
 #     like gofumpt — golangci-lint is not a go.mod tool dependency).
 #     Three honest caveats: (a) MEASURED cost is ~7s warm but ~295s
 #     (~5min) COLD — i.e. after `go clean -cache`, a dependency bump, or
