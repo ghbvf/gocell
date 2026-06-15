@@ -939,6 +939,24 @@ linters:
         linters:
           - gosec
         text: "G122"
+      # archtest governance scanners are static analyzers that assert about
+      # OTHER code's structure — they never hold real credentials. Their files
+      # naturally contain the auth vocabulary they police (method names like
+      # UpdatePassword, carve-out rationale strings such as "CAS write
+      # (password); not a row read", scan patterns referencing token/secret/
+      # bcrypt). gosec G101's pattern (passwd|pass|password|pwd|secret|token|
+      # apikey) matches those human-readable strings, so G101 is a categorical
+      # false positive across this whole directory (test carve-out maps AND
+      # non-test scanner sources). Same justification as the errcode.go G101
+      # waiver below: the matched strings are documentation/identifiers, not
+      # secrets. Path-scoped to tools/archtest/ (not a global G101 disable). This
+      # rests on archtest's zero-secrets contract: a real credential literal in
+      # this tree would itself be a bug to fix at the source, not something to
+      # hide behind this waiver.
+      - path: ^tools/archtest/
+        linters:
+          - gosec
+        text: "G101"
       - path: ^tools/metricschema/
         linters:
           - gosec
