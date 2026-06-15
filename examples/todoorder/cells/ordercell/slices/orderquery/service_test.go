@@ -135,10 +135,13 @@ func TestService_List_FirstPage(t *testing.T) {
 // data-visibility fix — owner scoping is enforced at the data source, not the gate.
 func TestService_List_OwnerScoped(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// CreatedAt values are immaterial here (the assertion is on owner membership and
+	// count, not order); use the same base for all three to avoid duration literals
+	// (TEST-TIME-LITERAL-01) — the keyset sort tie-breaks on id ASC.
 	repo := seedRepo(
 		&domain.Order{ID: "ord-mine-1", Owner: testListOwner, Item: "a", Status: "pending", CreatedAt: base},
-		&domain.Order{ID: "ord-mine-2", Owner: testListOwner, Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
-		&domain.Order{ID: "ord-other", Owner: "usr-someone-else", Item: "c", Status: "pending", CreatedAt: base.Add(2 * time.Hour)},
+		&domain.Order{ID: "ord-mine-2", Owner: testListOwner, Item: "b", Status: "pending", CreatedAt: base},
+		&domain.Order{ID: "ord-other", Owner: "usr-someone-else", Item: "c", Status: "pending", CreatedAt: base},
 	)
 	svc := mustNewService(repo, testCodec())
 
