@@ -131,6 +131,35 @@ func TestPatternsWithSatellites(t *testing.T) {
 				"(no nested go.mod → empty satellite increment); ext=%v full=%v", ext, full)
 		}
 	})
+
+	t.Run("real workspace adds top-level single-module roots", func(t *testing.T) {
+		// #2164: PatternsWithSatellites must compose the module-root increment too,
+		// so the duration gates (PROD-DURATION-CONST-01 / TEST-TIME-LITERAL-01) cover
+		// corecells/cellmodules — the symmetric counterpart of the satellite increment.
+		root := writeTree(t, map[string]string{
+			"framework/kernel/k.go": "package kernel\n",
+			"corecells/go.mod":      "module x/corecells\n",
+			"corecells/c.go":        "package corecells\n",
+			"cellmodules/go.mod":    "module x/cellmodules\n",
+			"cellmodules/m.go":      "package cellmodules\n",
+		})
+		ext := map[string]bool{}
+		for _, p := range PatternsExtended(root) {
+			ext[p] = true
+		}
+		got := map[string]bool{}
+		for _, p := range PatternsWithSatellites(root) {
+			got[p] = true
+		}
+		for _, mod := range []string{"./corecells/...", "./cellmodules/..."} {
+			if ext[mod] {
+				t.Fatalf("PatternsExtended unexpectedly contains %q; the module-root increment is vacuous", mod)
+			}
+			if !got[mod] {
+				t.Errorf("PatternsWithSatellites must add %q; got %v", mod, PatternsWithSatellites(root))
+			}
+		}
+	})
 }
 
 // TestSatelliteParentPatterns covers the single-sourced satellite increment (#2147)
@@ -187,6 +216,64 @@ func TestSatelliteParentPatterns(t *testing.T) {
 		})
 		if got := SatelliteParentPatterns(root); len(got) != 0 {
 			t.Errorf("SatelliteParentPatterns on single-module fixture = %v, want empty", got)
+		}
+	})
+}
+
+// TestModuleRootMemberPatterns covers the single-sourced module-root increment
+// (#2164) — the sibling of SatelliteParentPatterns. SatelliteParentPatterns re-emits
+// the MULTI-MEMBER parents (cmd/adapters/examples, !IsModuleRoot && HasNestedModuleRoot);
+// ModuleRootMemberPatterns re-emits the TOP-LEVEL SINGLE-MODULE ROOTS (corecells/
+// cellmodules, IsModuleRoot && !HasNestedModuleRoot) that Patterns prunes via IsModuleRoot.
+// Both OBS-01 and the duration gates compose this increment onto their base.
+func TestModuleRootMemberPatterns(t *testing.T) {
+	t.Run("real workspace yields exactly the top-level single-module roots", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"framework/kernel/k.go": "package kernel\n", // plain production layer, not a module root
+			// multi-member parent — owned by SatelliteParentPatterns, NOT this increment.
+			"cmd/gocell/go.mod":  "module x/cmd/gocell\n",
+			"cmd/gocell/main.go": "package main\n",
+			// top-level single-module roots — own go.mod, no nested member → THIS increment.
+			"cellmodules/go.mod": "module x/cellmodules\n",
+			"cellmodules/m.go":   "package cellmodules\n",
+			"corecells/go.mod":   "module x/corecells\n",
+			"corecells/c.go":     "package corecells\n",
+		})
+		got := ModuleRootMemberPatterns(root)
+		gotSet := map[string]bool{}
+		for _, p := range got {
+			gotSet[p] = true
+		}
+		for _, want := range []string{"./cellmodules/...", "./corecells/..."} {
+			if !gotSet[want] {
+				t.Errorf("ModuleRootMemberPatterns missing %q; got %v", want, got)
+			}
+		}
+		if len(got) != 2 {
+			t.Errorf("ModuleRootMemberPatterns = %v, want exactly the 2 top-level single-module roots "+
+				"(no framework layers, no multi-member parents)", got)
+		}
+		// The increment is genuinely NEW: its members appear in neither the base scan
+		// nor the multi-member-parent increment (else composing it would be vacuous).
+		base := map[string]bool{}
+		for _, p := range append(Patterns(root), SatelliteParentPatterns(root)...) {
+			base[p] = true
+		}
+		for _, p := range got {
+			if base[p] {
+				t.Errorf("ModuleRootMemberPatterns member %q already present in Patterns+SatelliteParentPatterns "+
+					"— the increment is not additive", p)
+			}
+		}
+	})
+
+	t.Run("single-module fixture yields nothing", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"go.mod":            "module x\n",
+			"corecells/repo.go": "package corecells\n", // part of the ONE module, no own go.mod
+		})
+		if got := ModuleRootMemberPatterns(root); len(got) != 0 {
+			t.Errorf("ModuleRootMemberPatterns on single-module fixture = %v, want empty", got)
 		}
 	})
 }

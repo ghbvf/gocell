@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
@@ -998,6 +999,167 @@ func TestOBS01CoverageRequiresSatellites_AntiVacuity(t *testing.T) {
 	}
 }
 
+// moduleRootCoverageExcluded lists the depth-1 go.work module roots that are
+// legitimately NOT covered by ModuleRootMemberPatterns, each with its reason:
+//   - framework: the platform core, covered by base Patterns via its
+//     framework/{kernel,runtime,pkg} sub-layer patterns (NOT as a whole module).
+//   - generated: codegen output, excluded from every production scan.
+//   - tools: build/governance tooling, PatternsExtended-only scope (never OBS-01
+//     production / never a production-shippable layer).
+//
+// The set is fail-closed in BOTH directions (see
+// TestModuleRootMembersCoverGoWorkProductionRoots): a new PRODUCTION single-module
+// root missing from topLevelDirs surfaces as uncovered → CI red; a new NON-production
+// module root missing from this set surfaces as "required but uncovered" → CI red →
+// a human adds it here with a reason. `tests` is auto-excluded (it is a MULTI-MEMBER
+// parent — tests/integration carries its own go.mod — so HasNestedModuleRoot prunes it).
+var moduleRootCoverageExcluded = map[string]bool{
+	"framework": true,
+	"generated": true,
+	"tools":     true,
+}
+
+// goWorkProductionModuleRoots derives, from the AUTHORITATIVE go.work member list
+// (NOT from prodscan.topLevelDirs — that would be circular), the depth-1 members that
+// are top-level single-module PRODUCTION roots: own go.mod (IsModuleRoot), no nested
+// member (!HasNestedModuleRoot → not a multi-member parent), one path segment, and not
+// in moduleRootCoverageExcluded. corecells/cellmodules are the post-#1559/#1560 members.
+func goWorkProductionModuleRoots(t *testing.T, root string) []string {
+	t.Helper()
+	mods, err := workspace.Modules(root)
+	require.NoError(t, err)
+	var out []string
+	for _, m := range mods {
+		dir := filepath.ToSlash(filepath.Clean(m.Dir))
+		if dir == "." || dir == "" || strings.Contains(dir, "/") {
+			continue // root or nested (multi-member child) — not a depth-1 single-module root
+		}
+		abs := filepath.Join(root, dir)
+		if !prodscan.IsModuleRoot(abs) || prodscan.HasNestedModuleRoot(abs) {
+			continue
+		}
+		if moduleRootCoverageExcluded[dir] {
+			continue
+		}
+		out = append(out, dir)
+	}
+	return out
+}
+
+// uncoveredModuleRoots is the pure set-difference at the heart of the anti-drift
+// guard: the required roots not present in the covered top-level set. Extracted so the
+// guard's core decision is unit-testable with synthetic input (see
+// TestUncoveredModuleRootsDetectsGap) independent of the real go.work / filesystem.
+func uncoveredModuleRoots(required []string, covered map[string]bool) []string {
+	var missing []string
+	for _, r := range required {
+		if !covered[r] {
+			missing = append(missing, r)
+		}
+	}
+	return missing
+}
+
+// TestModuleRootMembersCoverGoWorkProductionRoots is the #2164 AI-robust (Medium)
+// anti-drift guard: it closes the recurrence vector that produced #2164 — corecells
+// was simply forgotten in the hand-maintained prodscan.topLevelDirs, and nothing
+// caught the omission (TestOBS01ProductionPatternsCoverProjectPackages SkipDir's
+// module roots, so it passes vacuously for them).
+//
+// It cross-checks the two INDEPENDENT sources fail-closed: every depth-1 production
+// single-module root the AUTHORITATIVE go.work declares MUST be covered by
+// ModuleRootMemberPatterns (derived from topLevelDirs). A future top-level
+// single-module module added to go.work but not topLevelDirs is uncovered → CI red.
+// The check is non-circular: `required` comes from go.work, `covered` from
+// topLevelDirs — drift between them is machine-detectable.
+func TestModuleRootMembersCoverGoWorkProductionRoots(t *testing.T) {
+	root := repoRoot(t)
+	required := goWorkProductionModuleRoots(t, root)
+
+	// Anti-vacuity: the guard is meaningless if `required` is empty. Pin the two
+	// real members so a refactor that stops yielding them (e.g. go.work parse change)
+	// fails here rather than passing trivially.
+	require.GreaterOrEqual(t, len(required), 2,
+		"go.work must yield ≥2 production single-module roots (corecells, cellmodules) — guard would be vacuous otherwise")
+	for _, want := range []string{"corecells", "cellmodules"} {
+		assert.Containsf(t, required, want,
+			"go.work production single-module roots must include %q (anti-vacuity)", want)
+	}
+
+	covered := prodscan.PatternTopLevels(prodscan.ModuleRootMemberPatterns(root))
+	missing := uncoveredModuleRoots(required, covered)
+	slices.Sort(missing)
+	assert.Emptyf(t, missing,
+		"go.work declares production single-module root(s) %v not covered by "+
+			"prodscan.ModuleRootMemberPatterns — add them to prodscan.topLevelDirs "+
+			"(or, if non-production, to moduleRootCoverageExcluded with a reason). This is #2164's recurrence guard.",
+		missing)
+}
+
+// TestUncoveredModuleRootsDetectsGap is the synthetic RED witness proving the
+// anti-drift guard's core decision is not恒真: a required root absent from the covered
+// set must be reported missing.
+func TestUncoveredModuleRootsDetectsGap(t *testing.T) {
+	missing := uncoveredModuleRoots(
+		[]string{"corecells", "cellmodules"},
+		map[string]bool{"cellmodules": true}, // corecells forgotten in scan scope
+	)
+	assert.Equal(t, []string{"corecells"}, missing,
+		"uncoveredModuleRoots must report a required root absent from the covered set")
+	assert.Empty(t,
+		uncoveredModuleRoots([]string{"corecells"}, map[string]bool{"corecells": true}),
+		"uncoveredModuleRoots must report nothing when every required root is covered")
+}
+
+// TestOBS01CoverageRequiresModuleRootMembers is the #2164 module-root counterpart of
+// TestOBS01CoverageRequiresSatellites: it asserts the independent, hardcoded fact that
+// the top-level single-module roots (corecells/cellmodules) MUST be OBS-01-covered, via
+// two checks that do NOT depend on each other:
+//
+//  1. the OBS-01 production pattern set's top-levels include corecells/cellmodules; and
+//  2. those module-root patterns actually LOAD non-empty project packages through the
+//     EXACT loadPackages path OBS-01 uses — a load-witness strictly stronger than string
+//     presence: it catches a pattern present in the SoR but matching zero packages.
+func TestOBS01CoverageRequiresModuleRootMembers(t *testing.T) {
+	root := repoRoot(t)
+
+	// (1) coverage: the OBS-01 SoR patterns map back to the module-root top-levels.
+	covered := prodscan.PatternTopLevels(obs01ProductionPatterns(root))
+	for _, mod := range []string{"corecells", "cellmodules"} {
+		assert.Truef(t, covered[mod],
+			"OBS-01 production scan must cover top-level single-module root %q (#2164)", mod)
+	}
+
+	// (2) load-witness: the module-root patterns load non-empty through OBS-01's loader.
+	pkgs, err := loadPackages(t.Context(), root, "./corecells/...", "./cellmodules/...")
+	require.NoError(t, err)
+	require.NotEmpty(t, pkgs,
+		"module-root patterns loaded zero project packages — OBS-01 silently stopped scanning corecells/cellmodules")
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		switch {
+		case strings.Contains(p.PkgPath, "/corecells"):
+			seen["corecells"] = true
+		case strings.Contains(p.PkgPath, "/cellmodules"):
+			seen["cellmodules"] = true
+		}
+	}
+	for _, mod := range []string{"corecells", "cellmodules"} {
+		assert.Truef(t, seen[mod], "module root %q loaded no project package under the OBS-01 scan", mod)
+	}
+}
+
+// TestOBS01CoverageRequiresModuleRootMembers_AntiVacuity proves check (1) is not恒真:
+// a synthetic production pattern set with no module-root pattern must NOT report
+// corecells/cellmodules as covered.
+func TestOBS01CoverageRequiresModuleRootMembers_AntiVacuity(t *testing.T) {
+	covered := prodscan.PatternTopLevels([]string{".", "./framework/kernel/...", "./cmd/..."})
+	for _, mod := range []string{"corecells", "cellmodules"} {
+		assert.Falsef(t, covered[mod],
+			"PatternTopLevels must not report module root %q covered when no module-root pattern is present", mod)
+	}
+}
+
 // TestCheckOBS01DetectsSatelliteMemberLeak is the #2147 anti-vacuity witness that
 // OBS-01 actually SCANS satellite (cmd/adapters/examples) production code. It builds
 // a multi-member go.work workspace whose sole satellite member (examples/leakydemo)
@@ -1018,6 +1180,27 @@ func TestCheckOBS01DetectsSatelliteMemberLeak(t *testing.T) {
 	assert.Equal(t, "reason", diagnostics[0].Label)
 	assert.Equal(t, "examples/leakydemo/leak.go", filepath.ToSlash(diagnostics[0].File),
 		"diagnostic must point exactly at the satellite member leak file — proves satellite code is scanned")
+}
+
+// TestCheckOBS01DetectsModuleRootMemberLeak is the #2164 anti-vacuity witness that
+// OBS-01 actually SCANS top-level single-module root (corecells/cellmodules)
+// production code. It builds a go.work workspace whose sole member is a top-level
+// single-module root (corecells/) that leaks an errcode classifier
+// (errcode.IsInfraError) into a metric label.
+//
+// Before #2164 the module root is pruned by Patterns' IsModuleRoot and re-emitted by
+// neither SatelliteParentPatterns (it is !IsModuleRoot-gated) nor anything else, so the
+// member is never loaded and the leak goes uncaught (CheckOBS01 yields 0 diagnostics →
+// this test RED). With ModuleRootMemberPatterns the member is emitted ("./corecells/...")
+// and the satellite-aware loader resolves it as a workspace member and scans it (GREEN).
+func TestCheckOBS01DetectsModuleRootMemberLeak(t *testing.T) {
+	root := writeModuleRootMemberMetricsFixture(t)
+	diagnostics, err := CheckOBS01(t.Context(), root)
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+	assert.Equal(t, "corecells/leak.go", filepath.ToSlash(diagnostics[0].File),
+		"diagnostic must point exactly at the module-root member leak file — proves module-root code is scanned")
 }
 
 func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
@@ -2358,6 +2541,47 @@ import (
 var leakProvider = metrics.NopProvider{}
 var leakCounter, _ = leakProvider.CounterVec(metrics.CounterOpts{
 	Name:       "satellite_leak_total",
+	LabelNames: []string{"reason"},
+})
+
+func Record(err error) {
+	leakCounter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
+}
+`)
+	return root
+}
+
+// writeModuleRootMemberMetricsFixture mirrors writeSatelliteMetricsFixture but places
+// the leaky member at a TOP-LEVEL SINGLE-MODULE ROOT (corecells/ — own go.mod, no
+// nested member, in prodscan.topLevelDirs) rather than under a multi-member parent.
+// OBS-01 reaches it only via prodscan.ModuleRootMemberPatterns ("./corecells/..."),
+// which the satellite-aware loader resolves as a workspace member (#2164).
+func writeModuleRootMemberMetricsFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mod, sum := canonicalMetricsFixtureMod(t)
+	const newModulePath = "module example.com/corecellsleak"
+	mod = strings.Replace(mod, "module example.com/metricsfixture", newModulePath, 1)
+	require.Contains(t, mod, newModulePath,
+		"fixture go.mod module-path replacement failed — canonicalMetricsFixtureMod format changed?")
+	// Pin the same toolchain version as the real repo go.work (no hardcoded drift).
+	writeFile(t, root, "go.work", repoGoWorkGoDirective(t)+"\n\nuse ./corecells\n")
+	writeFile(t, root, "corecells/go.mod", mod)
+	writeFile(t, root, "corecells/go.sum", sum)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", "acknowledgements: []\n")
+	writeFile(t, root, "corecells/leak.go", `package corecells
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+)
+
+var leakProvider = metrics.NopProvider{}
+var leakCounter, _ = leakProvider.CounterVec(metrics.CounterOpts{
+	Name:       "modroot_leak_total",
 	LabelNames: []string{"reason"},
 })
 
