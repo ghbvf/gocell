@@ -44,8 +44,6 @@ import (
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
-//
-//nolint:gosec // G101 false positive: archtest rule identifier, not a credential
 const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 
 // authRuntimeImportPath is the canonical import path for runtime/auth.

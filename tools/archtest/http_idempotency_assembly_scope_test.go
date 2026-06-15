@@ -944,7 +944,7 @@ func DeriveKey(tenantID, subject, method, path, idemKey string) IdempotencyKey {
 // deriveKeyBad: each fixture drops one isolation dimension (caught by the taint
 // walk) or adds a node-id param (caught by the signature freeze). The dummy-read
 // fixture references every input but flows only subject into the key.
-var deriveKeyBad = map[string]string{ //nolint:gosec,gochecknoglobals // G101 false positive: values are Go source fixtures, not credentials
+var deriveKeyBad = map[string]string{ //nolint:gochecknoglobals // intentional package-level RED-case fixture map
 	"node-id-param": `package p
 func DeriveKey(tenantID, subject, method, path, idemKey, podID string) IdempotencyKey {
 	return IdempotencyKey{ns: tenantID + podID, key: subject + method + path + idemKey}
@@ -1008,7 +1008,7 @@ func DeriveCommandKey(tenantID, subject, commandID string) IdempotencyKey {
 // deriveCommandKeyBad: each fixture drops one isolation dimension (caught by the
 // taint walk) or adds a node-id param (caught by the signature freeze). The
 // dummy-read fixture references commandID but flows only subject into the key.
-var deriveCommandKeyBad = map[string]string{ //nolint:gosec,gochecknoglobals // G101: Go source fixtures, not credentials
+var deriveCommandKeyBad = map[string]string{ //nolint:gochecknoglobals // intentional package-level RED-case fixture map
 	"node-id-param": `package p
 func DeriveCommandKey(tenantID, subject, commandID, podID string) IdempotencyKey {
 	return IdempotencyKey{ns: tenantID + podID, key: subject + commandID}
