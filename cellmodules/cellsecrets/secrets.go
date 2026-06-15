@@ -119,6 +119,7 @@ func ResolveAndRejectDemoKey(adapterMode, envLabel, primary, devDefault string) 
 		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envLabel)
 	default:
 		slog.Warn("using dev-only default; set env var for production",
+			slog.String("adapter_mode", adapterMode),
 			slog.String("var", envLabel),
 			slog.String("mode", "dev-fallback"),
 			slog.String("action_required", "set env var before real mode"))
@@ -163,6 +164,7 @@ func BuildCursorCodec(cfg CursorCodecConfig) (*query.CursorCodec, error) {
 	}
 	if len(prevKey) > 0 {
 		slog.Info("cursor key rotation active",
+			slog.String("adapter_mode", cfg.AdapterMode),
 			slog.String("label", cfg.Label),
 			slog.String("current_env", cfg.EnvName),
 			slog.String("previous_env", cfg.PrevEnvName))
@@ -188,7 +190,8 @@ func BuildHMACKey(cfg HMACKeyConfig) ([]byte, error) {
 func LoadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 	ks, err := auth.LoadKeySetFromEnv(clk)
 	if err == nil {
-		slog.Info("JWT key set loaded from environment variables")
+		slog.Info("JWT key set loaded from environment variables",
+			slog.String("adapter_mode", adapterMode))
 		return ks, nil
 	}
 	if IsRealMode(adapterMode) {
@@ -198,7 +201,8 @@ func LoadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 	if genErr != nil {
 		return nil, fmt.Errorf("dev mode ephemeral key pair: %w", genErr)
 	}
-	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
+	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart",
+		slog.String("adapter_mode", adapterMode))
 	return auth.NewKeySet(privKey, pubKey, clk)
 }
 
