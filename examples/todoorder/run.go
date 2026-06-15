@@ -186,6 +186,15 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		return nil, fmt.Errorf("consumer base: %w", err)
 	}
 
+	// Wire the example-owned PDP (orderAuthorizer) into the primary listener via
+	// bootstrap.PrimaryAuthorizerOption. OrderCell.Authorizer() satisfies the
+	// authorizerProvider duck-type; lazyAuthorizer defers the actual lookup until
+	// after Init (where the repo and authorizer are constructed).
+	authzOpt, err := bootstrap.PrimaryAuthorizerOption([]cell.Cell{oc})
+	if err != nil {
+		return nil, fmt.Errorf("primary authorizer wiring: %w", err)
+	}
+
 	// No WithMetricsProvider in demo → projection metric instruments are no-ops.
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
@@ -203,6 +212,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		bootstrap.WithProjectionReplaySource(projSource),
 		bootstrap.WithProjectionCursor(projSource),
 	}
+	opts = append(opts, authzOpt)
 	if operatorEnabled {
 		// Operator control-plane on a network-isolated (loopback) admin port,
 		// gated by operator credentials (defense in depth). The framework

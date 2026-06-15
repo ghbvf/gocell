@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
@@ -135,19 +135,20 @@ type Handler struct {
 }
 
 // NewHandler creates a public devicecommand Handler with generated per-contract
-// handlers. Policies mirror those previously set in cell.go:
-//   - enqueue / enqueue-async: admin or operator only
-//   - dequeue/report/ack/extend-lease: self-or admin/operator (device polls its own commands)
+// handlers. Route gates are permission-based (PR-10d migration):
+//   - enqueue / enqueue-async: auth.RequirePermission(PermDeviceCommand) — admin or operator PDP baseline.
+//   - dequeue/report/ack/extend-lease: auth.RequirePermissionForResource("id", PermDeviceConsume) —
+//     the device itself (subject==resource via PDP ownership rule) or admin/operator.
 func NewHandler(svc *Service) *Handler {
-	selfOrAdminOp := auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator)
-	adminOrOp := auth.AnyRole(dto.RoleAdmin, dto.RoleOperator)
+	commandGate := auth.RequirePermission(authz.PermDeviceCommand())
+	consumeGate := auth.RequirePermissionForResource("id", authz.PermDeviceConsume())
 	return &Handler{
-		enqueueH:      enqueuecontract.NewHandler(EnqueueAdapter{svc}, adminOrOp),
-		enqueueAsyncH: enqueueasynccontract.NewHandler(EnqueueAsyncAdapter{svc}, adminOrOp),
-		dequeueH:      dequeuecontract.NewHandler(DequeueAdapter{svc}, selfOrAdminOp),
-		reportH:       reportcontract.NewHandler(ReportAdapter{svc}, selfOrAdminOp),
-		ackH:          ackcontract.NewHandler(AckAdapter{svc}, selfOrAdminOp),
-		extendLeaseH:  extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, selfOrAdminOp),
+		enqueueH:      enqueuecontract.NewHandler(EnqueueAdapter{svc}, commandGate),
+		enqueueAsyncH: enqueueasynccontract.NewHandler(EnqueueAsyncAdapter{svc}, commandGate),
+		dequeueH:      dequeuecontract.NewHandler(DequeueAdapter{svc}, consumeGate),
+		reportH:       reportcontract.NewHandler(ReportAdapter{svc}, consumeGate),
+		ackH:          ackcontract.NewHandler(AckAdapter{svc}, consumeGate),
+		extendLeaseH:  extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, consumeGate),
 	}
 }
 

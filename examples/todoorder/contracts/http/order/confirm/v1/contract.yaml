@@ -23,6 +23,11 @@ endpoints:
       400:
         description: "Bad request — invalid request body"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      # 404 is the handler-level not-found semantic (matches the corecells owner-scoped
+      # precedent). In production this endpoint is owner-scoped (gate
+      # RequirePermissionForResource → PDP PIP lookup), so a missing/non-owned id is
+      # denied at the gate with 403 (uniform for "missing"/"not yours", no existence
+      # side-channel) and the 404 is shadowed — reachable only without the gate.
       404:
         description: "Not found — order with given id does not exist"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

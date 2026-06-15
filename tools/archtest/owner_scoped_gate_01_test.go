@@ -3,7 +3,9 @@
 // INVARIANT: OWNER-SCOPED-GATE-EXACT-SET-01
 //
 // OWNER-SCOPED-GATE-EXACT-SET-01 freezes the set of owner-scoped route gates in
-// accesscore. An owner-scoped endpoint (one whose resource ownership the PDP
+// accesscore AND the iotdevice/todoorder examples (the latter added by PR-10d
+// #1894, which migrated their auth.SelfOr gates to RequirePermissionForResource).
+// An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
 //
 //	auth.RequirePermissionForResource("<pathParam>", authz.Perm*())
@@ -42,6 +44,9 @@
 //     (admin gate, line ~267) AND auth.RequirePermissionForResource("id", authz.PermUserWrite())
 //     (owner gate). The scan collects ONLY the RequirePermissionForResource triple; if it
 //     over-collected plain RequirePermission, an UNEXPECTED triple would break the exact set.
+//     The example handlers carry the same discriminator: ordercell/cell.go and
+//     devicecell/cell.go each hold plain RequirePermission gates (create/list, device:list)
+//     alongside the owner gates, so over-collection there would also surface as UNEXPECTED.
 //   - If the typed scan silently failed to resolve any callsite, the collected set would be
 //     empty and every frozen triple would report MISSING → fail.
 //
@@ -55,9 +60,11 @@
 //   - Guards gate CONSTRUCTION, not route→gate WIRING: a correctly-constructed gate that
 //     is never mounted (or mounted on the wrong handler) is not caught here — the
 //     contract serve tests + e2e cover wiring.
-//   - Only the two named handler files are scanned; a NEW owner-scoped endpoint in a new
-//     file must be added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the
-//     UNEXPECTED-triple check forces this consciously for the two guarded files).
+//   - Only the named handler files are scanned (accesscore identitymanage/rbaccheck +
+//     examples ordercell/cell.go, devicecell/cell.go, devicecommand/handler.go); a NEW
+//     owner-scoped endpoint in a new file must be added to ownerScopedGateHandlerKey +
+//     ownerScopedGateExpectedSet (the UNEXPECTED-triple check forces this consciously for
+//     the already-guarded files).
 package archtest
 
 import (
@@ -85,6 +92,15 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	"identitymanage|id|PermUserRead":  {},
 	"identitymanage|id|PermUserWrite": {},
 	"rbaccheck|userID|PermRoleRead":   {},
+	// examples (PR-10d #1894): the iotdevice + todoorder owner-scoped gates that
+	// PR-10d migrated from auth.SelfOr to auth.RequirePermissionForResource. Frozen
+	// here so a regression back to a plain RequirePermission (which forwards
+	// r.URL.Path, not the canonical resource id, breaking the ownership rule) drops
+	// the triple → exact-set mismatch → CI red, identical to the accesscore guard.
+	"todoorder-order|id|PermOrderRead":   {},
+	"todoorder-order|id|PermOrderUpdate": {},
+	"iotdevice-device|id|PermDeviceRead": {},
+	"devicecommand|id|PermDeviceConsume": {},
 }
 
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
@@ -95,6 +111,16 @@ func ownerScopedGateHandlerKey(rel string) string {
 		return "identitymanage"
 	case strings.HasSuffix(rel, "slices/rbaccheck/handler.go"):
 		return "rbaccheck"
+	// examples (PR-10d #1894). todoorder get+confirm owner gates both live in
+	// ordercell/cell.go — one handler key, the two triples differ by permission
+	// (PermOrderRead/PermOrderUpdate). iotdevice's status owner gate lives in
+	// devicecell/cell.go; the devicecommand consume gate lives in its slice handler.
+	case strings.HasSuffix(rel, "cells/ordercell/cell.go"):
+		return "todoorder-order"
+	case strings.HasSuffix(rel, "cells/devicecell/cell.go"):
+		return "iotdevice-device"
+	case strings.HasSuffix(rel, "slices/devicecommand/handler.go"):
+		return "devicecommand"
 	default:
 		return ""
 	}
@@ -153,7 +179,7 @@ func TestOwnerScopedGate_ExactSet_01(t *testing.T) {
 	}
 
 	collected := map[string]struct{}{}
-	_ = Run(t, Typed(TypedOpts{}, []string{"./corecells/..."}),
+	_ = Run(t, Typed(TypedOpts{}, []string{"./corecells/...", "./examples/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil

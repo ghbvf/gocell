@@ -308,7 +308,7 @@ func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { ret
 
 // --- Integration tests with real chi router ---
 
-func initCellWithRouter(t *testing.T) *router.Router {
+func initCellWithRouter(t *testing.T) (*router.Router, *OrderCell) {
 	t.Helper()
 	c := newTestCell()
 	ctx := context.Background()
@@ -327,16 +327,24 @@ func initCellWithRouter(t *testing.T) *router.Router {
 		}
 	}
 	require.NoError(t, r.FinalizeAuth())
-	return r
+	return r, c
+}
+
+// withAuthorizer returns a copy of ctx with the cell's authorizer injected.
+// Required for tests that exercise permission-gated routes: RequirePermission
+// and RequirePermissionForResource both fail-closed (403) when no Authorizer
+// is in context.
+func withAuthorizer(ctx context.Context, c *OrderCell) context.Context {
+	return auth.WithAuthorizer(ctx, c.Authorizer())
 }
 
 func TestOrderCell_RouteCreateOrder(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
 	body := `{"item":"test-widget"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(body))
-	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req = req.WithContext(withAuthorizer(auth.TestContext("usr-1", []string{dto.RoleCustomer}), c))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -354,12 +362,13 @@ func TestJOrdercreateHttpCreate(t *testing.T) {
 // delivered, which demo-mode NoopWriter skips), so it is a valid auto journey
 // criterion for the confirm command path.
 func TestOrderCell_RouteConfirmOrder(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
-	// Create a pending order first.
+	// Create a pending order first. The creating subject becomes order.Owner.
+	const owner = "usr-1"
 	createRec := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"confirmable"}`))
-	createReq = createReq.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	createReq = createReq.WithContext(withAuthorizer(auth.TestContext(owner, []string{dto.RoleCustomer}), c))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	require.Equal(t, http.StatusCreated, createRec.Code)
@@ -373,15 +382,16 @@ func TestOrderCell_RouteConfirmOrder(t *testing.T) {
 	orderID := createResp.Data.ID
 	require.NotEmpty(t, orderID, "response should contain data.id")
 
-	// PATCH the order to confirmed.
+	// PATCH the order to confirmed. Must use the same subject as the creator
+	// (owner) because confirm is owner-scoped (RequirePermissionForResource).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/orders/"+orderID+"/status", strings.NewReader(`{"status":"confirmed"}`))
-	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req = req.WithContext(withAuthorizer(auth.TestContext(owner, []string{dto.RoleCustomer}), c))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"PATCH /api/v1/orders/{id}/status should return 200 for a pending order")
+		"PATCH /api/v1/orders/{id}/status should return 200 for owner of a pending order")
 }
 
 // TestJOrderprojectionHttpConfirm is the auto checkRef for J-orderprojection
@@ -428,11 +438,11 @@ func projectionStatusOf(s orderprojection.Summary, orderID string) string {
 }
 
 func TestOrderCell_RouteListOrders(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/", nil)
-	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req = req.WithContext(withAuthorizer(auth.TestContext("usr-1", []string{dto.RoleCustomer}), c))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -440,13 +450,14 @@ func TestOrderCell_RouteListOrders(t *testing.T) {
 }
 
 func TestOrderCell_RouteGetOrder(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
-	// Create an order first.
+	// Create an order first. The creating subject becomes order.Owner.
+	const owner = "usr-1"
 	body := `{"item":"queryable"}`
 	createRec := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(body))
-	createReq = createReq.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	createReq = createReq.WithContext(withAuthorizer(auth.TestContext(owner, []string{dto.RoleCustomer}), c))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	require.Equal(t, http.StatusCreated, createRec.Code)
@@ -461,35 +472,43 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 	orderID := createResp.Data.ID
 	require.NotEmpty(t, orderID, "response should contain data.id")
 
-	// GET the created order by its actual ID.
+	// GET the created order by its actual ID — must use the same owner subject.
+	// GET is owner-scoped: RequirePermissionForResource("id", PermOrderRead())
+	// calls PDP.Authorize(subject, orderID, "order:read"), PDP fetches
+	// order.Owner via repo.GetByID and allows when owner==subject.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+orderID, nil)
-	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req = req.WithContext(withAuthorizer(auth.TestContext(owner, []string{dto.RoleCustomer}), c))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"GET /api/v1/orders/{id} should return 200 for existing order")
+		"GET /api/v1/orders/{id} should return 200 for owner of the order")
 }
 
 func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/nonexistent", nil)
-	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
+	req = req.WithContext(withAuthorizer(auth.TestContext("usr-1", []string{dto.RoleCustomer}), c))
 	r.ServeHTTP(rec, req)
 
-	// 404 is the correct domain response for a nonexistent order.
-	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrOrderNotFound)
+	// With owner-scoped gate (RequirePermissionForResource), the PDP is called
+	// first. The PDP performs a PIP lookup (repo.GetByID("nonexistent")) which
+	// returns not-found, so the PDP denies with fail-closed → 403.
+	// The domain 404 is never reached (gate fires before the handler).
+	errcodetest.AssertWireCode(t, rec, http.StatusForbidden, errcode.ErrAuthForbidden)
 }
 
 // TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole verifies that the
-// three protected routes (POST /orders, GET /orders, GET /orders/{id}) reject
-// requests with no auth context (→ 401) and with an incorrect role (→ 403).
+// protected routes reject requests with no auth context (→ 401) and with an
+// incorrect role (→ 403). For owner-scoped routes (GET /orders/{id}), "wrong
+// role" with an authorizer in context still reaches the PDP — and since the
+// resource doesn't exist in this test, the PDP denies (fail-closed → 403).
 // This test acts as a regression guard: if the policy is accidentally changed
 // to Public, all positive-path tests still pass but these cases will fail.
 func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
-	r := initCellWithRouter(t)
+	r, c := initCellWithRouter(t)
 
 	body := `{"item":"test-widget"}`
 
@@ -511,7 +530,7 @@ func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
 			name:       "create wrong role → 403",
 			method:     http.MethodPost,
 			path:       "/api/v1/orders/",
-			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			ctx:        withAuthorizer(auth.TestContext("u-1", []string{"viewer"}), c),
 			wantStatus: http.StatusForbidden,
 		},
 		{
@@ -525,7 +544,7 @@ func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
 			name:       "list wrong role → 403",
 			method:     http.MethodGet,
 			path:       "/api/v1/orders/",
-			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			ctx:        withAuthorizer(auth.TestContext("u-1", []string{"viewer"}), c),
 			wantStatus: http.StatusForbidden,
 		},
 		{
@@ -536,10 +555,12 @@ func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name:       "get wrong role → 403",
-			method:     http.MethodGet,
-			path:       "/api/v1/orders/some-id",
-			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			name:   "get non-owner (resource not found) → 403",
+			method: http.MethodGet,
+			path:   "/api/v1/orders/some-id",
+			// owner-scoped: PDP fetches order.Owner via repo; "some-id" does not
+			// exist → PDP denies (fail-closed) → 403 regardless of role.
+			ctx:        withAuthorizer(auth.TestContext("u-1", []string{dto.RoleCustomer}), c),
 			wantStatus: http.StatusForbidden,
 		},
 	}

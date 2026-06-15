@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -162,6 +163,7 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 // +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
+	authorizer         auth.Authorizer // iotdevice example-owned PDP (deviceAuthorizer)
 	deviceRepo         domain.DeviceRepository
 	publisher          outbox.CellPublisher
 	emitter            outbox.CellEmitter        // set during initInternal; retained for Probes
@@ -272,9 +274,10 @@ func (c *DeviceCell) requireCommandQueue() error {
 func NewDeviceCell(clk clock.Clock, opts ...Option) *DeviceCell {
 	clock.MustHaveClock(clk, "devicecell.New")
 	c := &DeviceCell{
-		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
-		clk:      clk,
-		logger:   slog.Default(),
+		BaseCell:   cell.MustNewBaseCell(loadCellMetadata()),
+		authorizer: deviceAuthorizer{},
+		clk:        clk,
+		logger:     slog.Default(),
 		// Demo default mirroring devicebootstrap's own txRunner default: the
 		// cert-renewal reconciler requires a non-nil CellTxManager. Durable mode
 		// overrides it via WithBootstrapTxManager (accumulative, nil-ignored).
@@ -284,6 +287,15 @@ func NewDeviceCell(clk clock.Clock, opts ...Option) *DeviceCell {
 		o(c)
 	}
 	return c
+}
+
+// Authorizer returns the iotdevice example-owned PDP (deviceAuthorizer).
+// It satisfies the bootstrap.authorizerProvider duck-type so that
+// bootstrap.PrimaryAuthorizerOption can discover and wire the PDP into the
+// primary listener's request context without importing this package directly.
+// The returned value is always non-nil (set at construction time).
+func (c *DeviceCell) Authorizer() auth.Authorizer {
+	return c.authorizer
 }
 
 // buildCellEmitter constructs a sealed CellEmitter via NewDirectCellEmitter.
@@ -516,7 +528,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command-grpc: %w", err)
 	}
-	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc)
+	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc, c.authorizer)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
 	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same
@@ -549,8 +561,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return fmt.Errorf("device-status: %w", err)
 	}
 	// status: admin and operator may read any device's status; a device may only
-	// read its own status (path {id} must match the token subject).
-	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	// read its own status (path {id} must match the token subject via PDP ownership rule).
+	// Migrated from auth.SelfOr("id", ...) to auth.RequirePermissionForResource per PR-10d.
+	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicestatus.SliceMetadata()))
 
 	// device-list slice
@@ -559,7 +572,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
-	c.listHandler = listcontract.NewHandler(listSvc, auth.AnyRole("admin"))
+	// list: admin-only fleet enumeration gate. Migrated from auth.AnyRole("admin")
+	// to auth.RequirePermission per PR-10d.
+	c.listHandler = listcontract.NewHandler(listSvc, auth.RequirePermission(authz.PermDeviceList()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicelist.SliceMetadata()))
 	return nil
 }

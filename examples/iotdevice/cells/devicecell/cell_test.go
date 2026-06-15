@@ -27,7 +27,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	"github.com/ghbvf/gocell/framework/runtime/http/router"
@@ -339,7 +338,7 @@ func TestDeviceCell_RouteListDevices_Authz(t *testing.T) {
 	t.Run("403 non-admin", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
-		req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+		req = req.WithContext(testCtx("user-1", []string{"viewer"}))
 		r.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusForbidden, rec.Code)
@@ -350,7 +349,7 @@ func TestDeviceCell_RouteListDevices_Authz(t *testing.T) {
 	t.Run("403 operator", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
-		req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
+		req = req.WithContext(testCtx("operator-1", []string{dto.RoleOperator}))
 		r.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusForbidden, rec.Code)
@@ -359,7 +358,7 @@ func TestDeviceCell_RouteListDevices_Authz(t *testing.T) {
 	t.Run("403 device", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
-		req = req.WithContext(auth.TestContext("device-1", []string{dto.RoleDevice}))
+		req = req.WithContext(testCtx("device-1", []string{dto.RoleDevice}))
 		r.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusForbidden, rec.Code)
@@ -380,10 +379,10 @@ func TestDeviceCell_RouteGetStatus(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Now get status. Status requires RoleOperator or RoleDevice (Policy: auth.AnyRole(dto.RoleOperator, dto.RoleDevice)).
+	// Now get status. Status requires device:read permission (RequirePermissionForResource + deviceAuthorizer: owner or admin/operator).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext(deviceID, []string{dto.RoleDevice}))
+	req = req.WithContext(testCtx(deviceID, []string{dto.RoleDevice}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -407,7 +406,7 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
+	req = req.WithContext(testCtx("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
@@ -427,11 +426,11 @@ func TestDeviceCell_RouteDequeueCommands(t *testing.T) {
 	deviceID := data["id"].(string)
 
 	// Dequeue (should be empty). Inject auth context: device authenticates as itself.
-	// nil roles is intentional: dequeue uses auth.SelfOr("id", "admin") which
-	// passes when subject == path {id}, so no role is required for the device.
+	// nil roles is intentional: dequeue uses RequirePermissionForResource("id", PermDeviceConsume)
+	// which passes when subject == resource (path {id}), so no role is required for the device.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
-	req = req.WithContext(auth.TestContext(deviceID, nil))
+	req = req.WithContext(testCtx(deviceID, nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -455,7 +454,7 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	cmdBody := `{"payload":"reboot","commandType":"reboot"}`
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(cmdBody))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
+	req = req.WithContext(testCtx("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
@@ -465,7 +464,7 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	// Dequeue first so AckSuccess is allowed from Sent.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
-	req = req.WithContext(auth.TestContext(deviceID, nil))
+	req = req.WithContext(testCtx(deviceID, nil))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -474,7 +473,7 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	ackPath := "/api/v1/devices/" + deviceID + "/commands/" + cmdID + "/ack"
 	req = httptest.NewRequest(http.MethodPost, ackPath, strings.NewReader(`{"reason":"success"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(deviceID, nil))
+	req = req.WithContext(testCtx(deviceID, nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

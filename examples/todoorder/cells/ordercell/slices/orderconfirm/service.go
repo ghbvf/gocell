@@ -102,6 +102,13 @@ func NewService(clk clock.Clock, repo domain.OrderRepository, logger *slog.Logge
 //   - 400 if status != "confirmed"
 //   - 404 if order not found
 //   - 409 if order is not in pending state
+//
+// 404 is the handler-level not-found semantic (matches the corecells owner-scoped
+// precedent). In production this endpoint is owner-scoped (gate
+// RequirePermissionForResource → PDP PIP lookup), so a missing/non-owned id is
+// denied at the gate with 403 (uniform for "missing"/"not yours", avoiding an
+// existence side-channel) and the 404 below is shadowed — reachable only without
+// the gate.
 func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv1.ConfirmResponseObject, error) {
 	// Validate requested status value
 	if req.Status != domain.StatusConfirmed {

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -93,9 +94,10 @@ func WithLogger(l *slog.Logger) Option {
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
-	repo     domain.OrderRepository
-	txRunner persistence.CellTxManager
-	emitter  outbox.CellEmitter
+	repo       domain.OrderRepository
+	authorizer auth.Authorizer // todoorder example-owned PDP (orderAuthorizer); set in initInternal
+	txRunner   persistence.CellTxManager
+	emitter    outbox.CellEmitter
 	// Outbox wiring — writer accumulated via WithOutboxWriter and composed into
 	// emitter at Init() via outbox.ResolveCellEmitter. ordercell is L2 OutboxFact:
 	// writer+txRunner is the only supported sink. Sealed marker types prevent
@@ -165,6 +167,10 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 		c.logger.Info("ordercell: using in-memory repository (demo mode)")
 	}
 
+	// Construct the example-owned PDP after the repo is resolved so the
+	// authorizer's PIP can perform ownership lookups via repo.GetByID.
+	c.authorizer = newOrderAuthorizer(c.repo)
+
 	// order-create slice — unified outbox path, no publisher fork.
 	createSvc, err := ordercreate.NewService(clock.Real(), c.repo, c.logger,
 		ordercreate.WithEmitter(c.emitter),
@@ -173,7 +179,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("ordercreate: %w", err)
 	}
-	c.createHandler = createv1.NewHandler(createSvc, auth.AnyRole(dto.RoleCustomer))
+	c.createHandler = createv1.NewHandler(createSvc, auth.RequirePermission(authz.PermOrderCreate()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(ordercreate.SliceMetadata()))
 
 	// Default cursor codec for pagination if not injected. Durable mode
@@ -203,8 +209,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
-	c.getHandler = getv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
-	c.listHandler = listv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
+	c.getHandler = getv1.NewHandler(querySvc, auth.RequirePermissionForResource("id", authz.PermOrderRead()))
+	c.listHandler = listv1.NewHandler(querySvc, auth.RequirePermission(authz.PermOrderList()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderquery.SliceMetadata()))
 
 	// order-confirm slice (L2 OutboxFact) — PATCH status to confirmed, publishes
@@ -217,7 +223,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("orderconfirm: %w", err)
 	}
-	c.confirmHandler = confirmv1.NewHandler(confirmSvc, auth.AnyRole(dto.RoleCustomer))
+	c.confirmHandler = confirmv1.NewHandler(confirmSvc, auth.RequirePermissionForResource("id", authz.PermOrderUpdate()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderconfirm.SliceMetadata()))
 
 	// order-projection slice (L3 WorkflowEventual) — canonical CQRS harness
@@ -234,10 +240,26 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	}
 	c.projectionSvc = projSvc
 	c.projectionSummaryHandler = projectionsummaryv1.NewHandler(
-		orderprojection.NewSummaryAdapter(projSvc), auth.AnyRole(dto.RoleCustomer))
+		orderprojection.NewSummaryAdapter(projSvc), auth.RequirePermission(authz.PermOrderList()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderprojection.SliceMetadata()))
 
 	return nil
+}
+
+// Authorizer returns the todoorder example-owned PDP (orderAuthorizer).
+// It satisfies the bootstrap.authorizerProvider duck-type so that
+// bootstrap.PrimaryAuthorizerOption can discover and wire the PDP into the
+// primary listener's request context without importing this package directly.
+//
+// The lazy construction pattern (c.authorizer is nil before Init) is intentional:
+// the authorizer depends on c.repo, which is resolved inside initInternal (called
+// by Init). Bootstrap's ResolveAuthorizer is invoked after Init completes — never
+// before — so by the time ResolveAuthorizer calls Authorizer(), c.authorizer is
+// always non-nil. There is therefore no fail-open window: Init is a precondition
+// of serve, and a nil return here would be caught by ResolveAuthorizer's nil check
+// which causes a startup-time failure rather than a per-request silent deny.
+func (c *OrderCell) Authorizer() auth.Authorizer {
+	return c.authorizer
 }
 
 // resolveOutboxDeps delegates to outbox.ResolveCellEmitter — the same path

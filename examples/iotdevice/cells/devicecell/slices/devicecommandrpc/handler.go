@@ -19,11 +19,13 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
@@ -37,36 +39,58 @@ const watchSnapshotLimit = 100
 // Server implements commandv1.DeviceCommandServiceServer.
 type Server struct {
 	commandv1.UnimplementedDeviceCommandServiceServer
-	clk    clock.Clock
-	cmdSvc *devicecmd.Service
+	clk        clock.Clock
+	cmdSvc     *devicecmd.Service
+	authorizer auth.Authorizer // iotdevice example PDP, injected from DeviceCell
 }
 
 // NewServer constructs the gRPC command server. clock is a mandatory positional
 // dependency (CLOCK-POSITIONAL-INJECTION-01); the acknowledgement timestamp is
 // stamped from it so it stays consistent with the cell's business clock. cmdSvc
 // is the shared device-command domain service — the gRPC handler enqueues
-// through the same Enqueue path the HTTP devicecommand slice uses.
-func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service) *Server {
+// through the same Enqueue path the HTTP devicecommand slice uses. authorizer is
+// the iotdevice example PDP (deviceAuthorizer), injected by DeviceCell so the
+// gRPC handler participates in the same ABAC decision as the HTTP route gates.
+//
+// authorizer is a mandatory dependency, fail-fast at construction
+// (validation.IsNilInterface, mirroring clock.MustHaveClock and the saga.md
+// required-interface-positional-param convention): unlike the HTTP route gate —
+// which reads the Authorizer from the request context and fail-closes (403) when
+// AuthorizerFromContext returns ok=false — the gRPC server holds the authorizer
+// as a field, so a nil/typed-nil here would panic inside authorize() at request
+// time (after authentication) on the very next RPC. Rejecting it at construction
+// surfaces the mis-wire at startup, consistent with the framework preference for
+// startup fail-fast over per-request silent failure (tenancy.md).
+func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, authorizer auth.Authorizer) *Server {
 	clock.MustHaveClock(clk, "devicecommandrpc.NewServer")
-	return &Server{clk: clk, cmdSvc: cmdSvc}
+	if validation.IsNilInterface(authorizer) {
+		panic(panicregister.Approved("devicecommandrpc-nil-authorizer", errcode.Assertion(
+			"devicecommandrpc.NewServer: auth.Authorizer is required (nil/typed-nil rejected); "+
+				"the PDP enforces device:command on every RPC, so a nil authorizer would panic at "+
+				"request time after authentication — fail fast at construction instead")))
+	}
+	return &Server{clk: clk, cmdSvc: cmdSvc, authorizer: authorizer}
 }
 
-// IssueCommand authorizes the caller, validates the request, enqueues the
-// command into the L4 device command queue, and returns the enqueued command id
-// as the acknowledgement.
+// IssueCommand authorizes the caller via the injected example PDP, validates
+// the request, enqueues the command into the L4 device command queue, and
+// returns the enqueued command id as the acknowledgement.
 //
-// Authorization mirrors the HTTP devicecommand enqueue route policy
-// (auth.AnyRole(admin, operator)). gRPC has no route-policy layer, so the role
-// gate runs at the handler edge, before any field validation or device lookup,
-// preserving the 403-before-404 ordering so an unauthorized caller cannot probe
-// device existence (per-method gRPC auth is #1675). A domain error is returned
-// as an *errcode.Error; the gRPC interceptor chain maps it to a status code (the
-// full errcode→codes table is PR-12, the Kratos GRPCStatus() model).
+// Authorization uses the injected auth.Authorizer (iotdevice example PDP,
+// deviceAuthorizer) for the device:command action, matching the HTTP
+// devicecommand enqueue route gate (RequirePermission(PermDeviceCommand)).
+// gRPC has no route-policy layer, so the PDP check runs at the handler edge,
+// before any field validation or device lookup, preserving the 403-before-404
+// ordering so an unauthorized caller cannot probe device existence (per-method
+// gRPC auth is #1675). A domain error is returned as an *errcode.Error; the
+// gRPC interceptor chain maps it to a status code (the full errcode→codes table
+// is PR-12, the Kratos GRPCStatus() model). Migrated from authorizeCommandRole
+// (role-literal gate) to PDP Authorize per PR-10d.
 func (s *Server) IssueCommand(
 	ctx context.Context,
 	req *commandv1.IssueCommandRequest,
 ) (*commandv1.IssueCommandResponse, error) {
-	if err := authorizeCommandRole(ctx); err != nil {
+	if err := s.authorize(ctx, req.GetDeviceId()); err != nil {
 		return nil, err
 	}
 	if req.GetDeviceId() == "" {
@@ -93,25 +117,34 @@ func (s *Server) IssueCommand(
 	}, nil
 }
 
-// WatchCommands authorizes the caller, validates the request, streams the
-// device's currently active commands as a snapshot (reusing the same ScanActive
-// domain read the HTTP list path uses), then keeps the watch open until the
-// caller disconnects or the server drains. It is the example's first
-// server-streaming RPC (PR-10 #1153).
+// WatchCommands authorizes the caller via the injected example PDP, validates
+// the request, streams the device's currently active commands as a snapshot
+// (reusing the same ScanActive domain read the HTTP list path uses), then keeps
+// the watch open until the caller disconnects or the server drains. It is the
+// example's first server-streaming RPC (PR-10 #1153).
 //
-// Drain discipline: the snapshot loop checks stream.Context().Err() between sends
-// and the tail blocks on stream.Context().Done(), so the framework drain signal
-// (StreamDrain cancels the stream context at GracefulStop) terminates an
+// Drain discipline: the snapshot loop checks stream.Context().Err() between
+// sends and the tail blocks on stream.Context().Done(), so the framework drain
+// signal (StreamDrain cancels the stream context at GracefulStop) terminates an
 // in-flight watch promptly instead of holding the graceful-stop budget. A
 // production watch would push newly-enqueued commands during the tail; the
 // example demonstrates the long-lived server-stream shape and the framework
-// drain. Authorization mirrors IssueCommand (admin or operator).
+// drain. Authorization mirrors IssueCommand (device:command via example PDP).
+// Migrated from authorizeCommandRole (role-literal gate) to PDP Authorize per
+// PR-10d.
+//
+// Note on permission reuse: WatchCommands and IssueCommand intentionally share
+// device:command (admin/operator coarse gate), replicating the pre-migration
+// authorizeCommandRole baseline that applied uniformly to both RPC methods.
+// Granting devices the ability to watch their own command queue via gRPC
+// (device:consume semantic, analogous to the HTTP dequeue gate) is a distinct
+// enhancement not in scope for PR-10d.
 func (s *Server) WatchCommands(
 	req *commandv1.WatchCommandsRequest,
 	stream commandv1.DeviceCommandService_WatchCommandsServer,
 ) error {
 	ctx := stream.Context()
-	if err := authorizeCommandRole(ctx); err != nil {
+	if err := s.authorize(ctx, req.GetDeviceId()); err != nil {
 		return err
 	}
 	if req.GetDeviceId() == "" {
@@ -144,21 +177,39 @@ func (s *Server) WatchCommands(
 	return ctx.Err()
 }
 
-// authorizeCommandRole enforces the device-command role gate (admin or operator)
-// at the handler edge, shared by IssueCommand and WatchCommands. gRPC has no
-// route-policy layer, so the role gate runs before any field validation or
-// device lookup, preserving the 403-before-404 ordering so an unauthorized caller
-// cannot probe device existence (per-method gRPC auth is #1675).
+// authorize evaluates the device:command permission for the given deviceID via
+// the injected example PDP (deviceAuthorizer). It replaces the former
+// authorizeCommandRole role-literal check per PR-10d: gRPC has no route-policy
+// layer, so this method is the per-handler entry point that mirrors the
+// auth.RequirePermission(PermDeviceCommand()) gate the HTTP routes use.
 //
-// Demo authorization model: an admin/operator may command OR watch ANY device —
-// there is no per-device ownership check (IssueCommand uses the same model). A
-// production deployment with multi-tenant device isolation would add a
-// device-ownership predicate here (or restrict cross-device visibility to admin).
-func authorizeCommandRole(ctx context.Context) error {
-	if p, ok := auth.FromContext(ctx); !ok ||
-		(!p.HasRole(dto.RoleAdmin) && !p.HasRole(dto.RoleOperator)) {
+// Fail-closed: absent principal → ErrAuthUnauthorized (401); PDP deny →
+// ErrAuthForbidden (403); PDP error → returned verbatim.
+func (s *Server) authorize(ctx context.Context, deviceID string) error {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"device-command: authentication required")
+	}
+	dec, err := s.authorizer.Authorize(ctx, p.Subject, deviceID, authz.PermDeviceCommand().String())
+	if err != nil {
+		return err
+	}
+	if !dec.IsAllow() {
+		slog.WarnContext(ctx, "devicecommandrpc: authorization denied",
+			slog.String("subject", p.Subject),
+			slog.String("device_id", deviceID),
+			slog.String("action", authz.PermDeviceCommand().String()),
+			slog.String("reason", dec.Reason()))
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			"device-command: requires admin or operator role")
+			"device-command: insufficient permissions")
+	}
+	if obl := dec.Obligations(); !obl.IsZero() {
+		slog.WarnContext(ctx, "devicecommandrpc: authorization carries unenforceable obligations",
+			slog.String("subject", p.Subject),
+			slog.String("device_id", deviceID))
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"device-command: authorization carries unenforceable obligations")
 	}
 	return nil
 }

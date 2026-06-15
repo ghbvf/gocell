@@ -23,9 +23,48 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
+
+// testDeviceAuthorizer is a test-local PDP implementing the iotdevice baseline
+// for handler unit tests in this package. It mirrors the deviceAuthorizer in
+// cells/devicecell/authorizer.go; that type is package-private, so tests in
+// this slice package implement an equivalent locally.
+type testDeviceAuthorizer struct{}
+
+func (testDeviceAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil {
+		return authz.Deny("test-device-authz: no authenticated principal"), nil
+	}
+	opOrAdmin := p.HasRole(dto.RoleAdmin) || p.HasRole(dto.RoleOperator)
+	switch action {
+	case authz.PermDeviceCommand().String():
+		if opOrAdmin {
+			dec, err := authz.Allow(authz.Obligations{})
+			return dec, err
+		}
+	case authz.PermDeviceConsume().String(), authz.PermDeviceRead().String():
+		if opOrAdmin || (subject != "" && subject == resource) {
+			dec, err := authz.Allow(authz.Obligations{})
+			return dec, err
+		}
+	case authz.PermDeviceList().String():
+		if p.HasRole(dto.RoleAdmin) {
+			dec, err := authz.Allow(authz.Obligations{})
+			return dec, err
+		}
+	}
+	return authz.Deny("test-device-authz: insufficient permissions"), nil
+}
+
+// withTestAuth builds a context carrying both a Principal and the test PDP.
+// route gates (RequirePermission / RequirePermissionForResource) require both.
+func withTestAuth(subject string, roles []string) context.Context {
+	return auth.WithAuthorizer(auth.TestContext(subject, roles), testDeviceAuthorizer{})
+}
 
 // Compile-time check: the type alias is transparent.
 var _ *devicecmd.Service = (*Service)(nil)
@@ -195,7 +234,7 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 			cmdBody := `{"payload":"reboot","commandType":"reboot"}`
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands", strings.NewReader(cmdBody))
 			req.Header.Set("Content-Type", "application/json")
-			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			req = req.WithContext(withTestAuth(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -489,7 +528,7 @@ func TestHandleDequeue_RoutePolicy(t *testing.T) {
 			mux, _ := setupCommandMux()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+tc.deviceID+"/commands", nil)
-			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			req = req.WithContext(withTestAuth(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -533,7 +572,7 @@ func TestHandleAck_RoutePolicy(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands/cmd-ack/ack", strings.NewReader(`{"reason":"success"}`))
 			req.Header.Set("Content-Type", "application/json")
-			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			req = req.WithContext(withTestAuth(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)

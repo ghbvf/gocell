@@ -9,6 +9,26 @@ An IoT device management application demonstrating the GoCell **L4 DeviceLatent*
   bootstrap setup that demonstrates the GoCell L4 DeviceLatent golden path
 - `modules_gen.go` — generated; cell → Module factory
 
+## Authorization Model
+
+iotdevice ships a **self-contained lightweight PDP** (`cells/devicecell/authorizer.go`).
+Each request to a protected endpoint goes through
+`auth.RequirePermission` / `auth.RequirePermissionForResource`, which call the
+injected `auth.Authorizer` (the example PDP) for a decision.
+
+| Permission | Allowed callers | Notes |
+|---|---|---|
+| `device:command` | admin, operator | Coarse fleet command gate (enqueue + gRPC IssueCommand/WatchCommands) |
+| `device:consume` | device itself (subject == path `{id}`), admin, operator | Device polls its own command queue (dequeue / ack / report) |
+| `device:read` | device itself (subject == path `{id}`), admin, operator | Device reads its own status; same ownership baseline as device:consume |
+| `device:list` | admin only | Fleet enumeration |
+
+The example PDP encodes the baseline rules above inline. In a production
+deployment you would replace or extend it with the platform ABAC engine
+(`cmd/corebundle` wires `accesscore`'s full PDP: tenant policy, forbid-wins,
+RowScope obligation) via `bootstrap.WithPrimaryAuthorizer`. The example keeps
+things self-contained so it can run without `accesscore` in the assembly.
+
 ## Architecture
 
 - **devicecell** (L4 DeviceLatent): manages device lifecycle and command dispatch

@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/framework/pkg/query"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	idemkey "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 )
 
@@ -79,7 +78,7 @@ func TestHandleEnqueueAsync_Accepted(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/async-commands",
 		strings.NewReader(`{"commandType":"reboot","payload":"now"}`))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := reqIDCtx(t, auth.TestContext("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-1")
+	ctx := reqIDCtx(t, withTestAuth("admin-user", []string{dto.RoleAdmin}), "admin-user", "idem-1")
 	mux.ServeHTTP(w, req.WithContext(ctx))
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
@@ -94,7 +93,7 @@ func TestHandleEnqueueAsync_MissingKey(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/async-commands",
 		strings.NewReader(`{"payload":"now"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+	req = req.WithContext(withTestAuth("admin-user", []string{dto.RoleAdmin}))
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)

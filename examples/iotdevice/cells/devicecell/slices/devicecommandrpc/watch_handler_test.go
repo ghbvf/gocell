@@ -41,15 +41,18 @@ func newWatchStream(ctx context.Context) *fakeWatchStream {
 	return &fakeWatchStream{ctx: ctx, sentCh: make(chan *commandv1.WatchCommandsResponse, 8)}
 }
 
-// TestServer_WatchCommands_Unauthorized asserts the role gate runs at the handler
-// edge before any work: a stream with no principal is denied ErrAuthForbidden.
+// TestServer_WatchCommands_Unauthorized asserts the PDP gate runs at the handler
+// edge before any work: a stream with no principal is rejected as
+// ErrAuthUnauthorized (authentication precedes authorization — PR-10d aligns the
+// gRPC edge with the HTTP enforcePermission 401-before-403 contract; the prior
+// hand-rolled authorizeCommandRole returned 403 for the no-principal case).
 func TestServer_WatchCommands_Unauthorized(t *testing.T) {
 	t.Parallel()
 	srv := newTestServer(t)
 	err := srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, newWatchStream(context.Background()))
 	var ce *errcode.Error
-	if !errors.As(err, &ce) || ce.Code != errcode.ErrAuthForbidden {
-		t.Fatalf("want ErrAuthForbidden, got %v", err)
+	if !errors.As(err, &ce) || ce.Code != errcode.ErrAuthUnauthorized {
+		t.Fatalf("want ErrAuthUnauthorized, got %v", err)
 	}
 }
 

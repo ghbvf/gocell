@@ -14,9 +14,35 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 )
+
+// testStatusAuthorizer is a test-local PDP for devicestatus handler unit tests.
+// It mirrors the device:read baseline in cells/devicecell/authorizer.go;
+// deviceAuthorizer is package-private to devicecell, so this package
+// implements an equivalent locally.
+type testStatusAuthorizer struct{}
+
+func (testStatusAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil {
+		return authz.Deny("test-status-authz: no authenticated principal"), nil
+	}
+	if action == authz.PermDeviceRead().String() {
+		opOrAdmin := p.HasRole("admin") || p.HasRole("role:operator")
+		if opOrAdmin || (subject != "" && subject == resource) {
+			return authz.Allow(authz.Obligations{})
+		}
+	}
+	return authz.Deny("test-status-authz: denied"), nil
+}
+
+// withStatusTestAuth builds a context carrying both a Principal and the status test PDP.
+func withStatusTestAuth(subject string, roles []string) context.Context {
+	return auth.WithAuthorizer(auth.TestContext(subject, roles), testStatusAuthorizer{})
+}
 
 func setupStatusHandler(t testing.TB) (*statuscontract.Handler, *mem.DeviceRepository) {
 	t.Helper()
@@ -25,7 +51,7 @@ func setupStatusHandler(t testing.TB) (*statuscontract.Handler, *mem.DeviceRepos
 	if err != nil {
 		t.Fatalf("setupStatusHandler: %v", err)
 	}
-	return statuscontract.NewHandler(svc, auth.SelfOr("id", "admin")), repo
+	return statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead())), repo
 }
 
 func TestHandleGetStatus(t *testing.T) {
@@ -77,6 +103,8 @@ func TestHandleGetStatus(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/status", nil)
 			req.SetPathValue("id", tc.deviceID)
+			// Inject principal + authorizer: admin can read any device's status.
+			req = req.WithContext(withStatusTestAuth("admin-1", []string{"admin"}))
 			h.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -95,11 +123,13 @@ func TestService_Status_LastSeenRFC3339(t *testing.T) {
 	})
 	svc, err := NewService(repo, slog.Default())
 	require.NoError(t, err)
-	h := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	h := statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetPathValue("id", "dev-ts")
+	// Device reads its own status (subject == resource).
+	req = req.WithContext(withStatusTestAuth("dev-ts", nil))
 	h.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)

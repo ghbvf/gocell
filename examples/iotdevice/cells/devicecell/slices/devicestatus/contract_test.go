@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -37,7 +38,7 @@ func newContractHandler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	handler := statuscontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	handler := statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/devices/{id}/status", handler)
 	return mux
@@ -60,6 +61,8 @@ func TestHttpDeviceStatusV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	// Admin can read any device's status.
+	req = req.WithContext(withStatusTestAuth("admin-1", []string{"admin"}))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -74,6 +77,8 @@ func TestHttpDeviceStatusV1Serve_NotFound(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", "no-such-id", 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	// Admin can read any device; 404 is the expected outcome (device not found).
+	req = req.WithContext(withStatusTestAuth("admin-1", []string{"admin"}))
 	h.ServeHTTP(rec, req)
 	errcodetest.AssertWireCode(t, rec, http.StatusNotFound, errcode.ErrDeviceNotFound)
 	c.ValidateErrorResponse(t, http.StatusNotFound, rec.Body.Bytes())

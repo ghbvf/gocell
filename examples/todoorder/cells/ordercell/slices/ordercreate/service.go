@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 )
 
@@ -97,7 +98,17 @@ func NewService(clk clock.Clock, repo domain.OrderRepository, logger *slog.Logge
 // Create creates a new order and publishes an outbox event.
 // It implements createv1.Service.
 func (s *Service) Create(ctx context.Context, req *createv1.Request) (createv1.CreateResponseObject, error) {
-	order, err := s.createInternal(ctx, req.Item)
+	// Derive the owner from the authenticated principal. The create gate
+	// (RequirePermission(PermOrderCreate())) guarantees a principal is present,
+	// but we fail-fast here as defense-in-depth: an order with an empty Owner
+	// would be permanently inaccessible (no subject can ever satisfy the ownership
+	// rule), creating an orphaned record. Unauthenticated context → 401.
+	p, ok := auth.FromContext(ctx)
+	if !ok || p == nil || p.Subject == "" {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "order-create: authenticated subject required")
+	}
+	owner := p.Subject
+	order, err := s.createInternal(ctx, req.Item, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -105,14 +116,17 @@ func (s *Service) Create(ctx context.Context, req *createv1.Request) (createv1.C
 }
 
 // createInternal is the business logic core: creates an order and writes
-// an outbox entry atomically.
-func (s *Service) createInternal(ctx context.Context, item string) (*domain.Order, error) {
+// an outbox entry atomically. owner is the JWT subject of the creating user
+// and is stored in domain.Order.Owner for PDP ownership lookups; it is
+// intentionally kept off-wire (not in HTTP responses or event payloads).
+func (s *Service) createInternal(ctx context.Context, item, owner string) (*domain.Order, error) {
 	if item == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item must not be empty")
 	}
 
 	order := &domain.Order{
 		ID:        "ord" + "-" + uuid.NewString(),
+		Owner:     owner,
 		Item:      item,
 		Status:    "pending",
 		CreatedAt: s.clock.Now(),

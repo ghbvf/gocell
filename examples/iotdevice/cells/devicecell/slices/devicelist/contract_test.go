@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
@@ -53,7 +54,7 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 
-	handler := listcontract.NewHandler(svc, auth.AnyRole("admin"))
+	handler := listcontract.NewHandler(svc, auth.RequirePermission(authz.PermDeviceList()))
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { require.NoError(t, handler.RegisterRoutes(sub)) })
 	return mux
@@ -81,7 +82,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2", nil)
-	req = req.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	req = req.WithContext(withListTestAuth([]string{"admin"}))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	page1 := decodeDeviceListPage(t, rec)
@@ -97,7 +98,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2&cursor="+url.QueryEscape(page1.NextCursor), nil)
-	req2 = req2.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	req2 = req2.WithContext(withListTestAuth([]string{"admin"}))
 	h.ServeHTTP(rec2, req2)
 	c.ValidateHTTPResponseRecorder(t, rec2)
 	page2 := decodeDeviceListPage(t, rec2)
@@ -117,7 +118,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 	rec400 := httptest.NewRecorder()
 	req400 := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=notanumber", nil)
-	req400 = req400.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	req400 = req400.WithContext(withListTestAuth([]string{"admin"}))
 	h.ServeHTTP(rec400, req400)
 	if rec400.Code != http.StatusBadRequest {
 		t.Errorf("invalid limit: expected 400, got %d", rec400.Code)
@@ -126,7 +127,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 	recBadCursor := httptest.NewRecorder()
 	reqBadCursor := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?cursor=not-a-valid-cursor", nil)
-	reqBadCursor = reqBadCursor.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	reqBadCursor = reqBadCursor.WithContext(withListTestAuth([]string{"admin"}))
 	h.ServeHTTP(recBadCursor, reqBadCursor)
 	if recBadCursor.Code != http.StatusBadRequest {
 		t.Errorf("invalid cursor: expected 400, got %d", recBadCursor.Code)

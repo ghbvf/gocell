@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 )
@@ -57,8 +58,23 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.Order, error)
 	return s.repo.GetByID(ctx, id)
 }
 
-// list is the internal paginated query implementation.
+// subjectFromContext returns the authenticated principal's subject, or "" when
+// absent. The order:list route gate (RequirePermission(PermOrderList)) guarantees a
+// customer principal is present, so "" arises only on a misconfigured auth chain —
+// and repo.List treats "" as match-nothing (fail-closed), yielding an empty list
+// rather than a global read. Owner scoping lives here (and in the repo), not at the
+// coarse route gate, because the gate allows any customer through.
+func subjectFromContext(ctx context.Context) string {
+	if p, ok := auth.FromContext(ctx); ok && p != nil {
+		return p.Subject
+	}
+	return ""
+}
+
+// list is the internal paginated query implementation. It is owner-scoped: only the
+// calling principal's own orders are listed (see subjectFromContext + repo.List).
 func (s *Service) list(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Order], error) {
+	owner := subjectFromContext(ctx)
 	qctx := query.QueryContext("endpoint", "order-query")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Order]{
 		Codec:      s.codec,
@@ -66,7 +82,7 @@ func (s *Service) list(ctx context.Context, pageReq query.PageParams) (query.Pag
 		Sort:       orderSort,
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Order, error) {
-			return s.repo.List(ctx, params)
+			return s.repo.List(ctx, owner, params)
 		},
 		Extract: func(o *domain.Order) []any {
 			return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
