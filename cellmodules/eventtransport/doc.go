@@ -25,6 +25,24 @@
 // configured: a missing GOCELL_AMQP_URL is a startup error, never a silent
 // degrade back to in-memory.
 //
+// # Composition-root usage
+//
+// A composition root resolves the transport once and threads its three outputs
+// into bootstrap:
+//
+//	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{AMQPURL: os.Getenv("GOCELL_AMQP_URL")})
+//	// ... handle err ...
+//	opts := []bootstrap.Option{
+//	    bootstrap.WithPublisher(transport.Publisher),
+//	    bootstrap.WithSubscriber(transport.Subscriber),
+//	    bootstrap.WithEventTransportKind(transport.Kind), // sealed broker-kind for the phase0 split gate (#2211)
+//	}
+//	for _, mr := range transport.Resources { // broker connection (postgres mode) for LIFO teardown
+//	    opts = append(opts, bootstrap.WithManagedResource(mr))
+//	}
+//
+// See cmd/corebundle and examples/ssobff for the two production wirings.
+//
 // # INVARIANT: EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01
 //
 // Resolve stamps each [Transport] with a sealed [runtime/bootstrap.EventTransportKind]

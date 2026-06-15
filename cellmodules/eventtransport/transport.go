@@ -37,7 +37,11 @@ const dlxExchange = "gocell.events.dlx"
 // real-broker variant (EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01); the composition
 // root threads Kind into bootstrap.WithEventTransportKind so the phase0
 // broker-mandatory gate trusts a type-system fact instead of a StorageBackend
-// proxy (#2211).
+// proxy (#2211). Kind is intentionally NOT promoted to composition.SharedDeps
+// (unlike Publisher/Subscriber): it is a wiring-time fact consumed only by the
+// bootstrap startup gate — cell modules and the shared-dep layer never inspect
+// it — so it stays a composition-root-local value (cmdLocals / the ssobff infra
+// struct), threaded directly into the bootstrap option.
 type Transport struct {
 	Publisher  outbox.Publisher
 	Subscriber outbox.Subscriber

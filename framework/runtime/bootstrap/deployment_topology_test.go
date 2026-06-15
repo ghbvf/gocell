@@ -620,10 +620,13 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	// nonNilBus is used for the GREEN cases that require non-nil publisher/subscriber.
 	nonNilBus := eventbus.New(clock.Real())
 
-	// typedNilPub is a typed-nil interface value (non-nil interface header, nil
-	// concrete pointer). A bare == nil check would MISS it; the gate uses
-	// validation.IsNilInterface so it is correctly rejected (#2188 review F3).
+	// typedNilPub / typedNilSub are typed-nil interface values (non-nil interface
+	// header, nil concrete pointer). A bare == nil check would MISS them; the gate
+	// uses validation.IsNilInterface so both publisher and subscriber are correctly
+	// rejected (#2188 review F3). Both directions are covered to lock the symmetric
+	// IsNilInterface check on each sink.
 	var typedNilPub outbox.Publisher = (*eventbus.InMemoryEventBus)(nil)
+	var typedNilSub outbox.Subscriber = (*eventbus.InMemoryEventBus)(nil)
 
 	cases := []struct {
 		name               string
@@ -688,6 +691,17 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			wantErrCode:        errcode.ErrValidationFailed,
 		},
 		{
+			// Symmetric to the publisher case: a typed-nil subscriber must also be
+			// rejected (the gate's IsNilInterface check is applied to both sinks).
+			name:               "RED: split topology + real-broker kind + typed-nil subscriber → rejected (F3 typed-nil)",
+			deploymentTopology: splitDT,
+			kind:               RealBrokerEventTransport(),
+			publisher:          nonNilBus,
+			subscriber:         typedNilSub,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
 			name:               "GREEN: split topology + real-broker kind + non-nil pub/sub → accepted",
 			deploymentTopology: splitDT,
 			kind:               RealBrokerEventTransport(),
@@ -736,9 +750,13 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	}
 }
 
-// TestPhase0_RejectsSplitTopologyWithInMemoryBus verifies that phase0 end-to-end
-// rejects a split topology combined with in-memory bus (no postgres storage).
-func TestPhase0_RejectsSplitTopologyWithInMemoryBus(t *testing.T) {
+// TestPhase0_RejectsSplitTopologyWithoutBrokerKind verifies that phase0 end-to-end
+// rejects a split topology when no real-broker EventTransportKind is declared.
+// The composition root here omits WithEventTransportKind, so the kind is the zero
+// value (unset) → IsRealBroker()==false → fail-closed. Since #2211 the rejection
+// is driven by the sealed kind, NOT by the (now gate-irrelevant) controlPlaneTopology
+// storage backend — the in-memory bus can no longer be reached in a split topology.
+func TestPhase0_RejectsSplitTopologyWithoutBrokerKind(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
 		Remote: []RemoteCellEndpoint{
@@ -760,7 +778,7 @@ func TestPhase0_RejectsSplitTopologyWithInMemoryBus(t *testing.T) {
 
 	err = b.phase0ValidateOptions()
 	if err == nil {
-		t.Fatal("phase0ValidateOptions: expected error for split topology + in-memory bus, got nil")
+		t.Fatal("phase0ValidateOptions: expected error for split topology without a real-broker kind, got nil")
 	}
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
@@ -775,8 +793,12 @@ func TestPhase0_RejectsSplitTopologyWithInMemoryBus(t *testing.T) {
 }
 
 // TestPhase0_AcceptsSplitTopologyWithPostgres verifies that phase0 accepts a
-// split topology when postgres storage is declared and non-nil publisher/subscriber
-// are injected (broker-mandatory gate, F1).
+// split topology when a real-broker EventTransportKind + non-nil publisher/subscriber
+// are injected (broker-mandatory gate). Note: brokerBus is an in-memory eventbus
+// used only to satisfy the non-nil sink check — the gate validates the sealed Kind
+// fact, NOT the bus implementation. The honest pairing (a real kind ⇒ a real bus)
+// is the composition root's job; in production COREBUNDLE-EVENTBUS-FUNNEL-01 makes
+// the dishonest pairing import-unexpressible, so this unit-test shortcut cannot leak.
 func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},

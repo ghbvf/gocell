@@ -30,9 +30,9 @@ package bootstrap
 // by archtest EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01 (same family as the
 // RowScopeAll minter and COMMAND-ASYNC-EMIT-CALLER-01). The production
 // end-to-end guarantee is nonetheless Hard: the COREBUNDLE-EVENTBUS-FUNNEL-01
-// depguard makes an in-memory bus import-unexpressible in the production
-// composition roots, so a forged real-broker kind cannot be paired with an
-// in-memory bus there.
+// depguard (corebundle-no-direct-eventbus + ssobff-no-direct-eventbus) makes an
+// in-memory bus import-unexpressible in BOTH production composition roots, so a
+// forged real-broker kind cannot be paired with an in-memory bus there.
 //
 // Field set frozen by TestEventTransportKindZeroExportedFields
 // (EVENT-TRANSPORT-KIND-SEALED-FIELD-FROZEN-01).
@@ -51,7 +51,13 @@ func InMemoryEventTransport() EventTransportKind {
 
 // RealBrokerEventTransport mints the kind for a real cross-process broker
 // (postgres topology → RabbitMQ). IsRealBroker()==true. Sanctioned caller:
-// cellmodules/eventtransport.Resolve only (EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01).
+// cellmodules/eventtransport.Resolve only.
+//
+// Enforcement rating: Hard (sealed construction — see type godoc) + Medium
+// (caller funnel EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01, a cross-module Go ceiling
+// with no low-cost Hard path) + Hard end-to-end (the COREBUNDLE-EVENTBUS-FUNNEL-01
+// depguard makes an in-memory bus import-unexpressible in the production roots).
+// ADR: docs/architecture/202606131500-1940 (amendment 2026-06-15).
 func RealBrokerEventTransport() EventTransportKind {
 	return EventTransportKind{set: true, realBroker: true}
 }
@@ -62,7 +68,11 @@ func (k EventTransportKind) IsRealBroker() bool {
 	return k.set && k.realBroker
 }
 
-// String renders the kind for diagnostics (errcode internal attrs / logs).
+// String renders the kind for diagnostics (errcode internal attrs / logs). The
+// "unset" value is the operationally significant one: it means the composition
+// root never called WithEventTransportKind, which the split-topology gate treats
+// as fail-closed — so a server log showing eventTransportKind=unset on a startup
+// rejection points the operator at the missing WithEventTransportKind wiring.
 func (k EventTransportKind) String() string {
 	switch {
 	case !k.set:

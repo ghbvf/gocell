@@ -161,9 +161,18 @@ func (b *Bootstrap) validateSplitTopologyBroker() error {
 	if b.deploymentTopology.HasRemoteCells() &&
 		(!b.eventTransportKind.IsRealBroker() ||
 			validation.IsNilInterface(b.publisher) || validation.IsNilInterface(b.subscriber)) {
+		// Distinct internal attrs so the server log pinpoints WHICH sub-cause
+		// tripped the gate — an unset/in-memory kind (composition root forgot
+		// WithEventTransportKind), a nil publisher, and a nil subscriber are
+		// different wiring mistakes that the single const message cannot
+		// distinguish on the wire (MESSAGE-CONST-LITERAL-01).
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgSplitTopologyRequiresBroker,
-			errcode.WithInternal(errcode.InternalAttr("eventTransportKind", b.eventTransportKind.String())))
+			errcode.WithInternal(
+				errcode.InternalAttr("eventTransportKind", b.eventTransportKind.String()),
+				errcode.InternalAttr("publisherNil", validation.IsNilInterface(b.publisher)),
+				errcode.InternalAttr("subscriberNil", validation.IsNilInterface(b.subscriber)),
+			))
 	}
 	return nil
 }
@@ -245,7 +254,8 @@ const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cel
 	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL so " +
 	"eventtransport.Resolve selects a real broker, and thread its Transport.Kind via " +
 	"WithEventTransportKind plus a non-nil publisher/subscriber via WithPublisher/WithSubscriber" +
-	" — or remove topology.remote to keep all cells co-located (no broker needed)"
+	" — or drop the remote cells from the deployment topology (assembly topology.remote / " +
+	"DeploymentTopologySpec.Remote) to keep all cells co-located (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx

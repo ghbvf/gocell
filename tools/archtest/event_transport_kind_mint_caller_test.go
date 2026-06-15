@@ -103,7 +103,7 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	var observed bool
+	var observed, observedInFunnel bool
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
@@ -118,6 +118,7 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 				}
 				observed = true
 				if inFunnel {
+					observedInFunnel = true
 					return // eventtransport.Resolve is the sanctioned minter
 				}
 				pos := p.Fset.Position(call.Pos())
@@ -149,6 +150,19 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 				"bootstrap.RealBrokerEventTransport() was observed anywhere. eventtransport.Resolve " +
 				"(resolveRabbitMQ) must mint it on the RabbitMQ branch — either the minter was " +
 				"removed/renamed or the scanner regressed; the funnel guards nothing without it.",
+		})
+	}
+	// Second anti-vacuity: the observed mint must occur INSIDE the sanctioned
+	// minter package, exercising the allowlist GREEN path. If observed==true but
+	// observedInFunnel==false, the only mint is somewhere else and the funnel's
+	// suppression branch was never taken (the eventtransport pkgPath drifted or
+	// the minter moved out) — that is a silent regression of the funnel's anchor.
+	if observed && !observedInFunnel {
+		diags = append(diags, Diagnostic{
+			Message: "EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01 anti-vacuity: RealBrokerEventTransport() " +
+				"is minted in production but NOT inside " + eventTransportKindMinterPkgPath +
+				"; the sanctioned-minter (GREEN) path was never exercised. Either the minter moved out " +
+				"of eventtransport.Resolve or eventTransportKindMinterPkgPath drifted.",
 		})
 	}
 
