@@ -251,10 +251,10 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	got, _ := reasonAttr.Value().(string)
-	assert.Equal(t, "sort scope mismatch", got)
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not leak via public details (#1103)")
+	assert.Contains(t, ecErr.Error(), "sort scope mismatch",
+		"reason should remain on the internal/server-log surface (#1103)")
 }
 
 func TestService_List_ContextMismatch(t *testing.T) {
@@ -278,8 +278,8 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	got, _ := reasonAttr.Value().(string)
-	assert.Equal(t, "query context mismatch", got)
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not leak via public details (#1103)")
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason should remain on the internal/server-log surface (#1103)")
 }
