@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/idutil"
@@ -202,4 +203,31 @@ func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry)
 	}
 	_, err := h.HandleEnqueue(ctx, &req)
 	return err
+}
+
+// EmitAsync enqueues a command.devicecommand.enqueue.v1 async command through the sanctioned
+// runtime command emit funnel. It is the producer-side counterpart of
+// DispatchAsync: it bakes in DispatchID (the cell never names the raw routing
+// topic) and locks the payload to the typed *Request, so a
+// bare-DispatchID dispatch is unexpressible at the call site.
+//
+// subject and commandID are the idempotency identity slot the relay's Claimer
+// wrap reads (subject = the dedup aggregate, e.g. deviceID; commandID = the
+// per-instance identity). opts is additive — pass command.WithActiveUniqueness
+// to opt into queue active-uniqueness. The funnel is locked by archtest
+// COMMAND-ASYNC-EMIT-CALLER-01 (symmetric to the consumer-side
+// COMMAND-ASYNC-DISPATCH-CALLER-01).
+func EmitAsync(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject, commandID string, req *Request, opts ...command.EmitOption) error {
+	return command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)
+}
+
+// EmitAsyncFromIdempotencyKey enqueues a command.devicecommand.enqueue.v1 async command sourcing
+// the per-instance commandID from the validated HTTP Idempotency-Key in ctx
+// (the #1610 bridge), instead of taking commandID as a parameter. Like EmitAsync
+// it bakes in DispatchID and locks the payload to *Request;
+// because commandID is derived from the sealed ctx identity, the subject/commandID
+// transpose footgun is structurally inexpressible on this HTTP-sourced path.
+// Callers are locked by archtest COMMAND-ASYNC-EMIT-CALLER-01.
+func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject string, req *Request, opts ...command.EmitOption) error {
+	return command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)
 }

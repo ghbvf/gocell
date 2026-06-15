@@ -91,12 +91,12 @@ func commandEmitExitCallee(p *Pass, call *ast.CallExpr) (name string, ok bool) {
 //     excluded by Production() scope regardless — so the Production scan never
 //     observes a sanctioned caller; the anti-vacuity anchor scans generated/
 //     separately for the wrapper's existence.
-//  2. EmitAsyncFromIdempotencyKey currently has zero production callers
-//     (HTTP→command is not wired). Its arm of the lock is therefore vacuous-green
-//     today, anchored structurally by the EmitAsync wrapper anti-vacuity — the
-//     same posture as COMMAND-ASYNC-EMIT-FUNNEL-01's vacuous-green const-topic
-//     arm. A typed HTTP wrapper is generated on demand when HTTP→command is wired
-//     (no dead code emitted now).
+//  2. Both exits have live production callers post-migration (#2059): EmitAsync
+//     (device bootstrap + cert-renewal reconcile producers) and
+//     EmitAsyncFromIdempotencyKey (the devicecmd HTTP EnqueueAsync bridge, #1610).
+//     Both arms are therefore non-vacuous and both typed wrappers are generated —
+//     neither is dead code. The anti-vacuity anchor below checks the EmitAsync
+//     wrapper's existence, which is sufficient to prove the codegen funnel is wired.
 //  3. Build-tag-gated production files under a non-default tag are not scanned by
 //     the default-tags Production scan (same posture as the sibling funnels).
 func TestCommandAsyncEmitCaller01(t *testing.T) {

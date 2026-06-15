@@ -127,11 +127,12 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		// #2059 producer wrappers: per-command typed EmitAsync +
 		// EmitAsyncFromIdempotencyKey that bake DispatchID + lock the payload to
 		// *Request (symmetric to consumer DispatchAsync; callers locked by archtest
-		// COMMAND-ASYNC-EMIT-CALLER-01).
-		{"EmitAsync producer wrapper", "func EmitAsync(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject, commandID string, req *Request, opts ...command.EmitOption) error"},
-		{"EmitAsync delegates to runtime", "return command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)"},
-		{"EmitAsyncFromIdempotencyKey producer wrapper", "func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock, emitter kout.Emitter, subject string, req *Request, opts ...command.EmitOption) error"},
-		{"EmitAsyncFromIdempotencyKey delegates to runtime", "return command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)"},
+		// COMMAND-ASYNC-EMIT-CALLER-01). Fragments kept short for lll; the full
+		// signatures are byte-locked by the golden test above.
+		{"EmitAsync wrapper", "func EmitAsync(ctx context.Context, clk clock.Clock,"},
+		{"EmitAsync bakes DispatchID", "command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)"},
+		{"EmitFromIdemKey wrapper", "func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock,"},
+		{"EmitFromIdemKey bakes DispatchID", "command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)"},
 		{"clock import", `"github.com/ghbvf/gocell/framework/kernel/clock"`},
 		// #1588 value funnel: unconditional request-schema embed + validator +
 		// the DispatchAsync Validate call (the async command-entry value check).

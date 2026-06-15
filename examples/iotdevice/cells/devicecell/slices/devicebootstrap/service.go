@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
-	"github.com/ghbvf/gocell/framework/runtime/command"
 	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
 )
 
@@ -35,12 +34,12 @@ type deviceRegisteredEvent struct {
 // Service is the event-reactive bootstrap producer.
 //
 // emitter is the sealed CellEmitter marker (composition root wraps a raw
-// Emitter); it embeds outbox.Emitter, so it is passed directly to
-// command.EmitAsync's kout.Emitter parameter. It is an optional dependency
-// (defaults to outbox.DemoCellEmitter), matching the deviceregister slice — no
-// gocell:"required" tag.
+// Emitter); it embeds outbox.Emitter, so it is passed directly to the generated
+// cmdenqueue.EmitAsync wrapper's kout.Emitter parameter. It is an optional
+// dependency (defaults to outbox.DemoCellEmitter), matching the deviceregister
+// slice — no gocell:"required" tag.
 //
-// txRunner wraps command.EmitAsync in a real transaction when the durable
+// txRunner wraps the cmdenqueue.EmitAsync emit in a real transaction when the durable
 // outbox writer requires one (adapters/postgres.OutboxWriter.Write calls
 // persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
 // is present in ctx). Defaults to outbox.DemoCellTxManager() — a no-op that
@@ -68,8 +67,8 @@ func WithEmitter(e outbox.CellEmitter) Option {
 	}
 }
 
-// WithTxManager sets the CellTxManager used to wrap command.EmitAsync in a
-// transaction. Required for durable mode: the PG outbox writer calls
+// WithTxManager sets the CellTxManager used to wrap the cmdenqueue.EmitAsync
+// emit in a transaction. Required for durable mode: the PG outbox writer calls
 // persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
 // is in ctx. Demo mode and tests use the default outbox.DemoCellTxManager()
 // no-op. Accumulative: a nil txRunner leaves the previously-set value in place.
@@ -142,8 +141,7 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 	// Demo mode uses outbox.DemoCellTxManager() (no-op), which just calls the
 	// closure directly, so behavior is unchanged for tests and demo assemblies.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		return command.EmitAsync(txCtx, s.clk, s.emitter, cmdenqueue.DispatchID,
-			ev.ID, entry.ID(), req)
+		return cmdenqueue.EmitAsync(txCtx, s.clk, s.emitter, ev.ID, entry.ID(), &req)
 	}); err != nil {
 		s.logger.Error("device-bootstrap: failed to emit enqueue command",
 			slog.String("device_id", ev.ID), slog.String("entry_id", entry.ID()),
