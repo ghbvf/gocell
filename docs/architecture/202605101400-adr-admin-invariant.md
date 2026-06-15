@@ -180,20 +180,30 @@ destructive Down 由 Go 层 sealed `DestructiveDownPermit`（`adapters/postgres/
 
 **回滚后运维验证**
 
-回滚完成后执行以下 SQL 确认仍存在至少一个 effective admin：
+自 migration 050 起，effective-admin invariant 是 **per-tenant** 的——每个 tenant 至少
+需要一个 active admin，全局计数非零可能掩盖某个 tenant 已无可用 admin 的情况。因此
+回滚验证必须按 tenant 分组，不能依赖全局计数。
+
+回滚完成后，执行以下 SQL 列出「没有 active admin 的 tenant」（结果不为空即为危险集）：
 
 ```sql
-SELECT count(*) FROM role_assignments ra
-  JOIN users u ON u.id = ra.user_id
- WHERE ra.role_id='admin' AND u.status='active';
+SELECT u.tenant_id,
+       count(*) FILTER (WHERE ra.role_id = 'admin' AND u.status = 'active') AS active_admins
+  FROM users u
+  LEFT JOIN role_assignments ra
+    ON ra.tenant_id = u.tenant_id AND ra.user_id = u.id
+ GROUP BY u.tenant_id
+HAVING count(*) FILTER (WHERE ra.role_id = 'admin' AND u.status = 'active') = 0;
 ```
 
-若结果为 0，必须在回滚完成前手动 reactivate 一个 admin，或（若系统从未初始化）经
-`/api/v1/access/setup/admin` 恢复。
+结果中出现的任一 tenant（active_admins = 0）必须为该 tenant reactivate 一个 admin，
+或（该 tenant 从未初始化）经 `/api/v1/access/setup/admin` 恢复。若只需检查单个
+tenant，在 `FROM users u` 后加 `WHERE u.tenant_id = '<target>'` 即可。
 
 **参考**
 
 - `adapters/postgres/migrations/024_effective_admin_invariant.sql`（Up 强化 + Down WARNING）
+- `adapters/postgres/migrations/050_accesscore_tenant_id.sql`（per-tenant invariant 重建）
 - `adapters/postgres/migrations/019_roles.sql`（`last_admin_protected_fn` 弱语义）
 - `adapters/postgres/migrator.go`（`DestructiveDownPermit` sealed 门控）
 - issue #1248（destructive-down permit 设计）；来源 PR #1396（关联 issue #1054 / #740）

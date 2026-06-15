@@ -26,7 +26,7 @@ Compose v2 ships bundled with Docker Desktop and with the `docker-compose-plugin
 package on Linux. The `make local-up` target calls `docker compose` (v2 syntax).
 
 
-## Quick Start (5 steps)
+## Quick Start (6 steps)
 
 Run these commands from the repository root in a single terminal. Each step
 takes a few seconds; the whole sequence finishes in under 5 minutes.
@@ -354,7 +354,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
 
    ```bash
    docker compose -f docker-compose.local.yml --env-file .env.local exec corebundle \
-     curl -fsS "http://127.0.0.1:9091/readyz?verbose" | grep audit_admin
+     sh -c 'curl -fsS -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" "http://127.0.0.1:9091/readyz?verbose"' | grep audit_admin
    ```
 
    A healthy output contains `"postgres_audit_admin_restricted_ready": "ok"`.
