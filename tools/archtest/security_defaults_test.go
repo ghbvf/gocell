@@ -211,6 +211,179 @@ services:
 	assert.Equal(t, "examples/futuredevice/docker-compose.yml", rels[1])
 }
 
+// TestScanComposeCredentialViolations_Structural drives the #2176 fix: the
+// SEC-05 compose scanner must classify credentials by YAML STRUCTURE (mapping
+// key vs. sequence item), not by string-cutting on the first ":". The legacy
+// strings.Cut(line, ":") mis-cut a redis `--requirepass "${VAR:?msg}"` command
+// sequence item (first ":" landed inside ":?") and FALSE-POSITIVED a line that
+// was already the secure required-interpolation form.
+//
+// RED→GREEN drivers (FAIL on the legacy string scanner, PASS once the scanner
+// parses with yaml.v3): "required interpolation in command array" and "comment
+// with credential keyword". Anti-vacuity guards (flag both before and after, so
+// the sequence/mapping paths are provably non-vacuous): "fallback in command
+// array", "mapping fallback still governed". fail-closed: unparseable YAML must
+// surface a diagnostic rather than silently pass.
+func TestScanComposeCredentialViolations_Structural(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		yaml string
+		// one expected message substring per diagnostic, in order; empty = no violation.
+		wantContains []string
+	}{
+		{
+			name: "required interpolation in command array is not flagged (#2176)",
+			yaml: `services:
+  redis:
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "${GOCELL_EXAMPLE_REDIS_PASSWORD:?set it for local demo}"
+`,
+			wantContains: nil,
+		},
+		{
+			name: "credential keyword inside a comment is not flagged",
+			yaml: `services:
+  db:
+    image: postgres:16
+    # POSTGRES_PASSWORD: example-do-not-flag
+`,
+			wantContains: nil,
+		},
+		{
+			name: "fallback default in command array is still flagged",
+			yaml: `services:
+  redis:
+    command:
+      - "--requirepass"
+      - "${REDIS_PASSWORD:-weakdefault}"
+`,
+			wantContains: []string{"REDIS_PASSWORD"},
+		},
+		{
+			name: "mapping fallback is still flagged",
+			yaml: `services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${VAR:-gocell}
+`,
+			wantContains: []string{"POSTGRES_PASSWORD"},
+		},
+		{
+			name: "non-credential command items are ignored",
+			yaml: `services:
+  redis:
+    command:
+      - "redis-server"
+      - "--appendonly"
+`,
+			wantContains: nil,
+		},
+		{
+			name: "non-credential env-ref command item is ignored",
+			yaml: `services:
+  app:
+    command:
+      - "--redis-url"
+      - "${REDIS_HOST:?set host}"
+`,
+			wantContains: nil,
+		},
+		{
+			name: "non-scalar command item is skipped (env-var name only applies to scalars)",
+			yaml: `services:
+  redis:
+    command:
+      - "redis-server"
+      - ["nested", "list"]
+`,
+			wantContains: nil,
+		},
+		{
+			name: "malformed interpolation without terminator is not flagged",
+			yaml: `services:
+  redis:
+    command:
+      - "${REDIS_PASSWORD"
+`,
+			wantContains: nil,
+		},
+		{
+			name:         "unparseable YAML fails closed",
+			yaml:         "services:\n  db:\n    command: [unterminated\n",
+			wantContains: []string{"not valid YAML"},
+		},
+		{
+			// #2184 F1: Compose `environment` written as a sequence uses KEY=VALUE
+			// array form; a credential KEY with a fallback default leaks just like
+			// the mapping form and must be flagged.
+			name: "array-env KEY=VALUE fallback is flagged (#2184 F1)",
+			yaml: `services:
+  db:
+    environment:
+      - "POSTGRES_PASSWORD=${VAR:-weak}"
+`,
+			wantContains: []string{"POSTGRES_PASSWORD"},
+		},
+		{
+			name: "array-env KEY=VALUE required interpolation is not flagged (#2184 F1)",
+			yaml: `services:
+  db:
+    environment:
+      - "POSTGRES_PASSWORD=${VAR:?set it}"
+`,
+			wantContains: nil,
+		},
+		{
+			name: "array-env KEY=VALUE plaintext credential is flagged (#2184 F1)",
+			yaml: `services:
+  db:
+    environment:
+      - "POSTGRES_PASSWORD=plaintext"
+`,
+			wantContains: []string{"POSTGRES_PASSWORD"},
+		},
+		{
+			// #2184 F2: a credential key whose value is not a scalar cannot be a
+			// required ${VAR:?message} interpolation, so it fails closed rather
+			// than being silently skipped.
+			name: "credential key with non-scalar value fails closed (#2184 F2)",
+			yaml: `services:
+  db:
+    environment:
+      POSTGRES_PASSWORD:
+        - nested
+`,
+			wantContains: []string{"POSTGRES_PASSWORD"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := scanComposeCredentialViolations("docker-compose.yml", []byte(tt.yaml))
+			require.Len(t, diags, len(tt.wantContains), "diags: %+v", diags)
+			for i, want := range tt.wantContains {
+				assert.Contains(t, diags[i].Message, want)
+			}
+		})
+	}
+}
+
+// TestScanComposeCredentialViolations_ParseFailureFailsClosed pins the #2184 F3
+// fix: a YAML parse failure must produce a file-anchored diagnostic (Line 1, the
+// diagFile convention — not the unclickable :0:) and must preserve the parser
+// error detail rather than discarding it.
+func TestScanComposeCredentialViolations_ParseFailureFailsClosed(t *testing.T) {
+	t.Parallel()
+	diags := scanComposeCredentialViolations("docker-compose.yml", []byte("services:\n  db:\n    command: [unterminated\n"))
+	require.Len(t, diags, 1)
+	assert.Equal(t, 1, diags[0].Line, "parse-failure diagnostic must anchor to file head (Line 1), not :0:")
+	assert.Contains(t, diags[0].Message, "not valid YAML")
+	assert.Contains(t, diags[0].Message, "yaml:", "parser error detail must be preserved")
+}
+
 func TestFindUpgradeConfigWithoutAuthenticator_DetectsLiteralWithMissingField(t *testing.T) {
 	t.Parallel()
 
