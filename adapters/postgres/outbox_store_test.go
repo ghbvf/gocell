@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -106,10 +107,12 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	assert.Equal(t, kout.StateClaiming.String(), ec.args[5])
 	assert.Equal(t, testLease, ec.args[6])
 
-	// Interval arg ($3) should be a non-empty string with microseconds
-	intervalArg, ok := ec.args[2].(string)
-	require.True(t, ok, "interval arg should be a string")
-	assert.Contains(t, intervalArg, "microseconds")
+	// Interval arg ($3) is a typed pgtype.Interval; ~10s future delay → positive microseconds.
+	intervalArg, ok := ec.args[2].(pgtype.Interval)
+	require.True(t, ok, "delay must be a typed pgtype.Interval")
+	assert.True(t, intervalArg.Valid, "interval must be valid")
+	assert.Greater(t, intervalArg.Microseconds, int64(0), "future nextRetryAt yields positive interval")
+	assert.LessOrEqual(t, intervalArg.Microseconds, testtime.D10s.Microseconds(), "delay capped by the requested offset")
 }
 
 func TestPGOutboxStore_MarkRetry_NotUpdated(t *testing.T) {
@@ -163,9 +166,10 @@ func TestPGOutboxStore_MarkRetry_PastNextRetry_UsesZeroDelay(t *testing.T) {
 	require.NoError(t, err)
 
 	ec := db.execCalls[0]
-	intervalArg, ok := ec.args[2].(string)
-	require.True(t, ok)
-	assert.Equal(t, "0 microseconds", intervalArg, "past nextRetryAt should yield 0 interval")
+	intervalArg, ok := ec.args[2].(pgtype.Interval)
+	require.True(t, ok, "delay must be a typed pgtype.Interval")
+	assert.Equal(t, pgtype.Interval{Microseconds: 0, Valid: true}, intervalArg,
+		"past nextRetryAt should yield 0 interval")
 }
 
 // ---------------------------------------------------------------------------
@@ -271,10 +275,11 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	assert.Equal(t, kout.StateClaiming.String(), ec.args[5], "claiming status for WHERE clause")
 	assert.Equal(t, callerBatch, ec.args[7], "ReclaimStale must pass through the caller's batchSize")
 
-	// claimTTL interval text
-	ttlArg, ok := ec.args[0].(string)
-	require.True(t, ok)
-	assert.Contains(t, ttlArg, "microseconds")
+	// claimTTL is passed as a typed pgtype.Interval (Microseconds), not text.
+	ttlArg, ok := ec.args[0].(pgtype.Interval)
+	require.True(t, ok, "claimTTL must be a typed pgtype.Interval")
+	assert.Equal(t, pgtype.Interval{Microseconds: testtime.D60s.Microseconds(), Valid: true}, ttlArg,
+		"claimTTL must encode the duration as microseconds")
 }
 
 func TestPGOutboxStore_ReclaimStale_ExecError(t *testing.T) {
