@@ -25,6 +25,11 @@
 //   - Only scans YAML files reachable by ModuleScope (honors the default
 //     excludes: vendor/, testdata/, .git/, node_modules/). Files placed in those
 //     directories are not checked.
+//   - Services whose healthcheck block contains "disable: true" are intentionally
+//     skipped: Docker Compose treats this as an explicit opt-out of the healthcheck
+//     mechanism, so requiring start_period there would be meaningless.
+//     This carve-out is tested by the inline GREEN fixture sub-case
+//     "disabled-healthcheck-skipped" in TestComposeHealthcheckStartPeriod_AcceptsCompliantCompose.
 package archtest
 
 import (
@@ -37,6 +42,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// composeHealthcheckRuleID is the rule identifier for COMPOSE-HEALTHCHECK-START-PERIOD-01.
+const composeHealthcheckRuleID = "COMPOSE-HEALTHCHECK-START-PERIOD-01"
 
 // composeFilePrefix is the base-name prefix that identifies Docker Compose files.
 // All docker-compose* files (docker-compose.yml, docker-compose.local.yml,
@@ -74,6 +82,11 @@ func composeStartPeriodViolations(path string, body []byte) []string {
 		if len(hc) == 0 {
 			continue
 		}
+		// Docker Compose healthcheck: {disable: true} is a valid explicit opt-out.
+		// Requiring start_period on a disabled healthcheck is meaningless, so skip.
+		if node, ok := hc["disable"]; ok && node.Value == "true" {
+			continue
+		}
 		if _, ok := hc["start_period"]; !ok {
 			violations = append(violations,
 				fmt.Sprintf("service %q has healthcheck but is missing start_period", name))
@@ -106,7 +119,7 @@ func TestComposeHealthcheckStartPeriod(t *testing.T) {
 			} `yaml:"services"`
 		}
 		if err := yaml.NewDecoder(bytes.NewReader(fc.Bytes)).Decode(&doc); err != nil {
-			ft.Errorf("COMPOSE-HEALTHCHECK-START-PERIOD-01: parse %s: %v", fc.Rel, err)
+			ft.Errorf("%s: parse %s: %v", composeHealthcheckRuleID, fc.Rel, err)
 			return
 		}
 		for _, svc := range doc.Services {
@@ -117,16 +130,17 @@ func TestComposeHealthcheckStartPeriod(t *testing.T) {
 
 		violations := composeStartPeriodViolations(fc.Rel, fc.Bytes)
 		for _, v := range violations {
-			ft.Errorf("COMPOSE-HEALTHCHECK-START-PERIOD-01: %s: %s", fc.Rel, v)
+			ft.Errorf("%s: %s: %s", composeHealthcheckRuleID, fc.Rel, v)
 		}
 	})
 
 	// Anti-vacuity: current repo has ~20 healthcheck blocks across all compose
 	// files. A count below 10 indicates the scope or base-name filter has broken.
 	require.GreaterOrEqualf(t, totalHealthchecks, 10,
-		"COMPOSE-HEALTHCHECK-START-PERIOD-01: observed only %d healthcheck blocks "+
+		"%s: observed only %d healthcheck blocks "+
 			"across all docker-compose* files — expected ≥10; scope or file detection "+
-			"may be broken (compose files moved to excluded dirs?)", totalHealthchecks)
+			"may be broken (compose files moved to excluded dirs?)",
+		composeHealthcheckRuleID, totalHealthchecks)
 }
 
 // --- synthetic fixtures: RED (must detect violations) -------------------------
@@ -249,6 +263,16 @@ services:
   postgres:
     healthcheck:
       test: ping
+`,
+		},
+		"disabled-healthcheck-skipped": {
+			path: "docker-compose.yml",
+			body: `
+services:
+  legacy:
+    image: legacy:latest
+    healthcheck:
+      disable: true
 `,
 		},
 	}

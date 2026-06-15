@@ -22,6 +22,11 @@
 // free to call httptest directly until the scope is widened in a follow-up
 // issue.
 //
+// # Build tag
+//
+// This package carries no build tag and compiles unconditionally, so it may be
+// imported by production test helpers without any tag constraint on the caller.
+//
 // # Unconditional-skip analyzer note
 //
 // The skip inside skipIfNoTCP is guarded by an if-err-not-nil conditional,

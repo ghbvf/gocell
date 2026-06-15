@@ -52,10 +52,14 @@
 // # Reverse self-check (RED/GREEN fixture)
 //
 // TestSandboxHTTPTestTCPFunnel01_Fixture loads
-// tools/archtest/internal/sandboxhttptestfixture/ via Run(t, Fixture(...)) and
-// asserts that:
+// tools/archtest/internal/sandboxhttptestfixture/ via Run(t, Fixture(...)) with
+// FixtureOpts{Tests: true} (the fixture source is in a _test.go file, mirroring
+// the production _test.go-only filter) and asserts that:
 //   - badBareServer (contains httptest.NewServer) is reported — RED must fire.
 //   - goodNettestServer (uses nettest.NewServer) is NOT reported — GREEN must pass.
+//
+// Both the production scan and the fixture scan use the same scanBareHTTPTest
+// predicate (single-source detection logic).
 //
 // Bypassing the self-check requires editing the real fixture source.
 package archtest
@@ -87,10 +91,62 @@ var bannedHTTPTestFuncs = map[string]bool{
 }
 
 // sandboxHTTPTestScanPkgs is the closed set of packages scanned by
-// SANDBOX-HTTPTEST-TCP-FUNNEL-01.
+// SANDBOX-HTTPTEST-TCP-FUNNEL-01. scanPkgs (slice) is derived from this map so
+// both data structures always agree on the package set.
 var sandboxHTTPTestScanPkgs = map[string]bool{
 	PlatformModulePath + "/adapters/websocket": true,
 	PlatformModulePath + "/adapters/oidc":      true,
+}
+
+// scanPkgs returns the package paths for SANDBOX-HTTPTEST-TCP-FUNNEL-01 as a
+// slice, derived from sandboxHTTPTestScanPkgs so there is a single source of
+// truth for the scan set.
+func sandboxHTTPTestScanPkgsList() []string {
+	pkgs := make([]string, 0, len(sandboxHTTPTestScanPkgs))
+	for pkg := range sandboxHTTPTestScanPkgs {
+		pkgs = append(pkgs, pkg)
+	}
+	return pkgs
+}
+
+// scanBareHTTPTest is the single-source detection predicate for
+// SANDBOX-HTTPTEST-TCP-FUNNEL-01. It scans all _test.go files in p for bare
+// httptest.NewServer / NewTLSServer / NewUnstartedServer call sites and returns
+// one Diagnostic per violation.
+//
+// Both the production test (TestSandboxHTTPTestTCPFunnel01) and the fixture
+// test (TestSandboxHTTPTestTCPFunnel01_Fixture) call this function, ensuring
+// the fixture mirrors the exact production predicate.
+func scanBareHTTPTest(p *Pass) []Diagnostic {
+	if !p.Typed() {
+		return nil
+	}
+	var d []Diagnostic
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		if !strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+			pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+			if !ok {
+				return
+			}
+			if pkgPath == httptestPkgPath && bannedHTTPTestFuncs[name] {
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(call.Pos()).Line,
+					Message: fmt.Sprintf(
+						"bare httptest.%s call — use nettest.%s(t, handler) from %s instead "+
+							"(skips in sandboxes where net.Listen is forbidden; "+
+							"return type stays *httptest.Server, keep the httptest import).",
+						name, name, nettestPkgPath,
+					),
+				})
+			}
+		})
+	}
+	return d
 }
 
 // TestSandboxHTTPTestTCPFunnel01 enforces SANDBOX-HTTPTEST-TCP-FUNNEL-01.
@@ -111,10 +167,7 @@ func TestSandboxHTTPTestTCPFunnel01(t *testing.T) {
 
 	const ruleID = "SANDBOX-HTTPTEST-TCP-FUNNEL-01"
 
-	scanPkgs := []string{
-		PlatformModulePath + "/adapters/websocket",
-		PlatformModulePath + "/adapters/oidc",
-	}
+	scanPkgs := sandboxHTTPTestScanPkgsList()
 
 	var allDiags []Diagnostic
 	var nettestCallsObserved int
@@ -131,10 +184,10 @@ func TestSandboxHTTPTestTCPFunnel01(t *testing.T) {
 			if !sandboxHTTPTestScanPkgs[p.Pkg.Path()] {
 				return nil
 			}
-			var d []Diagnostic
+			// Count nettest funnel calls for anti-vacuity (separate from the
+			// shared predicate which only reports violations).
 			for _, file := range p.Files {
-				rel := p.Rel(file)
-				if !strings.HasSuffix(rel, "_test.go") {
+				if !strings.HasSuffix(p.Rel(file), "_test.go") {
 					continue
 				}
 				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -142,30 +195,13 @@ func TestSandboxHTTPTestTCPFunnel01(t *testing.T) {
 					if !ok {
 						return
 					}
-					// Count nettest funnel calls for anti-vacuity.
 					if pkgPath == nettestPkgPath &&
 						(name == "NewServer" || name == "NewTLSServer") {
 						nettestCallsObserved++
-						return
-					}
-					// Detect banned bare httptest constructor calls.
-					if pkgPath == httptestPkgPath && bannedHTTPTestFuncs[name] {
-						pos := p.Fset.Position(call.Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: fmt.Sprintf(
-								"%s: bare httptest.%s call at %s:%d. "+
-									"Use nettest.%s(t, handler) from %s "+
-									"instead. The nettest funnel skips tests in sandboxes "+
-									"where net.Listen is forbidden (avoids panic).",
-								ruleID, name, rel, pos.Line, name, nettestPkgPath,
-							),
-						})
 					}
 				})
 			}
-			return d
+			return scanBareHTTPTest(p)
 		})
 		allDiags = append(allDiags, diags...)
 	}
@@ -187,6 +223,10 @@ func TestSandboxHTTPTestTCPFunnel01(t *testing.T) {
 // and asserts:
 //   - badBareServer (httptest.NewServer) → exactly 1 Diagnostic (RED fires).
 //   - goodNettestServer (nettest.NewServer) → 0 extra Diagnostics (GREEN passes).
+//
+// The fixture file is a _test.go file (fixture_shim_test.go) and is loaded
+// with FixtureOpts{Tests: true}, so the fixture mirrors the production rule's
+// _test.go-only filter exactly (single-source predicate via scanBareHTTPTest).
 func TestSandboxHTTPTestTCPFunnel01_Fixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -196,33 +236,9 @@ func TestSandboxHTTPTestTCPFunnel01_Fixture(t *testing.T) {
 	const ruleID = "SANDBOX-HTTPTEST-TCP-FUNNEL-01"
 	const fixturePkg = "./tools/archtest/internal/sandboxhttptestfixture"
 
-	diags := Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg}),
+	diags := Run(t, Fixture(FixtureOpts{Tests: true}, []string{fixturePkg}),
 		func(p *Pass) []Diagnostic {
-			if !p.Typed() {
-				return nil
-			}
-			var d []Diagnostic
-			for _, file := range p.Files {
-				rel := p.Rel(file)
-				EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-					pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-					if !ok {
-						return
-					}
-					if pkgPath == httptestPkgPath && bannedHTTPTestFuncs[name] {
-						pos := p.Fset.Position(call.Pos())
-						d = append(d, Diagnostic{
-							Rel:  rel,
-							Line: pos.Line,
-							Message: fmt.Sprintf(
-								"%s fixture: bare httptest.%s at %s:%d",
-								ruleID, name, rel, pos.Line,
-							),
-						})
-					}
-				})
-			}
-			return d
+			return scanBareHTTPTest(p)
 		})
 
 	// RED: exactly one violation must be found (badBareServer's httptest.NewServer).

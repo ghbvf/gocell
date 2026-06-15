@@ -146,15 +146,6 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 //	engageStopProcedure — LIFO + StopAndWait.
 //
 // ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md
-// freshShutdownCtx returns a root-parented (context.Background) timeout context
-// for one shutdown stage's budget. Parenting on Background — never on another
-// stage's ctx (e.g. drainCtx) — is the budget-isolation invariant: a blocked or
-// slow upstream stage cannot bleed its budget into a later stage. Locked by
-// archtest INVARIANT PHASE10-TEARCTX-PARENT-CHAIN-GUARD-01.
-func (b *Bootstrap) freshShutdownCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), b.shutdownTimeout)
-}
-
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
 	// stages 1+2: drainCtx — readiness flip + HTTP drain share one budget.
 	drainCtx, drainCancel := b.freshShutdownCtx()
@@ -250,6 +241,15 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	}
 	// Surface the triggering signal error when teardown itself was clean.
 	return sig.err
+}
+
+// freshShutdownCtx returns a root-parented (context.Background) timeout context
+// for one shutdown stage's budget. Parenting on Background — never on another
+// stage's ctx (e.g. drainCtx) — is the budget-isolation invariant: a blocked or
+// slow upstream stage cannot bleed its budget into a later stage. Locked by
+// archtest INVARIANT PHASE10-TEARCTX-PARENT-CHAIN-GUARD-01.
+func (b *Bootstrap) freshShutdownCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), b.shutdownTimeout)
 }
 
 // phase10ReadinessFlip marks the health handler as shutting down (503) and

@@ -32,10 +32,16 @@
 //     a method body. Ceiling: same class as SPAN-SETATTR-HOLDER-SEAL (#851) /
 //     HEALTHZ-HOLDER-SEAL (#893) / MQTT-CONNECT-DEADLINE-DECOUPLED-01 —
 //     all in-package callee scoping limits. No lower-cost Hard form exists.
-//   - Rule ②: Hard — the check constrains the concrete AST node (Args[0]) of
-//     the WithTimeout call inside freshShutdownCtx to be a context.Background()
-//     call. A wrong parent cannot be expressed through freshShutdownCtx without
-//     failing this rule.
+//     This archtest itself is Medium (type-aware AST scan).
+//   - Rule ②: the funnel API shape of freshShutdownCtx (no parent-ctx parameter)
+//     makes it impossible for callers to pass a wrong parent — the wrong-parent
+//     error cannot be expressed at the call site. This is Hard for callers.
+//     However, the check that freshShutdownCtx itself passes context.Background()
+//     as Args[0] to context.WithTimeout is a type-aware AST scan of the helper
+//     body — that specific check is Medium (same class as rule ①). Together:
+//     caller-side is Hard (API shape); helper-body compliance is Medium (this
+//     archtest scan). A wrong parent inside freshShutdownCtx is caught here at
+//     CI time even though it cannot be prevented at the Go type-system level.
 //
 // Anti-vacuity: both functions (phase10OrchestrateShutdown and freshShutdownCtx)
 // are required to be found in the bootstrap package. If either is renamed or
@@ -77,6 +83,10 @@ const (
 
 // TestPhase10TearctxParentChainGuard01 runs both rule arms against the
 // production bootstrap package and asserts zero violations.
+//
+// A single Run call collects anti-vacuity evidence (both functions found) and
+// executes both rule assertions in the same packages.Load invocation, avoiding
+// the overhead of a second cold load of the bootstrap package.
 func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -85,6 +95,8 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 
 	var phase10FD *ast.FuncDecl
 	var helperFD *ast.FuncDecl
+	var phase10DiagCount int
+	var helperViolated bool
 
 	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{phase10BootstrapPkgPath}),
@@ -100,11 +112,22 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 					if fd.Name == nil {
 						return
 					}
+					// Anti-vacuity: collect both function declarations.
 					switch fd.Name.Name {
 					case "phase10OrchestrateShutdown":
 						phase10FD = fd
 					case "freshShutdownCtx":
 						helperFD = fd
+					}
+					// Rule assertions require TypesInfo; only execute when available.
+					if p.TypesInfo == nil || fd.Body == nil {
+						return
+					}
+					switch fd.Name.Name {
+					case "phase10OrchestrateShutdown":
+						phase10DiagCount += countDirectWithTimeoutCalls(p, fd.Body)
+					case "freshShutdownCtx":
+						helperViolated = helperHasNonBackgroundParent(p, fd.Body)
 					}
 				})
 			}
@@ -119,35 +142,6 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 		"%s: cannot find freshShutdownCtx in %s — rule must be updated if function was renamed",
 		rulePhase10TearctxParentChainGuard, phase10BootstrapPkgPath)
 
-	// Reload with TypesInfo to execute typed assertions.
-	var phase10DiagCount int
-	var helperViolated bool
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
-		[]string{phase10BootstrapPkgPath}),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil || p.TypesInfo == nil || p.Pkg.Path() != phase10BootstrapPkgPath {
-				return nil
-			}
-			for _, f := range p.Files {
-				if strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-					if fd.Name == nil || fd.Body == nil {
-						return
-					}
-					switch fd.Name.Name {
-					case "phase10OrchestrateShutdown":
-						phase10DiagCount += countDirectWithTimeoutCalls(p, fd.Body)
-					case "freshShutdownCtx":
-						helperViolated = helperHasNonBackgroundParent(p, fd.Body)
-					}
-				})
-			}
-			return nil
-		})
-
 	// Rule ①: phase10 must not directly call context.WithTimeout/WithDeadline.
 	assert.Equal(t, 0, phase10DiagCount,
 		"%s rule①: phase10OrchestrateShutdown must not directly call context.WithTimeout "+
@@ -160,7 +154,7 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 			"to context.WithTimeout/WithDeadline",
 		rulePhase10TearctxParentChainGuard)
 
-	// No unexpected diagnostics from the initial scan.
+	// No unexpected diagnostics from the scan.
 	Report(t, rulePhase10TearctxParentChainGuard, diags)
 }
 

@@ -11,8 +11,9 @@
 //     the archtest rule must NOT report this site.
 //
 // The fixture is loaded via Run(t, Fixture(FixtureOpts{Tests: true}, ...)) with
-// the archtest_fixture build tag. Bypassing the self-check requires editing this
-// real source file.
+// the archtest_fixture build tag. The file is named _test.go so that the
+// fixture scan mirrors the production rule's _test.go-only filter exactly.
+// Bypassing the self-check requires editing this real source file.
 package sandboxhttptestfixture
 
 import (
