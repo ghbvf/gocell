@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-15
+
 ### Breaking Changes
 
 - **Go SDK module path (轴 A)**: the framework core module moved from the repo root
@@ -122,12 +124,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
-- **External consumability**: the repository is public, so the framework module
-  is consumable with plain `go get github.com/ghbvf/gocell@<tag>` — the `GOPRIVATE`
-  setup step was removed from the README and the external-cell quickstart (#1723).
-  Known limitation: `go install github.com/ghbvf/gocell/cmd/gocell@<tag>` does not
-  yet work (the satellite `cmd/gocell` module keeps a local `replace` and the
-  release pipeline cuts no submodule tag); install the CLI from source until #2045.
+- **External consumability**: the repository is public, so the framework is
+  consumable with plain `go get github.com/ghbvf/gocell/framework@<tag>` (post-#1565
+  the core moved to the `/framework` submodule — see Breaking Changes above) — the
+  `GOPRIVATE` setup step was removed from the README and the external-cell quickstart
+  (#1723). The CLI now also installs via `go install
+  github.com/ghbvf/gocell/cmd/gocell@<tag>` from any stable tag that ships the #2045
+  pipeline (the release strips the satellite `cmd/gocell` module's local `replace`
+  and cuts the `cmd/gocell/vX.Y.Z` submodule tag); earlier tags install from source.
 - `gocell scaffold assembly` runnable stub now blocks on signal (SIGINT/SIGTERM)
   instead of returning a "not implemented" error immediately. `go run ./cmd/{id}`
   will wait for signal rather than exiting with code 1. (#867, sub-item
