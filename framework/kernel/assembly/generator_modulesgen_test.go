@@ -367,3 +367,89 @@ func indexOfStr(s, substr string) int {
 	}
 	return -1
 }
+
+// ---------------------------------------------------------------------------
+// generatedPostgresCells — codegen function tests (#1964 per-cell PG seam)
+// ---------------------------------------------------------------------------
+
+// TestGenerateModulesGen_CompositionForm_PostgresCellsEmitted verifies that the
+// composition form emits generatedPostgresCells() listing only the cells that
+// declare `requires: [postgres]`, sorted alphabetically, deduplicated.
+func TestGenerateModulesGen_CompositionForm_PostgresCellsEmitted(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// accesscore requires postgres + redis; auditcore requires postgres only;
+	// configcore requires postgres only. Expected sorted output: accesscore, auditcore, configcore.
+	project.Cells["accesscore"].Requires = []string{"redis", "postgres"}
+	project.Cells["auditcore"].Requires = []string{"postgres"}
+	project.Cells["configcore"].Requires = []string{"postgres"}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	// The function must be emitted.
+	assert.Contains(t, content, "func generatedPostgresCells() []string")
+	// All three postgres-requiring cells must appear.
+	assert.Contains(t, content, `"accesscore"`)
+	assert.Contains(t, content, `"auditcore"`)
+	assert.Contains(t, content, `"configcore"`)
+	// Sorted: accesscore < auditcore < configcore.
+	posAccess := indexOfStr(content, `"accesscore"`)
+	posAudit := indexOfStr(content, `"auditcore"`)
+	posConfig := indexOfStr(content, `"configcore"`)
+	assert.Less(t, posAccess, posAudit, "accesscore must precede auditcore (sorted)")
+	assert.Less(t, posAudit, posConfig, "auditcore must precede configcore (sorted)")
+}
+
+// TestGenerateModulesGen_CompositionForm_NoPostgresCells verifies that when no
+// cell in the assembly requires postgres, generatedPostgresCells() is still
+// emitted (always, like generatedProjectionSourceTopics) but returns nil.
+func TestGenerateModulesGen_CompositionForm_NoPostgresCells(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// No cell requires postgres in this fixture.
+	// (all cells have empty Requires from buildModulesTestProject)
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	// Function must always be emitted.
+	assert.Contains(t, content, "func generatedPostgresCells() []string")
+	// When empty, must return nil.
+	assert.Contains(t, content, "return nil")
+}
+
+// TestGenerateModulesGen_CompositionForm_PartialPostgresCells verifies that only
+// postgres-requiring cells appear (redis-only cells are excluded).
+func TestGenerateModulesGen_CompositionForm_PartialPostgresCells(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// accesscore requires redis only; auditcore requires postgres.
+	project.Cells["accesscore"].Requires = []string{"redis"}
+	project.Cells["auditcore"].Requires = []string{"postgres"}
+	// configcore: no requires
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	assert.Contains(t, content, "func generatedPostgresCells() []string")
+	assert.Contains(t, content, `"auditcore"`)
+	// accesscore does NOT require postgres — must not appear in postgres list.
+	// (It may appear in module imports, so we check the function body specifically.)
+	pgFnIdx := indexOfStr(content, "func generatedPostgresCells()")
+	if pgFnIdx < 0 {
+		t.Fatal("generatedPostgresCells() not found")
+	}
+	pgFnBody := content[pgFnIdx:]
+	assert.NotContains(t, pgFnBody[:strings.Index(pgFnBody, "}")+1], `"accesscore"`,
+		"accesscore does not require postgres and must not appear in generatedPostgresCells()")
+}

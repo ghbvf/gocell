@@ -85,8 +85,11 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_AUDIT_BOOTSTRAP_HMAC_KEY", "prod-bootstrap-hmac-key-32bytes!")
 	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 
-	// configcore cell
+	// Per-cell PG DSN (#1964): all three postgres cells must have a DSN set;
+	// percellpg.Resolve deduplicates to one pool when all DSNs are identical.
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", dsn)
+	t.Setenv("GOCELL_AUDITCORE_DATABASE_URL", dsn)
+	t.Setenv("GOCELL_ACCESSCORE_DATABASE_URL", dsn)
 	t.Setenv("GOCELL_CONFIGCORE_KEY_PROVIDER", "local-aes")
 	t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
@@ -98,18 +101,20 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 }
 
-// TestCorebundlePG_UsesConfigCoreDatabaseURL verifies the complete
-// env-to-pool contract: setting GOCELL_CONFIGCORE_DATABASE_URL=<dsn> and
-// running the full LoadSharedDepsFromEnv → provisionCapabilities →
-// composition.Builder.Build path results in a successfully wired assembly
-// backed by a live PostgreSQL pool.
+// TestCorebundlePG_UsesPerCellDatabaseURLs verifies the complete env-to-pool
+// contract: setting GOCELL_{CELL}_DATABASE_URL for each postgres cell (#1964 per-cell
+// seam) and running the full LoadSharedDepsFromEnv → provisionCapabilities →
+// composition.Builder.Build path results in a successfully wired assembly backed by a
+// live PostgreSQL pool.
 //
-// This test covers F5: the env→pool path had zero automated coverage because
-// all existing integration tests bypassed LoadPGConfig + LoadSharedDepsFromEnv
-// by calling buildConfigCoreOpts directly. Post capability-provider refactor the
-// pool is opened by provisionCapabilities (not by any cell module), so
-// the test must run that step before Build.
-func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
+// setRealModeEnv sets the same DSN for configcore, auditcore, and accesscore;
+// percellpg.Resolve deduplicates to one pool (colocated deployment invariant).
+//
+// This test covers F5: the env→pool path had zero automated coverage because all
+// existing integration tests bypassed LoadPGConfig + LoadSharedDepsFromEnv by calling
+// buildConfigCoreOpts directly. Post capability-provider refactor the pool is opened by
+// provisionCapabilities (not by any cell module), so the test must run that step before Build.
+func TestCorebundlePG_UsesPerCellDatabaseURLs(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 
@@ -128,8 +133,8 @@ func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed with all required env set")
 
 	require.NoError(t, provisionCapabilities(ctx, shared, locals),
-		"provisionCapabilities must open the assembly pool from GOCELL_CONFIGCORE_DATABASE_URL")
-	require.NotNil(t, shared.PG, "shared.PG must be provisioned from the DSN in postgres mode")
+		"provisionCapabilities must open the assembly pool from per-cell DSNs (#1964)")
+	require.NotNil(t, shared.PG, "shared.PG must be provisioned from the per-cell DSNs in postgres mode")
 	require.NotNil(t, locals.poolMR, "locals.poolMR must hold the pool ManagedResource")
 	defer func() { _ = locals.poolMR.Close(ctx) }()
 
@@ -148,16 +153,16 @@ func TestCorebundlePG_UsesConfigCoreDatabaseURL(t *testing.T) {
 	require.NoError(t, err, "composition.Builder.Build must succeed: cell modules consume the injected shared.PG")
 }
 
-// TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL verifies that
-// provisionCapabilities, when called after LoadSharedDepsFromEnv in postgres
-// mode, opens the assembly pool from GOCELL_CONFIGCORE_DATABASE_URL and records
-// it as locals.poolMR with a passing postgres_ready checker.
+// TestProvisionCapabilities_Postgres_UsesPerCellDatabaseURLs verifies that
+// provisionCapabilities, when called after LoadSharedDepsFromEnv in postgres mode, opens
+// the assembly pool from the per-cell DSN vars (#1964 percellpg seam) and records it as
+// locals.poolMR with a passing postgres_ready checker.
 //
-// This slim companion test isolates the pool-provisioning path (formerly
-// ConfigCoreModule.Provide opened the pool; the capability-provider refactor
-// moved it to provisionCapabilities) so the pool ManagedResource + its health
-// check are verified independently of the full assembly Build.
-func TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
+// setRealModeEnv sets the same DSN for all three postgres cells; percellpg.Resolve
+// deduplicates to one pool. This slim companion test isolates the pool-provisioning
+// path so the pool ManagedResource + its health check are verified independently of
+// the full assembly Build.
+func TestProvisionCapabilities_Postgres_UsesPerCellDatabaseURLs(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
 
@@ -174,7 +179,7 @@ func TestProvisionCapabilities_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) 
 
 	// provisionCapabilities opens the pool and records it as locals.poolMR.
 	require.NoError(t, provisionCapabilities(ctx, shared, locals),
-		"provisionCapabilities must succeed with GOCELL_CONFIGCORE_DATABASE_URL set")
+		"provisionCapabilities must succeed with per-cell DSNs set (#1964)")
 	require.NotNil(t, shared.PG, "shared.PG must be provisioned in postgres mode")
 	require.NotNil(t, locals.poolMR, "provisionCapabilities must record the pool as locals.poolMR")
 

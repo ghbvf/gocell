@@ -388,7 +388,7 @@ cell-level repo probes (schema shape):
 
 - Green `postgres_ready` + failing `postgres_app_role_restricted_ready` → serving
   pool is connected but running as a privileged role that bypasses RLS. Remediation:
-  change `GOCELL_CONFIGCORE_DATABASE_URL` to use role `gocell_app` and restart.
+  change the per-cell DSNs (`GOCELL_CONFIGCORE_DATABASE_URL`, `GOCELL_AUDITCORE_DATABASE_URL`, `GOCELL_ACCESSCORE_DATABASE_URL`) to use role `gocell_app` and restart.
 - Red on startup: local dev env still uses the admin `gocell` role; see
   `docs/ops/local-docker-deploy.md` §Dual-role PostgreSQL.
 
