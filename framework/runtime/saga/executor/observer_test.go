@@ -701,8 +701,9 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	// errCh is the tightest available sync point: it fires exactly when
 	// RunWithHeartbeat returns, just after the bounded-observer timer logged the
 	// WARN asserted below. The window between fc.Advance and this send is real
-	// goroutine scheduling (timer-fire goroutine → log → return) that the fake
-	// clock cannot collapse — there is no closer signal to wait on. Under
+	// goroutine scheduling — the run goroutine must wake on the fired timer's
+	// channel inside callObserverBounded's select, log, then return — that the
+	// fake clock cannot collapse; there is no closer signal to wait on. Under
 	// pathological local load (`go test -race -count=5 ./runtime/saga/...`, where
 	// the saga package and this executor package stress-run concurrently and
 	// saturate the CPU) that real progress can occasionally exceed testwait's 30s
