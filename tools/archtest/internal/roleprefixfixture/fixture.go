@@ -15,10 +15,10 @@
 //
 // GREEN (must NOT be flagged):
 //   - RoleGood      = "role:operator"  — correctly namespaced business role.
-//   - RoleAdmin     = "admin"          — canonical alias: name "RoleAdmin" +
-//     value "admin" matches the rolePrefixPlatformAlias entry exactly.
-//   - RoleSuperAdmin = "superadmin"    — canonical alias: name "RoleSuperAdmin"
-//     + value "superadmin" matches the rolePrefixPlatformAlias entry exactly.
+//   - RoleAdmin     = "admin"          — canonical alias: identifier "RoleAdmin"
+//     with value "admin" matches a rolePrefixPlatformAlias entry exactly.
+//   - RoleSuperAdmin = "superadmin"    — canonical alias: identifier "RoleSuperAdmin"
+//     with value "superadmin" matches a rolePrefixPlatformAlias entry exactly.
 //   - notARole = "bare"               — unexported, does not start with "Role";
 //     ignored by the Role* naming filter.
 package roleprefixfixture
