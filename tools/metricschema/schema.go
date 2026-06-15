@@ -235,10 +235,11 @@ func Marshal(schema *Schema) ([]byte, error) {
 }
 
 // loadPackages loads the OBS-01 production scan patterns through the shared
-// satellite-aware loader packagesload.LoadWorkspace, which expands the multi-member
-// satellite parent-prefixes obs01ProductionPatterns now emits ("./cmd/...",
-// "./adapters/...", "./examples/...") to their go.work members so OBS-01 scans
-// satellite production code (#2147). It keeps only this project's packages
+// satellite-aware loader packagesload.LoadWorkspace, which resolves the satellite
+// prefixes obs01ProductionPatterns emits — the multi-member parents ("./cmd/...",
+// "./adapters/...", "./examples/...", #2147) expanded to their members, and the
+// top-level single-module roots ("./corecells/...", "./cellmodules/...", #2164)
+// resolved as workspace members — so OBS-01 scans that production code. It keeps only this project's packages
 // (packageHasProjectFile), deduped by import path (preferring the syntax-rich copy),
 // and fails closed on any load error.
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
@@ -1971,13 +1972,15 @@ func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ..
 }
 
 // obs01ProductionPatterns is the OBS-01 production-scan source-of-record: the
-// satellite-free base (prodscan.Patterns) plus the multi-member satellite parent
-// prefixes (cmd/adapters/examples), which the shared satellite-aware loader
-// (loadPackages → packagesload.LoadWorkspace) expands to their go.work members so
-// satellite production code is scanned for metric-PII leaks (#2147). It does NOT use
-// PatternsExtended — OBS-01 never scanned tests/ or tools/.
+// satellite-free base (prodscan.Patterns) plus BOTH satellite increments — the
+// multi-member satellite parent prefixes (cmd/adapters/examples, #2147) and the
+// top-level single-module roots (corecells/cellmodules, #2164). The shared
+// satellite-aware loader (loadPackages → packagesload.LoadWorkspace) resolves each to
+// its go.work member(s) so that production code is scanned for metric-PII leaks. It
+// does NOT use PatternsExtended — OBS-01 never scanned tests/ or tools/.
 func obs01ProductionPatterns(projectRoot string) []string {
-	return append(prodscan.Patterns(projectRoot), prodscan.SatelliteParentPatterns(projectRoot)...)
+	patterns := append(prodscan.Patterns(projectRoot), prodscan.SatelliteParentPatterns(projectRoot)...)
+	return append(patterns, prodscan.ModuleRootMemberPatterns(projectRoot)...)
 }
 
 func dedupeDiagnostics(in []Diagnostic) []Diagnostic {
