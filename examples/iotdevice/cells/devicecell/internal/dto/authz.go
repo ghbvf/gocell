@@ -7,6 +7,6 @@ const (
 	RoleDevice   = "role:device"
 	// RoleAdmin grants administrative access to the iotdevice cell endpoints.
 	// Value matches the platform-wide admin role (no "role:" prefix), aligned
-	// with corecells/configcore/internal/dto.RoleAdmin.
+	// with framework/runtime/auth.RoleAdmin (the single authoritative definition).
 	RoleAdmin = "admin"
 )
