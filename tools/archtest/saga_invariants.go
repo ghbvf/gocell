@@ -44,7 +44,7 @@ package archtest
 // via ConfigForExternalCell.ExtraRules — only CheckSagaStepCompensatePure is a
 // portable consumer rule (it alone honors the cfg.BuildTags consumer-scan
 // contract). This single godoc is the authoritative internal/portable boundary;
-// per-func docs defer to it rather than repeating the caveat ten times.
+// per-func docs defer to it rather than repeating the caveat per function.
 //
 // Two rules remain in saga_invariants_test.go (no importable Check*):
 //
