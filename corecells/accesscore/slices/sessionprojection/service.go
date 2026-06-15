@@ -4,12 +4,19 @@
 // This slice serves the session registry-summary query endpoint on the
 // PrimaryListener (/api/v1/access/sessions/registry-summary).
 //
-// The projection logic lives in corecells/accesscore/internal/sessionprojection.
-// This file re-exports only the symbols that the cell composition root and
-// tests need from the shared internal package.
+// Layer split: corecells/accesscore/internal/sessionprojection holds the pure
+// projection logic (apply, reset, query) with no HTTP dependency. This file
+// re-exports the public surface as forwarding functions rather than assignable
+// vars — callers cannot reassign NewService or WithLogger, which preserves the
+// sealed-construction invariant (consistent with the todoorder orderprojection
+// re-export pattern and cell-patterns.md DTO scope B).
 package sessionprojection
 
-import internalprojection "github.com/ghbvf/gocell/corecells/accesscore/internal/sessionprojection"
+import (
+	"log/slog"
+
+	internalprojection "github.com/ghbvf/gocell/corecells/accesscore/internal/sessionprojection"
+)
 
 // Service is the slice service type; the projection logic lives in
 // corecells/accesscore/internal/sessionprojection.
@@ -19,7 +26,11 @@ type Service = internalprojection.Service
 type Option = internalprojection.Option
 
 // NewService creates a new sessionprojection Service.
-var NewService = internalprojection.NewService
+func NewService(opts ...Option) (*Service, error) {
+	return internalprojection.NewService(opts...)
+}
 
 // WithLogger sets the logger.
-var WithLogger = internalprojection.WithLogger
+func WithLogger(l *slog.Logger) Option {
+	return internalprojection.WithLogger(l)
+}

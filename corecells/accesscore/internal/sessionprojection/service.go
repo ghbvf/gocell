@@ -11,6 +11,11 @@
 // calls entry.RestoreContext before invoking Apply, so tenant.FromContext(ctx)
 // is authoritative inside HandleSessionCreated. A missing tenant is a permanent
 // error (the producer side violates the contract), not a transient retry.
+//
+// Lifecycle: on restart the Coordinator first calls ResetSessionRegistry to clear
+// the in-memory read model, then calls Rebuild to replay the durable projection
+// journal from the beginning. Query returns 0 during the Rebuild phase — this is
+// expected; the read model is not yet complete.
 package sessionprojection
 
 import (
@@ -33,7 +38,7 @@ import (
 // no-op.
 type store struct {
 	mu       sync.RWMutex
-	sessions map[string]map[string]struct{} // tenantID → set of sessionIDs
+	sessions map[tenant.TenantID]map[string]struct{} // tenantID → set of sessionIDs
 }
 
 // Service is the sessionprojection L3 projection service.
@@ -58,7 +63,7 @@ func WithLogger(l *slog.Logger) Option {
 func NewService(opts ...Option) (*Service, error) {
 	s := &Service{
 		store: &store{
-			sessions: make(map[string]map[string]struct{}),
+			sessions: make(map[tenant.TenantID]map[string]struct{}),
 		},
 		logger: slog.Default(),
 	}
@@ -112,15 +117,14 @@ func (s *Service) HandleSessionCreated(ctx context.Context, entry projection.Pro
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
 
-	tenantKey := string(tid)
-	if _, ok := s.store.sessions[tenantKey]; !ok {
-		s.store.sessions[tenantKey] = make(map[string]struct{})
+	if _, ok := s.store.sessions[tid]; !ok {
+		s.store.sessions[tid] = make(map[string]struct{})
 	}
-	s.store.sessions[tenantKey][payload.SessionID] = struct{}{}
+	s.store.sessions[tid][payload.SessionID] = struct{}{}
 
 	s.logger.Debug("sessionprojection: session.created applied",
-		slog.String("session_id", payload.SessionID),
-		slog.String("tenant_id", tenantKey))
+		slog.String("entry_id", entry.EventID()),
+		slog.String("tenant_id", string(tid)))
 
 	return nil
 }
@@ -131,7 +135,7 @@ func (s *Service) HandleSessionCreated(ctx context.Context, entry projection.Pro
 func (s *Service) ResetSessionRegistry(_ context.Context) error {
 	s.store.mu.Lock()
 	defer s.store.mu.Unlock()
-	s.store.sessions = make(map[string]map[string]struct{})
+	s.store.sessions = make(map[tenant.TenantID]map[string]struct{})
 	return nil
 }
 
@@ -141,5 +145,5 @@ func (s *Service) ResetSessionRegistry(_ context.Context) error {
 func (s *Service) Query(_ context.Context, tenantID tenant.TenantID) int64 {
 	s.store.mu.RLock()
 	defer s.store.mu.RUnlock()
-	return int64(len(s.store.sessions[string(tenantID)]))
+	return int64(len(s.store.sessions[tenantID]))
 }

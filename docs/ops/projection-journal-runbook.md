@@ -14,10 +14,12 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）的�
 
 自 PR-04（#1771）起，`GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate **已删除**，durable `projection_events` journal 成为生产默认：
 
-- **无 env opt-out**（per 不留软回退宪法）。
+- **无 env opt-out**（per 不留软回退宪法）：此处"无 env opt-out"专指不再保留 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` 式环境开关来禁用 durable journal。回退路径仍可通过**重新部署旧版本二进制**实现（见下文 §Rollback）；两者不矛盾。
 - PG 模式且在 `slice.yaml` 中声明了 projection 时，corebundle 自动接 durable source 并注册 `projection_journal_ready` readyz probe。
 - 未声明任何 projection 时不接（无空转 probe）。
 - Rollback = 重新部署上一版本二进制（见下文 §Rollback）。
+
+> **多租户注意**：super-admin 持 TenantID 调用 `registry-summary` 等端点，仅得其**自身租户**的计数，不返回跨租户聚合结果。跨租户隔离由 principal 派生的 `RowScope` 在数据层独立执行，与路由门禁正交。
 
 ### projection_events 表特性
 
@@ -38,14 +40,16 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）的�
 Rebuild 是**异步**操作，由框架提供的控制面端点触发：
 
 ```
-POST /admin/v1/projection/{cell}/{projection}/rebuild
+POST /admin/v1/projection/{cell}/{name}/rebuild
 ```
 
-> **corebundle 当前未挂载此端点**：该端点是 framework-owned（`bootstrap.WithProjectionRebuildEndpoint`），挂在 `cell.AdminListener` 上、用 operator 凭据（`AuthOperator`）鉴权。corebundle 本版（#1771）只声明 Primary / Internal / Health 三个 listener，**未加 AdminListener**，故未启用该端点——在 corebundle 接 AdminListener + operator auth + rebuild 端点是独立 follow-up（见 backlog）。`examples/todoorder` 演示了条件化接线（env 有 operator 凭据时才挂，见 `examples/todoorder/run.go` + `auth.go`）。
+> **仅限已挂载 AdminListener 的部署（corebundle 暂不支持，见 #2209）**
 >
-> rebuild 正确性（cold-start / rebuild-from-0 / cleaned-outbox 独立性 / 幂等）由 `adapters/postgres/projection_rebuild_e2e_integration_test.go` 白盒集成测试证明（T-06-2）；也可在已挂载该端点的部署（如 todoorder 范式）经下面的 HTTP 流程触发。
+> 该端点是 framework-owned（`bootstrap.WithProjectionRebuildEndpoint`），挂在 `cell.AdminListener` 上、用 operator 凭据（`AuthOperator`）鉴权。**corebundle 本版（#1771）只声明 Primary / Internal / Health 三个 listener，未加 AdminListener**，故未启用该端点——在 corebundle 接 AdminListener + operator auth + rebuild 端点是独立 follow-up（#2209）。在 corebundle 部署上执行下面的 curl 会返回 404，请勿在生产 corebundle 实例上执行。
+>
+> `examples/todoorder` 演示了条件化接线（env 有 operator 凭据时才挂，见 `examples/todoorder/run.go` + `auth.go`）。rebuild 正确性（cold-start / rebuild-from-0 / cleaned-outbox 独立性 / 幂等）由 `adapters/postgres/projection_rebuild_e2e_integration_test.go` 白盒集成测试证明（T-06-2）。
 
-启用端点的部署上，以 accesscore / session_registry 投影为例：
+以下操作步骤**仅适用于已挂载 AdminListener 的部署**（如 todoorder 范式）。以 accesscore / session_registry 投影为例：
 
 ```bash
 # 使用 operator 凭据（HTTP Basic Auth，GOCELL_OPERATOR_ADMIN_USERNAME / GOCELL_OPERATOR_ADMIN_PASSWORD）
@@ -87,6 +91,8 @@ Rebuild 期间读模型处于 stale 状态（非 503，业务 read 仍可服务�
 
 ### 诊断 Rebuild 进度
 
+**运维注意（rebuild 期 lag 盲区）**：rebuild 过程中，`projection_event_replay_lag_seconds` **不反映** rebuild 整体进度。原因：foreign-stream 条目（非本投影 topic 的事件）仅推进 checkpoint offset，**不更新** lag gauge（见 `kernel/projection/rebuild.go` `advanceOffsetPastForeign` 注释）。在 journal 中含有大量 foreign-stream 条目时，lag 可能在相当长的 rebuild 阶段内保持静止，即便 checkpoint 实际在推进。**判断 rebuild 进度应优先看 `projection_pending_events`（= head − checkpoint，未应用条数）+ `projection_checkpoints.offset_seq`**，而非 lag 指标。
+
 ```sql
 -- 查当前 checkpoint offset（0 = 还未推进 / reset 后）
 SELECT cell_id, projection_id, offset_seq, updated_at
@@ -100,6 +106,7 @@ SELECT COUNT(*) AS total_events FROM projection_events;
 SELECT MAX(global_seq) AS head FROM projection_events;
 
 -- 查 session_registry 相关 topic 的事件量（topic-filter 限定范围）
+-- topic 名以 cmd/corebundle/modules_gen.go 的 generatedProjectionSourceTopics()（cellgen golden）为准，勿手工推测
 SELECT COUNT(*) FROM projection_events WHERE topic = 'event.session.created.v1';
 ```
 
@@ -109,7 +116,18 @@ SELECT COUNT(*) FROM projection_events WHERE topic = 'event.session.created.v1';
 
 ### projection_event_replay_lag_seconds
 
-**语义**：当前 checkpoint offset 与 journal head（`MAX(global_seq)`）之间的差值，经估算转换为秒数。
+**语义**：**当前墙钟时间与最后一次成功 Apply 的事件 `OccurredAt` 之差（秒）**，即事件域的时间陈旧度。实现为 `c.clk.Since(entry.OccurredAt()).Seconds()`（`framework/kernel/projection/coordinator.go`）。
+
+> lag 反映的是「最后被投影成功处理的事件距今多久发生」，是**事件域时间陈旧度**指标，**不是** journal head 与 checkpoint 之间的 offset 差值。
+
+与 `projection_pending_events` 的区分（**告警配置时勿混淆**）：
+
+| 指标 | 语义 | 典型用途 |
+|------|------|---------|
+| `projection_event_replay_lag_seconds` | 墙钟时间 − `lastApplied.OccurredAt()`，时间陈旧度（秒） | 检测投影是否停止推进（消费者挂起、事件停发等） |
+| `projection_pending_events` | `Head − checkpoint`，未应用事件条数 | 检测 backlog 积压量、rebuild 进度 |
+
+两者正交，lag 高可以是生产写入速率低（无新事件），pending 高说明积压未消化。配置告警时分别独立评估，不用其中一个替代另一个。
 
 **解读注意（bootstrap-gap 盲区）**：
 
@@ -138,7 +156,7 @@ SELECT pg_total_relation_size('projection_events');
 
 ## Rollback
 
-自 PR-04（#1771）删 gate 后，**不提供 env opt-out**（per 不留软回退宪法）。
+自 PR-04（#1771）删 gate 后，**不提供 env opt-out**（per 不留软回退宪法；见 §Posture 说明）。
 
 Rollback 路径 = **重新部署上一版本二进制**：
 

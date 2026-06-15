@@ -15,5 +15,9 @@ passCriteria:
     mode: manual
   - text: session_registry 投影 rebuild 后计数与 live 一致；outbox 清理不破坏 rebuild（T-06-2，由 adapters/postgres testcontainers 白盒证明）
     mode: manual
-  - text: registry-summary 读端点经 session:read 门禁 + principal 派生 tenant 隔离，跨租户不可见，缺 tenant fail-closed（403）
+  - text: registry-summary 读端点缺少 session:read 权限时返回 403（鉴权 fail-closed）
+    mode: manual
+  - text: registry-summary 读端点有 session:read 权限但请求缺少 tenant 上下文时返回 403（tenant 缺失 fail-closed，非 200 降级）
+    mode: manual
+  - text: v1 单 pod 约束——双 pod 并发 rebuild 无 CAS fencing，会 double-apply；生产运维须保证同一 projection 单 pod 消费。多 pod fencing（AdvanceIfOwner CAS）待 PR-PG 落地（#1100 Q5）
     mode: manual

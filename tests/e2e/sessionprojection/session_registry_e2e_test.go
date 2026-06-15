@@ -43,7 +43,11 @@ func TestE2E_SessionRegistryProjection_LiveCountConverges(t *testing.T) {
 	// the converged count is ≥ 1. Poll because the projection consumes the event
 	// asynchronously off the broker.
 	got := pollTotalSessions(t, token, 1, testtime.CtxLong)
-	assert.GreaterOrEqual(t, got, int64(1),
+	// Use >= 1 (not == 1) because the bootstrap-admin login count depends on the
+	// test environment; the admin tenant may have produced more than one session
+	// (e.g. repeated docker-compose up runs). A lower-bound assertion is the
+	// correct convergence gate.
+	require.GreaterOrEqual(t, got, int64(1),
 		"session_registry projection must converge to ≥ 1 session for the admin tenant "+
 			"(durable source wired by default after the #1771 gate removal)")
 }

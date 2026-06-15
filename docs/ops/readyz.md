@@ -508,7 +508,17 @@ developer test, not production behaviour.
 
 `projection_journal_ready` ProbeName 在 `adapters/postgres` 声明（`ProbeProjectionJournalReady`，EPIC #1504 PR-01），由 `PGProjectionEventSource.RepoReady` 实现。自 PR-04（#1771）删除 `GOCELL_PROJECTION_PG_JOURNAL_PREVIEW` gate 后，composition root（`cmd/corebundle`）在 **PG 模式且声明了 projection**（`generatedProjectionSourceTopics()` 非空）时自动注册此 probe；无投影声明则不注册（无空转 probe，不会出现在 `/readyz?verbose`）。
 
-该 probe 报告 `projection_events` 表可达性 + 表级权限（`SELECT 1 FROM projection_events WHERE false` 代表性查询），暴露 pool-level `postgres_ready` ping 无法检测的 schema/migration drift——与 `*_repo_ready` 系列 cell probe 同语义。
+该 probe 的查询形态为 `SELECT 1 FROM projection_events WHERE false`（`adapters/postgres` `PGProjectionEventSource.RepoReady` 实现），暴露 pool-level `postgres_ready` ping 无法检测的问题——与 `*_repo_ready` 系列 cell probe 同语义。
+
+**probe 检测边界**：
+
+| 能检测 | 不能检测 |
+|--------|---------|
+| `projection_events` 表不存在（migration 058 未执行） | journal 行数 / 数据完整性 |
+| serving role `gocell_app` 对 `projection_events` 缺少 `SELECT` 权限 | checkpoint 是否推进 / rebuild 是否卡住 |
+| `projection_events` 表级 schema drift（如表被意外删除） | lag 或 pending 积压量 |
+
+该 probe **不**检测行数或数据完整性；replay lag 与 pending 积压量由 `projection_event_replay_lag_seconds` 和 `projection_pending_events` 指标（以及 `docs/ops/projection-journal-runbook.md` §监控）反映。green probe 仅表示表结构与权限正常，不保证投影内容准确。
 
 **运维注意**：在未声明任何 projection 的部署中，该 probe 不出现是预期行为，不是故障。若需对此 probe 设依赖可用性告警，确保部署确实声明了 projection。
 

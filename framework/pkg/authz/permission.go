@@ -185,11 +185,19 @@ var permSessionRead = newPermission("session:read")
 // is NOT a migration of a prior role-literal gate — it is the first route gate for
 // the new L3 CQRS session_registry read model (#1771 / EPIC #1504 PR-04). The PDP
 // baseline grants it to admin / super-admin (see authorizationdecide baseline.go),
-// mirroring the admin-read shape of policy:read / system:read. Row visibility is
-// independently governed at the data layer (the read model partitions by the
-// principal-derived tenant), so this route gate is coarse defense-in-depth, not
-// the sole control. Same accessor-func-over-private-singleton shape as the other
-// perms (reassignment is a compile error → Hard immutability).
+// mirroring the admin-read shape of policy:read / system:read.
+//
+// Why admin-only: the session registry summary is a tenant-level aggregate
+// operational view (total active sessions, per-user counts across the whole
+// tenant). It is not a user's own session data — ordinary users have no legitimate
+// need to query the full tenant's session counters. Widening the grant surface
+// (e.g. to role:user) would require a corresponding update to the PDP baseline
+// rules in authorizationdecide/baseline.go and a re-evaluation of the threat model.
+//
+// Row visibility is independently governed at the data layer (the read model
+// partitions by the principal-derived tenant), so this route gate is coarse
+// defense-in-depth, not the sole control. Same accessor-func-over-private-singleton
+// shape as the other perms (reassignment is a compile error → Hard immutability).
 func PermSessionRead() Permission { return permSessionRead }
 
 // examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its

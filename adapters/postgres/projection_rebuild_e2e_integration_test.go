@@ -19,8 +19,8 @@ package postgres
 
 import (
 	"context"
+	"sort"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -440,19 +440,17 @@ func TestProjectionRebuild_CleanedOutboxIndependence(t *testing.T) {
 	c := f.newCoordinator(t)
 	defer closeCoordinator(t, c)
 
-	var applyCount int32
-	apply := func(_ context.Context, _ projection.ProjectionEvent) error {
-		atomic.AddInt32(&applyCount, 1)
-		return nil
-	}
-	subscribeRebuild(t, c, apply)
+	col := newApplyCollector()
+	subscribeRebuild(t, c, col.Apply)
 
 	require.NoError(t, c.Rebuild(context.Background()))
 	waitRebuildLive(t, c)
 
-	assert.Equal(t, int32(n), atomic.LoadInt32(&applyCount),
+	assert.Equal(t, n, col.totalApplied(),
 		"T-06-2: cleaned outbox must not affect rebuild — projection_events is the sole durable source; "+
 			"#1504 root bug: old cursor read outbox_entries (cleaned) → permanent error")
+	assert.Equal(t, 1, col.maxCountForAnyEvent(),
+		"每个 journaled EventID 恰好 apply 一次（清 outbox 后无重复/丢失）")
 	assert.Equal(t, projection.PhaseLive, c.Phase(),
 		"T-06-2: Coordinator must reach PhaseLive after cleaned-outbox rebuild")
 
@@ -462,10 +460,14 @@ func TestProjectionRebuild_CleanedOutboxIndependence(t *testing.T) {
 	assert.Equal(t, head, offset,
 		"T-06-2: checkpoint must equal head — all durable journal events were replayed")
 
-	// Cross-check: every seeded event ID must have been applied.
-	seededIDs := make(map[string]bool, n)
-	for _, ev := range seeded {
-		seededIDs[ev.EventID()] = true
+	// Cross-check: applied event ID set must exactly equal the seeded event ID set.
+	seededIDs := make([]string, n)
+	for i, ev := range seeded {
+		seededIDs[i] = ev.EventID()
 	}
-	_ = seededIDs // structural proof; count assertion above is the primary guard
+	appliedIDs := col.appliedIDs()
+	sort.Strings(seededIDs)
+	sort.Strings(appliedIDs)
+	assert.Equal(t, seededIDs, appliedIDs,
+		"T-06-2: applied event ID set must exactly match seeded event IDs — no missing, no extra, no duplicates")
 }

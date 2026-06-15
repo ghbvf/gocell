@@ -286,6 +286,6 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 		// requires a cell.AdminListener + operator-credential auth, a corebundle
 		// listener surface this PR (#1771) does not add. Rebuild correctness is proven
 		// by the adapters/postgres testcontainers white-box test (T-06-2); wiring the
-		// operator rebuild endpoint in corebundle is tracked as a follow-up.
+		// operator rebuild endpoint in corebundle is tracked as a follow-up (tracked: #2209).
 	}, nil
 }

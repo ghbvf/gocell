@@ -222,6 +222,69 @@ func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 	}
 }
 
+// TestBuiltinBaseline_SessionRead proves the #1771 baseline rule: admin and
+// super-admin are granted session:read (the tenant-scoped session registry
+// projection summary gate), while ordinary users / role-less principals are
+// denied. session:read is a tenant-level aggregate operational view — not a
+// per-user self-query — so the gate is admin-only (no ownership rule applies).
+//
+// Anti-vacuity: the test asserts that admin is explicitly allowed, so if the
+// baseline-session-read-admin rule is removed (or the action string is changed),
+// at least the first sub-test will flip from true to false and turn red.
+func TestBuiltinBaseline_SessionRead(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	sessionReadAction := authz.PermSessionRead().String()
+
+	tests := []struct {
+		name      string
+		principal *auth.Principal
+		wantAllow bool
+	}{
+		{
+			name: "admin + session:read → Allow (baseline-session-read-admin)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "admin-1", TenantID: testTenantIDStr,
+				Roles: []string{auth.RoleAdmin},
+			},
+			wantAllow: true,
+		},
+		{
+			name: "super-admin + session:read → Allow (baseline grants)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "sadmin-1", TenantID: testTenantIDStr,
+				Roles: []string{auth.RoleSuperAdmin},
+			},
+			wantAllow: true,
+		},
+		{
+			name: "ordinary user + session:read → Deny (default-deny, no matching baseline rule)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "user-1", TenantID: testTenantIDStr,
+				Roles: []string{"viewer"},
+			},
+			wantAllow: false,
+		},
+		{
+			name: "no roles + session:read → Deny (default-deny)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "user-2", TenantID: testTenantIDStr,
+				Roles: nil,
+			},
+			wantAllow: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Evaluate with NO tenant policies — only baseline applies.
+			resolver := attributeResolver{principal: tt.principal}
+			dec, _ := svc.evaluate(nil, resolver, sessionReadAction)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow())
+		})
+	}
+}
+
 // TestBuiltinBaseline_RulesAreNonEmpty guards anti-vacuity: the baseline must
 // contain at least one rule so an empty return from builtinBaselineRules()
 // cannot silently skip all enforcement.

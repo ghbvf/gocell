@@ -117,6 +117,7 @@ func doRequest(t *testing.T, handler http.Handler, ctx context.Context) *httptes
 // TestHandler_NoPrincipal_Returns401 verifies that a request with no auth
 // principal returns HTTP 401.
 func TestHandler_NoPrincipal_Returns401(t *testing.T) {
+	t.Parallel()
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
 	mux := newHandlerMux(t, svc)
@@ -132,6 +133,7 @@ func TestHandler_NoPrincipal_Returns401(t *testing.T) {
 // TestHandler_NoTenant_Returns403 verifies that an authenticated principal with
 // no tenant scope is fail-closed with HTTP 403 (tenant isolation, epic #1337 PR-2a F1).
 func TestHandler_NoTenant_Returns403(t *testing.T) {
+	t.Parallel()
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
 	mux := newHandlerMux(t, svc)
@@ -145,6 +147,7 @@ func TestHandler_NoTenant_Returns403(t *testing.T) {
 // TestHandler_Admin_Returns200_EmptyCount verifies the normal path: admin with
 // a valid tenant gets HTTP 200 with TotalSessions = 0 (no sessions yet).
 func TestHandler_Admin_Returns200_EmptyCount(t *testing.T) {
+	t.Parallel()
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
 	mux := newHandlerMux(t, svc)
@@ -161,6 +164,7 @@ func TestHandler_Admin_Returns200_EmptyCount(t *testing.T) {
 // TestHandler_Returns200_WithCount verifies that sessions added to the read
 // model are reflected in the count response for the caller's tenant.
 func TestHandler_Returns200_WithCount(t *testing.T) {
+	t.Parallel()
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
 
@@ -180,6 +184,7 @@ func TestHandler_Returns200_WithCount(t *testing.T) {
 // TestHandler_NoSessionIDsInResponse verifies that raw session IDs are never
 // returned on the wire (privacy boundary: only the count is exposed).
 func TestHandler_NoSessionIDsInResponse(t *testing.T) {
+	t.Parallel()
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
 
@@ -199,6 +204,7 @@ func TestHandler_NoSessionIDsInResponse(t *testing.T) {
 // TestHandler_TenantIsolation verifies that one tenant's session count is not
 // visible to another tenant's principal (cross-tenant isolation).
 func TestHandler_TenantIsolation(t *testing.T) {
+	t.Parallel()
 	otherTenantStr := "eeeeeeee-0000-0000-0000-000000000099"
 	svc, err := sessionprojection.NewService()
 	require.NoError(t, err)
@@ -218,6 +224,32 @@ func TestHandler_TenantIsolation(t *testing.T) {
 	require.NotNil(t, resp.Data)
 	assert.Equal(t, int64(1), resp.Data.TotalSessions,
 		"caller should only see sessions for their own tenant (isolation)")
+}
+
+// TestHandler_NonCanonicalTenant_Returns500 verifies that a principal with a
+// non-empty but non-canonical TenantID (e.g. "not-a-uuid") causes a 500 Internal
+// Server Error. The JWT authenticator must canonicalise the tenant; if it does not,
+// tenant.ParseTenantID fails in the handler, which is an internal invariant break
+// (not a client error), so the framework returns 500 + ERR_INTERNAL.
+func TestHandler_NonCanonicalTenant_Returns500(t *testing.T) {
+	t.Parallel()
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	// Build a principal with a non-empty but non-canonical TenantID.
+	p := &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "admin-user-1",
+		Roles:      []string{"admin"},
+		TenantID:   "not-a-uuid",
+		AuthMethod: "test",
+	}
+	ctx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
+	w := doRequest(t, mux, ctx)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assertErrCode(t, w, "ERR_INTERNAL")
 }
 
 // assertErrCode checks that the response body contains an error with the expected code.

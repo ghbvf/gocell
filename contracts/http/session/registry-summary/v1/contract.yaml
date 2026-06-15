@@ -1,3 +1,7 @@
+# consistencyLevel L1 = 读端点单次本地读语义（不 emit）；数据来源是 L3 最终一致投影
+# （见 projection.session.registry-summary.v1），读到的计数为最终一致快照。
+# L2+ HTTP 契约要求声明 triggers，读端点不 emit，故 L1 是正确且唯一合法值，
+# 与 accesscore 既有读端点（如 policy.get）保持一致。
 id: http.session.registry-summary.v1
 kind: http
 ownerCell: accesscore
