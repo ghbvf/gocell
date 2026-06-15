@@ -121,28 +121,30 @@ var (
 	// These constants are migration artifacts. New fixtures should use
 	// descriptive cell ids via NewCellID(literal) rather than mirroring
 	// these naming patterns.
-	CellIDFoobar     = NewCellID("foobar")
-	CellIDAA         = NewCellID("aa") // legacy "a"
-	CellIDBB         = NewCellID("bb") // legacy "b"
-	CellIDCC         = NewCellID("cc") // legacy "c"
-	CellIDXX         = NewCellID("xx") // legacy "x"
-	CellIDYY         = NewCellID("yy") // legacy "y"
-	CellIDDemo       = NewCellID("demo")
-	CellIDTestCell   = NewCellID("testcell") // legacy "test-cell"
-	CellIDOrderCell  = NewCellID("ordercell")
-	CellIDSampleCore = NewCellID("samplecore")
-	CellIDAlpha      = NewCellID("alpha")
-	CellIDBeta       = NewCellID("beta")
-	CellIDDeviceCell = NewCellID("devicecell")
-	CellIDGood       = NewCellID("good")
-	CellIDCellA      = NewCellID("cella")      // legacy "cell-a"
-	CellIDCellB      = NewCellID("cellb")      // legacy "cell-b"
-	CellIDCellC      = NewCellID("cellc")      // legacy "cell-c"
-	CellIDEdgeBFF    = NewCellID("edgebff")    // legacy "edge-bff"
-	CellIDExtGateway = NewCellID("extgateway") // legacy "ext-gateway"
-	CellIDAppCore    = NewCellID("appcore")    // legacy "app-core"
-	CellIDSvcA       = NewCellID("svca")       // legacy "svc-a"
-	CellIDSvcB       = NewCellID("svcb")       // legacy "svc-b"
-	CellIDL1Cell     = NewCellID("l1cell")     // legacy "l1-cell"
-	CellIDMyL0Cell   = NewCellID("myl0cell")   // legacy "myL0cell" (uppercase)
+	CellIDFoobar       = NewCellID("foobar")
+	CellIDAA           = NewCellID("aa") // legacy "a"
+	CellIDBB           = NewCellID("bb") // legacy "b"
+	CellIDCC           = NewCellID("cc") // legacy "c"
+	CellIDXX           = NewCellID("xx") // legacy "x"
+	CellIDYY           = NewCellID("yy") // legacy "y"
+	CellIDDemo         = NewCellID("demo")
+	CellIDTestCell     = NewCellID("testcell") // legacy "test-cell"
+	CellIDOrderCell    = NewCellID("ordercell")
+	CellIDSampleCore   = NewCellID("samplecore")
+	CellIDAlpha        = NewCellID("alpha")
+	CellIDBeta         = NewCellID("beta")
+	CellIDDeviceCell   = NewCellID("devicecell")
+	CellIDGood         = NewCellID("good")
+	CellIDCellA        = NewCellID("cella")        // legacy "cell-a"
+	CellIDCellB        = NewCellID("cellb")        // legacy "cell-b"
+	CellIDCellC        = NewCellID("cellc")        // legacy "cell-c"
+	CellIDEdgeBFF      = NewCellID("edgebff")      // legacy "edge-bff"
+	CellIDExtGateway   = NewCellID("extgateway")   // legacy "ext-gateway"
+	CellIDAppCore      = NewCellID("appcore")      // legacy "app-core"
+	CellIDSvcA         = NewCellID("svca")         // legacy "svc-a"
+	CellIDSvcB         = NewCellID("svcb")         // legacy "svc-b"
+	CellIDL1Cell       = NewCellID("l1cell")       // legacy "l1-cell"
+	CellIDMyL0Cell     = NewCellID("myl0cell")     // legacy "myL0cell" (uppercase)
+	CellIDConsumerCell = NewCellID("consumercell") // TOPO-11 fixtures (≥3 sites: ~10 map-key/owner uses)
+	CellIDProviderCell = NewCellID("providercell") // TOPO-11 fixtures (≥3 sites: ~7 map-key/provider uses)
 )

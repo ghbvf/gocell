@@ -356,6 +356,9 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 		// F5 reverse fixtures: NewCellID(var) and non-CellID-prefixed local var ref.
 		"bad_dynamic_arg.go",
 		"bad_unsanctioned_var.go",
+		// #2178 F1: FrameworkOwnerSentinel at the non-provider CellMeta.ID position
+		// must be flagged (A1 is field-position-aware; sentinel is owner/provider-only).
+		"bad_framework_sentinel_at_id.go",
 	}
 	var missing []string
 	for _, want := range wantBadFiles {
@@ -382,7 +385,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	}
 
 	// Good files must NOT produce any violations.
-	goodFiles := []string{"good_const_ref.go", "good_call_literal.go"}
+	goodFiles := []string{"good_const_ref.go", "good_call_literal.go", "good_framework_sentinel.go"}
 	for _, d := range violations {
 		for _, gf := range goodFiles {
 			if d.Rel == negFixturePrefix+gf {
@@ -411,10 +414,12 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	wantVisited := []string{
 		"good_const_ref.go",
 		"good_call_literal.go",
+		"good_framework_sentinel.go",
 		"blind_spot_ident_slice.go",
 		"blind_spot_assign.go",
 		"bad_dynamic_arg.go",
 		"bad_unsanctioned_var.go",
+		"bad_framework_sentinel_at_id.go",
 	}
 	for _, want := range wantVisited {
 		if _, ok := visitedFiles[want]; !ok {

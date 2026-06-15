@@ -100,28 +100,30 @@ var projectionEventsDeletePattern = regexp.MustCompile(
 
 // scanProjectionEventDelete reports every compile-time-constant SQL string that is a
 // DELETE/TRUNCATE of projection_events, and counts constant strings that merely
-// reference the table into tableRefs (anti-vacuity). It walks MAXIMAL constant string
-// expressions via EvaluateConstString (go/types constant folding), so a value spread
-// across a compile-time concatenation ("DELETE FROM " + "projection_events", or
-// "DELETE FROM " + projectionEventsTable) is folded and matched as a whole; only a
-// table name arriving as a runtime (non-const) value stays invisible. Reused over both
-// production (expect zero diagnostics, tableRefs ≥ 1) and the RED fixture.
+// reference the table into tableRefs (anti-vacuity). It scans concrete constant-bearing
+// node types (BasicLit, BinaryExpr, Ident, SelectorExpr) via four EachInSubtree passes,
+// calling EvaluateConstString on each candidate. Partial operands of a concatenation
+// (e.g. "DELETE FROM " or "projection_events" alone) do not individually match the
+// pattern because projectionEventsDeletePattern requires the DELETE/TRUNCATE verb and
+// the table name to be adjacent in the same folded string, so visiting operands
+// separately does not produce false positives. The four passes scan disjoint node
+// kinds, so no node is re-visited; a diagnostic is emitted once per matching node
+// position. The only way the same logical SQL could double-report is a concatenation
+// whose operand ALSO independently carries the full verb+table (a redundant concat),
+// which no real DELETE/TRUNCATE takes — and the RED fixture's 8 cases (6 BasicLit +
+// 2 BinaryExpr) lock the exact count as the regression backstop. tableRefs may exceed
+// 1 in production (over-counting is harmless — the anti-vacuity guard only requires
+// ≥ 1). Reused over both production (expect zero diagnostics, tableRefs ≥ 1) and the
+// RED fixture.
 func scanProjectionEventDelete(p *Pass, tableRefs *int) []Diagnostic {
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		ast.Inspect(file, func(n ast.Node) bool {
-			expr, ok := n.(ast.Expr)
-			if !ok {
-				return true
-			}
+		check := func(expr ast.Expr) {
 			s, ok := EvaluateConstString(p.TypesInfo, expr)
 			if !ok {
-				return true // not a constant string — recurse to reach inner literals
+				return
 			}
-			// expr is the MAXIMAL constant string expression: a constant-string parent
-			// would have been visited first (pre-order) and stopped recursion, so each
-			// folded value is evaluated exactly once — no double counting of operands.
 			if strings.Contains(strings.ToLower(s), projectionEventsTable) {
 				*tableRefs++
 			}
@@ -141,8 +143,11 @@ func scanProjectionEventDelete(p *Pass, tableRefs *int) []Diagnostic {
 					),
 				})
 			}
-			return false // maximal constant string handled; do not re-scan its operands
-		})
+		}
+		EachInSubtree[ast.BasicLit](file, func(n *ast.BasicLit) { check(n) })
+		EachInSubtree[ast.BinaryExpr](file, func(n *ast.BinaryExpr) { check(n) })
+		EachInSubtree[ast.Ident](file, func(n *ast.Ident) { check(n) })
+		EachInSubtree[ast.SelectorExpr](file, func(n *ast.SelectorExpr) { check(n) })
 	}
 	return diags
 }

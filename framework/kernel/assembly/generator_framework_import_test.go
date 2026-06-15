@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
 )
 
@@ -34,7 +35,7 @@ func TestGenerateEntrypoint_FrameworkImportModuleIndependent(t *testing.T) {
 	project := buildTestProject()
 	project.Assemblies["demo"] = &metadata.AssemblyMeta{
 		ID:    "demo",
-		Cells: []metadata.AssemblyCellRef{{ID: "democell"}},
+		Cells: []metadata.AssemblyCellRef{{ID: metadatatest.NewCellID("democell")}},
 		Build: metadata.BuildMeta{Entrypoint: "cmd/demo/main.go", Binary: "demo", DeployTemplate: "k8s"},
 	}
 	// External consumer module — the framework import must NOT pick it up.

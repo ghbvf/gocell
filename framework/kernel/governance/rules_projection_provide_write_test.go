@@ -252,7 +252,6 @@ func assertProjectionProvideFinding(t *testing.T, r ValidationResult, tc project
 func TestProjectionProvideNeedsWriteCU01_SagaJournalWriteCUCounts(t *testing.T) {
 	t.Parallel()
 
-	cellID := metadatatest.CellIDTestCell
 	const (
 		projectionID = "projection.order.saga-summary.v1"
 		sliceAID     = "testcell/projprovide"
@@ -262,7 +261,7 @@ func TestProjectionProvideNeedsWriteCU01_SagaJournalWriteCUCounts(t *testing.T) 
 
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellID: {
+			metadatatest.CellIDTestCell: {
 				ID:               metadatatest.CellIDTestCell,
 				Type:             "core",
 				ConsistencyLevel: "L3",
