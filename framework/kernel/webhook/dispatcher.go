@@ -137,10 +137,10 @@ func NewDispatcher(
 	}
 	// Resolve circuit-breaker settings AFTER options: if WithCircuitBreakerSettings
 	// was provided, validate and use it; otherwise fall back to defaults.
-	cbSettings := defaultCircuitBreakerSettings()
+	cbSettings := DefaultCircuitBreakerSettings()
 	if d.cbSettingsSet {
 		if err := d.cbSettings.Validate(); err != nil {
-			return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid, err.Error())
+			return nil, err
 		}
 		cbSettings = d.cbSettings
 	}

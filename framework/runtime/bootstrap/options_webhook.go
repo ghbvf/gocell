@@ -25,8 +25,6 @@ package bootstrap
 import (
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
-	"github.com/ghbvf/gocell/framework/pkg/errcode"
-	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
@@ -88,30 +86,26 @@ func WithWebhookSSRFPolicy(policy *kwh.SafePolicy) Option {
 
 // WithWebhookCircuitBreaker overrides the per-endpoint circuit-breaker
 // thresholds applied to every outbound webhook dispatcher in this deployment.
-// All three fields (TripThreshold, OpenTimeout, HalfOpenProbes) must be
-// positive; a zero or negative value is rejected immediately at option-apply
-// time (fail-fast — per runtime-api.md §Option 范式: "强依赖 option 必须
-// fail-fast，不静默 noop"). Omitting this option uses the defaults that match
-// the original hardcoded values (TripThreshold=5, OpenTimeout=60s,
-// HalfOpenProbes=1).
+// All three fields (TripThreshold, OpenTimeout, HalfOpenProbes) must be in
+// range; invalid settings are rejected at phase6 [drainWebhookDispatchers]
+// via [kwh.CircuitBreakerSettings.Validate], which causes bootstrap to fail
+// fast at startup before any delivery is attempted.
+//
+// Omitting this option uses the defaults that match the original hardcoded
+// values (TripThreshold=5, OpenTimeout=60s, HalfOpenProbes=1).
 //
 // There is intentionally no Enabled/Disabled variant: disabling the circuit
 // breaker is not a supported configuration (no-disable invariant).
 //
-// Bootstrap panics at option-apply time on invalid settings so misconfiguration
-// is visible on startup rather than silently degrading to defaults or first
-// delivery. The panic uses [panicregister.Approved] as required by the
-// PANIC-REGISTERED-01 governance rule.
+// Design note — fail-fast timing: validation happens at phase6
+// (drainWebhookDispatchers) rather than at option-apply time, consistent with
+// the cumulative-builder convention used by other webhook options in this file.
+// A deployment with zero dispatchers needs no circuit-breaker settings; the
+// dependency only becomes mandatory when a cell has actually declared a
+// dispatcher — exactly when phase6 can see both the snapshot and the wired
+// options.
 func WithWebhookCircuitBreaker(settings kwh.CircuitBreakerSettings) Option {
 	return func(b *Bootstrap) {
-		if err := settings.Validate(); err != nil {
-			// Fail-fast at option-apply time: invalid CB settings are a
-			// programmer error (B-class assertion), not a runtime degradation
-			// path. Panics through the panic-taxonomy funnel so PANIC-REGISTERED-01
-			// archtest does not flag this as an unapproved panic site.
-			panic(panicregister.Approved("bootstrap-webhook-cb-invalid-settings",
-				errcode.Assertion("bootstrap: WithWebhookCircuitBreaker: %s", err.Error())))
-		}
 		b.webhookCBSettings = settings
 		b.webhookCBSettingsSet = true
 	}

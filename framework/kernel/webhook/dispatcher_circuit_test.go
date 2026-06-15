@@ -23,7 +23,7 @@ import (
 
 // defaultCB is a test-local shorthand for the default circuit breaker settings,
 // replacing the former package-level const references deleted in #2106.
-var defaultCB = defaultCircuitBreakerSettings()
+var defaultCB = DefaultCircuitBreakerSettings()
 
 // tenantEntry builds an outbox entry whose principal carries tenantID, so the
 // dispatcher's circuit key includes the tenant dimension.
@@ -303,7 +303,7 @@ func TestDispatcher_Handle_Circuit429Trips(t *testing.T) {
 // breaker construction never fails on an empty Name. allowed=true and the done
 // callback does not panic.
 func TestCircuitGate_EmptyKeyStillBreaks(t *testing.T) {
-	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), defaultCircuitBreakerSettings())
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), DefaultCircuitBreakerSettings())
 	allow, done := g.Allow(newCircuitEndpointKey("", ""))
 	assert.True(t, allow, "fresh breaker starts closed (allow=true)")
 	require.NotNil(t, done, "a working breaker returns a non-nil done callback")
@@ -363,7 +363,7 @@ func TestDispatcher_Handle_CircuitTransportFaultTrips(t *testing.T) {
 // bounded (DoS guard) — registering far more than the cap never grows the map
 // past circuitGateMaxEndpoints.
 func TestCircuitGate_BoundedEviction(t *testing.T) {
-	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), defaultCircuitBreakerSettings())
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), DefaultCircuitBreakerSettings())
 	for i := range circuitGateMaxEndpoints + 100 {
 		allow, done := g.Allow(newCircuitEndpointKey("", fmt.Sprintf("http://e%d.example.test/", i)))
 		require.True(t, allow, "fresh endpoint breaker starts closed")

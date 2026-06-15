@@ -13,11 +13,11 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 )
 
-// TestCircuitBreakerSettings_Defaults verifies that defaultCircuitBreakerSettings
+// TestCircuitBreakerSettings_Defaults verifies that DefaultCircuitBreakerSettings
 // returns values equal to the original package-const values (TripThreshold=5,
 // OpenTimeout=60s, HalfOpenProbes=1).
 func TestCircuitBreakerSettings_Defaults(t *testing.T) {
-	s := defaultCircuitBreakerSettings()
+	s := DefaultCircuitBreakerSettings()
 	assert.Equal(t, 5, s.TripThreshold, "default TripThreshold must equal original const 5")
 	assert.Equal(t, 60*time.Second, s.OpenTimeout, "default OpenTimeout must equal original const 60s")
 	assert.Equal(t, 1, s.HalfOpenProbes, "default HalfOpenProbes must equal original const 1")
@@ -85,6 +85,39 @@ func TestCircuitBreakerSettings_Validate_NonPositiveHalfOpenProbes(t *testing.T)
 func TestCircuitBreakerSettings_Validate_Valid(t *testing.T) {
 	s := CircuitBreakerSettings{TripThreshold: 3, OpenTimeout: 30 * time.Second, HalfOpenProbes: 2}
 	require.NoError(t, s.Validate())
+}
+
+// TestCircuitBreakerSettings_Validate_AboveUpperBound verifies that values exceeding
+// the upper bounds are rejected (no-disable defense-in-depth).
+func TestCircuitBreakerSettings_Validate_AboveUpperBound(t *testing.T) {
+	cases := []struct {
+		name string
+		s    CircuitBreakerSettings
+		want string
+	}{
+		{
+			"TripThreshold above max",
+			CircuitBreakerSettings{TripThreshold: 1001, OpenTimeout: time.Second, HalfOpenProbes: 1},
+			"TripThreshold",
+		},
+		{
+			"OpenTimeout above max",
+			CircuitBreakerSettings{TripThreshold: 1, OpenTimeout: 2 * time.Hour, HalfOpenProbes: 1},
+			"OpenTimeout",
+		},
+		{
+			"HalfOpenProbes above max",
+			CircuitBreakerSettings{TripThreshold: 1, OpenTimeout: time.Second, HalfOpenProbes: 101},
+			"HalfOpenProbes",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.s.Validate()
+			require.Error(t, err, "above-upper-bound value must be rejected")
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
 }
 
 // TestWithCircuitBreakerSettings_InvalidSettings verifies that NewDispatcher
@@ -211,7 +244,7 @@ func TestWithCircuitBreakerSettings_DefaultsUnchangedWhenOptionAbsent(t *testing
 	)
 	require.NoError(t, err)
 
-	defaults := defaultCircuitBreakerSettings()
+	defaults := DefaultCircuitBreakerSettings()
 	// Deliver exactly TripThreshold times — circuit must still be CLOSED.
 	for i := range defaults.TripThreshold {
 		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{}`)))
