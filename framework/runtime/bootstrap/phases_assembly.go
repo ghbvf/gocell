@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/healthz"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/config"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	obshealthz "github.com/ghbvf/gocell/framework/runtime/observability/healthz"
@@ -49,6 +50,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return err
 	}
 	if err := b.validateDeploymentTopology(); err != nil {
+		return err
+	}
+	if err := b.validateSplitTopologyBroker(); err != nil {
 		return err
 	}
 	if err := b.validateGRPCListenerConfigs(); err != nil {
@@ -118,6 +122,47 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 		return err
 	}
 	b.deploymentTopology = dt
+	return nil
+}
+
+// validateSplitTopologyBroker rejects the illegal combination of a split
+// deployment topology (≥1 remote cell) with an in-memory EventBus. The bus is
+// in-memory iff the storage backend is not postgres (#1940 eventtransport
+// funnel: in-memory is reachable only in demo/non-postgres topology), so this
+// gate is expressed via controlPlaneTopology.StorageBackend() — the same shape
+// as topology.go's "postgres requires real adapter" coupling check. Called at
+// phase0 after validateDeploymentTopology seals b.deploymentTopology.
+//
+// Split topology additionally requires explicit broker publisher/subscriber
+// injection; a nil publisher or subscriber causes phase2InitPubSub to fall back
+// to the in-memory EventBus regardless of StorageBackend, so this gate also
+// rejects that combination. The nil check uses validation.IsNilInterface so a
+// typed-nil interface value (e.g. WithPublisher((*T)(nil))) cannot slip past a
+// bare == nil comparison — the same defense SharedDeps applies to its
+// Publisher/Subscriber. Residual blind-spot: StorageBackend==postgres with a
+// hand-injected non-nil in-memory publisher/subscriber instance is not caught
+// here (non-nil ≠ real broker); that hole is closed by the
+// COREBUNDLE-EVENTBUS-FUNNEL-01 depguard (in-memory bus is import-banned in the
+// production composition roots, reachable only via eventtransport.Resolve's
+// non-postgres branch). Promoting this gate to a sealed broker-kind check is
+// tracked as a follow-up (#1965 review F2).
+//
+// Medium gate (Hard unreachable: compares two runtime values). Coarse proxy:
+// fires on ANY remote cell — even one with only sync (HTTP/CellTransport)
+// contracts and no cross-process events — because HasRemoteCells is a
+// per-assembly signal, not a per-contract signal (US7 #1967 refines this).
+// Fail-closed: an un-injected controlPlaneTopology reads as memory, so a split
+// topology that forgot to declare postgres storage is correctly rejected; a nil
+// (or typed-nil) publisher or subscriber is also rejected (phase2 would degrade
+// to in-memory bus). See also DeploymentTopology.HasRemoteCells for the blind-spot.
+func (b *Bootstrap) validateSplitTopologyBroker() error {
+	if b.deploymentTopology.HasRemoteCells() &&
+		(b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres ||
+			validation.IsNilInterface(b.publisher) || validation.IsNilInterface(b.subscriber)) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			errMsgSplitTopologyRequiresBroker,
+			errcode.WithInternal(errcode.InternalAttr("storageBackend", b.controlPlaneTopology.StorageBackend())))
+	}
 	return nil
 }
 
@@ -191,6 +236,13 @@ func (b *Bootstrap) resolveHealthAggregator() error {
 // must remain on top of shutdownTimeout before kubelet escalates to SIGKILL.
 // 10s is the empirical floor — see docs/ops/graceful-shutdown-k8s.md.
 const terminationGraceSafetyMargin = 10 * time.Second
+
+// errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
+const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
+	"the in-memory EventBus cannot deliver events across process boundaries — " +
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL, " +
+	"and inject a real broker publisher/subscriber via WithPublisher/WithSubscriber" +
+	" — or remove topology.remote to keep all cells co-located (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx

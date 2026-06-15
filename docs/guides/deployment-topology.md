@@ -57,16 +57,24 @@ accepted (useful for dev/compose multi-process topologies).
 
 ## Static enforcement by `gocell validate`
 
-Three governance rules enforce deployment topology:
+Four governance rules enforce deployment topology:
 
 | Rule | What it checks |
 |------|---------------|
 | **TOPO-10** | Structural validity: mutual exclusion, exhaustive partition, valid endpoints |
 | **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell reachable (colocated or remote) within that assembly |
 | **TOPO-12** | INTERIM: topology.remote fail-closed until US4 #1963 wires transport |
+| **TOPO-13** | Broker-mandatory static gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
 
-Run `gocell validate` to check all three. TOPO-12 fires if any assembly declares
-`topology.remote`; remove it until US4 lands.
+Run `gocell validate` to check all four. TOPO-12 fires if any assembly declares
+`topology.remote`; remove it until US4 lands. TOPO-13 runs normally in
+`gocell validate` and would fire on cross-process event pub/sub, but its trigger
+condition (split topology with cross-process event pub/sub) is currently
+**unreachable** because TOPO-12 issues a blanket rejection of all
+`topology.remote` declarations first — TOPO-13 is not disabled, it simply has
+no valid input to check until TOPO-12 is removed. Correctness is proven by
+synthetic RED/GREEN unit tests. When TOPO-12 is removed (US5 #1966), TOPO-13
+becomes the event-specific broker guard for split topologies.
 
 ## Example YAML
 
@@ -92,9 +100,16 @@ topology:
 
 When cells are split across processes, the following infrastructure is required:
 
-- **Event transport broker** (US3 #1965): remote cells need a real message
-  broker (e.g. RabbitMQ) to exchange events across process boundaries. In
-  postgres topology this is provisioned via `GOCELL_AMQP_URL`.
+- **Event transport broker** (US3 #1965, enforced): remote cells need a real
+  message broker (e.g. RabbitMQ) to exchange events across process boundaries.
+  In postgres topology this is provisioned via `GOCELL_AMQP_URL`. A split
+  topology combined with an in-memory EventBus is rejected by a **double gate**:
+  the static `gocell validate` rule TOPO-13 and a bootstrap **phase0 runtime
+  gate** (`validateSplitTopologyBroker`) that fail-fasts when the deployment has
+  remote cells while `StorageBackend() != postgres` (the in-memory bus is
+  reachable only in non-postgres topology — #1940 funnel). The runtime gate is a
+  coarse proxy: it fires on any remote cell, even one with only sync (no
+  cross-process events); a precise codegen-derived signal is a follow-up.
 - **Remote sync transport** (US4 #1963 / US5 #1966): a remote dispatch
   transport layer for synchronous cross-cell calls (planned, not yet
   implemented). US4 also removes the TOPO-12 fail-close gate.
@@ -104,6 +119,15 @@ When cells are split across processes, the following infrastructure is required:
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
 split topology in production. `topology.remote` is fail-closed until US4 lands.
+
+**Diagnosing broker status via `/readyz?verbose`**: the framework-level
+`Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres
+topology, the composition root (`cmd/corebundle`) overrides the `event_bus`
+value with the broker kind — currently the literal `"rabbitmq"` (the broker
+*kind*, never the connection URL, which would leak the AMQP credentials). When
+interpreting the `event_bus` field in verbose readyz output, use the value
+reported by the composition root override — the framework default is not
+meaningful in a postgres deployment.
 
 ## ADR reference
 

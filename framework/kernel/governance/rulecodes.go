@@ -77,6 +77,19 @@ const (
 	// The runtime DeploymentTopology API and ValidateTopologyStructure intentionally
 	// still accept remote (US4-ready shape preserved in schema).
 	codeTOPO12 RuleCode = "TOPO-12"
+	// TOPO-13: broker-mandatory static gate (Epic #1423 US3). For an assembly
+	// with a split topology, an event contract whose publisher cell and a
+	// subscriber cell fall on opposite sides of the process boundary (one Local,
+	// one Remote) requires a real broker — the in-memory EventBus cannot deliver
+	// across processes. Medium, permanent ceiling (Hard unreachable: bus is a
+	// runtime-injected instance, not statically expressible — ADR 1423 §214-219).
+	// Blind-spots: (1) production-shadowed by the interim TOPO-12 (blanket remote
+	// ban) until US5 #1966 removes it; proven via synthetic unit test until then.
+	// (2) Structural-only — asserts cross-process pub/sub, cannot verify a broker
+	// is wired (runtime concern, enforced by the bootstrap runtime gate); thus
+	// fail-closed and over-constrains future broker-backed split (US7 #1967
+	// reconciliation tracked separately).
+	codeTOPO13 RuleCode = "TOPO-13"
 
 	// VERIFY — verify closure (rules_verify.go; VERIFY-06 strict-only).
 	codeVERIFY01 RuleCode = "VERIFY-01"
