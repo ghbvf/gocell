@@ -67,10 +67,14 @@ Four governance rules enforce deployment topology:
 | **TOPO-13** | Broker-mandatory static gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
 
 Run `gocell validate` to check all four. TOPO-12 fires if any assembly declares
-`topology.remote`; remove it until US4 lands. TOPO-13 is forward-looking: it is
-production-shadowed by the interim TOPO-12 (which blanket-rejects `remote`) and
-proven by synthetic unit tests until TOPO-12 is removed, after which it becomes
-the event-specific broker guard.
+`topology.remote`; remove it until US4 lands. TOPO-13 runs normally in
+`gocell validate` and would fire on cross-process event pub/sub, but its trigger
+condition (split topology with cross-process event pub/sub) is currently
+**unreachable** because TOPO-12 issues a blanket rejection of all
+`topology.remote` declarations first — TOPO-13 is not disabled, it simply has
+no valid input to check until TOPO-12 is removed. Correctness is proven by
+synthetic RED/GREEN unit tests. When TOPO-12 is removed (US5 #1966), TOPO-13
+becomes the event-specific broker guard for split topologies.
 
 ## Example YAML
 
@@ -115,6 +119,14 @@ When cells are split across processes, the following infrastructure is required:
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
 split topology in production. `topology.remote` is fail-closed until US4 lands.
+
+**Diagnosing broker status via `/readyz?verbose`**: the framework-level
+`Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres
+topology, the composition root (`cmd/corebundle`) overrides this value with the
+actual broker descriptor (e.g. `"rabbitmq:<amqp-url>"`). When interpreting the
+`event_bus` field in verbose readyz output, use the value reported by the
+composition root override — the framework default is not meaningful in a
+postgres deployment.
 
 ## ADR reference
 

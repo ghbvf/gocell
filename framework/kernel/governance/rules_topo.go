@@ -689,6 +689,12 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 //     broker is actually wired (runtime concern, enforced by the bootstrap
 //     runtime gate). This causes TOPO-13 to over-constrain future broker-backed
 //     split topologies (US7 #1967 reconciliation tracked separately).
+//  3. When pub and sub are BOTH Remote from this assembly's perspective,
+//     pubLoc.IsLocal() != subLoc.IsLocal() evaluates to false != false == false
+//     and TOPO-13 does NOT fire. This is correct per-assembly behavior: if this
+//     assembly is not the host of either party, the cross-process concern belongs
+//     to the assembly that IS the publisher's local host — TOPO-13 will fire
+//     there. Intentional non-firing confirmed by TestTOPO13_BothRemote_NotFired.
 //
 // Skip conditions (delegated to other rules or out-of-scope):
 //   - assembly has no topology.remote (all-colocated → no cross-process boundary)
@@ -782,7 +788,9 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 				),
 				"co-locate publisher and subscriber (topology.colocated),"+
 					" or deploy with a real event broker"+
-					" (GOCELL_CELL_ADAPTER_MODE=postgres + GOCELL_AMQP_URL)",
+					" (GOCELL_CELL_ADAPTER_MODE=postgres + GOCELL_ADAPTER_MODE=real + GOCELL_AMQP_URL);"+
+					" if a broker is already configured but this still fires,"+
+					" the broker-backed split path lands in US7 #1967",
 			))
 		}
 	}

@@ -13,7 +13,9 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 )
 
 // ---------------------------------------------------------------------------
@@ -403,8 +405,8 @@ func TestPhase0_RejectsInvalidDeploymentTopology(t *testing.T) {
 
 // TestPhase0_AcceptsValidDeploymentTopology verifies the happy path: a valid
 // DeploymentTopologySpec does not cause phase0 to fail.
-// A split topology requires postgres storage (broker-mandatory gate); inject
-// WithControlPlaneTopology(postgres) so the gate accepts it.
+// A split topology requires postgres storage + non-nil publisher/subscriber
+// (broker-mandatory gate, F1); inject both so the gate accepts it.
 func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 	spec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
@@ -414,10 +416,13 @@ func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTopology: %v", err)
 	}
+	brokerBus := eventbus.New(clock.Real())
 	b := New(
 		clock.Real(),
 		WithDeploymentTopology(spec),
 		WithControlPlaneTopology(postgresTopo),
+		WithPublisher(brokerBus),
+		WithSubscriber(brokerBus),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -443,13 +448,14 @@ func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 // TestBootstrap_DeploymentTopologyGetter_BeforePhase0 verifies that the
 // Bootstrap.DeploymentTopology() getter returns the zero value (all-colocated)
 // before phase0 runs, and the sealed value after (F4).
-// A split topology requires postgres storage (broker-mandatory gate); inject
-// WithControlPlaneTopology(postgres) so the gate accepts the split spec.
+// A split topology requires postgres storage + non-nil publisher/subscriber
+// (broker-mandatory gate, F1); inject both so the gate accepts the split spec.
 func TestBootstrap_DeploymentTopologyGetter_BeforePhase0(t *testing.T) {
 	postgresTopo, err := NewTopology("real", "postgres", false)
 	if err != nil {
 		t.Fatalf("NewTopology: %v", err)
 	}
+	brokerBus := eventbus.New(clock.Real())
 	b := New(
 		clock.Real(),
 		WithDeploymentTopology(DeploymentTopologySpec{
@@ -457,6 +463,8 @@ func TestBootstrap_DeploymentTopologyGetter_BeforePhase0(t *testing.T) {
 			Remote:    []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
 		}),
 		WithControlPlaneTopology(postgresTopo),
+		WithPublisher(brokerBus),
+		WithSubscriber(brokerBus),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -579,7 +587,9 @@ func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 // (validateSplitTopologyBroker) directly, without starting a full Bootstrap.
 // The gate must:
 //   - reject split topology (≥1 remote) + in-memory bus (storage != postgres)
-//   - accept split topology + postgres storage
+//   - reject split topology + postgres storage but nil publisher or subscriber
+//     (F1: phase2 would degrade to in-memory bus — same security gap)
+//   - accept split topology + postgres storage + non-nil publisher + non-nil subscriber
 //   - accept colocated topology + in-memory bus (no remote cells, no broker needed)
 func TestValidateSplitTopologyBroker(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
@@ -609,10 +619,15 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 		t.Fatalf("NewTopology(postgres): %v", err)
 	}
 
+	// nonNilBus is used for the GREEN cases that require non-nil publisher/subscriber.
+	nonNilBus := eventbus.New(clock.Real())
+
 	cases := []struct {
 		name               string
 		deploymentTopology DeploymentTopology
 		controlPlaneTopo   Topology
+		publisher          outbox.Publisher
+		subscriber         outbox.Subscriber
 		wantErr            bool
 		wantErrCode        errcode.Code
 	}{
@@ -624,9 +639,33 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			wantErrCode:        errcode.ErrValidationFailed,
 		},
 		{
-			name:               "GREEN: split topology + postgres storage → accepted",
+			// F1: split topology + postgres storage but nil publisher → rejected.
+			// phase2InitPubSub falls back to in-memory bus when publisher==nil,
+			// so this combination must be fail-closed even though StorageBackend==postgres.
+			name:               "RED: split topology + postgres + nil publisher → rejected (F1 nil guard)",
 			deploymentTopology: splitDT,
 			controlPlaneTopo:   postgresTopo,
+			publisher:          nil,
+			subscriber:         nonNilBus,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			// F1: split topology + postgres storage but nil subscriber → rejected.
+			name:               "RED: split topology + postgres + nil subscriber → rejected (F1 nil guard)",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   postgresTopo,
+			publisher:          nonNilBus,
+			subscriber:         nil,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			name:               "GREEN: split topology + postgres storage + non-nil pub/sub → accepted",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   postgresTopo,
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
 			wantErr:            false,
 		},
 		{
@@ -641,6 +680,17 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			controlPlaneTopo:   memoryTopo,
 			wantErr:            false,
 		},
+		{
+			// F6: zero-value Topology{} (StorageBackend()=="") combined with a split
+			// deployment topology must be fail-closed rejected. This locks the
+			// invariant that a zero Topology does not accidentally read as postgres
+			// and let an un-configured split deployment pass the broker gate.
+			name:               "RED: split topology + zero Topology{} (StorageBackend==\"\") → rejected (fail-closed)",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   Topology{}, // true zero value — StorageBackend()==""
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
 	}
 
 	for _, tc := range cases {
@@ -648,6 +698,8 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			b := &Bootstrap{
 				deploymentTopology:   tc.deploymentTopology,
 				controlPlaneTopology: tc.controlPlaneTopo,
+				publisher:            tc.publisher,
+				subscriber:           tc.subscriber,
 			}
 			err := b.validateSplitTopologyBroker()
 			if tc.wantErr {
@@ -707,7 +759,8 @@ func TestPhase0_RejectsSplitTopologyWithInMemoryBus(t *testing.T) {
 }
 
 // TestPhase0_AcceptsSplitTopologyWithPostgres verifies that phase0 accepts a
-// split topology when postgres storage is declared (real broker available).
+// split topology when postgres storage is declared and non-nil publisher/subscriber
+// are injected (broker-mandatory gate, F1).
 func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
@@ -719,17 +772,20 @@ func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTopology: %v", err)
 	}
+	brokerBus := eventbus.New(clock.Real())
 
 	b := New(
 		clock.Real(),
 		WithDeploymentTopology(splitSpec),
 		WithControlPlaneTopology(postgresTopo),
+		WithPublisher(brokerBus),
+		WithSubscriber(brokerBus),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 
 	err = b.phase0ValidateOptions()
 	if err != nil {
-		t.Fatalf("phase0ValidateOptions: unexpected error for split topology + postgres: %v", err)
+		t.Fatalf("phase0ValidateOptions: unexpected error for split topology + postgres + non-nil pub/sub: %v", err)
 	}
 }

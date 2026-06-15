@@ -132,14 +132,29 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 // as topology.go's "postgres requires real adapter" coupling check. Called at
 // phase0 after validateDeploymentTopology seals b.deploymentTopology.
 //
-// Medium gate (Hard unreachable: compares two runtime values). Coarse: fires on
-// any remote cell (see DeploymentTopology.HasRemoteCells blind-spot). Fail-closed:
-// an un-injected controlPlaneTopology reads as memory, so a split topology that
-// forgot to declare postgres storage is correctly rejected.
+// Split topology additionally requires explicit broker publisher/subscriber
+// injection; a nil publisher or subscriber causes phase2InitPubSub to fall back
+// to the in-memory EventBus regardless of StorageBackend, so this gate also
+// rejects that combination. Residual blind-spot: StorageBackend==postgres with
+// a hand-injected in-memory publisher/subscriber instance is not caught here;
+// that is prevented by the #1940 eventtransport funnel + depguard at the
+// composition root layer.
+//
+// Medium gate (Hard unreachable: compares two runtime values). Coarse proxy:
+// fires on ANY remote cell — even one with only sync (HTTP/CellTransport)
+// contracts and no cross-process events — because HasRemoteCells is a
+// per-assembly signal, not a per-contract signal (US7 #1967 refines this).
+// Fail-closed: an un-injected controlPlaneTopology reads as memory, so a split
+// topology that forgot to declare postgres storage is correctly rejected; a nil
+// publisher or subscriber is also rejected (phase2 would degrade to in-memory
+// bus). See also DeploymentTopology.HasRemoteCells for the blind-spot note.
 func (b *Bootstrap) validateSplitTopologyBroker() error {
-	if b.deploymentTopology.HasRemoteCells() && b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres {
+	if b.deploymentTopology.HasRemoteCells() &&
+		(b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres ||
+			b.publisher == nil || b.subscriber == nil) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			errMsgSplitTopologyRequiresBroker)
+			errMsgSplitTopologyRequiresBroker,
+			errcode.WithInternal(errcode.InternalAttr("storageBackend", b.controlPlaneTopology.StorageBackend())))
 	}
 	return nil
 }
@@ -218,7 +233,9 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
 const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
 	"the in-memory EventBus cannot deliver events across process boundaries — " +
-	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL"
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL, " +
+	"and inject a real broker publisher/subscriber via WithPublisher/WithSubscriber" +
+	" — or remove topology.remote to keep all cells co-located (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx
