@@ -106,10 +106,15 @@ var projectionEventsDeletePattern = regexp.MustCompile(
 // (e.g. "DELETE FROM " or "projection_events" alone) do not individually match the
 // pattern because projectionEventsDeletePattern requires the DELETE/TRUNCATE verb and
 // the table name to be adjacent in the same folded string, so visiting operands
-// separately does not produce false positives. The RED fixture's 8 cases (6 BasicLit +
-// 2 BinaryExpr) confirm the count is exact; tableRefs may exceed 1 in production
-// (over-counting is harmless — the anti-vacuity guard only requires ≥ 1). Reused over
-// both production (expect zero diagnostics, tableRefs ≥ 1) and the RED fixture.
+// separately does not produce false positives. The four passes scan disjoint node
+// kinds, so no node is re-visited; a diagnostic is emitted once per matching node
+// position. The only way the same logical SQL could double-report is a concatenation
+// whose operand ALSO independently carries the full verb+table (a redundant concat),
+// which no real DELETE/TRUNCATE takes — and the RED fixture's 8 cases (6 BasicLit +
+// 2 BinaryExpr) lock the exact count as the regression backstop. tableRefs may exceed
+// 1 in production (over-counting is harmless — the anti-vacuity guard only requires
+// ≥ 1). Reused over both production (expect zero diagnostics, tableRefs ≥ 1) and the
+// RED fixture.
 func scanProjectionEventDelete(p *Pass, tableRefs *int) []Diagnostic {
 	var diags []Diagnostic
 	for _, file := range p.Files {

@@ -126,6 +126,13 @@ func scanPublicMethodFieldWrites(t *testing.T, allowlist map[string]struct{}) ([
 					if sel.Sel.Name != "publicMethod" {
 						return
 					}
+					// EachInChildren over an AssignStmt visits selectors on BOTH the Lhs
+					// and the Rhs; restrict to the Lhs write targets so a RHS READ of
+					// c.publicMethod (e.g. y := c.publicMethod) is not mis-flagged as a
+					// write. Mirrors audit_trace_id_write_caller's exprInList Lhs-only guard.
+					if !exprInList(as.Lhs, sel) {
+						return
+					}
 					if s := p.TypesInfo.Selections[sel]; s != nil && isAuthConfigPublicMethodField(s.Obj()) {
 						flag(rel, sel.Pos())
 					}
