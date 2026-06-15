@@ -51,6 +51,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateDeploymentTopology(); err != nil {
 		return err
 	}
+	if err := b.validateSplitTopologyBroker(); err != nil {
+		return err
+	}
 	if err := b.validateGRPCListenerConfigs(); err != nil {
 		return err
 	}
@@ -118,6 +121,26 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 		return err
 	}
 	b.deploymentTopology = dt
+	return nil
+}
+
+// validateSplitTopologyBroker rejects the illegal combination of a split
+// deployment topology (≥1 remote cell) with an in-memory EventBus. The bus is
+// in-memory iff the storage backend is not postgres (#1940 eventtransport
+// funnel: in-memory is reachable only in demo/non-postgres topology), so this
+// gate is expressed via controlPlaneTopology.StorageBackend() — the same shape
+// as topology.go's "postgres requires real adapter" coupling check. Called at
+// phase0 after validateDeploymentTopology seals b.deploymentTopology.
+//
+// Medium gate (Hard unreachable: compares two runtime values). Coarse: fires on
+// any remote cell (see DeploymentTopology.HasRemoteCells blind-spot). Fail-closed:
+// an un-injected controlPlaneTopology reads as memory, so a split topology that
+// forgot to declare postgres storage is correctly rejected.
+func (b *Bootstrap) validateSplitTopologyBroker() error {
+	if b.deploymentTopology.HasRemoteCells() && b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			errMsgSplitTopologyRequiresBroker)
+	}
 	return nil
 }
 
@@ -191,6 +214,11 @@ func (b *Bootstrap) resolveHealthAggregator() error {
 // must remain on top of shutdownTimeout before kubelet escalates to SIGKILL.
 // 10s is the empirical floor — see docs/ops/graceful-shutdown-k8s.md.
 const terminationGraceSafetyMargin = 10 * time.Second
+
+// errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
+const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
+	"the in-memory EventBus cannot deliver events across process boundaries — " +
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx

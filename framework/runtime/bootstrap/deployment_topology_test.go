@@ -403,19 +403,26 @@ func TestPhase0_RejectsInvalidDeploymentTopology(t *testing.T) {
 
 // TestPhase0_AcceptsValidDeploymentTopology verifies the happy path: a valid
 // DeploymentTopologySpec does not cause phase0 to fail.
+// A split topology requires postgres storage (broker-mandatory gate); inject
+// WithControlPlaneTopology(postgres) so the gate accepts it.
 func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 	spec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
 		Remote:    []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
 	}
+	postgresTopo, err := NewTopology("real", "postgres", false)
+	if err != nil {
+		t.Fatalf("NewTopology: %v", err)
+	}
 	b := New(
 		clock.Real(),
 		WithDeploymentTopology(spec),
+		WithControlPlaneTopology(postgresTopo),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
 
-	err := b.phase0ValidateOptions()
+	err = b.phase0ValidateOptions()
 	if err != nil {
 		t.Fatalf("phase0ValidateOptions: unexpected error for valid DeploymentTopologySpec: %v", err)
 	}
@@ -436,13 +443,20 @@ func TestPhase0_AcceptsValidDeploymentTopology(t *testing.T) {
 // TestBootstrap_DeploymentTopologyGetter_BeforePhase0 verifies that the
 // Bootstrap.DeploymentTopology() getter returns the zero value (all-colocated)
 // before phase0 runs, and the sealed value after (F4).
+// A split topology requires postgres storage (broker-mandatory gate); inject
+// WithControlPlaneTopology(postgres) so the gate accepts the split spec.
 func TestBootstrap_DeploymentTopologyGetter_BeforePhase0(t *testing.T) {
+	postgresTopo, err := NewTopology("real", "postgres", false)
+	if err != nil {
+		t.Fatalf("NewTopology: %v", err)
+	}
 	b := New(
 		clock.Real(),
 		WithDeploymentTopology(DeploymentTopologySpec{
 			Colocated: []string{"cellA"},
 			Remote:    []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "cell-b:9090"}},
 		}),
+		WithControlPlaneTopology(postgresTopo),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
 	)
@@ -496,5 +510,226 @@ func TestPhase0_OmittedDeploymentTopology_AllColocated(t *testing.T) {
 	_, ok := b.deploymentTopology.RemoteEndpoint("anyCellID")
 	if ok {
 		t.Error("zero DeploymentTopology.RemoteEndpoint(any) = hit, want miss")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HasRemoteCells predicate
+// ---------------------------------------------------------------------------
+
+// TestDeploymentTopologyHasRemoteCells verifies the HasRemoteCells predicate
+// used by the phase0 broker-mandatory gate (validateSplitTopologyBroker).
+func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
+	cases := []struct {
+		name string
+		spec DeploymentTopologySpec
+		want bool
+	}{
+		{
+			name: "zero value (no topology declared) → false",
+			spec: DeploymentTopologySpec{},
+			want: false,
+		},
+		{
+			name: "only colocated cells → false",
+			spec: DeploymentTopologySpec{
+				Colocated: []string{"cellA", "cellB"},
+			},
+			want: false,
+		},
+		{
+			name: "at least one remote cell → true",
+			spec: DeploymentTopologySpec{
+				Remote: []RemoteCellEndpoint{
+					{CellID: "cellRemote", Endpoint: "cell-remote:8080"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "mixed colocated + remote → true",
+			spec: DeploymentTopologySpec{
+				Colocated: []string{"cellA"},
+				Remote: []RemoteCellEndpoint{
+					{CellID: "cellB", Endpoint: "cell-b:9090"},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dt, err := newDeploymentTopology(tc.spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: unexpected error: %v", err)
+			}
+			if got := dt.HasRemoteCells(); got != tc.want {
+				t.Errorf("HasRemoteCells() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// validateSplitTopologyBroker — phase0 broker-mandatory gate
+// ---------------------------------------------------------------------------
+
+// TestValidateSplitTopologyBroker exercises the phase0 broker-mandatory gate
+// (validateSplitTopologyBroker) directly, without starting a full Bootstrap.
+// The gate must:
+//   - reject split topology (≥1 remote) + in-memory bus (storage != postgres)
+//   - accept split topology + postgres storage
+//   - accept colocated topology + in-memory bus (no remote cells, no broker needed)
+func TestValidateSplitTopologyBroker(t *testing.T) {
+	splitSpec := DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote: []RemoteCellEndpoint{
+			{CellID: "cellB", Endpoint: "cell-b:9090"},
+		},
+	}
+	colocatedSpec := DeploymentTopologySpec{
+		Colocated: []string{"cellA", "cellB"},
+	}
+
+	splitDT, err := newDeploymentTopology(splitSpec)
+	if err != nil {
+		t.Fatalf("newDeploymentTopology(split): %v", err)
+	}
+	colocatedDT, err := newDeploymentTopology(colocatedSpec)
+	if err != nil {
+		t.Fatalf("newDeploymentTopology(colocated): %v", err)
+	}
+	memoryTopo, err := NewTopology("", "memory", false)
+	if err != nil {
+		t.Fatalf("NewTopology(memory): %v", err)
+	}
+	postgresTopo, err := NewTopology("real", "postgres", false)
+	if err != nil {
+		t.Fatalf("NewTopology(postgres): %v", err)
+	}
+
+	cases := []struct {
+		name               string
+		deploymentTopology DeploymentTopology
+		controlPlaneTopo   Topology
+		wantErr            bool
+		wantErrCode        errcode.Code
+	}{
+		{
+			name:               "RED: split topology + in-memory bus → rejected",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   memoryTopo,
+			wantErr:            true,
+			wantErrCode:        errcode.ErrValidationFailed,
+		},
+		{
+			name:               "GREEN: split topology + postgres storage → accepted",
+			deploymentTopology: splitDT,
+			controlPlaneTopo:   postgresTopo,
+			wantErr:            false,
+		},
+		{
+			name:               "GREEN: colocated topology + in-memory bus → accepted (no remote cells)",
+			deploymentTopology: colocatedDT,
+			controlPlaneTopo:   memoryTopo,
+			wantErr:            false,
+		},
+		{
+			name:               "GREEN: zero deployment topology + in-memory bus → accepted (all-colocated default)",
+			deploymentTopology: DeploymentTopology{},
+			controlPlaneTopo:   memoryTopo,
+			wantErr:            false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &Bootstrap{
+				deploymentTopology:   tc.deploymentTopology,
+				controlPlaneTopology: tc.controlPlaneTopo,
+			}
+			err := b.validateSplitTopologyBroker()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("validateSplitTopologyBroker: expected error, got nil")
+				}
+				var ec *errcode.Error
+				if !errors.As(err, &ec) {
+					t.Fatalf("error is not *errcode.Error: %T %v", err, err)
+				}
+				if ec.Code != tc.wantErrCode {
+					t.Errorf("error code = %s, want %s", ec.Code, tc.wantErrCode)
+				}
+			} else if err != nil {
+				t.Errorf("validateSplitTopologyBroker: unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestPhase0_RejectsSplitTopologyWithInMemoryBus verifies that phase0 end-to-end
+// rejects a split topology combined with in-memory bus (no postgres storage).
+func TestPhase0_RejectsSplitTopologyWithInMemoryBus(t *testing.T) {
+	splitSpec := DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote: []RemoteCellEndpoint{
+			{CellID: "cellB", Endpoint: "cell-b:9090"},
+		},
+	}
+	memoryTopo, err := NewTopology("", "memory", false)
+	if err != nil {
+		t.Fatalf("NewTopology: %v", err)
+	}
+
+	b := New(
+		clock.Real(),
+		WithDeploymentTopology(splitSpec),
+		WithControlPlaneTopology(memoryTopo),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+
+	err = b.phase0ValidateOptions()
+	if err == nil {
+		t.Fatal("phase0ValidateOptions: expected error for split topology + in-memory bus, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("error is not *errcode.Error: %T %v", err, err)
+	}
+	if ec.Code != errcode.ErrValidationFailed {
+		t.Errorf("error code = %s, want %s", ec.Code, errcode.ErrValidationFailed)
+	}
+	if !strings.Contains(ec.Message, "in-memory") {
+		t.Errorf("error message %q should mention in-memory bus", ec.Message)
+	}
+}
+
+// TestPhase0_AcceptsSplitTopologyWithPostgres verifies that phase0 accepts a
+// split topology when postgres storage is declared (real broker available).
+func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
+	splitSpec := DeploymentTopologySpec{
+		Colocated: []string{"cellA"},
+		Remote: []RemoteCellEndpoint{
+			{CellID: "cellB", Endpoint: "cell-b:9090"},
+		},
+	}
+	postgresTopo, err := NewTopology("real", "postgres", false)
+	if err != nil {
+		t.Fatalf("NewTopology: %v", err)
+	}
+
+	b := New(
+		clock.Real(),
+		WithDeploymentTopology(splitSpec),
+		WithControlPlaneTopology(postgresTopo),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+		WithListener(cell.HealthListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}),
+	)
+
+	err = b.phase0ValidateOptions()
+	if err != nil {
+		t.Fatalf("phase0ValidateOptions: unexpected error for split topology + postgres: %v", err)
 	}
 }

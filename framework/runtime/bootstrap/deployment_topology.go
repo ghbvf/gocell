@@ -177,6 +177,21 @@ func validateDeployEndpoint(ep, cellID string) error {
 		errcode.WithDetails(errcode.PublicString("cellID", cellID)))
 }
 
+// HasRemoteCells reports whether the deployment topology declares at least one
+// remote cell (i.e. a split topology with a process boundary). Zero value
+// (no explicit topology, all-colocated) returns false. Used by the bootstrap
+// phase0 broker-mandatory gate: a split topology + in-memory EventBus is
+// rejected because the in-memory bus cannot deliver events across processes.
+//
+// Coarse proxy (Medium, blind-spot): true for ANY remote cell, even one with
+// only sync (CellTransport) contracts and no cross-process events; the precise
+// "has cross-process event pub/sub" signal would require codegen derivation
+// (tracked as follow-up). Currently unreachable in production because the
+// interim TOPO-12 rule blanket-rejects topology.remote at gocell validate.
+func (t DeploymentTopology) HasRemoteCells() bool {
+	return len(t.remote) > 0
+}
+
 // IsColocated reports whether cellID is co-located in the same process.
 // For a zero-value (no explicit topology), always returns true — all cells
 // are treated as colocated (single-process default).
