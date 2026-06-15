@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cellmodules/percellpg"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/migration"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
@@ -14,18 +16,19 @@ import (
 )
 
 // provisionCapabilities is the assembly's single shared-infrastructure
-// provisioning site. It is the sole sanctioned caller of the banned adapter
-// constructors (adapterpg.NewPool / NewTxManager / NewOutboxWriter /
-// NewJournalingOutboxWriter, adapterredis.NewClient via the factory) —
-// CAPABILITY-PROVIDER-FUNNEL-01 downstream allowlist locks construction to this file.
-//
-// It iterates the codegen-declared generatedCapabilities() (single source:
-// the derived union of the assembly cells' cell.yaml `requires`, computed in
-// kernel/assembly.GenerateModulesGen), and for each declared
+// provisioning site. It iterates the codegen-declared generatedCapabilities()
+// (single source: the derived union of the assembly cells' cell.yaml `requires`,
+// computed in kernel/assembly.GenerateModulesGen), and for each declared
 // capability provisions the shared resource exactly once and wraps it into the
 // sealed runtime/capability provider stored on shared. Consuming cell modules receive
 // the injected provider (shared.PG / shared.Redis) and never construct adapter
 // primitives themselves.
+//
+// Postgres per-cell DSN resolution (dedup-by-DSN + fail-closed gates) is decided
+// by cellmodules/percellpg.Resolve, but the adapter construction (pool, TxManager,
+// journaling outbox writer, capability.PGProvider) stays HERE — this file remains
+// the single sanctioned shared-infra provisioning site in cmd/
+// (CAPABILITY-PROVIDER-FUNNEL-01 + PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01).
 //
 // Called from runCorebundle after LoadSharedDepsFromEnv and before composition.Builder.Build
 // so the providers are present (or fail-fast) before any module.Provide runs —
@@ -61,66 +64,93 @@ func provisionCapabilities(ctx context.Context, shared *composition.SharedDeps, 
 	return nil
 }
 
-// provisionPostgres opens the assembly's single postgres pool (postgres
-// StorageBackend only), runs the schema/shape/index fail-fast checks, and wraps
-// the pool-bound TxManager + OutboxWriter + raw *pgxpool.Pool handle into the
-// sealed capability.PGProvider. The pool is recorded as locals.poolMR so bundle_options
-// registers it as the first ManagedResource (LIFO: closed last, after every PG
-// consumer — relay, cell workers, tx).
+// provisionPostgres opens the assembly's single serving pool from the per-cell
+// DSN agreed by cellmodules/percellpg.Resolve. percellpg owns the per-cell DSN
+// decision (dedup-by-DSN + fail-closed gates: empty cell set, missing DSN, >1
+// distinct DSN); this site owns the actual adapter construction — pool, schema
+// verification, the journaling outbox writer, and the capability.PGProvider —
+// because the banned shared-infra constructors (NewPool / NewTxManager /
+// NewJournalingOutboxWriter) must stay in the single sanctioned cmd/ site that
+// CAPABILITY-PROVIDER-FUNNEL-01 and PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-
+// DERIVED-01 cover.
 //
-// In memory mode the pool is not opened and shared.PG stays nil; cell modules
-// fall through to their in-memory storage path.
+// The topology gate runs FIRST — before reading any per-cell PG env — so memory
+// mode is never blocked by an unused / malformed GOCELL_<CELL>_DATABASE_* knob.
+// In memory topology shared.PG stays nil and cell modules take their in-memory path.
 func provisionPostgres(ctx context.Context, shared *composition.SharedDeps, locals *cmdLocals) error {
 	if shared.Topology.StorageBackend() != bootstrap.StorageBackendPostgres {
 		return nil
 	}
-	pgCfg, err := LoadPGConfig("CONFIGCORE")
+
+	cells := make(map[string]adapterpg.Config, len(generatedPostgresCells()))
+	for _, cellID := range generatedPostgresCells() {
+		pgCfg, err := LoadPGConfig(strings.ToUpper(cellID))
+		if err != nil {
+			return fmt.Errorf("corebundle: load PG config for cell %s: %w", cellID, err)
+		}
+		cells[cellID] = pgCfg
+	}
+
+	// Topology is gated above, so percellpg.Resolve always returns ok=true here
+	// (ok=false is the memory-topology signal only). A contract drift that returned
+	// an empty agreed config would still fail-closed at NewPool ("DSN is empty").
+	agreed, _, err := percellpg.Resolve(shared.Topology, percellpg.Config{
+		Cells:                 cells,
+		RequireRestrictedRole: true,
+	})
 	if err != nil {
-		return fmt.Errorf("assembly pg config: %w", err)
+		return err
 	}
-	if pgCfg.DSN == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"corebundle postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
-	}
-	// This is the assembly's SERVING pool. Its schema (migrations 052/053) places
-	// the six tenant tables under FORCE ROW LEVEL SECURITY, which is only enforced
-	// at runtime when the connecting role is neither a superuser nor BYPASSRLS.
-	// Opt into the postgres_app_role_restricted_ready precondition probe so a
-	// superuser-served deployment reports /readyz 503 instead of silently leaking
-	// across tenants (#1676 [F-B11]). Migrations are applied by a separate admin
-	// pool (tools/pg-migrate), which does not set this flag.
-	pgCfg.RequireRestrictedRole = true
-	pool, err := adapterpg.NewPool(ctx, pgCfg)
+
+	pool, err := adapterpg.NewPool(ctx, agreed)
 	if err != nil {
-		return fmt.Errorf("assembly PG pool: %w", err)
+		return fmt.Errorf("corebundle: open assembly PG pool: %w", err)
 	}
-	// Assembly-wide schema/shape/index fail-fast before any wiring. The guard is
-	// not configcore-specific: it checks the single migration set
-	// (adapterpg.MigrationsFS) that owns config + session + audit tables.
 	if vErr := verifyPGPreconditions(ctx, pool); vErr != nil {
-		_ = pool.Close(ctx)
+		_ = pool.Close(ctx) // no leak on verify error
 		return vErr
 	}
-	txMgr := adapterpg.NewTxManager(pool)
-	// Wrap the base outbox writer so projection-source events are journaled to the
-	// durable projection_events table inside the producer's transaction (EPIC #1504
-	// D4). The topic set is cellgen-derived (generatedProjectionSourceTopics, I5); it
-	// is empty today (corebundle declares no outbox projections), so the decorator
-	// forwards writes unchanged until a projection is added — at which point its topic
-	// auto-enrolls on the next `gocell generate assembly`. Wiring the durable source as
-	// the projection read side lands in PR-03.
+
 	// Surface the wired topic-set size so operators can distinguish "journal inactive
 	// because no projections are declared" (count 0, expected today) from a wiring
 	// regression — the durable journal otherwise gives no startup signal (#1504 PR-02).
 	// The decorator's topic argument MUST stay the direct generatedProjectionSourceTopics()
 	// call (PROJECTION-EVENT-JOURNAL-TOPIC-ALLOWLIST-DERIVED-01 rejects a threaded
-	// variable, which could hide a hand-typed list); the accessor is a cheap generated
-	// slice literal, so calling it again for the count is free.
+	// variable, which could hide a hand-typed list).
 	slog.InfoContext(ctx, "corebundle: journaling outbox writer wired",
 		slog.Int("projection_source_topic_count", len(generatedProjectionSourceTopics())))
 	writer := adapterpg.NewJournalingOutboxWriter(adapterpg.NewOutboxWriter(shared.Clock), generatedProjectionSourceTopics())
-	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
+
+	shared.PG = capability.NewPGProvider(adapterpg.NewTxManager(pool), writer, pool.DB())
 	locals.poolMR = pool
+	return nil
+}
+
+// verifyPGPreconditions runs the three assembly-wide PG fail-fast checks in order.
+// Caller owns pool lifecycle; on error the caller must close the pool.
+func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
+	if err := verifyConfigCorePGSchema(ctx, pool); err != nil {
+		return err
+	}
+	// S3+S5: column-existence fail-fast catches partial migrations.
+	if err := adapterpg.VerifyExpectedShape(ctx, pool); err != nil {
+		return fmt.Errorf("corebundle PG schema shape: %w", err)
+	}
+	// B2-X-03: operators must DROP INVALID indexes manually before start.
+	if err := adapterpg.VerifyNoInvalidIndexes(ctx, pool); err != nil {
+		return fmt.Errorf("corebundle PG invalid indexes: %w", err)
+	}
+	return nil
+}
+
+func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		return fmt.Errorf("corebundle PG migrations fs: %w", err)
+	}
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, migration.PlatformNamespace); err != nil {
+		return fmt.Errorf("corebundle PG schema guard: %w", err)
+	}
 	return nil
 }
 
@@ -131,33 +161,4 @@ func provisionRedis(shared *composition.SharedDeps, locals *cmdLocals) {
 	if locals.redisClient != nil {
 		shared.Redis = capability.NewRedisProvider(locals.redisClient)
 	}
-}
-
-// verifyPGPreconditions runs the three configcore PG fail-fast checks in
-// order. Caller owns pool lifecycle; on error caller must close the pool.
-func verifyPGPreconditions(ctx context.Context, pool *adapterpg.Pool) error {
-	if schemaErr := verifyConfigCorePGSchema(ctx, pool); schemaErr != nil {
-		return schemaErr
-	}
-	// S3+S5: column-existence fail-fast catches partial migrations.
-	if shapeErr := adapterpg.VerifyExpectedShape(ctx, pool); shapeErr != nil {
-		return fmt.Errorf("configcore PG schema shape: %w", shapeErr)
-	}
-	// B2-X-03: operators must DROP INVALID indexes manually before start —
-	// silent continue can hide INSERT-time failures in tests / staging.
-	if idxErr := adapterpg.VerifyNoInvalidIndexes(ctx, pool); idxErr != nil {
-		return fmt.Errorf("configcore PG invalid indexes: %w", idxErr)
-	}
-	return nil
-}
-
-func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
-	migrationsFS, err := adapterpg.MigrationsFS()
-	if err != nil {
-		return fmt.Errorf("configcore PG migrations fs: %w", err)
-	}
-	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS, migration.PlatformNamespace); err != nil {
-		return fmt.Errorf("configcore PG schema guard: %w", err)
-	}
-	return nil
 }

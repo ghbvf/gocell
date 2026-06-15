@@ -69,7 +69,10 @@ func TestTestTimeLiteralConst(t *testing.T) {
 	// produce a false-green in CI. The full scan is ~1-2 s after caching.
 
 	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
+	// PatternsWithSatellites adds the cmd/adapters/examples satellite parents the
+	// typed loader expands to real members — #2136. The satellite-free Patterns set
+	// would silently skip them (vacuous on satellite test code).
+	patterns := prodscan.PatternsWithSatellites(root)
 
 	var violations []string
 	Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, patterns),

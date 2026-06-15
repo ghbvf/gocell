@@ -22,7 +22,15 @@
 //     (`pkg/contracttest/`, `pkg/testutil/`, `runtime/internal/authtest/`,
 //     `cells/internal/testoutbox/`). Callers must be `_test.go` files —
 //     enforced indirectly by the package not being importable from
-//     production paths without raising review attention.
+//     production paths without raising review attention. SUB-CASE: a test
+//     fixture that cannot be physically isolated because it depends on
+//     package-private state of a production package (it must be exported
+//     FROM that package so cross-package `_test.go` callers can reach it) is
+//     registered as a (modulePath, funcName) carve-out instead, and its
+//     production-caller ban is carried by a dedicated companion archtest
+//     (e.g. `runtime/auth.MustNewTestDevicePrincipal` needs the unexported
+//     `mintDevicePrincipal` seal; callers are banned by
+//     `NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01`).
 //
 // Other `Must*` production declarations were removed by the B2-K-02 ship
 // (see ADR `docs/architecture/202605171800-adr-kernel-mustctor-removal.md`);
@@ -134,6 +142,14 @@ var allowedMustDecls = map[string]map[string]struct{}{
 	// (a) internal validator — NewHub calls it internally, not exposed as constructor
 	"framework/runtime/websocket": {
 		"MustValidateHubConfig": {},
+	},
+	// (c) test fixture, non-isolable sub-case — forges a sealed device principal
+	// for cross-cell handler/integration tests. Exported from the production auth
+	// package because it needs the unexported mintDevicePrincipal seal, so it
+	// cannot live in a test-fixture package; production callers are banned by the
+	// companion NO-TEST-DEVICE-PRINCIPAL-IN-PRODUCTION-01 archtest.
+	"framework/runtime/auth": {
+		"MustNewTestDevicePrincipal": {},
 	},
 }
 

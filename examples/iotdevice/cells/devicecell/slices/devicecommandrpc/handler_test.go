@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
@@ -184,7 +185,7 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	client := commandv1.NewDeviceCommandServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancel()
 
 	t.Run("success", func(t *testing.T) {

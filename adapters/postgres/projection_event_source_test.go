@@ -16,6 +16,7 @@ import (
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/projection"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 )
 
 // compile-time interface checks mirror the production assertions so a signature drift
@@ -252,7 +253,7 @@ func TestPGProjectionEventSource_ResolveCarrier_BoundedLookup(t *testing.T) {
 		t.Parallel()
 		tx := &mockProjTx{row: &mockProjRow{value: 3}}
 		s, base := newEventSourceWithTx(tx)
-		callerCtx, cancel := context.WithTimeout(base, 500*time.Millisecond)
+		callerCtx, cancel := context.WithTimeout(base, testtime.D500ms)
 		defer cancel()
 		_, err := s.ResolveCarrier(callerCtx, mustEntry(t))
 		require.NoError(t, err)

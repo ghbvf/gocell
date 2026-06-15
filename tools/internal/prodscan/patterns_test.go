@@ -3,6 +3,7 @@ package prodscan
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -65,6 +66,129 @@ func TestPatternsSkipsMultiMemberSatelliteParents(t *testing.T) {
 			t.Errorf("Patterns must skip %q (satellite parent / module root deferred to #1590); got %v", skipped, Patterns(root))
 		}
 	}
+}
+
+// TestPatternsWithSatellites pins #2136: PatternsWithSatellites is the duration
+// gates' opt-in to satellite coverage — it widens PatternsExtended with EXACTLY the
+// multi-member satellite parent prefixes (cmd/adapters/examples) that Patterns
+// prunes. Anti-vacuity: in a real multi-member workspace the increment must be
+// NON-EMPTY (and those prefixes must be ABSENT from PatternsExtended, proving the
+// widening is real, not already present); in a single-module fixture the increment
+// must be EMPTY (== PatternsExtended).
+func TestPatternsWithSatellites(t *testing.T) {
+	t.Run("real workspace adds satellite parents", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"framework/kernel/k.go":    "package kernel\n",
+			"cmd/gocell/go.mod":        "module x/cmd/gocell\n",
+			"cmd/gocell/main.go":       "package main\n",
+			"cmd/corebundle/go.mod":    "module x/cmd/corebundle\n",
+			"cmd/corebundle/main.go":   "package main\n",
+			"adapters/postgres/go.mod": "module x/adapters/postgres\n",
+			"adapters/postgres/pg.go":  "package postgres\n",
+			"examples/iot/go.mod":      "module x/examples/iot\n",
+			"examples/iot/main.go":     "package main\n",
+		})
+		base := map[string]bool{}
+		for _, p := range PatternsExtended(root) {
+			base[p] = true
+		}
+		got := map[string]bool{}
+		for _, p := range PatternsWithSatellites(root) {
+			got[p] = true
+		}
+		for _, sat := range []string{"./cmd/...", "./adapters/...", "./examples/..."} {
+			if base[sat] {
+				t.Fatalf("PatternsExtended unexpectedly contains %q; the satellite increment is vacuous", sat)
+			}
+			if !got[sat] {
+				t.Errorf("PatternsWithSatellites must add %q; got %v", sat, PatternsWithSatellites(root))
+			}
+		}
+		for p := range base {
+			if !got[p] {
+				t.Errorf("PatternsWithSatellites dropped base pattern %q (must be a superset of PatternsExtended)", p)
+			}
+		}
+		if len(PatternsWithSatellites(root)) <= len(PatternsExtended(root)) {
+			t.Errorf("PatternsWithSatellites must strictly widen PatternsExtended in a multi-member workspace; "+
+				"ext=%v full=%v", PatternsExtended(root), PatternsWithSatellites(root))
+		}
+	})
+
+	t.Run("single-module fixture adds nothing", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"go.mod":      "module x\n",
+			"cmd/main.go": "package main\n",
+			"pkg/util.go": "package pkg\n",
+		})
+		ext := PatternsExtended(root)
+		full := PatternsWithSatellites(root)
+		// Content equality, not just length: a regression that dropped a base
+		// pattern while adding a spurious one would keep the length equal but
+		// must still fail here.
+		if !slices.Equal(ext, full) {
+			t.Errorf("single-module fixture: PatternsWithSatellites must equal PatternsExtended "+
+				"(no nested go.mod → empty satellite increment); ext=%v full=%v", ext, full)
+		}
+	})
+}
+
+// TestSatelliteParentPatterns covers the single-sourced satellite increment (#2147)
+// that both PatternsWithSatellites and the OBS-01 scan compose onto their base.
+func TestSatelliteParentPatterns(t *testing.T) {
+	t.Run("real workspace yields exactly the multi-member parents", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"framework/kernel/k.go":    "package kernel\n",
+			"cmd/gocell/go.mod":        "module x/cmd/gocell\n",
+			"cmd/gocell/main.go":       "package main\n",
+			"adapters/postgres/go.mod": "module x/adapters/postgres\n",
+			"adapters/postgres/pg.go":  "package postgres\n",
+			"examples/iot/go.mod":      "module x/examples/iot\n",
+			"examples/iot/main.go":     "package main\n",
+			// cellmodules is a plain module root (own go.mod, no nested member) — it
+			// is NOT a satellite parent and must be excluded by !IsModuleRoot.
+			"cellmodules/go.mod": "module x/cellmodules\n",
+			"cellmodules/m.go":   "package cellmodules\n",
+			// tests/ + tools/ are PatternsExtended-only scope, never satellites.
+			"tests/e2e/e.go": "package e2e\n",
+			"tools/t/t.go":   "package t\n",
+		})
+		got := SatelliteParentPatterns(root)
+		gotSet := map[string]bool{}
+		for _, p := range got {
+			gotSet[p] = true
+		}
+		for _, want := range []string{"./cmd/...", "./adapters/...", "./examples/..."} {
+			if !gotSet[want] {
+				t.Errorf("SatelliteParentPatterns missing %q; got %v", want, got)
+			}
+		}
+		if len(got) != 3 {
+			t.Errorf("SatelliteParentPatterns = %v, want exactly the 3 multi-member parents "+
+				"(no framework/cellmodules/tests/tools)", got)
+		}
+		// OBS-01 composition = Patterns + increment, and must NOT pull in tests/ or
+		// tools/ (PatternsExtended scope) — the split is by base, not loader capability.
+		obs01 := map[string]bool{}
+		for _, p := range append(Patterns(root), SatelliteParentPatterns(root)...) {
+			obs01[p] = true
+		}
+		for _, forbidden := range []string{"./tests/...", "./tools/..."} {
+			if obs01[forbidden] {
+				t.Errorf("OBS-01 composition (Patterns + satellites) must exclude %q", forbidden)
+			}
+		}
+	})
+
+	t.Run("single-module fixture yields nothing", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"go.mod":      "module x\n",
+			"cmd/main.go": "package main\n",
+		})
+		if got := SatelliteParentPatterns(root); len(got) != 0 {
+			t.Errorf("SatelliteParentPatterns on single-module fixture = %v, want empty", got)
+		}
+	})
 }
 
 // TestPatternsKeepsSingleModuleFixtureDirs proves the prune is real-workspace-only:

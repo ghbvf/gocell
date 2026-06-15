@@ -100,9 +100,11 @@ check there would always return "superuser" in development and CI environments, 
 a permanent red /readyz for any developer who hasn't configured dual-role locally.
 
 The serving-pool probe must execute under the **serving pool** connection
-(`GOCELL_CONFIGCORE_DATABASE_URL`), which uses the restricted role in dual-role
-deployments. This is why the probe is registered in `adapters/postgres` for the
-serving pool specifically, not folded into the shared admin pool health check.
+(per-cell DSNs `GOCELL_CONFIGCORE_DATABASE_URL` / `GOCELL_AUDITCORE_DATABASE_URL` /
+`GOCELL_ACCESSCORE_DATABASE_URL`; deduped to one pool by `percellpg.Resolve`, #1964),
+which uses the restricted role in dual-role deployments. This is why the probe is
+registered in `adapters/postgres` for the serving pool specifically, not folded into
+the shared admin pool health check.
 
 ---
 
@@ -122,8 +124,10 @@ The probe itself is **Medium**:
 2. **Integration tests** assert `rolbypassrls=false` on the test DB role fixture,
    ensuring the e2e harness always runs under the correct privilege model.
 3. **Compose wiring**: `docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml`
-   configure `GOCELL_CONFIGCORE_DATABASE_URL` to use `gocell_app`, so the probe
-   would immediately fail in CI if the restricted role were not created or misconfigured.
+   configure all three per-cell DSNs (`GOCELL_CONFIGCORE_DATABASE_URL`,
+   `GOCELL_AUDITCORE_DATABASE_URL`, `GOCELL_ACCESSCORE_DATABASE_URL`) to use `gocell_app`,
+   so the probe would immediately fail in CI if the restricted role were not created or
+   misconfigured.
 
 ---
 
@@ -138,7 +142,8 @@ The probe itself is **Medium**:
 - **One-time volume reset**: existing local environments have a `pgdata` volume
   created without the restricted role. Run `make local-down` (which passes `-v` to
   remove volumes) then `make local-up`. The initdb script runs on the fresh data dir.
-- **Superuser dev /readyz**: if `GOCELL_CONFIGCORE_DATABASE_URL` still points to the
+- **Superuser dev /readyz**: if any per-cell DSN (`GOCELL_CONFIGCORE_DATABASE_URL`,
+  `GOCELL_AUDITCORE_DATABASE_URL`, `GOCELL_ACCESSCORE_DATABASE_URL`) still points to the
   admin role `gocell`, the new probe turns red. This is the intended behaviour.
 
 ### Production deployment

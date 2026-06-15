@@ -48,7 +48,14 @@ func newGeneratedVerifyAppFixture(t *testing.T) string {
 	t.Helper()
 
 	root := t.TempDir()
-	writeAppFixtureFile(t, root, "go.mod", []byte("module example.com/generatedfixture\n\ngo 1.25.0\n"))
+	// issue #2126: the generated assembly main.go imports the gocell framework at its
+	// FIXED module path (github.com/ghbvf/gocell/framework/runtime/...), orthogonal to
+	// the consumer's own module. Provide that module via require + replace to a local
+	// stub module (gocellframework/) — mirroring how a real external consumer wires the
+	// framework dependency. (Pre-fix the template emitted {{.Module}}/framework/... so a
+	// stub under the fixture's own module tree sufficed; that masked the bug.)
+	writeAppFixtureFile(t, root, "go.mod", []byte("module example.com/generatedfixture\n\ngo 1.25.0\n\nrequire github.com/ghbvf/gocell/framework v0.0.0\n\nreplace github.com/ghbvf/gocell/framework => ./gocellframework\n"))
+	writeAppFixtureFile(t, root, "gocellframework/go.mod", []byte("module github.com/ghbvf/gocell/framework\n\ngo 1.25.0\n"))
 	writeAppFixtureFile(t, root, "kernel/depgraph/depgraph.go", []byte(`package depgraph
 
 type Graph struct {
@@ -96,7 +103,7 @@ verify:
   smoke: []
 goStructName: Placeholder
 `))
-	writeAppFixtureFile(t, root, "framework/runtime/shutdown/shutdown.go", []byte(`package shutdown
+	writeAppFixtureFile(t, root, "gocellframework/runtime/shutdown/shutdown.go", []byte(`package shutdown
 
 import "context"
 
@@ -104,11 +111,12 @@ func NotifyContext(parent context.Context) (context.Context, context.CancelFunc)
 	return context.WithCancel(parent)
 }
 `))
-	// The assembly main.go template imports {{.Module}}/framework/runtime/observability/logging
-	// for the sink-side redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated
-	// segment). Provide a minimal stub so the generated main compiles in the
-	// synthetic fixture module.
-	writeAppFixtureFile(t, root, "framework/runtime/observability/logging/logging.go", []byte(`package logging
+	// The assembly main.go template imports
+	// github.com/ghbvf/gocell/framework/runtime/observability/logging for the sink-side
+	// redaction seal (SLOG-HANDLER-SEALED-FUNNEL-01 A3 generated segment). Provide a
+	// minimal stub under the replaced framework stub module so the generated main
+	// compiles in the synthetic fixture (issue #2126).
+	writeAppFixtureFile(t, root, "gocellframework/runtime/observability/logging/logging.go", []byte(`package logging
 
 import (
 	"log/slog"

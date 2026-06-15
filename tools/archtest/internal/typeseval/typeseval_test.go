@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
-
-	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 // TestLoadMode_NoNeedDeps guards the #1499 RSS optimization: the shared
@@ -189,41 +187,6 @@ func cacheKey(root string, tests bool, patterns ...string) string {
 		out += p
 	}
 	return out
-}
-
-func TestSplitWorkspacePattern_RoutesKnownSatellite(t *testing.T) {
-	mods := []workspace.Module{
-		{Dir: ".", ImportPath: "github.com/ghbvf/gocell"},
-		{Dir: "tools", ImportPath: "github.com/ghbvf/gocell/tools"},
-	}
-
-	dir, pattern := splitWorkspacePattern(mods, "./tools/archtest/internal/typeseval/...")
-	assert.Equal(t, "tools", dir)
-	assert.Equal(t, "./archtest/internal/typeseval/...", pattern)
-
-	dir, pattern = splitWorkspacePattern(mods, "./framework/pkg/...")
-	assert.Equal(t, ".", dir)
-	assert.Equal(t, "./framework/pkg/...", pattern)
-
-	dir, pattern = splitWorkspacePattern(mods, "github.com/ghbvf/gocell/tools/archtest/internal/scanner")
-	assert.Equal(t, "tools", dir)
-	assert.Equal(t, "github.com/ghbvf/gocell/tools/archtest/internal/scanner", pattern)
-}
-
-func TestSplitWorkspacePattern_PrefersLongestSatellitePrefix(t *testing.T) {
-	mods := []workspace.Module{
-		{Dir: ".", ImportPath: "github.com/ghbvf/gocell"},
-		{Dir: "tools", ImportPath: "github.com/ghbvf/gocell/tools"},
-		{Dir: "tools/nested", ImportPath: "github.com/ghbvf/gocell/tools/nested"},
-	}
-
-	dir, pattern := splitWorkspacePattern(mods, "./tools/nested/pkg/...")
-	assert.Equal(t, "tools/nested", dir)
-	assert.Equal(t, "./pkg/...", pattern)
-
-	dir, pattern = splitWorkspacePattern(mods, "github.com/ghbvf/gocell/tools/nested/pkg")
-	assert.Equal(t, "tools/nested", dir)
-	assert.Equal(t, "github.com/ghbvf/gocell/tools/nested/pkg", pattern)
 }
 
 func TestLoadPackages_HappyPath(t *testing.T) {

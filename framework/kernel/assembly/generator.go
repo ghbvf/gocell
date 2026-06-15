@@ -51,9 +51,11 @@ func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Ge
 	}
 }
 
-// entrypointContext is the template context for main.go.tpl.
+// entrypointContext is the template context for main.go.tpl. The gocell framework
+// runtime imports are hardcoded in the template (the framework lives at the fixed
+// module path github.com/ghbvf/gocell/framework, orthogonal to the consumer module),
+// so no Module field is threaded here (issue #2126).
 type entrypointContext struct {
-	Module     string
 	AssemblyID string
 	HelperName string
 	Cells      []string
@@ -96,7 +98,6 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	}
 
 	ctx := entrypointContext{
-		Module:     g.module,
 		AssemblyID: assemblyID,
 		HelperName: helperName,
 		Cells:      metadata.CellIDs(asm.Cells),
@@ -146,6 +147,12 @@ type modulesCompositionContext struct {
 	// metadata.ValidateTopologyStructure before codegen proceeds — illegal topology
 	// (mutual exclusion, non-exhaustive, bad endpoint) fails generation closed.
 	DeploymentTopology deploymentTopologyTemplateData
+	// PostgresCells is the sorted list of cell IDs whose cell.yaml declares
+	// `requires: [postgres]`. Single-sourced from cell.yaml metadata; consumed by
+	// the composition root's per-cell PG resolution (cellmodules/percellpg.Resolve).
+	// The template ALWAYS emits generatedPostgresCells() (nil when empty) so the
+	// composition root can call it unconditionally (#1964 per-cell infra seam).
+	PostgresCells []string
 }
 
 // deploymentTopologyTemplateData is the flattened template-serialisable form of
@@ -549,6 +556,7 @@ func (g *Generator) generateModulesGenComposition(
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
 	topoData := buildDeploymentTopologyData(asm.Topology)
+	postgresCells := g.collectPostgresCells(asm.Cells)
 	ctx := modulesCompositionContext{
 		AssemblyID:             assemblyID,
 		SourcePath:             asm.File,
@@ -557,8 +565,32 @@ func (g *Generator) generateModulesGenComposition(
 		Capabilities:           capConsts,
 		ProjectionSourceTopics: projTopics,
 		DeploymentTopology:     topoData,
+		PostgresCells:          postgresCells,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
+}
+
+// collectPostgresCells returns the sorted list of cell IDs in the assembly whose
+// cell.yaml `requires` includes "postgres". Unknown cell IDs are silently skipped
+// (unknown-cell errors are already raised by collectCapabilityConsts). Dedup is
+// not needed because assembly cells are unique by ref.ID (ensured by the YAML
+// parser), but we iterate cellRefs (not the capSet) to preserve the full ID set.
+func (g *Generator) collectPostgresCells(cellRefs []metadata.AssemblyCellRef) []string {
+	var cells []string
+	for _, ref := range cellRefs {
+		cm := g.cells.Get(ref.ID)
+		if cm == nil {
+			continue // unknown cells: error raised by collectCapabilityConsts upstream
+		}
+		for _, req := range cm.Requires {
+			if req == "postgres" {
+				cells = append(cells, ref.ID)
+				break
+			}
+		}
+	}
+	sort.Strings(cells)
+	return cells
 }
 
 // buildDeploymentTopologyData translates the metadata.TopologyMeta into the

@@ -74,7 +74,7 @@ func scanOutboxSubscriberSettlement(t *testing.T) (implPkgSet, notifyPkgSet map[
 	// adapters/rabbitmq + adapters/mqtt would be invisible to this scan — leaving
 	// the rule vacuous for everything but the in-process eventbus. Hardcode the
 	// satellite parent prefix (the sanctioned opt-in: the typed loader expands it
-	// via workspace.ExpandParentPrefix, kept honest by SATELLITE-PARENT-PREFIX-SCAN-01;
+	// via packagesload.LoadWorkspace, kept honest by SATELLITE-PARENT-PREFIX-SCAN-01;
 	// mirrors health_aggregation_test.go) so all three terminal packages are scanned.
 	ifacePatterns := append([]string{"./framework/kernel/outbox/...", "./adapters/..."}, prodPatterns...)
 

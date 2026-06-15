@@ -199,6 +199,11 @@ func TestContract_PolicyDeleteV1_Serve(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "http.policy.delete.v1")
 	c.MustRejectPathParam(t, "id", "") // violates minLength: 1
 
+	// Per-param reject coverage (CONTRACT-PATH-QUERY-COVERAGE-01).
+	c.ValidateQueryParam(t, "expectedVersion", "1")
+	c.MustRejectQueryParam(t, "expectedVersion", "0")      // violates minimum: 1
+	c.MustRejectQueryParam(t, "expectedVersion", "100000") // violates maximum: 99999
+
 	h := setupPolicyHandler(t)
 	id := postCreatePolicy(t, h, "DelMe")
 

@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +24,7 @@ import (
 	kout "github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
@@ -323,12 +323,12 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
-		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
+		outbox.RelayConfig{PollInterval: testtime.FastPoll}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 
@@ -364,12 +364,12 @@ func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
 	store.Seed(outbox.ClaimedEntry{Entry: invalidEntry})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
-		outbox.RelayConfig{PollInterval: 5 * time.Millisecond}.WithDefaults())
+		outbox.RelayConfig{PollInterval: testtime.FastPoll}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
 		enqueue.DispatchID: enqueue.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	go func() { _ = relay.Start(ctx) }()
 

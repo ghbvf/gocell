@@ -37,7 +37,7 @@ func NewMemProjectionEventSource() *MemProjectionEventSource {
 // This is the test/demo seed surface — a production source is read-only (the sanctioned
 // same-transaction writer is the only append path; ADR §6 I2). Returning the carrier lets
 // conformance seeds hand the exact delivered carrier to Cursor.Position.
-func (m *MemProjectionEventSource) Append(entry outbox.Entry) *JournalEvent {
+func (m *MemProjectionEventSource) Append(entry ProjectionEvent) *JournalEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	seq := int64(len(m.events) + 1) // 1-based dense index

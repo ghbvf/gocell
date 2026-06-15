@@ -329,6 +329,7 @@ func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 			Binary:         a.Build.Binary,
 			DeployTemplate: a.Build.DeployTemplate,
 		},
+		Topology: mapAssemblyTopology(a.Topology),
 	}
 
 	var rels []Relation
@@ -350,6 +351,25 @@ func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 		Spec:      spec,
 		Relations: rels,
 	}
+}
+
+// mapAssemblyTopology copies metadata.TopologyMeta onto the wire DTO field-by-field,
+// mirroring the AssemblyMeta.Build → AssemblySpecBuild mapping above. A zero TopologyMeta
+// (no colocated and no remote cells) yields nil so the optional topology field is omitted
+// from the wire entirely (see AssemblySpecTopology godoc on why a value struct + omitempty
+// would still emit `{}`).
+func mapAssemblyTopology(t metadata.TopologyMeta) *AssemblySpecTopology {
+	if len(t.Colocated) == 0 && len(t.Remote) == 0 {
+		return nil
+	}
+	out := &AssemblySpecTopology{}
+	if len(t.Colocated) > 0 {
+		out.Colocated = append([]string(nil), t.Colocated...)
+	}
+	for _, r := range t.Remote {
+		out.Remote = append(out.Remote, AssemblySpecTopologyRemote{CellID: r.CellID, Endpoint: r.Endpoint})
+	}
+	return out
 }
 
 // buildActorEntity converts ActorMeta to an Entity.

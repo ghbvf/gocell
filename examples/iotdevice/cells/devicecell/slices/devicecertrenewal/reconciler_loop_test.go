@@ -15,16 +15,20 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
 )
+
+// certRenewalLoopTestCertWindow is the cert expiry window seeded in loop tests.
+const certRenewalLoopTestCertWindow = 24 * time.Hour
 
 // stopLoop stops a reconcile.Loop and fails the test if it does not stop within
 // the budget. Must be called BEFORE goleak.VerifyNone so all loop goroutines are
 // joined before the leak check runs.
 func stopLoop(t *testing.T, loop *reconcile.Loop) {
 	t.Helper()
-	sc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	sc, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancel()
 	require.NoError(t, loop.Stop(sc), "loop must stop cleanly within the budget")
 }
@@ -44,7 +48,7 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 	leakOpt := goleak.IgnoreCurrent()
 	ctx := context.Background()
 	repo := mem.NewDeviceRepository()
-	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(24*time.Hour))
+	seedCert(t, ctx, repo, "dev-near", certTestBase.Add(certRenewalLoopTestCertWindow))
 
 	rec := outboxtest.NewRecorder()
 	r := newTestReconciler(t, clockmock.New(certTestBase), repo, rec)
@@ -65,7 +69,7 @@ func TestReconciler_EmitsSystemTenantlessPrincipalViaLoop(t *testing.T) {
 	// so one Loop dispatch yields exactly one entry.
 	testwait.External(t, "cert-renewal-loop-emit",
 		func() bool { return len(rec.Entries()) == 1 },
-		3*time.Second, 5*time.Millisecond,
+		testtime.EventuallyDefault, testtime.FastPoll,
 		"the Loop-driven reconcile must emit exactly one rotate-cert command")
 
 	// Stop the loop before goleak runs — loop goroutines must be joined first.
@@ -135,7 +139,7 @@ func TestReconciler_OneTickEmitsAllNearExpiry(t *testing.T) {
 
 	testwait.External(t, "cert-renewal-full-sweep",
 		func() bool { return len(rec.Entries()) == totalCerts },
-		3*time.Second, 10*time.Millisecond,
+		testtime.EventuallyDefault, testtime.D10ms,
 		"all %d near-expiry certs must be emitted in a single tick (no batch boundary)", totalCerts)
 
 	// Stop the loop before goleak runs — loop goroutines must be joined first.

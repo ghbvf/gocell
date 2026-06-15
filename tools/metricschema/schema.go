@@ -234,23 +234,52 @@ func Marshal(schema *Schema) ([]byte, error) {
 	return append([]byte(header), body...), nil
 }
 
+// loadPackages loads the OBS-01 production scan patterns through the shared
+// satellite-aware loader packagesload.LoadWorkspace, which expands the multi-member
+// satellite parent-prefixes obs01ProductionPatterns now emits ("./cmd/...",
+// "./adapters/...", "./examples/...") to their go.work members so OBS-01 scans
+// satellite production code (#2147). It keeps only this project's packages
+// (packageHasProjectFile), deduped by import path (preferring the syntax-rich copy),
+// and fails closed on any load error.
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(ctx, root, false, packagesload.ModeModule, patterns...)
-}
-
-func loadReachablePackages(ctx context.Context, root string, mode packagesload.Mode, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(ctx, root, true, mode, patterns...)
-}
-
-func loadPackagesWithMode(
-	ctx context.Context, root string, includeDeps bool, mode packagesload.Mode, patterns ...string,
-) ([]*packages.Package, error) {
-	if !includeDeps && len(patterns) > 1 {
-		return loadPatternScopedPackages(ctx, root, patterns...)
+	cfg := packages.Config{Context: ctx, Mode: packageLoadMode(false)}
+	pkgs, loadErrs, err := packagesload.LoadWorkspace(root, cfg, patterns...)
+	if err != nil {
+		return nil, err
 	}
+	if len(loadErrs) > 0 {
+		return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(loadErrs), loadErrs[0])
+	}
+	byPath := map[string]*packages.Package{}
+	var paths []string
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		if !packageHasProjectFile(root, p) {
+			return
+		}
+		if _, ok := byPath[p.PkgPath]; !ok {
+			paths = append(paths, p.PkgPath)
+		}
+		if existing := byPath[p.PkgPath]; existing == nil || len(existing.Syntax) == 0 {
+			byPath[p.PkgPath] = p
+		}
+	})
+	sort.Strings(paths)
+	out := make([]*packages.Package, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, byPath[path])
+	}
+	return out, nil
+}
+
+// loadReachablePackages loads the reachable closure of a single assembly entrypoint
+// for Build's metric-schema generation. This is the cross-module REACHABILITY path
+// (NeedDeps, whole-graph ModeWorkspace when the entrypoint lives in a satellite
+// module — see Build/containingModuleDir), distinct from loadPackages' per-member
+// satellite SCAN grouping; it deliberately does NOT route through LoadWorkspace.
+func loadReachablePackages(ctx context.Context, root string, mode packagesload.Mode, patterns ...string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
 		Context: ctx,
-		Mode:    packageLoadMode(includeDeps),
+		Mode:    packageLoadMode(true),
 		Dir:     root,
 	}
 	// mode is ModeModule (GOWORK=off, go.work-agnostic) for root-module assemblies
@@ -271,65 +300,6 @@ func loadPackagesWithMode(
 		return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(loadErrs), loadErrs[0])
 	}
 	return out, nil
-}
-
-// patternLoadMode returns the Mode to use for a single go-packages pattern
-// rooted at root. Post-#1565 the repo root has no go.mod; patterns that address
-// a sub-module with its own go.mod (e.g. "./framework/kernel/...") must use
-// ModeWorkspace so the framework workspace member is visible. Patterns that do
-// NOT live under a sub-module root (e.g. "./cmd/...", "./adapters/...") still
-// use ModeModule: under ModeWorkspace they would fail because "cmd" is not a
-// workspace member, whereas ModeModule silently skips them (match-zero).
-func patternLoadMode(root, pattern string) packagesload.Mode {
-	// Strip the leading "./" and trailing "/..." to get the directory segment.
-	rel := strings.TrimPrefix(pattern, "./")
-	rel = strings.TrimSuffix(rel, "/...")
-	// Use only the top-level directory component to find the module root.
-	if idx := strings.IndexByte(rel, '/'); idx >= 0 {
-		rel = rel[:idx]
-	}
-	if rel == "" || rel == "." {
-		return packagesload.ModeModule
-	}
-	if prodscan.IsModuleRoot(filepath.Join(root, rel)) {
-		return packagesload.ModeWorkspace
-	}
-	return packagesload.ModeModule
-}
-
-func loadPatternScopedPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
-	byPath := map[string]*packages.Package{}
-	var paths []string
-	for _, pattern := range patterns {
-		mode := patternLoadMode(root, pattern)
-		pkgs, err := loadPackagesWithMode(ctx, root, false, mode, pattern)
-		if err != nil {
-			return nil, err
-		}
-		paths = mergeLoadedPackages(byPath, paths, pkgs)
-	}
-	sort.Strings(paths)
-	out := make([]*packages.Package, 0, len(paths))
-	for _, path := range paths {
-		out = append(out, byPath[path])
-	}
-	return out, nil
-}
-
-func mergeLoadedPackages(
-	byPath map[string]*packages.Package,
-	paths []string,
-	pkgs []*packages.Package,
-) []string {
-	for _, p := range pkgs {
-		if _, ok := byPath[p.PkgPath]; !ok {
-			paths = append(paths, p.PkgPath)
-		}
-		if existing := byPath[p.PkgPath]; existing == nil || len(existing.Syntax) == 0 {
-			byPath[p.PkgPath] = p
-		}
-	}
-	return paths
 }
 
 func packageLoadMode(includeDeps bool) packages.LoadMode {
@@ -2000,8 +1970,14 @@ func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ..
 	return diagnostics, nil
 }
 
+// obs01ProductionPatterns is the OBS-01 production-scan source-of-record: the
+// satellite-free base (prodscan.Patterns) plus the multi-member satellite parent
+// prefixes (cmd/adapters/examples), which the shared satellite-aware loader
+// (loadPackages → packagesload.LoadWorkspace) expands to their go.work members so
+// satellite production code is scanned for metric-PII leaks (#2147). It does NOT use
+// PatternsExtended — OBS-01 never scanned tests/ or tools/.
 func obs01ProductionPatterns(projectRoot string) []string {
-	return prodscan.Patterns(projectRoot)
+	return append(prodscan.Patterns(projectRoot), prodscan.SatelliteParentPatterns(projectRoot)...)
 }
 
 func dedupeDiagnostics(in []Diagnostic) []Diagnostic {
