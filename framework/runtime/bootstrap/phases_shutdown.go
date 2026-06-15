@@ -146,9 +146,18 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 //	engageStopProcedure — LIFO + StopAndWait.
 //
 // ref: docs/architecture/202605101730-adr-shutdown-budget-decouple.md
+// freshShutdownCtx returns a root-parented (context.Background) timeout context
+// for one shutdown stage's budget. Parenting on Background — never on another
+// stage's ctx (e.g. drainCtx) — is the budget-isolation invariant: a blocked or
+// slow upstream stage cannot bleed its budget into a later stage. Locked by
+// archtest INVARIANT PHASE10-TEARCTX-PARENT-CHAIN-GUARD-01.
+func (b *Bootstrap) freshShutdownCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), b.shutdownTimeout)
+}
+
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
 	// stages 1+2: drainCtx — readiness flip + HTTP drain share one budget.
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	drainCtx, drainCancel := b.freshShutdownCtx()
 	defer drainCancel()
 
 	m := b.shutdownMet
@@ -170,7 +179,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// A blocked HTTP drain cannot starve LIFO teardown of its budget; this
 	// is the budget-isolation invariant pinned by
 	// TestPhase10_BudgetIsolation_LIFOTeardownGetsFreshCtx.
-	tearCtx, tearCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	tearCtx, tearCancel := b.freshShutdownCtx()
 	defer tearCancel()
 	m.RecordPhaseEntry(tearCtx, metricsmiddleware.ShutdownPhaseLIFOTeardown)
 	tearStart := b.clock.Now()
