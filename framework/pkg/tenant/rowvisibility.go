@@ -20,14 +20,27 @@ import (
 //
 // # Sealed construction
 //
-// RowVisibility's fields are unexported and the only constructor is
-// NewRowVisibility, which validates the obligation. A populated RowVisibility{…}
-// literal is not expressible outside this package, so a caller cannot FORGE a
-// RowScopeAll (cross-tenant) obligation by struct literal — mirroring the
+// RowVisibility's fields are unexported, so a populated RowVisibility{…} literal
+// is not expressible outside this package — a caller cannot FORGE an obligation
+// (in particular a RowScopeAll cross-tenant one) by struct literal, mirroring the
 // errcode.PublicDetail / outbox.Entry sealed-construction pattern. Combined with
 // RowVisibility being a mandatory typed positional parameter on the repo
 // interfaces (ROWSCOPE-REPO-PARAM-FUNNEL-01), "forget the obligation" and "forge
 // the obligation" are both compile-time impossible.
+//
+// Three in-package constructors mint a RowVisibility — all validated, none
+// forgeable from outside:
+//   - NewRowVisibility(scope, subject) — the self / device / tenant constructor.
+//     It REJECTS RowScopeAll (see next section).
+//   - SystemRowVisibility() — a named alias for the tenant-wide (no owner
+//     predicate) obligation used by trusted SYSTEM reads. It is NOT a privilege
+//     escalation (RowScopeTenant is already mintable via NewRowVisibility) but it
+//     IS a footgun on subject-facing paths, so its production callsites are pinned
+//     by archtest SYSTEM-ROWVISIBILITY-CALLSITE-01: subject-self / device handlers
+//     must derive the obligation from the principal, never call it. See the
+//     SystemRowVisibility doc below.
+//   - NewCrossTenantVisibility().Visibility() — the sealed RowScopeAll
+//     (cross-tenant) funnel, audited at its sole super-admin caller (next section).
 //
 // # RowScopeAll is sealed behind CrossTenantVisibility (#1760)
 //

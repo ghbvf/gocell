@@ -35,6 +35,14 @@
 //   - runtime/audit/ledger/storetest/suite.go — the ledger.Store conformance
 //     suite, a testing-helper package (every callsite takes testing.TB) that
 //     mints an All obligation to exercise the serving store's fail-closed path.
+//   - corecells/accesscore/internal/ports/conformance/conformance.go — the
+//     accesscore UserRepository/RoleRepository conformance suite, a testing-helper
+//     package (every callsite takes testing.TB; the file is the non-_test.go home
+//     of RunUserRepoConformance/RunRoleRepoConformance so external Cell repos can
+//     compile it) that mints an All obligation to exercise the repos' RowScopeAll
+//     fail-closed path (ports.RowScopeAllUnsupportedError → 501, #1709). Same
+//     testing-helper rationale as the audit storetest suite above; it has no
+//     end-user principal so there is no cross-tenant access to audit.
 //
 // _test.go files and the archtest fixture are also exempt: the Production scan
 // excludes _test.go (Tests:false) and the build-tagged fixture.
@@ -100,8 +108,9 @@ import (
 // allowed to call tenant.NewCrossTenantVisibility (the sole RowScopeAll
 // producer). See the file godoc.
 var rowScopeAllProducerAllowlist = map[string]struct{}{
-	"runtime/auth/rowscope.go":                {}, // (*Principal).CrossTenantVisibility — slog.Error-audits first
-	"runtime/audit/ledger/storetest/suite.go": {}, // ledger.Store conformance suite — testing-helper pkg
+	"runtime/auth/rowscope.go":                                       {}, // (*Principal).CrossTenantVisibility — slog.Error-audits first
+	"runtime/audit/ledger/storetest/suite.go":                        {}, // ledger.Store conformance suite — testing-helper pkg
+	"corecells/accesscore/internal/ports/conformance/conformance.go": {}, // accesscore repo conformance suite — testing-helper pkg (#1709)
 }
 
 // rowScopeAllAuditFixturePkg is the build-tagged RED fixture package exercised

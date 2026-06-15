@@ -960,6 +960,16 @@ linters:
       - path: ^corecells/accesscore/slices/rbacassign/service\.go
         linters:
           - dupl
+      # {user,policy,role}_repo_conformance_enrollment.go: one importable
+      # CellRule body per ports repo interface (UserRepository / PolicyRepository
+      # / RoleRepository). They are intentional sibling mirror implementations —
+      # the non-test home pattern (USERREPO/POLICYREPO/ROLEREPO-CONFORMANCE-
+      # ENROLLMENT-01) keeps each detector compilable by an external Cell repo
+      # and single-source with its own _test.go. The structural similarity is by
+      # design; dupl flags it without adding signal.
+      - path: ^tools/archtest/(user|policy|role)_repo_conformance_enrollment\.go
+        linters:
+          - dupl
       # generate_contract.go / verify_codegen_contract.go are intentional
       # mirror implementations of generate_cell.go / verify_codegen_cell.go
       # (K#06 contract DTO codegen, mirroring K#04 cell codegen). The structural

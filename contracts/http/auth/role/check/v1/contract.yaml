@@ -34,5 +34,8 @@ endpoints:
       403:
         description: "Forbidden — caller lacks the role:read permission and is not the target user — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; the baseline also grants role:read to the admin and super-admin roles."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      501:
+        description: "Not Implemented — a super-admin's principal derives cross-tenant (RowScopeAll) row visibility, but accesscore has no cross-tenant read pool (unlike audit's gocell_audit_admin, #1810): its tables are served only by the app pool under FORCE RLS, so this read fail-closes unconditionally (ports.RowScopeAllUnsupportedError, #1709). Distinct from a negative membership result, which signals the user does not hold the role."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json
