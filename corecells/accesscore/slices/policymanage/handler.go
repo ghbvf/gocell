@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	policyCreate "github.com/ghbvf/gocell/generated/contracts/http/policy/create/v1"
@@ -81,7 +82,13 @@ func (a GetAdapter) Get(ctx context.Context, req *policyGet.Request) (policyGet.
 		}
 		return nil, err
 	}
-	return policyGet.Get200JSONResponse{Data: policyToGetResponseData(p)}, nil
+	// identity projection — masking obligation source becomes the ABAC Decision
+	// later; routes resource data through the column-masking funnel (FR-016).
+	data, err := projection.NewProjection(authz.IdentityFieldMask(), policyToGetResponseData(p).ToMap())
+	if err != nil {
+		return nil, err
+	}
+	return policyGet.Get200JSONResponse{Data: data}, nil
 }
 
 func mapGetError(ce *errcode.Error) policyGet.GetResponseObject {
@@ -191,12 +198,18 @@ func (a ListAdapter) List(ctx context.Context, req *policyList.Request) (policyL
 		return nil, err
 	}
 
-	items := make([]*policyList.ResponseDataItem, 0, len(result.Items))
+	rows := make([]map[string]any, 0, len(result.Items))
 	for _, p := range result.Items {
-		items = append(items, policyToListResponseDataItem(p))
+		rows = append(rows, policyToListResponseDataItem(p).ToMap())
+	}
+	// identity projection — masking obligation source becomes the ABAC Decision
+	// later; routes resource data through the column-masking funnel (FR-016).
+	data, err := projection.NewProjectionList(authz.IdentityFieldMask(), rows)
+	if err != nil {
+		return nil, err
 	}
 	return policyList.List200JSONResponse{
-		Data:       items,
+		Data:       data,
 		NextCursor: result.NextCursor,
 		HasMore:    result.HasMore,
 	}, nil

@@ -853,8 +853,14 @@ func validateProjectionContractKind(cellID, sliceID string, cu metadata.Contract
 	switch cu.ProjectionSource {
 	case projectionSourceSagaJournal:
 		if kind != "saga" {
-			return projectionKindMismatchErr(cellID, sliceID, cu.Contract,
-				"cellgen build: saga-journal projection must consume a saga contract", kind)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build: saga-journal projection must consume a saga contract",
+				errcode.WithDetails(
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", sliceID),
+					errcode.PublicString("contract", cu.Contract),
+					errcode.PublicString("kind", kind),
+				))
 		}
 		return nil
 	case projectionSourceOutbox, "":
@@ -862,8 +868,14 @@ func validateProjectionContractKind(cellID, sliceID string, cu metadata.Contract
 		// "" == outbox); both demand a kind=event contract. The parser already
 		// requires a non-empty value, so "" only reaches here on a non-parser path.
 		if kind != "event" {
-			return projectionKindMismatchErr(cellID, sliceID, cu.Contract,
-				"cellgen build: projection consumes non-event contract", kind)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build: projection consumes non-event contract",
+				errcode.WithDetails(
+					errcode.PublicString("cellID", cellID),
+					errcode.PublicString("sliceID", sliceID),
+					errcode.PublicString("contract", cu.Contract),
+					errcode.PublicString("kind", kind),
+				))
 		}
 		return nil
 	default:
@@ -876,19 +888,6 @@ func validateProjectionContractKind(cellID, sliceID string, cu metadata.Contract
 				errcode.PublicString("projectionSource", cu.ProjectionSource),
 			))
 	}
-}
-
-// projectionKindMismatchErr builds the shared "projection source ↔ contract kind"
-// validation error (DRY: the two source branches differ only in message + the
-// mismatched kind).
-func projectionKindMismatchErr(cellID, sliceID, contract, msg, kind string) error {
-	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msg,
-		errcode.WithDetails(
-			errcode.PublicString("cellID", cellID),
-			errcode.PublicString("sliceID", sliceID),
-			errcode.PublicString("contract", contract),
-			errcode.PublicString("kind", kind),
-		))
 }
 
 // buildGrpcServicesFromSlices scans all slices belonging to cellID and
