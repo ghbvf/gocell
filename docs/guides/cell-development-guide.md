@@ -315,6 +315,44 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registrar) error {
 - Nesting `/internal/v1/*` routes inside a `Route` / `Group` / `With` sub-scope is forbidden — it triggers `chiRouterAdapter.guardNestedInternalRegistration` panic (the top-level Router is the sole entry point for internal/external mux splitting).
 - `/healthz` / `/readyz` / `/metrics` are only available on the health listener (`cell.HealthListener`); if no health listener is declared, bootstrap phase0 fails fast (since there is no fallback to primary and no opt-in escape hatch).
 
+### 6b. gRPC Per-Method Public Auth (Optional)
+
+A gRPC service is JWT-authed on every method by default (fail-closed). To expose a
+specific RPC without a token (e.g. a health probe), declare it in the gRPC contract —
+**not** by installing an auth option yourself. The `.proto` remains the single source
+of the method set; the contract overlay only **annotates** an existing method.
+
+```yaml
+# contract.yaml (kind: grpc)
+endpoints:
+  grpc:
+    codegen: true          # required whenever methods[] is present
+    methods:               # SPARSE: list only RPCs that need a non-default flag
+      - name: Check        # must match a proto method name (referential integrity is enforced)
+        public: true       # the only allowed value (const:true); an absent method stays authed
+```
+
+Declaration path (all derived, single-sourced — you write only the contract):
+
+1. contract `endpoints.grpc.methods[].public:true`
+2. → cellgen derives `GRPCServiceSpec.PublicMethods []string` (full `/{Service}/{Method}` names, byte-locked by the cellgen golden)
+3. → the runtime `ServiceRegistrar` aggregates them (`IsPublicMethod`)
+4. → the auth interceptor installs `WithPublicMethod(reg.IsPublicMethod)` for both the unary and stream chains (`authOptionsWithPublicMethods` in `chain.go` — the sole sanctioned installer)
+
+**Compared to HTTP `auth.public`**: an HTTP route declares public access per-route via
+the route field (`auth.Route{Public: true}`, §6). gRPC declares it per-method via the
+contract overlay because the proto — not the contract — owns the method set, so the
+overlay annotates rather than declares. Both are fail-closed: a method/route is authed
+unless explicitly marked public.
+
+**Do not** call `WithPublicMethod` or inject a public-method predicate through
+`Deps.AuthOptions` in your cell — production `WithPublicMethod` references are funnel-locked
+to `chain.go` (`GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01`); the contract overlay is the only
+authoring path, and a name absent from the proto fails the codegen referential-integrity
+funnel. ABAC `permission`/`resource`/`action` and `internalOnly` are **not** part of this
+overlay yet — only `public` is live (the rest are deferred to #2008). See ADR
+`docs/architecture/202605260000-adr-grpc-transport-adapter.md` §"Amendment #1675".
+
 ### 7. Register Event Subscriptions (Optional)
 
 The sole authoritative source for subscriptions is **`slice.yaml` `contractUsages[role=subscribe]`** — cellgen generates the `reg.Subscribe(...)` call into `cell_gen.go` from this declaration. Manually starting goroutines or calling `Subscriber.Subscribe` directly is forbidden; goroutine lifecycle, error convergence, and Setup/Ready phases are all managed by EventRouter.

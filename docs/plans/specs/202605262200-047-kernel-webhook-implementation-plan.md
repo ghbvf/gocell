@@ -491,7 +491,7 @@ make verify
 | 项 | 状态 | 载体 |
 |----|------|------|
 | 4 个 OTel metrics | ✅ | `kernel/webhook/metrics.go`：`webhook_deliveries_total{result,source}` / `webhook_delivery_duration_seconds{source}` / `webhook_signature_failures_total{source,reason}` / `webhook_idempotency_hits_total{source}`。收集器在 kernel（镜像 `kernel/reconcile`），`Dispatcher.Handle`（发端，status-aware）+ runtime `Receiver.ServeHTTP`（收端）记录；bootstrap `autoWireWebhookMetricsCollector` 经 `autoWireCachedCollector` funnel 单源接线 phase5+phase6 |
-| `WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01` archtest | ✅ Medium | 双 sealed 枚举（`webhookDeliveryResult` 5 值 + `SignatureFailureReason` 5 值）按 TYPE 冻结 + `recordDelivery` callsite guard；Hard 路径并入 metricschema golden #1416 |
+| `WEBHOOK-METRIC-LABEL-VALUES-FROZEN-01` archtest | ✅ Medium | 双 sealed 枚举（`webhookDeliveryResult` 6 值（含 `circuit_open`，#1541 熔断器 fast-fail）+ `SignatureFailureReason` 5 值）按 TYPE 冻结 + `recordDelivery` callsite guard；Hard 路径并入 metricschema golden #1416 |
 | `WEBHOOK-IDEMPOTENCY-CLAIMER-01` archtest | ✅ Medium | type-keyed data-flow：`claimed.rcpt` 必须溯源自 `idempotency.Claimer.Claim`（object identity + method resolution，rename-proof）。**与计划假设的 `gocell:"required"` tag 形态不同**——receiver 用构造器 nil-guard；本规则锁 substance（claim 做真实幂等工作），与 PIPELINE-01 锁 ordering 正交 |
 | backlog `KERNEL-WEBHOOK-01` | PR-6 交付完成；EPIC #831 关闭**待人工裁定** | 6 个 PR 全合入 + follow-up issues #1539–#1544 全开；但 follow-up #1544（webhook receiver 在 JWT-gated PrimaryListener 上功能阻断）是 capability 级未竟项，EPIC 是否就此关闭由维护者决定。`docs/backlog/20260520/cap-x-cross.md` 是冻结快照，不编辑 |
 

@@ -26,13 +26,13 @@ endpoints:
         description: "Forbidden — authenticated but lacks required permission"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       409:
-        description: "Conflict — device already has an active certificate; use the renew endpoint to rotate."
+        description: "Conflict — device already has an active certificate; use the renew endpoint to rotate. NOTE: 409 is also the idempotency framework status (ClaimBusy, ADR 202606021000-1043); this entry describes the orthogonal business-level meaning."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       422:
-        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors"
+        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors. NOTE: 422 is also the idempotency framework status (key-reused, ADR 202606021000-1043); this entry describes the orthogonal business-level meaning."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       503:
         description: "Service Unavailable — CA backend is not reachable"
