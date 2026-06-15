@@ -10,6 +10,7 @@ import (
 	cell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/redaction"
@@ -187,6 +188,15 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	vis := vr.vis
 
+	// CWE-117 ordering: validate filter inputs BEFORE any logging of request
+	// fields (buildAuditFilters is the wire-boundary gate; logAdminAuditQuery
+	// must not receive unvalidated input — a malformed actorId would otherwise
+	// appear in log records before the 400 is returned).
+	filters, err := buildAuditFilters(req)
+	if err != nil {
+		return nil, err
+	}
+
 	logAdminAuditQuery(ctx, p, subject, req.ActorID)
 
 	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the mask obligation
@@ -198,11 +208,6 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	// mask (full column view) — same as RowScopeTenant.
 	mask := auditFieldMask(vis.Scope())
 	if err := rejectMaskedFilters(mask, req); err != nil {
-		return nil, err
-	}
-
-	filters, err := buildAuditFilters(req)
-	if err != nil {
 		return nil, err
 	}
 
@@ -323,13 +328,27 @@ func rejectMaskedFilters(mask authz.FieldMask, req *auditlist.Request) error {
 	return nil
 }
 
-// buildAuditFilters parses the request time-range fields and constructs an
+// buildAuditFilters validates and parses the request filter fields into an
 // AuditFilters. Extracted from List to keep cognitive complexity ≤ 15.
+//
+// This is the wire-boundary validation gate (CWE-117 / #1742): it must run
+// BEFORE any logging of req fields. The handler's List function calls this
+// before logAdminAuditQuery so an invalid actorId is never logged.
+//
+// ID fields (actorId, subjectId, traceId): validated via idutil.SafeID.Validate
+// (SafeID charset + MaxMetadataIDLen length cap). Empty is allowed.
+//
+// eventType: length cap only (len > MaxMetadataIDLen). EventType is a dotted
+// label and uses characters outside the SafeID charset (e.g. dots), so only
+// a length cap is enforced here.
 //
 // Inbound from/to use RFC3339Nano (optional sub-second precision) so a caller
 // can round-trip a returned occurredAt/timestamp verbatim as a filter bound
 // without truncation.
 func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
+	if err := validateIDFilters(req); err != nil {
+		return ledger.AuditFilters{}, err
+	}
 	filters := ledger.AuditFilters{
 		EventType: req.EventType,
 		ActorID:   req.ActorID,
@@ -353,6 +372,32 @@ func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
 		filters.To = t
 	}
 	return filters, nil
+}
+
+// validateIDFilters validates the ID-typed query filter parameters from the
+// wire request before any logging or store access. Extracted from buildAuditFilters
+// to keep cognitive complexity ≤ 15.
+//
+// Empty values are allowed ("no filter"). Violations yield KindInvalid /
+// ErrValidationFailed → HTTP 400 (already declared in contract.yaml).
+func validateIDFilters(req *auditlist.Request) error {
+	if err := idutil.SafeID(req.ActorID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: actorId format")
+	}
+	if err := idutil.SafeID(req.SubjectID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: subjectId format")
+	}
+	if err := idutil.SafeID(req.TraceID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: traceId format")
+	}
+	if len(req.EventType) > idutil.MaxMetadataIDLen {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: eventType too long")
+	}
+	return nil
 }
 
 // requireAuditReadForCrossTenant enforces the audit:read PDP check unconditionally

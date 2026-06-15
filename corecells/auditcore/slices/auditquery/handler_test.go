@@ -1967,3 +1967,195 @@ func TestHandleQuery_EmptyPayload_Returns200(t *testing.T) {
 		}
 	}
 }
+
+// --- Issue #1742: actorId/subjectId/traceId/eventType input validation ---
+
+// maxIDLen matches idutil.MaxMetadataIDLen (256). Redeclared here as a
+// test-local const rather than importing idutil so tests stay in the auditquery
+// package and match the "mock in same-package test file" convention. The actual
+// enforcement uses idutil.SafeID(x).Validate() whose cap is MaxMetadataIDLen.
+const testMaxIDLen = 256
+
+// TestHandleQuery_FilterValidation_IDFormats is a table-driven test that verifies
+// the wire-boundary validation introduced for #1742 (CWE-117 log injection + SQL
+// predicate hygiene). Invalid actorId/subjectId/traceId (too long or unsafe chars)
+// must return 400 BEFORE any logging of the untrusted input occurs. Valid inputs
+// must pass through and produce 200.
+//
+// Critically: the validation MUST run BEFORE logAdminAuditQuery logs req.ActorID
+// (CWE-117 — never log unvalidated input). The ordering is: validate → log →
+// query. A 400 for an invalid filter means the log never fires.
+func TestHandleQuery_FilterValidation_IDFormats(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Seed one entry so a valid query returns 200 with data.
+	base := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "fv-1", EventID: "evt-fv-1", EventType: "event.test.v1",
+		ActorID: "admin-user", Timestamp: base, Payload: []byte("{}"),
+	}))
+
+	tooLong := func(n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = 'a'
+		}
+		return string(b)
+	}
+
+	tests := []struct {
+		name       string
+		param      string // query param to set
+		value      string
+		wantStatus int
+		wantCode   string // error code in JSON when wantStatus != 200
+	}{
+		// --- actorId ---
+		{
+			name:  "actorId too long",
+			param: "actorId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		// Space is outside the SafeID charset (ASCII letters, digits, ._:/-).
+		{
+			name:  "actorId unsafe chars (space)",
+			param: "actorId", value: "usr injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		// '@' is outside the SafeID charset.
+		{
+			name:  "actorId unsafe chars (at-sign)",
+			param: "actorId", value: "usr@injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "actorId valid (self)",
+			param: "actorId", value: "admin-user",
+			wantStatus: http.StatusOK,
+		},
+		{
+			// Exactly at MaxMetadataIDLen (256) is allowed; one over is rejected.
+			name:  "actorId exactly at max len is valid",
+			param: "actorId", value: tooLong(testMaxIDLen),
+			wantStatus: http.StatusOK,
+		},
+		// --- subjectId ---
+		{
+			name:  "subjectId too long",
+			param: "subjectId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "subjectId unsafe chars (bracket)",
+			param: "subjectId", value: "subject[injection]",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "subjectId valid",
+			param: "subjectId", value: "victim-user",
+			wantStatus: http.StatusOK,
+		},
+		// --- traceId ---
+		{
+			name:  "traceId too long",
+			param: "traceId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "traceId unsafe chars (semicolon)",
+			param: "traceId", value: "trace;injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "traceId valid",
+			param: "traceId", value: "trace-abc-123",
+			wantStatus: http.StatusOK,
+		},
+		// --- eventType: length cap only (dotted label, not SafeID charset) ---
+		{
+			name:  "eventType too long (length cap)",
+			param: "eventType", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "eventType valid dotted label",
+			param: "eventType", value: "some.event.v1",
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Build the request using net/url.Values to correctly percent-encode
+			// special characters (spaces, brackets, etc.) in query param values,
+			// avoiding httptest.NewRequest panicking on raw control characters.
+			// For non-self actorId we need an admin with allow-all authorizer.
+			ctx := auditTestCtx("admin-user", []string{"admin"})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+			// Set RawQuery after construction so the value is properly encoded.
+			qv := req.URL.Query()
+			qv.Set(tc.param, tc.value)
+			req.URL.RawQuery = qv.Encode()
+			req = req.WithContext(ctx)
+			mux.ServeHTTP(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code, "case %q body=%s", tc.name, w.Body.String())
+			if tc.wantCode != "" {
+				var resp struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.Equal(t, tc.wantCode, resp.Error.Code, "case %q", tc.name)
+			}
+		})
+	}
+}
+
+// TestHandleQuery_FilterValidation_ValidationBeforeLogging asserts the CWE-117
+// ordering: when actorId is invalid, the handler must return 400 WITHOUT logging
+// the untrusted actorId value. This is a smoke test for the correct call order
+// (validate → log, never log → validate).
+func TestHandleQuery_FilterValidation_ValidationBeforeLogging(t *testing.T) {
+	store := newHandlerStore(t)
+
+	capture := &testCaptureHandler{}
+	log := slog.New(capture)
+
+	svc, err := NewService(store, testCodec(), log, outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Use a malformed actorId (unsafe chars — '@' is outside SafeID charset)
+	// so validation returns 400 before logging.
+	malformedActor := "actor@injection"
+
+	// Admin context so logAdminAuditQuery would fire IF we got past validation.
+	ctx := auditTestCtx("admin-user", []string{"admin"})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	qv := req.URL.Query()
+	qv.Set("actorId", malformedActor)
+	req.URL.RawQuery = qv.Encode()
+	req = req.WithContext(ctx)
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "invalid actorId must return 400; body=%s", w.Body.String())
+
+	// No log record should contain the malformed actor value — if validation fired
+	// before logging, logAdminAuditQuery was never called with the bad input.
+	for _, rec := range capture.records {
+		rec.Attrs(func(a slog.Attr) bool {
+			assert.NotContains(t, a.Value.String(), malformedActor,
+				"malformed actorId must not appear in any log record (CWE-117)")
+			return true
+		})
+	}
+}
