@@ -9,6 +9,16 @@
 //	golangci/golangci-lint-action and a root gomod block is present; the decode is
 //	tolerant of unmodeled orchestration fields (a typo in an asserted field
 //	collapses to its zero value and still reds the guard)
+//
+// Known limitation (#2160): since #1565/#2125 no workflow `uses:`
+// golangci/golangci-lint-action anymore — the real lint pin moved to
+// hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (a `go install @version`
+// shell literal, absent from any go.mod). So the dependabot golangci-lint group
+// this guard requires currently covers a ghost action and does NOT make the real
+// pin auto-updatable. The guard is kept as-is pending the supply-chain
+// auto-upgrade decision (redirect to the real pin source vs. go.mod tool dep vs.
+// accept manual bump) tracked in #2160; this note keeps the guard honest rather
+// than implying live dependabot coverage of the real golangci-lint pin.
 package archtest
 
 import (
@@ -20,7 +30,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
@@ -34,15 +43,73 @@ func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 	// the pin now lives solely in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION
 	// (resolved by gocell::golangci_lint::ensure). That constant is the single
 	// source of the CI lint pin; CI-PINNING-WORKFLOW-DIGEST-01 guards it stays
-	// patch-pinned (not bare major.minor).
+	// patch-pinned (not bare major.minor) AND is declared exactly once.
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "hack", "lib", "golangci-lint.sh")))
 	require.NoError(t, err)
+	require.NoError(t, validateGolangCILintPatchPinned(body))
+}
 
-	re := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION="(v[0-9]+\.[0-9]+(?:\.[0-9]+)?)"\s*$`)
-	matches := re.FindStringSubmatch(string(body))
-	require.Len(t, matches, 2, "hack/lib/golangci-lint.sh must declare GOLANGCI_LINT_VERSION")
-	assert.Regexp(t, regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`), matches[1],
-		"golangci-lint must be pinned to patch version, not only major.minor")
+// validateGolangCILintPatchPinned checks that the golangci-lint pin source
+// declares GOLANGCI_LINT_VERSION exactly once and pins it to a full patch
+// version (vMAJOR.MINOR.PATCH), not a bare vMAJOR.MINOR.
+//
+// Exactly-once is load-bearing: hack/lib/golangci-lint.sh is `source`d by every
+// consumer (CI lint step, make fmt, pre-push hook), and shell keeps the LAST
+// assignment of a variable. A first-match-only check (the pre-#2158 form used
+// regexp.FindStringSubmatch) read only the topmost line, so appending a second
+// `GOLANGCI_LINT_VERSION="v2.12"` below the patch-pinned one would make the
+// unpinned major.minor value win at runtime while the guard stayed green
+// (#2158 F2). The guard therefore rejects duplicate declarations outright; the
+// assignment regex captures ANY quoted value so a laundered second assignment
+// is still counted, not silently skipped.
+func validateGolangCILintPatchPinned(body []byte) error {
+	assign := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION="([^"]*)"\s*$`)
+	all := assign.FindAllStringSubmatch(string(body), -1)
+	if len(all) != 1 {
+		return fmt.Errorf("hack/lib/golangci-lint.sh must declare GOLANGCI_LINT_VERSION "+
+			"exactly once (shell `source` keeps the last assignment); found %d", len(all))
+	}
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(all[0][1]) {
+		return fmt.Errorf("golangci-lint must be pinned to patch version "+
+			"(vMAJOR.MINOR.PATCH), not only major.minor; got %q", all[0][1])
+	}
+	return nil
+}
+
+// TestValidateGolangCILintPatchPinned is the synthetic red/green table for the
+// patch-pin guard. The real hack/lib/golangci-lint.sh declares the version
+// exactly once, so the duplicate-assignment regression (#2158 F2) can only be
+// exercised against fixtures here.
+//
+// INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01 — exactly-once patch pin.
+func TestValidateGolangCILintPatchPinned(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"single patch pin", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\n", false},
+		{"bare major.minor", "GOLANGCI_LINT_VERSION=\"v2.11\"\n", true},
+		{"no declaration", "echo hi\n", true},
+		// shell `source` keeps the LAST assignment: a second bare major.minor
+		// below the pinned line wins at runtime, so the guard must red on the
+		// duplicate rather than read only the first (the #2158 F2 hole).
+		{"duplicate, second unpinned", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\nGOLANGCI_LINT_VERSION=\"v2.12\"\n", true},
+		// even two patch-pinned assignments are an ambiguous single-source — reject.
+		{"duplicate, both patch-pinned", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\nGOLANGCI_LINT_VERSION=\"v2.11.5\"\n", true},
+		// a non-version garbage value is still a (rejected) declaration, not skipped.
+		{"single garbage value", "GOLANGCI_LINT_VERSION=\"latest\"\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGolangCILintPatchPinned([]byte(tt.body))
+			if tt.wantErr {
+				require.Error(t, err, "expected validation error for %q", tt.body)
+			} else {
+				require.NoError(t, err, "expected validation pass for %q", tt.body)
+			}
+		})
+	}
 }
 
 func TestWorkflowExternalUsesPinnedToSHA(t *testing.T) {

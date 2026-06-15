@@ -21,11 +21,11 @@ PR #396 引入了 `TestSharedErrorSchema_CopiesInSync`（`bytes.Equal` 比对 3 
 
 ## Decision
 
-把 error envelope schema 收敛为**单一手写源 + codegen 派生 3 mirror**：
+把 error envelope schema 收敛为**单一手写源 + codegen 派生 mirror**：
 
 - **canonical 源**：`contracts/shared/errors/error-response-v1.schema.json`（唯一允许手工编辑的副本）
-- **mirror 清单**：`tools/codegen/sharedschema` 包的 `Mirrors` 变量（`map[canonicalRel][]destRoot`）声明 3 个派生目标：`examples/iotdevice`、`examples/todoorder`、`tests/contracttest/testdata`
-- **生成命令**：`gocell generate shared-schema` → 调用 `sharedschema.Generate(root, dryRun)`，把 canonical 字节恒等写到 3 个目标路径
+- **mirror 清单**：`tools/codegen/sharedschema` 包的 `Mirrors` 变量（`map[canonicalRel][]destRoot`）是**唯一**目标声明单源；本 ADR 不复制 mirror 数量（避免与 `Mirrors` 漂移）。当前声明的派生目标为 `examples/demo`、`examples/iotdevice`、`examples/orderfulfillment`、`examples/todoorder`、`tests/contracttest/testdata`（以 `sharedschema.Mirrors` 为准——新增消费 contractsRoot 时只改该变量，本 ADR 措辞不需同步）
+- **生成命令**：`gocell generate shared-schema` → 调用 `sharedschema.Generate(root, dryRun)`，把 canonical 字节恒等写到每个声明目标路径
 - **verify gate**：`gocell verify codegen-shared-schema` → 调用 `sharedschema.Verify(root)`，in-process 字节 diff，任一 mirror 漂移或缺失均返回非零退出码；该 gate 经 `# verify-bucket: codegen` 路由进 `make verify` 的 codegen bucket（#1817 删除独立 `verify-codegen` job 后单 owner），并由 nightly archtest `TestSharedSchemaMirrorByteCurrent`（`SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01`，#2113）在进程内直跑 `sharedschema.Verify` 兜底（见 §Threat Model blind-spot ③）
 - **删除旧测试**：`TestSharedErrorSchema_CopiesInSync` 删除，verify gate 取代其功能且强制物理同步
 - **reverse-enum archtest**（`SHARED-SCHEMA-MIRROR-FUNNEL-01` A1）：在 CI 全量扫描 repo，发现任何不在 `sharedschema.Mirrors` 声明集内的 `error-response-v1.schema.json` 副本即报错——新增 mirror 必须先进 `Mirrors` 清单
@@ -45,9 +45,9 @@ CAS mixin ADR（`202605241700`）和本 ADR 同在 `contracts/shared/` 命名空
 
 `contracts/shared/cas/v1/expected_version.schema.json` 的 6 个消费方（4 个 body schema + 2 个 DELETE query param）全部位于**主仓库同一 `contractsRoot`** 下，`$ref` 的相对路径解析路径完全可达。codegen DTO parse（`contractgen/jsonschema.go::fillRef`）和 runtime embed bundler（`refbundle.go`）都在主仓库树内运行，可以安全跟随 `$ref`。物理上只有 1 份定义，`$ref` 让消费方引用它——**违反在物理层不可表达**（Hard）。
 
-### Error envelope 选择「codegen 派生物理 3 份」
+### Error envelope 选择「codegen 派生物理多份（每消费 contractsRoot 一份）」
 
-Error envelope 的 3 个消费方落在 **3 个独立 `contractsRoot`**（`examples/iotdevice/contracts/`、`examples/todoorder/contracts/`、`tests/contracttest/testdata/contracts/`），无法通过 `$ref` 到主仓库根：
+Error envelope 的多个消费方落在**各自独立的 `contractsRoot`**（如 `examples/iotdevice/contracts/`、`examples/todoorder/contracts/`、`tests/contracttest/testdata/contracts/`——完整集以 `sharedschema.Mirrors` 为准），无法通过 `$ref` 到主仓库根：
 
 **物理 reader 1**（`tests/contracttest/contracttest.go` 第 385-423 行，`compileSchemaFile`）：
 
@@ -78,7 +78,7 @@ CAS ADR（`202605241700` §Out of scope）明确 `contracts/shared/` 是「mixin
 本 ADR 讨论的是**跨 contractsRoot 的副本治理**——不同 contractsRoot 下各自存在物理副本是必需的（见上两个 reader 的约束），治理方式是 codegen 字节同步而非 `$ref` 引用。两种范式处理不同层面的问题，不冲突：
 
 - CAS：同一 contractsRoot 内，`$ref` mixin → 物理单份（Hard）
-- Error envelope：跨 contractsRoot，codegen mirror → 字节恒等 3 份（Medium）
+- Error envelope：跨 contractsRoot，codegen mirror → 字节恒等多份（每消费 contractsRoot 一份，Medium）
 
 ## AI-robust 评级
 
@@ -117,7 +117,7 @@ Hard 化方向（gh issue `#954` 跟踪）：
 
 ### 正向效果
 
-- canonical 是唯一手写来源，`make generate` 后 3 个 mirror 自动对齐，AI 单独修改副本在下次 CI verify gate 时被发现。
+- canonical 是唯一手写来源，`make generate` 后所有声明 mirror 自动对齐，AI 单独修改副本在下次 CI verify gate 时被发现。
 - reverse-enum archtest 让「新增第 4 个副本」在 CI 立即可见，无需人工巡查。
 - `Headerless` 逃生口被 caller-allowlist 锁住，AI 无法在其他 codegen 路径中悄悄重用该选项。
 
@@ -133,7 +133,7 @@ Hard 化方向（gh issue `#954` 跟踪）：
 | AI 直接编辑某 mirror 副本，绕过 canonical | 低 | A1 reverse-enum archtest 全量扫 repo，但只检测"副本存在"而非"内容对齐"——内容对齐由 `gocell verify codegen-shared-schema` verify gate 守护（CI 强制） |
 | 新增第 4 个 mirror 副本未进 `sharedschema.Mirrors` 声明 | 低 | A1 archtest：未声明副本即 CI 红（reverse-enum 无枚举漏洞） |
 | `Headerless: true` 被其他包滥用绕过 generated header 门 | 低 | A2 archtest：caller-allowlist 类型感知扫描，composite literal 包外即 CI 红 |
-| 镜像字节相等 gate 不再被 CI 跑到（blind-spot ③） | 低 | `tools/archtest/TestSharedSchemaMirrorByteCurrent`（`SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01`）在 archtest 进程内直跑 `sharedschema.Verify` 做 in-process 字节 diff，drift 即 CI 红——**不依赖**任何 shell 脚本或 workflow step 存在（严于 #1817 前由已删 `codegenStepNames` step-name 锁守的旧形态）。shell gate 仍经 `# verify-bucket: codegen` 路由供 `make verify` |
+| 镜像字节相等 gate 不再被 CI 跑到（blind-spot ③） | 低 | `tools/archtest/TestSharedSchemaMirrorByteCurrent`（`SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01`，**Medium**——in-process runtime guard：stale JSON 可表达但每次 archtest 进程内 `sharedschema.Verify` 字节 diff 抓住）在 archtest 进程内直跑做 in-process 字节 diff，drift 即 CI 红——**不依赖**任何 shell 脚本或 workflow step 存在（严于 #1817 前由已删 `codegenStepNames` step-name 锁守的旧形态，但「严于 Soft step-name 锁」仍是 Medium，非 Hard）。shell gate 仍经 `# verify-bucket: codegen` 路由供 `make verify` |
 | reader allowlist 升级后（Hard 化）引入 symlink 逃逸 | 低（当前不适用） | 当前 reader allowlist 结构决定必须保持物理副本；Hard 化时需同步审查 allowlist 逻辑 |
 
 ## Related

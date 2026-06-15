@@ -147,9 +147,9 @@ same pattern. State-carrying event payloads remain lenient (no
 > **Amendment 2026-05-25** (issue #677 / ADR `docs/architecture/202605250900-adr-shared-error-schema-mirror-codegen.md`):
 > Mirror 的 strict 性现由「字节恒等 canonical」经 codegen funnel 传递继承。
 > `contracts/shared/errors/error-response-v1.schema.json` 是唯一手写源；
-> 3 个副本（`examples/iotdevice`、`examples/todoorder`、`tests/contracttest/testdata`
-> 下各一份）由 `gocell generate shared-schema` 派生并由 `gocell verify codegen-shared-schema`
-> 字节 diff 守护。`hack/verify-schema-policy.sh` 不再单列 example mirror 的 strict 行；
+> 每个消费 contractsRoot 下各一份副本（目标集以 `tools/codegen/sharedschema` 的 `Mirrors`
+> 变量为准，不在此复制数量）由 `gocell generate shared-schema` 派生并由
+> `gocell verify codegen-shared-schema` 字节 diff 守护。`hack/verify-schema-policy.sh` 不再单列 example mirror 的 strict 行；
 > strict 性由 canonical 单源传递，只需校验 canonical。
 
 `contracts/shared/errors/error-response-v1.schema.json` is the single

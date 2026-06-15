@@ -169,12 +169,17 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 // independent of any shell script (hack/verify-codegen-shared-schema.sh) or
 // workflow step existing. Strictly stronger than the old step-name lock.
 //
-// Tool choice: in-process byte diff (Hard) — sharedschema.Verify re-derives each
-// mirror from its canonical source and reports drift; the type system cannot make
-// a stale checked-in JSON file unrepresentable, but the diff is computed in-process
-// every archtest run, so drift cannot pass silently.
+// Tool choice: in-process byte diff (Medium) — sharedschema.Verify re-derives
+// each mirror from its canonical source and reports drift. Grade is Medium, not
+// Hard: a stale checked-in JSON file IS representable; the drift is caught by a
+// CI/runtime guard, which is the ai-robust.md Medium tier ("违反可表达，但 CI 中
+// 由 type-aware scan 或 runtime guard 抓住"). It is strictly stronger than the
+// deleted codegenStepNames step-name lock — the diff runs in-process every
+// archtest run, independent of any workflow step existing — but "stronger than a
+// Soft step-name lock" is still Medium. This is consistent with the funnel's
+// composite Medium (package doc line 83-84) and the ADR §"为何不能评 Hard".
 //
-// INVARIANT: SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01 — in-process byte diff.
+// INVARIANT: SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01 — in-process byte diff (Medium).
 func TestSharedSchemaMirrorByteCurrent(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
