@@ -9,10 +9,19 @@
 //	golangci/golangci-lint-action and a root gomod block is present; the decode is
 //	tolerant of unmodeled orchestration fields (a typo in an asserted field
 //	collapses to its zero value and still reds the guard)
+//
+// Known limitation (#2160): since #1565/#2125 no workflow `uses:`
+// golangci/golangci-lint-action anymore — the real lint pin moved to
+// hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (a `go install @version`
+// shell literal, absent from any go.mod). So the dependabot golangci-lint group
+// this guard requires currently covers a ghost action and does NOT make the real
+// pin auto-updatable. The guard is kept as-is pending the supply-chain
+// auto-upgrade decision (redirect to the real pin source vs. go.mod tool dep vs.
+// accept manual bump) tracked in #2160; this note keeps the guard honest rather
+// than implying live dependabot coverage of the real golangci-lint pin.
 package archtest
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +30,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
@@ -30,14 +38,78 @@ import (
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	// Since #1565 (PR #2125) golangci-lint runs via the shared funnel — the
+	// golangci-lint-action `version:` input in _build-lint.yml was removed and
+	// the pin now lives solely in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION
+	// (resolved by gocell::golangci_lint::ensure). That constant is the single
+	// source of the CI lint pin; CI-PINNING-WORKFLOW-DIGEST-01 guards it stays
+	// patch-pinned (not bare major.minor) AND is declared exactly once.
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "hack", "lib", "golangci-lint.sh")))
 	require.NoError(t, err)
+	require.NoError(t, validateGolangCILintPatchPinned(body))
+}
 
-	re := regexp.MustCompile(`(?m)^\s*version:\s*(v[0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$`)
-	matches := re.FindStringSubmatch(string(body))
-	require.Len(t, matches, 2, "golangci-lint action version input must be present")
-	assert.Regexp(t, regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`), matches[1],
-		"golangci-lint must be pinned to patch version, not only major.minor")
+// validateGolangCILintPatchPinned checks that the golangci-lint pin source
+// declares GOLANGCI_LINT_VERSION exactly once and pins it to a full patch
+// version (vMAJOR.MINOR.PATCH), not a bare vMAJOR.MINOR.
+//
+// Exactly-once is load-bearing: hack/lib/golangci-lint.sh is `source`d by every
+// consumer (CI lint step, make fmt, pre-push hook), and shell keeps the LAST
+// assignment of a variable. A first-match-only check (the pre-#2158 form used
+// regexp.FindStringSubmatch) read only the topmost line, so appending a second
+// `GOLANGCI_LINT_VERSION="v2.12"` below the patch-pinned one would make the
+// unpinned major.minor value win at runtime while the guard stayed green
+// (#2158 F2). The guard therefore rejects duplicate declarations outright; the
+// assignment regex captures ANY quoted value so a laundered second assignment
+// is still counted, not silently skipped.
+func validateGolangCILintPatchPinned(body []byte) error {
+	assign := regexp.MustCompile(`(?m)^GOLANGCI_LINT_VERSION="([^"]*)"\s*$`)
+	all := assign.FindAllStringSubmatch(string(body), -1)
+	if len(all) != 1 {
+		return fmt.Errorf("hack/lib/golangci-lint.sh must declare GOLANGCI_LINT_VERSION "+
+			"exactly once (shell `source` keeps the last assignment); found %d", len(all))
+	}
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(all[0][1]) {
+		return fmt.Errorf("golangci-lint must be pinned to patch version "+
+			"(vMAJOR.MINOR.PATCH), not only major.minor; got %q", all[0][1])
+	}
+	return nil
+}
+
+// TestValidateGolangCILintPatchPinned is the synthetic red/green table for the
+// patch-pin guard. The real hack/lib/golangci-lint.sh declares the version
+// exactly once, so the duplicate-assignment regression (#2158 F2) can only be
+// exercised against fixtures here.
+//
+// INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01 — exactly-once patch pin.
+func TestValidateGolangCILintPatchPinned(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"single patch pin", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\n", false},
+		{"bare major.minor", "GOLANGCI_LINT_VERSION=\"v2.11\"\n", true},
+		{"no declaration", "echo hi\n", true},
+		// shell `source` keeps the LAST assignment: a second bare major.minor
+		// below the pinned line wins at runtime, so the guard must red on the
+		// duplicate rather than read only the first (the #2158 F2 hole).
+		{"duplicate, second unpinned", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\nGOLANGCI_LINT_VERSION=\"v2.12\"\n", true},
+		// even two patch-pinned assignments are an ambiguous single-source — reject.
+		{"duplicate, both patch-pinned", "GOLANGCI_LINT_VERSION=\"v2.11.4\"\nGOLANGCI_LINT_VERSION=\"v2.11.5\"\n", true},
+		// a non-version garbage value is still a (rejected) declaration, not skipped.
+		{"single garbage value", "GOLANGCI_LINT_VERSION=\"latest\"\n", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateGolangCILintPatchPinned([]byte(tt.body))
+			if tt.wantErr {
+				require.Error(t, err, "expected validation error for %q", tt.body)
+			} else {
+				require.NoError(t, err, "expected validation pass for %q", tt.body)
+			}
+		})
+	}
 }
 
 func TestWorkflowExternalUsesPinnedToSHA(t *testing.T) {
@@ -145,56 +217,6 @@ func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
 	require.NoError(t, validateLocalUsesResolve(root, "fixture.yml", body))
 }
 
-func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
-	require.NoError(t, err)
-
-	require.NoError(t, validateGeneratedArtifactGates(body))
-}
-
-func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
-	// Fixture: verify-codegen job exists but step uses forbidden producer-defined
-	// scope pattern (git diff, generated_entrypoints, etc.).
-	body := []byte(`jobs:
-  verify-codegen:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        run: |
-          go run ./cmd/gocell verify generated
-          entrypoints_file="$(mktemp)"
-          go run ./cmd/gocell generate assembly --id "$(basename "$d")"
-          echo "Generated: cmd/corebundle/main.go"
-          generated_entrypoints=()
-          while IFS= read -r entrypoint; do
-            [ -n "$entrypoint" ] || continue
-            generated_entrypoints+=("$entrypoint")
-          done < "$entrypoints_file"
-          diff_paths=(assemblies/)
-          diff_paths+=("${generated_entrypoints[@]}")
-          git diff --exit-code -- "${diff_paths[@]}"
-          git ls-files --others --exclude-standard -- "${generated_entrypoints[@]}"
-          git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-`)
-	require.Error(t, validateGeneratedArtifactGates(body))
-}
-
-func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
-	// Fixture: verify-codegen job exists but step uses legacy cmd/*/main.go glob.
-	body := []byte(`jobs:
-  verify-codegen:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        run: |
-          go run ./cmd/gocell verify generated
-          go run ./cmd/gocell generate assembly --id "$(basename "$d")"
-          git diff --exit-code assemblies/ cmd/*/main.go
-          git ls-files --others --exclude-standard cmd/*/main.go
-          git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-`)
-	require.Error(t, validateGeneratedArtifactGates(body))
-}
-
 func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "dependabot.yml")))
@@ -287,9 +309,8 @@ updates:
 // orchestration fields the guard does not assert on — ignore (with full
 // dependency-name/versions/update-types), open-pull-requests-limit, labels.
 // The validator must check only the coverage invariant (root github-actions
-// covers golangci + root gomod) and stay tolerant of schema growth, matching
-// the other validators in this file (validateGeneratedArtifactGates /
-// validateCodegenJobStructure). A strict KnownFields(true) decode here would
+// covers golangci + root gomod) and stay tolerant of schema growth. A strict
+// KnownFields(true) decode here would
 // red on every new dependabot field while adding nothing to the assertion —
 // that fragility caused #925 (trigger: #911 added `ignore:`). This test
 // prevents a "helpful" reintroduction of strict decode: with strict decode
@@ -361,6 +382,66 @@ updates:
 		"a typo in the asserted `groups` field must red the guard, not pass silently")
 }
 
+// TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList locks the guard's
+// support for dependabot's plural `directories:` list form. dependabot natively
+// supports both singular `directory:` (one dir) and plural `directories:` (a
+// list / glob); the real .github/dependabot.yml uses the plural form for its
+// gomod block to cover the workspace's many sub-modules. The guard must detect
+// root ("/") coverage in EITHER form — modeling only `directory:` made the
+// gomod root check silently fail (#2113). Anti-vacuity companion below proves
+// the plural path is not a tautology.
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories list form.
+func TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/tools"
+    schedule:
+      interval: "weekly"
+`)
+	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body),
+		"plural `directories:` list containing / must satisfy the root gomod coverage check")
+}
+
+// TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot is the
+// anti-vacuity red case for the plural form: a `directories:` list that omits
+// "/" must NOT satisfy the root gomod coverage check, proving the plural-path
+// check tests membership of "/" rather than mere presence of the field.
+//
+// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories without root.
+func TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directories:
+      - "/tools"
+      - "/cmd/gocell"
+    schedule:
+      interval: "weekly"
+`)
+	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+		"a plural `directories:` list without / must not satisfy the root gomod coverage check")
+}
+
 // dependabotConfig models only the fields validateDependabotCoversCIAndGolangCILint
 // asserts on. The decode is intentionally tolerant (no KnownFields(true)):
 // dependabot.yml legitimately grows orchestration fields (ignore /
@@ -368,8 +449,8 @@ updates:
 // does not care about, and strict decode would red on each one while adding
 // nothing to the assertion (a typo in a field the guard *does* read collapses
 // it to its zero value, so the pattern match fails and the guard reds anyway).
-// Matches the tolerant decode in validateGeneratedArtifactGates /
-// validateCodegenJobStructure. See #925.
+// The tolerant-decode contract is locked by the fixtures above
+// (ToleratesUnmodeledFields + RejectsGroupsFieldTypo). See #925.
 type dependabotConfig struct {
 	Updates []dependabotUpdate `yaml:"updates"`
 }
@@ -377,7 +458,20 @@ type dependabotConfig struct {
 type dependabotUpdate struct {
 	PackageEcosystem string                     `yaml:"package-ecosystem"`
 	Directory        string                     `yaml:"directory"`
+	Directories      []string                   `yaml:"directories"`
 	Groups           map[string]dependabotGroup `yaml:"groups"`
+}
+
+// coversRoot reports whether the update targets the repo root ("/"). dependabot
+// natively supports BOTH the singular `directory:` field (one dir — used by the
+// github-actions / docker blocks) and the plural `directories:` list (a list /
+// glob — used by the gomod block to cover the workspace's many sub-modules), so
+// the guard must accept either form. Modeling only `directory:` made the gomod
+// root check silently fail once dependabot.yml moved gomod to the list form
+// (#2113). Both branches are load-bearing — they model dependabot's real schema
+// union, not a legacy/new compat shim.
+func (u dependabotUpdate) coversRoot() bool {
+	return u.Directory == "/" || slices.Contains(u.Directories, "/")
 }
 
 // dependabotGroup deliberately models only Patterns. The guard asks whether a
@@ -399,14 +493,14 @@ func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 	for _, update := range cfg.Updates {
 		switch update.PackageEcosystem {
 		case "github-actions":
-			if update.Directory == "/" {
+			if update.coversRoot() {
 				hasGitHubActions = true
 				if rootGitHubActionsUpdateCoversGolangCI(update) {
 					return validateDependabotHasGoModRoot(cfg)
 				}
 			}
 		case "gomod":
-			if update.Directory == "/" {
+			if update.coversRoot() {
 				hasGoMod = true
 			}
 		}
@@ -431,27 +525,11 @@ func rootGitHubActionsUpdateCoversGolangCI(update dependabotUpdate) bool {
 
 func validateDependabotHasGoModRoot(cfg dependabotConfig) error {
 	for _, update := range cfg.Updates {
-		if update.PackageEcosystem == "gomod" && update.Directory == "/" {
+		if update.PackageEcosystem == "gomod" && update.coversRoot() {
 			return nil
 		}
 	}
 	return fmt.Errorf("dependabot must update Go module pins from directory /")
-}
-
-type workflowConfig struct {
-	Jobs map[string]workflowJob `yaml:"jobs"`
-}
-
-type workflowJob struct {
-	Uses  string         `yaml:"uses"`
-	Steps []workflowStep `yaml:"steps"`
-}
-
-type workflowStep struct {
-	Name string `yaml:"name"`
-	If   string `yaml:"if"`
-	Uses string `yaml:"uses"`
-	Run  string `yaml:"run"`
 }
 
 func validateWorkflowUsesPinned(path string, body []byte) error {
@@ -618,184 +696,4 @@ func dockerDigestPinned(uses string) bool {
 	}
 	digest := rest[at+1:]
 	return regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(digest)
-}
-
-func validateGeneratedArtifactGates(body []byte) error {
-	var cfg workflowConfig
-	dec := yaml.NewDecoder(bytes.NewReader(body))
-	if err := dec.Decode(&cfg); err != nil {
-		return fmt.Errorf("parse _build-lint.yml: %w", err)
-	}
-	// After SEC-SETUP-CLOSURE F2, the generated-artifact gate lives in the
-	// independent verify-codegen job, not in build-test.
-	job, ok := cfg.Jobs["verify-codegen"]
-	if !ok {
-		return fmt.Errorf("verify-codegen job missing")
-	}
-	assemblyStep, ok := findWorkflowStep(job.Steps, "Verify generated artifacts are up-to-date")
-	if !ok {
-		return fmt.Errorf("generated artifact gate missing from verify-codegen")
-	}
-	if strings.TrimSpace(assemblyStep.Run) == "" {
-		return fmt.Errorf("generated artifact gate: run block missing")
-	}
-	if !strings.Contains(assemblyStep.Run, "go run ./cmd/gocell verify generated") {
-		return fmt.Errorf("generated artifact gate must call gocell verify generated")
-	}
-	for _, forbidden := range []string{
-		"Generated:",
-		"entrypoints_file",
-		"generated_entrypoints",
-		"go run ./cmd/gocell generate assembly",
-		"go run ./cmd/gocell generate metrics-schema",
-		"git diff",
-		"git ls-files",
-		"cmd/*/main.go",
-		"--boundary-only",
-	} {
-		if strings.Contains(assemblyStep.Run, forbidden) {
-			return fmt.Errorf("generated artifact gate must not contain %q", forbidden)
-		}
-	}
-	return nil
-}
-
-func findWorkflowStep(steps []workflowStep, name string) (workflowStep, bool) {
-	for _, step := range steps {
-		if step.Name == name {
-			return step, true
-		}
-	}
-	return workflowStep{}, false
-}
-
-// --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 17-18) ---
-// These tests verify that the three codegen verify steps move from build-test
-// into a new independent verify-codegen job (no needs: build-test).
-// They are RED because the workflow currently has all three steps inside
-// build-test, and no verify-codegen job exists yet.
-// After the workflow migration (Batch 1 / Agent-C), they will turn GREEN.
-
-// codegenStepNames are the codegen verify step names that must live in
-// verify-codegen, not in build-test, after the SEC-SETUP-CLOSURE workflow
-// refactor. Adding a new codegen subsystem (K#04 cell, K#06 contract,
-// K#10 assembly, …) means adding the step here so the SEC-SETUP-CLOSURE
-// archtest covers it.
-var codegenStepNames = []string{
-	"Verify generated artifacts are up-to-date",
-	"Verify cell codegen (K#04)",
-	"Verify contract codegen (K#06)",
-	"Verify assembly codegen (K#10)",
-	"Verify shared-schema codegen",
-}
-
-// TestVerifyCodegenJobIsIndependent asserts:
-//  1. jobs.verify-codegen exists in _build-lint.yml
-//  2. jobs.verify-codegen.needs does NOT contain "build-test" (runs in parallel)
-//  3. jobs.build-test does NOT contain any of the three codegen verify steps
-//  4. jobs.verify-codegen contains all three codegen verify steps
-//
-// RED: verify-codegen job does not exist yet; all three steps are in build-test.
-func TestVerifyCodegenJobIsIndependent(t *testing.T) {
-	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
-	require.NoError(t, err)
-
-	require.NoError(t, validateCodegenJobStructure(body))
-}
-
-// TestVerifyCodegenGateRejectsStepsInBuildTest is a negative-fixture unit test
-// for validateCodegenJobStructure. It verifies the checker correctly flags a
-// workflow where the three steps remain in build-test.
-// This test itself is GREEN (it validates checker logic); the real-workflow
-// assertion above (TestVerifyCodegenJobIsIndependent) is RED.
-func TestVerifyCodegenGateRejectsStepsInBuildTest(t *testing.T) {
-	// Fixture: three codegen steps are still in build-test, no verify-codegen job.
-	body := []byte(`jobs:
-  build-test:
-    steps:
-      - name: Verify generated artifacts are up-to-date
-        if: matrix.static_checks
-        run: go run ./cmd/gocell verify generated
-      - name: Verify cell codegen (K#04)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-cell.sh
-      - name: Verify contract codegen (K#06)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-contract.sh
-      - name: Verify assembly codegen (K#10)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-assembly.sh
-`)
-	require.Error(t, validateCodegenJobStructure(body),
-		"checker must reject when codegen steps are still in build-test")
-}
-
-// workflowJobWithNeeds extends workflowJob with a Needs field for the
-// verify-codegen independence check.
-type workflowJobWithNeeds struct {
-	Needs interface{}    `yaml:"needs"`
-	Steps []workflowStep `yaml:"steps"`
-}
-
-type workflowConfigWithNeeds struct {
-	Jobs map[string]workflowJobWithNeeds `yaml:"jobs"`
-}
-
-// validateCodegenJobStructure enforces the SEC-SETUP-CLOSURE CI split:
-//   - verify-codegen job must exist
-//   - verify-codegen must not depend on build-test (parallel execution)
-//   - build-test must not contain any of the three codegen verify steps
-//   - verify-codegen must contain all three codegen verify steps
-func validateCodegenJobStructure(body []byte) error {
-	var cfg workflowConfigWithNeeds
-	dec := yaml.NewDecoder(bytes.NewReader(body))
-	if err := dec.Decode(&cfg); err != nil {
-		return fmt.Errorf("parse _build-lint.yml: %w", err)
-	}
-
-	// 1. verify-codegen job must exist.
-	vcJob, ok := cfg.Jobs["verify-codegen"]
-	if !ok {
-		return fmt.Errorf("verify-codegen job missing from _build-lint.yml")
-	}
-
-	// 2. verify-codegen must not depend on build-test.
-	if jobNeeds(vcJob.Needs, "build-test") {
-		return fmt.Errorf("verify-codegen must not have needs: build-test (must run in parallel)")
-	}
-
-	// 3. build-test must not contain the three codegen steps.
-	if btJob, hasBT := cfg.Jobs["build-test"]; hasBT {
-		for _, stepName := range codegenStepNames {
-			if _, found := findWorkflowStep(btJob.Steps, stepName); found {
-				return fmt.Errorf("build-test must not contain step %q (must move to verify-codegen)", stepName)
-			}
-		}
-	}
-
-	// 4. verify-codegen must contain all three codegen steps.
-	for _, stepName := range codegenStepNames {
-		if _, found := findWorkflowStep(vcJob.Steps, stepName); !found {
-			return fmt.Errorf("verify-codegen must contain step %q", stepName)
-		}
-	}
-
-	return nil
-}
-
-// jobNeeds reports whether the given needs value (string, []interface{}, or nil)
-// contains the target job name.
-func jobNeeds(needs interface{}, target string) bool {
-	switch v := needs.(type) {
-	case string:
-		return v == target
-	case []interface{}:
-		for _, item := range v {
-			if s, ok := item.(string); ok && s == target {
-				return true
-			}
-		}
-	}
-	return false
 }

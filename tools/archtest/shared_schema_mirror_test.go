@@ -52,9 +52,14 @@
 //     allowlist. Validated by TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (production)
 //     and TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral (matcher).
 //
-//   - ③ CI step "Verify shared-schema codegen" omitted from the verify-codegen
-//     workflow job: covered by ci_pinning_test.go codegenStepNames (the step
-//     name was added there as part of this PR's TDD RED wave).
+//   - ③ Mirror byte-equality gate stops running in CI: covered in-process by
+//     TestSharedSchemaMirrorByteCurrent (SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01),
+//     which runs sharedschema.Verify directly in the archtest process — drift
+//     reds regardless of whether any shell script (hack/verify-codegen-shared-
+//     schema.sh) or workflow step exists. (#1817 deleted the verify-codegen
+//     workflow job that the old ci_pinning_test.go codegenStepNames step-name
+//     lock guarded; #2113 re-anchored this invariant here, strictly stronger.
+//     The shell gate still routes via `# verify-bucket: codegen` for `make verify`.)
 //
 //   - ④ Headerless set via field assignment (var o codegen.WriteOptions;
 //     o.Headerless = true) rather than a composite literal: NOT caught by A2
@@ -152,6 +157,43 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A1(t *testing.T) {
 		t.Errorf("SHARED-SCHEMA-MIRROR-FUNNEL-01 A1: unauthorized copy of %s at %q —"+
 			" either declare it in sharedschema.Mirrors or delete it", schemaFileName, v)
 	}
+}
+
+// TestSharedSchemaMirrorByteCurrent asserts every declared shared-schema mirror
+// is byte-identical to its canonical source, by running the in-process verify
+// (sharedschema.Verify) directly inside the archtest process. This closes
+// blind-spot ③ (see package doc): pre-#1817 the only guard that the mirror
+// byte-equality gate "still runs in CI" was the codegenStepNames step-name lock
+// in ci_pinning_test.go; #1817 removed the verify-codegen workflow job, voiding
+// that lock. Re-anchoring byte-equality here makes drift fail in-process —
+// independent of any shell script (hack/verify-codegen-shared-schema.sh) or
+// workflow step existing. Strictly stronger than the old step-name lock.
+//
+// Tool choice: in-process byte diff (Medium) — sharedschema.Verify re-derives
+// each mirror from its canonical source and reports drift. Grade is Medium, not
+// Hard: a stale checked-in JSON file IS representable; the drift is caught by a
+// CI/runtime guard, which is the ai-robust.md Medium tier ("违反可表达，但 CI 中
+// 由 type-aware scan 或 runtime guard 抓住"). It is strictly stronger than the
+// deleted codegenStepNames step-name lock — the diff runs in-process every
+// archtest run, independent of any workflow step existing — but "stronger than a
+// Soft step-name lock" is still Medium. This is consistent with the funnel's
+// composite Medium (package doc line 83-84) and the ADR §"为何不能评 Hard".
+//
+// INVARIANT: SHARED-SCHEMA-MIRROR-BYTE-CURRENT-01 — in-process byte diff (Medium).
+func TestSharedSchemaMirrorByteCurrent(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	// Anti-vacuity: an empty mirror set would make Verify vacuously pass; the
+	// drift-DETECTION logic of sharedschema.Verify (a tampered/missing mirror
+	// reds) is unit-tested in the sharedschema package's TestVerify, so this
+	// archtest is a thin real-repo assertion over that proven behavior.
+	require.NotEmpty(t, sharedschema.Mirrors,
+		"sharedschema.Mirrors must declare at least one mirror, else this guard is vacuous")
+
+	drifted, err := sharedschema.Verify(root)
+	require.NoError(t, err, "sharedschema.Verify must run without error")
+	require.Empty(t, drifted,
+		"shared-schema mirrors drifted from canonical source; regenerate via shared-schema codegen")
 }
 
 // TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (caller-allowlist) asserts that every

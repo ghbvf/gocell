@@ -47,8 +47,9 @@
 #     `bash hack/verify-archtest.sh` or `make verify` explicitly.
 #   - golangci-lint runs CI-faithfully —
 #     `golangci-lint run --new-from-merge-base=origin/develop` with the
-#     version pinned by hack/lib/golangci-lint.sh (the project's single
-#     source of truth, reviewer-synced with _build-lint.yml; NOT go.mod
+#     version pinned by hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (the
+#     project's single source of truth, which CI's lint step sources via the
+#     same gocell::golangci_lint::ensure; NOT go.mod
 #     like gofumpt — golangci-lint is not a go.mod tool dependency).
 #     Three honest caveats: (a) MEASURED cost is ~7s warm but ~295s
 #     (~5min) COLD — i.e. after `go clean -cache`, a dependency bump, or
@@ -233,8 +234,9 @@ gofumpt_gate() {
 # measured cost (warm ~7s / cold ~5min), the base-ref pin rationale, and
 # why mirroring PR-mode (not push-mode) CI cannot produce "hook red / CI
 # green". The binary version is resolved through the project's single
-# source of truth — hack/lib/golangci-lint.sh, reviewer-synced with
-# _build-lint.yml — NOT go.mod (golangci-lint is not a go.mod tool dep,
+# source of truth — hack/lib/golangci-lint.sh (GOLANGCI_LINT_VERSION), which
+# CI's lint step sources via the same gocell::golangci_lint::ensure — NOT
+# go.mod (golangci-lint is not a go.mod tool dep,
 # unlike gofumpt; this is the one place the no-PATH-ambient rule routes
 # through the lib instead of `go run`). Fail-closed: any sourcing /
 # resolver / install error returns non-zero so run_bg blocks the push
@@ -260,12 +262,14 @@ lint_gate() {
         printf 'golangci-lint gate: %s not found locally (run: git fetch origin develop)\n' "${BASE_BRANCH}"
         return 1
     fi
-    # --timeout overrides golangci-lint's 60s default; PR-mode on a
-    # multi-commit merge-base..HEAD range (especially after a develop sync)
-    # routinely exceeds 60s on cold-cache. CI's golangci-lint-action carries
-    # its own action-level timeout, so this command-line flag aligns the
-    # local hook with CI behaviour. 10m matches the value used in
-    # _build-lint.yml's runner job.
+    # --timeout overrides golangci-lint's default; PR-mode on a multi-commit
+    # merge-base..HEAD range (especially after a develop sync) routinely needs
+    # more than the default on cold-cache. CI invokes the same pinned binary via
+    # hack/lib/golangci-lint.sh (gocell::golangci_lint::ensure) without an
+    # explicit --timeout, so this generous 10m local cap only keeps the hook from
+    # aborting a slow cold-cache range — it does not change which findings the
+    # hook vs. CI report (verdict parity comes from the shared binary + config,
+    # not the timeout).
     "${bin}" run "--new-from-merge-base=${BASE_BRANCH}" --timeout=10m
 }
 

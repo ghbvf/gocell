@@ -92,8 +92,10 @@ test:
 # module with the repo-root config.
 #
 # golangci-lint is bootstrapped from hack/lib/golangci-lint.sh at the version
-# pinned to .github/workflows/_build-lint.yml — never from $PATH — so local
-# fmt and CI lint apply identical formatter rules.
+# pinned in that file (GOLANGCI_LINT_VERSION) — never from $PATH — so local
+# fmt and CI lint resolve the same binary and apply identical formatter rules.
+# (#1565/#2125 removed the golangci-lint-action `version:` input; the shell
+# constant is now the sole CI lint pin.)
 #
 # ref: kubernetes/kubernetes hack/update-gofmt.sh + hack/verify-golangci-lint.sh.
 fmt:

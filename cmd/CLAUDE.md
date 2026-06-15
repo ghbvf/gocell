@@ -10,7 +10,7 @@
 | **进入运行时进程** | 否 | 是 |
 | **对标定位** | 构建 / 治理工具（类似 `kubectl` / `go generate`） | Composition Root（类似 Uber fx 的 wire-up 入口） |
 
-- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生；含 `required-deps` 子命令 — 从 Service struct `gocell:"required"` tag 生成 `service_required_gen.go`，对应 `REQUIRED-DEP-NIL-GUARD-01` funnel；含 `shared-schema` 子命令 — 把 `contracts/shared/errors/error-response-v1.schema.json` 字节恒等派生到 3 个 mirror，对应 `SHARED-SCHEMA-MIRROR-FUNNEL-01` funnel）、check（自定义规则检查）、verify（验收规格对齐；含 `codegen-shared-schema` 子命令 — in-process 字节 diff 守护 3 个 mirror 与 canonical 同步）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）。**不进入运行时进程**，不依赖生产外部资源。
+- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生；含 `required-deps` 子命令 — 从 Service struct `gocell:"required"` tag 生成 `service_required_gen.go`，对应 `REQUIRED-DEP-NIL-GUARD-01` funnel；含 `shared-schema` 子命令 — 把 `contracts/shared/errors/error-response-v1.schema.json` 字节恒等派生到每个声明 mirror（目标集以 `tools/codegen/sharedschema.Mirrors` 为准），对应 `SHARED-SCHEMA-MIRROR-FUNNEL-01` funnel）、check（自定义规则检查）、verify（验收规格对齐；含 `codegen-shared-schema` 子命令 — in-process 字节 diff 守护各声明 mirror 与 canonical 同步）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）。**不进入运行时进程**，不依赖生产外部资源。
 
 - **`cmd/corebundle`**：`assemblies/corebundle/` 的运行时组装产物。负责 bootstrap wiring：加载 SharedDeps（PG / Redis / AMQP / JWT / HMAC 等）、调用 `cellmodules/<cell>.Module()` 构造各 CellModule（平台 cell 业务 wiring 已迁移至 `cellmodules/` 层）、配置三个 HTTP listener（Primary / Internal / Health）、启动 `bootstrap.Run`。**是实际部署运行的二进制**，也是项目唯一的生产 Composition Root。`corebundle-no-cells` depguard 强制 `cmd/corebundle` 不直接 import `cells/`（cellmodules 层负责绑定 cell 与 adapter）。
 

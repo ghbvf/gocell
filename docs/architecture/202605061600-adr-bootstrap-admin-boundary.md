@@ -28,7 +28,7 @@ codegen 对 `auth.bootstrap: true` 的 contract 生成的 `NewHandler` 必须把
 
 archtest 守卫：CELLS-NO-ROUTEMUX-WRAPPER-01 / AUTH-ROUTE-BOOTSTRAP-FLAG-REMOVED-01 / SETUP-ADMIN-CODEGEN-BOOTSTRAP-AUTH-WIRED-01。
 
-CI verify-codegen 三步（`go generate` + `git diff --quiet` + codegen drift check）从 build-test matrix 拆出为独立 job（无 `needs` 依赖），build-test 失败不再掩盖 codegen drift。`tools/archtest/TestVerifyCodegenJobIsIndependent` 静态守卫 job 拓扑不回退。
+codegen / scaffold gate 现由 `make verify` 的并行 bucket 系统唯一拥有（`governance.yml` 的 `codegen` bucket；`verify-bucket-coverage.sh` 反空洞守卫每个 `hack/verify-*.sh` 声明合法 `# verify-bucket:` 注解被 fan-out 跑到），叠加 producer 侧 `CODEGEN-*-GEN-*` Hard archtest。原 build-test matrix 内重复的独立 `verify-codegen` job 及守卫其拓扑的 `tools/archtest/TestVerifyCodegenJobIsIndependent` 已分别于 #1817 / #2113 移除（双跑去重 + 失效不变量清理）。
 
 ### D2 — Operator Basic Auth credential via env
 
