@@ -71,10 +71,12 @@ func WithDeploymentTopology(spec DeploymentTopologySpec) Option {
 // Note: this option no longer feeds the broker-mandatory split gate
 // (validateSplitTopologyBroker). Since #2211 that gate checks the sealed
 // EventTransportKind (WithEventTransportKind, minted by eventtransport.Resolve),
-// not StorageBackend — to pass it with a split deployment topology supply
-// RealBrokerEventTransport() via WithEventTransportKind plus non-nil
+// not StorageBackend — to pass it with a split deployment topology, thread
+// eventtransport.Resolve(...).Kind via WithEventTransportKind plus non-nil
 // publisher/subscriber via WithPublisher/WithSubscriber; an unset kind is
-// fail-closed.
+// fail-closed. (Do NOT call RealBrokerEventTransport() directly — that
+// constructor is reserved for eventtransport.Resolve and tests,
+// EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01.)
 func WithControlPlaneTopology(topo Topology) Option {
 	return func(b *Bootstrap) {
 		b.controlPlaneTopology = topo

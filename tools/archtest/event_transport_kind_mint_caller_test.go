@@ -47,16 +47,22 @@
 //
 // # Detection is type-aware (not string scanning)
 //
-// ResolvePackageRef resolves call.Fun to runtime/bootstrap.RealBrokerEventTransport,
-// alias- and dot-import-proof. No const-evaluation is needed (the callee identity
-// alone is the trip).
+// The scan visits every ast.SelectorExpr and resolves it via ResolvePackageRef to
+// runtime/bootstrap.RealBrokerEventTransport (alias- and dot-import-proof). It is a
+// SelectorExpr-level (reference) scan, NOT a CallExpr.Fun-only scan, so it catches
+// both a direct call (bootstrap.RealBrokerEventTransport()) AND a function-value
+// reference (f := bootstrap.RealBrokerEventTransport) — the latter would evade a
+// CallExpr.Fun scan because the resulting call's Fun is a local ident (#2215 F1).
+// No const-evaluation is needed (the referenced symbol's identity alone is the trip).
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
 //  1. A real-broker kind laundered through a function value
-//     (f := bootstrap.RealBrokerEventTransport; f()) is still a SelectorExpr the
-//     ResolvePackageRef walk resolves, so it is caught. A kind returned by a
-//     wrapper that itself calls the minter is caught at the wrapper's call.
+//     (f := bootstrap.RealBrokerEventTransport; f()) IS caught: the assignment's
+//     RHS is the SelectorExpr bootstrap.RealBrokerEventTransport, which the
+//     SelectorExpr-level scan resolves directly (regression-tested by the fixture's
+//     ForgeViaFuncValue RED case). A kind returned by a wrapper that itself
+//     references the minter is caught at the wrapper's reference.
 //  2. _test.go files are out of scope (Production scope, Tests:false): test
 //     helpers may mint a real-broker kind to exercise the gate. That is the same
 //     posture as DEVICE-PRINCIPAL-MINT-CALLER-01's test exemption — a sealed value
@@ -87,10 +93,15 @@ const eventTransportKindMinterPkgPath = PlatformModulePath + "/cellmodules/event
 // the reverse self-check.
 const eventTransportKindMintFixturePkg = "./tools/archtest/internal/eventtransportkindmintfixture"
 
-// isRealBrokerEventTransportCall reports whether call invokes
+// isRealBrokerEventTransportRef reports whether sel references
 // bootstrap.RealBrokerEventTransport (alias/dot-import-proof via ResolvePackageRef).
-func isRealBrokerEventTransportCall(p *Pass, call *ast.CallExpr) bool {
-	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+// Resolving the SelectorExpr (not a CallExpr.Fun) catches BOTH a direct call
+// (bootstrap.RealBrokerEventTransport()) and a function-value reference
+// (f := bootstrap.RealBrokerEventTransport; f()) — the latter would evade a
+// CallExpr.Fun-only scan because the call's Fun is then a local ident, not the
+// package selector (#2215 F1).
+func isRealBrokerEventTransportRef(p *Pass, sel *ast.SelectorExpr) bool {
+	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, sel)
 	return ok && pkgPath == bootstrapPkgPath && name == eventTransportKindMinterName
 }
 
@@ -112,8 +123,8 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if !isRealBrokerEventTransportCall(p, call) {
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if !isRealBrokerEventTransportRef(p, sel) {
 					return
 				}
 				observed = true
@@ -121,19 +132,19 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 					observedInFunnel = true
 					return // eventtransport.Resolve is the sanctioned minter
 				}
-				pos := p.Fset.Position(call.Pos())
+				pos := p.Fset.Position(sel.Pos())
 				d = append(d, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
 					Message: fmt.Sprintf(
-						"EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01: %s calls bootstrap.RealBrokerEventTransport() "+
-							"outside the sole sanctioned minter cellmodules/eventtransport.Resolve. A real-broker "+
-							"EventTransportKind must be minted only where the RabbitMQ transport is actually "+
-							"constructed (resolveRabbitMQ); minting it elsewhere hands the phase0 split-topology gate "+
-							"(validateSplitTopologyBroker) a \"real broker\" claim that may not be backed by one. "+
-							"Thread eventtransport.Resolve's Transport.Kind via bootstrap.WithEventTransportKind "+
-							"instead; or, if this is a genuinely new sanctioned minter, widen the funnel allowlist "+
-							"with a rationale.",
+						"EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01: %s references bootstrap.RealBrokerEventTransport "+
+							"(direct call OR function-value reference) outside the sole sanctioned minter "+
+							"cellmodules/eventtransport.Resolve. A real-broker EventTransportKind must be minted only "+
+							"where the RabbitMQ transport is actually constructed (resolveRabbitMQ); minting it "+
+							"elsewhere hands the phase0 split-topology gate (validateSplitTopologyBroker) a \"real "+
+							"broker\" claim that may not be backed by one. Thread eventtransport.Resolve's Transport.Kind "+
+							"via bootstrap.WithEventTransportKind instead; or, if this is a genuinely new sanctioned "+
+							"minter, widen the funnel allowlist with a rationale.",
 						rel),
 				})
 			})
@@ -170,9 +181,12 @@ func TestEventTransportKindMinterFunnel01(t *testing.T) {
 }
 
 // TestEventTransportKindMinterFunnel01_RedFixture verifies the scanner fires
-// against a package that mints the real-broker kind outside eventtransport, and
-// does NOT flag the in-memory GREEN control. found==0 means the scanner is
-// fail-open (anti-vacuity for the detector itself).
+// against a package that references the real-broker minter outside eventtransport
+// — BOTH as a direct call (ForgeRealBroker) AND as a function-value reference
+// (ForgeViaFuncValue, the #2215 F1 regression case) — and does NOT flag the
+// in-memory GREEN control. found==0 means the scanner is fail-open (anti-vacuity
+// for the detector itself); found==1 would mean the function-value reference
+// still evades (the F1 regression).
 func TestEventTransportKindMinterFunnel01_RedFixture(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -185,11 +199,11 @@ func TestEventTransportKindMinterFunnel01_RedFixture(t *testing.T) {
 			return nil
 		}
 		// The fixture package path is not cellmodules/eventtransport, so any
-		// RealBrokerEventTransport call there is a violation; InMemoryEventTransport
+		// RealBrokerEventTransport reference there is a violation; InMemoryEventTransport
 		// (the GREEN control) must not be counted.
 		for _, file := range p.Files {
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if isRealBrokerEventTransportCall(p, call) {
+			EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
+				if isRealBrokerEventTransportRef(p, sel) {
 					found++
 				}
 			})
@@ -197,9 +211,11 @@ func TestEventTransportKindMinterFunnel01_RedFixture(t *testing.T) {
 		return nil
 	})
 
-	assert.Equal(t, 1, found,
-		"EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01 RED fixture self-check FAILED: expected exactly 1 "+
-			"violation from eventtransportkindmintfixture (the ForgeRealBroker call; the SafeInMemory "+
-			"InMemoryEventTransport control must NOT be flagged); got %d. found==0 means the scanner is "+
-			"fail-open — check ResolvePackageRef resolves under the archtest_fixture tag.", found)
+	assert.Equal(t, 2, found,
+		"EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01 RED fixture self-check FAILED: expected exactly 2 "+
+			"violations from eventtransportkindmintfixture (ForgeRealBroker's direct call + "+
+			"ForgeViaFuncValue's function-value reference; the SafeInMemory InMemoryEventTransport "+
+			"control must NOT be flagged); got %d. found==1 means a function-value reference still "+
+			"evades the scan (F1 regression); found==0 means the scanner is fail-open — check "+
+			"ResolvePackageRef resolves SelectorExpr under the archtest_fixture tag.", found)
 }
