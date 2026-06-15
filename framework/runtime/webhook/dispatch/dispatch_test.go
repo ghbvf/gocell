@@ -127,6 +127,21 @@ func TestBuildConsumers_InvalidSpec(t *testing.T) {
 	requireWebhookConfigErr(t, err)
 }
 
+// TestBuildConsumers_InvalidCBSettings verifies that an invalid
+// CircuitBreakerSettings fails eagerly at BuildConsumers time and that the
+// returned error is the well-formed errcode produced by
+// CircuitBreakerSettings.Validate() — i.e. BuildConsumers does NOT re-mint a
+// new errcode with a dynamic message string (MESSAGE-CONST-LITERAL-01).
+func TestBuildConsumers_InvalidCBSettings(t *testing.T) {
+	t.Parallel()
+	store := testStore(t, "s")
+	// TripThreshold == 0 is explicitly rejected by Validate().
+	bad := kwh.CircuitBreakerSettings{TripThreshold: 0}
+	_, err := BuildConsumers(
+		testClock(), nil, store, kwh.NewSafePolicy(), kwh.Metrics{}, bad)
+	requireWebhookConfigErr(t, err)
+}
+
 func requireWebhookConfigErr(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

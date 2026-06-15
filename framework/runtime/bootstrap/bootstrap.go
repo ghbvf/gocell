@@ -222,8 +222,9 @@ type Bootstrap struct {
 
 	// webhookCBSettings holds the per-deployment circuit-breaker thresholds
 	// injected via WithWebhookCircuitBreaker. webhookCBSettingsSet distinguishes
-	// "option provided" from "not provided → use defaults". Validated at
-	// option-apply time so a bad value fails at bootstrap rather than first delivery.
+	// "option provided" from "not provided → use defaults". Validated during
+	// phase6 (drainWebhookDispatchers) at startup so a bad value fails at
+	// bootstrap rather than first delivery.
 	webhookCBSettings    kwh.CircuitBreakerSettings
 	webhookCBSettingsSet bool
 

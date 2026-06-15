@@ -132,9 +132,11 @@ func BuildConsumers(
 	}
 	// Validate settings here so a bad value from the caller fails eagerly at
 	// BuildConsumers time (startup) rather than per-dispatcher construction.
+	// cbSettings.Validate() already returns a well-formed errcode (KindInvalid +
+	// ErrWebhookConfigInvalid + typed WithDetails), so propagate it directly
+	// rather than re-minting a new errcode with a dynamic message string.
 	if err := cbSettings.Validate(); err != nil {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
-			"webhook dispatch: "+err.Error())
+		return nil, err
 	}
 	out := make([]Consumer, 0, len(reqs))
 	for _, req := range reqs {
