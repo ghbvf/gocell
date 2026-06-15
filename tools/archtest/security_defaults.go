@@ -52,6 +52,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -601,28 +603,96 @@ func findExampleComposeCredentialViolations(t *testing.T, root string) []Diagnos
 }
 
 // scanComposeCredentialViolations inspects compose YAML bytes for committed
-// credential literals (any line whose key matches isComposeCredentialKey must
-// use ${VAR:?required} env interpolation) and returns one structured Diagnostic
-// per offending line (Rel = rel, Line = line number, Message = key explanation —
-// no rel/line/id baked into the message). Decoupled from file reading so callers
-// funneled through scanner.EachContentFile can pass bytes directly.
+// credential literals and returns one structured Diagnostic per offending node
+// (Rel = rel, Line = node line, Message = credential explanation — no rel/line/id
+// baked into the message). Decoupled from file reading so callers funneled
+// through scanner.EachContentFile can pass bytes directly.
+//
+// It parses the document with yaml.v3 and walks the node tree structurally
+// rather than string-cutting each line. Two structural shapes carry credentials:
+//
+//   - mapping entry — a scalar key matching isComposeCredentialKey
+//     ("POSTGRES_PASSWORD: ...") governs its scalar value.
+//   - sequence item — a scalar ${NAME...} whose NAME matches isComposeCredentialKey
+//     (e.g. redis `--requirepass "${REDIS_PASSWORD:?msg}"`). There is no key, so
+//     the env-var name is the credential signal.
+//
+// Each governed value must be a required ${VAR:?message} interpolation.
+// Comments, quoting and the ":?" default-message colon are handled by the YAML
+// decoder, so the #2176 first-colon mis-cut (which false-positived a redis
+// command sequence item that was already the secure required form) is
+// structurally impossible. An unparseable compose file fails closed: the
+// scanner cannot vouch for its credentials, so it reports rather than passes.
 func scanComposeCredentialViolations(rel string, data []byte) []Diagnostic {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return []Diagnostic{{
+			Rel:     rel,
+			Line:    0,
+			Message: "compose file is not valid YAML; credential scan cannot verify it",
+		}}
+	}
 	var diags []Diagnostic
-	for i, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		key, value, ok := strings.Cut(trimmed, ":")
-		if !ok || !isComposeCredentialKey(key) {
-			continue
+	walkComposeCredentialNodes(rel, &root, &diags)
+	return diags
+}
+
+// walkComposeCredentialNodes recursively visits a decoded compose YAML tree and
+// appends one Diagnostic per credential that is not a required ${VAR:?message}
+// interpolation. A credential is emitted at most once: mapping pairs are checked
+// at the MappingNode level (key-based) and sequence credentials at the
+// SequenceNode level (env-var-name based); recursing into a scalar is a no-op
+// (no children), so mapping value scalars are never re-tested under the
+// env-ref rule — preserving the "value is a credential but key is not" pass
+// (e.g. "REDISCLI_AUTH: ${...PASSWORD...}").
+func walkComposeCredentialNodes(rel string, node *yaml.Node, diags *[]Diagnostic) {
+	switch node.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key, val := node.Content[i], node.Content[i+1]
+			if key.Kind == yaml.ScalarNode && val.Kind == yaml.ScalarNode &&
+				isComposeCredentialKey(key.Value) && !isRequiredComposeEnvInterpolation(val.Value) {
+				*diags = append(*diags, Diagnostic{
+					Rel:     rel,
+					Line:    val.Line,
+					Message: key.Value + " must use required environment interpolation ${VAR:?message}",
+				})
+			}
 		}
-		if !isRequiredComposeEnvInterpolation(value) {
-			diags = append(diags, Diagnostic{
-				Rel:     rel,
-				Line:    i + 1,
-				Message: key + " must use required environment interpolation ${VAR:?message}",
-			})
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			name, ok := composeEnvVarName(item)
+			if ok && isComposeCredentialKey(name) && !isRequiredComposeEnvInterpolation(item.Value) {
+				*diags = append(*diags, Diagnostic{
+					Rel:     rel,
+					Line:    item.Line,
+					Message: name + " must use required environment interpolation ${VAR:?message}",
+				})
+			}
 		}
 	}
-	return diags
+	for _, child := range node.Content {
+		walkComposeCredentialNodes(rel, child, diags)
+	}
+}
+
+// composeEnvVarName returns the variable name of a scalar ${NAME...} interpolation
+// (NAME runs up to the first ':' or '}'), reporting ok=false when the node is not
+// such a scalar.
+func composeEnvVarName(node *yaml.Node) (string, bool) {
+	if node.Kind != yaml.ScalarNode {
+		return "", false
+	}
+	value := strings.TrimSpace(node.Value)
+	if !strings.HasPrefix(value, "${") {
+		return "", false
+	}
+	inner := value[len("${"):]
+	end := strings.IndexAny(inner, ":}")
+	if end < 0 {
+		return "", false
+	}
+	return inner[:end], true
 }
 
 func isComposeCredentialKey(key string) bool {
