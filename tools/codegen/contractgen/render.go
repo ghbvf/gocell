@@ -170,6 +170,14 @@ func needsGuardedMinLengthCheck(p *int) bool {
 // OmitEmpty fields in practice; pointer dispatch covers it. The bool branch
 // is present as a defensive fallback only.
 func omitEmptyCheck(f DTOField) string {
+	// ZeroValueExpr carries structured underlying-kind information set by the
+	// builder for types where GoType alone is ambiguous — in particular, named
+	// string enum types (GoType = "FooStatus", underlying string, zero "").
+	// Without this check those types would fall through to the default
+	// "!= nil" branch, producing uncompilable code (named string ≠ nil-able).
+	if f.ZeroValueExpr != "" {
+		return `i.` + f.Name + ` != ` + f.ZeroValueExpr
+	}
 	switch {
 	case f.GoType == "string":
 		return `i.` + f.Name + ` != ""`
