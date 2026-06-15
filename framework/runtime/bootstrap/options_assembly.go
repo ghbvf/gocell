@@ -67,6 +67,12 @@ func WithDeploymentTopology(spec DeploymentTopologySpec) Option {
 // skips the topology-dependent replay check — identical to prior behavior for
 // hand-written bootstraps. The always-on nil/noop/ring service-token checks
 // (validateAuthServiceTokenPlan) run regardless.
+//
+// Note: the broker-mandatory split gate (validateSplitTopologyBroker) still
+// applies — a zero Topology reads as non-postgres (StorageBackend()==""), so a
+// split deployment topology is fail-closed rejected (not skipped). To pass the
+// gate with a split topology, supply a postgres Topology AND inject non-nil
+// publisher/subscriber via WithPublisher/WithSubscriber.
 func WithControlPlaneTopology(topo Topology) Option {
 	return func(b *Bootstrap) {
 		b.controlPlaneTopology = topo
