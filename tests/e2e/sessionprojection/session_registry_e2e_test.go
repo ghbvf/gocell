@@ -58,7 +58,7 @@ func TestE2E_SessionRegistryProjection_AnonymousRejected(t *testing.T) {
 	clients.WaitForReady(t, testtime.CtxLong)
 
 	resp := clients.DoJSON(t, http.MethodGet, registrySummaryPath, nil, "")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, resp.StatusCode,
 		"anonymous GET %s must be 401 or 403, got %d", registrySummaryPath, resp.StatusCode)
 }
@@ -86,7 +86,7 @@ func pollTotalSessions(t *testing.T, token string, want int64, timeout time.Dura
 func fetchTotalSessions(t *testing.T, token string) int64 {
 	t.Helper()
 	resp := clients.DoJSON(t, http.MethodGet, registrySummaryPath, nil, token)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"authorized GET %s must return 200", registrySummaryPath)
 
