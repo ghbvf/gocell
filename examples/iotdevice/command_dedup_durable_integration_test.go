@@ -142,8 +142,8 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		// Rollback: the PG outbox writer writes inside the device-bootstrap tx, so
 		// a tx that emits then fails must leave NO command entry.
 		rbErr := crs.bootstrapTxManager.RunInTx(ctx, func(txCtx context.Context) error {
-			if e := command.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
-				enqueue.DispatchID, "d2", "evt-rollback", req); e != nil {
+			if e := enqueue.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
+				"d2", "evt-rollback", &req); e != nil {
 				return e
 			}
 			return errBoom
@@ -155,8 +155,8 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 
 		// Commit: the same emit with a tx that succeeds → exactly one entry persists.
 		require.NoError(t, crs.bootstrapTxManager.RunInTx(ctx, func(txCtx context.Context) error {
-			return command.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
-				enqueue.DispatchID, "d2", "evt-commit", req)
+			return enqueue.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
+				"d2", "evt-commit", &req)
 		}))
 		n, err = outboxCount(ctx, pool, "")
 		require.NoError(t, err)

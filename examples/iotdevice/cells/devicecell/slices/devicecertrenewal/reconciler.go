@@ -53,7 +53,8 @@ func (p Policy) validate() error {
 
 // Reconciler is a STATELESS cert-renewal producer: a reconcile.Reconciler that,
 // on each tick, scans ALL near-expiry certificates and enqueues a rotate-cert
-// async command per device via runtime/command.EmitAsync with active-uniqueness.
+// async command per device via the generated cmdenqueue.EmitAsync wrapper
+// (→ runtime command.EmitAsync) with active-uniqueness.
 //
 // It is the iotdevice archetype-② reference (reconcile → command, issue #1757):
 // it reuses the already-activated async-dispatch path (#1698 WithCommandDispatch
@@ -196,7 +197,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 }
 
 // enqueueRenewal emits one rotate-cert async outbox entry for a near-expiry cert
-// via command.EmitAsync(..., command.WithActiveUniqueness(deadline)).
+// via the generated cmdenqueue.EmitAsync(..., command.WithActiveUniqueness(deadline))
+// wrapper (DispatchID baked in; delegates to runtime command.EmitAsync).
 // WithActiveUniqueness stamps CommandDeadlineMetadataKey on the entry; the relay
 // reads that key and injects (claimKey, deadline) into the dispatch ctx via
 // rtcommand.WithDispatchedUniqueness before calling the enqueue handler. The
@@ -219,8 +221,7 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 	}
 	commandID := rotateCommandID(cand.DeviceID, cand.CertEpoch)
 	deadline := now.Add(r.policy.AttemptTTL)
-	if err := command.EmitAsync(ctx, r.clk, r.emitter, cmdenqueue.DispatchID,
-		cand.DeviceID, commandID, req,
+	if err := cmdenqueue.EmitAsync(ctx, r.clk, r.emitter, cand.DeviceID, commandID, &req,
 		command.WithActiveUniqueness(deadline)); err != nil {
 		return fmt.Errorf("devicecertrenewal: enqueue cert-renewal command: %w", err)
 	}

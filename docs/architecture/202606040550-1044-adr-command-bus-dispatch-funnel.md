@@ -51,6 +51,7 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 | `COMMAND-DISPATCH-REGISTER-CALLER-01` | `(*command.Registry).RegisterHandler`/`LookupHandler` 调用方 ⊆ `generated/contracts/command/**` + `runtime/command` 自测 | Medium（Go 无 friend-package：「仅生成码可调」不可编译期表达；archtest caller-allowlist 兜底） | **Hard**（`ResolveMethodCall` 按 pkg path + receiver type 绑定 callee，alias/同名异型不匹配） |
 | `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1667 / #1673 / #1698 3-arg） | `(*outbox.Relay).WithCommandDispatch(reg, dispatch, claimer)`（#1698 起 **3-arg**，claimer 必填位置参）必须是直接 method-call，其 dispatch-map 把生成 `DispatchID` const 映射到**同包**生成 `DispatchAsync`（`generated/contracts/command/**`），异步路径下游半边 | Medium（Go 无 friend-package：「relay 只接生成 DispatchAsync」不可编译期表达；archtest value-allowlist 兜底。forwarded func-var = #1508-family data-flow 残留。与同步 `…REGISTER-CALLER-01` 共用 gh #1575） | **Hard**（go/types 绑 value 的 `*types.Func` + key 的 `DispatchID *types.Const` 身份 = pkg path + name，alias-proof；**form-complete**：扫全部 WithCommandDispatch selector，method-value capture / method-expression 即违例（#1673 F2 闭 call-only 盲区）；key↔value 同源校验（#1673 F1，今日单包 vacuous，第 2 个 codegen command 自动 bites）） |
 | `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698） | 任何 `command.*`-topic 的 `kout.Emit` / `kout.NewEntry` 必须在 `runtime/command` 包内（即异步命令只能经 sanctioned `command.EmitAsync` 出口构造 + 发射）；producer 侧上游半边 | **Medium**（Go 无 friend-package：「业务只能经 EmitAsync emit 异步命令」不可编译期表达；producer↔relay 经 async outbox store 解耦，「每条异步命令必带身份」无法端到端编译期 Hard——同 ConsumerBase 运行期 key 构造 / #1282·#851·#893 族结构天花板。archtest caller-allowlist 兜底；**won't-do ceiling**，per-command codegen extractor 不抬升该天花板，**不开伪 Hard-升级 issue**） | **Hard**（`EmitAsync` 的 subject/commandID 为 required 位置参 → happy-path「emit 异步命令但无身份槽」编译不可表达） |
+| `COMMAND-ASYNC-EMIT-CALLER-01`（#2059） | runtime 两个异步命令 emit 出口 `command.EmitAsync` / `command.EmitAsyncFromIdempotencyKey`（均带裸 `dispatchID CommandID` 参）的调用方 ⊆ `generated/contracts/command/**`（生成 typed wrapper）+ `runtime/command` 自身；业务 cell 经生成 `<cmd>.EmitAsync` 发命令、不直调裸 DispatchID；producer 侧**第二层**下游半边（对称 consumer `COMMAND-ASYNC-DISPATCH-CALLER-01`） | **Medium**（Go 无 friend-package：「仅生成 wrapper 可调 `command.EmitAsync`」不可编译期表达；archtest caller-allowlist 兜底，同 EMIT-FUNNEL / #851 / #893 / #1282 族永久天花板；**won't-do ceiling，不开伪 Hard-升级 issue**） | **Hard**（生成 `<cmd>.EmitAsync` / `EmitAsyncFromIdempotencyKey` wrapper 由 `command.tmpl` 派生 + golden 字节锁；wrapper bake DispatchID + 锁 payload 为 `*Request` → 裸字符串 dispatch 经生成路径不可表达，对称上游 Hard 半边 `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`） |
 
 **闭环论证**：codegen-Hard 上游（typed funnel 不可手写，D1/D2）+ caller-allowlist-Hard 下游（raw `RegisterHandler` 在生成码外被调即 CI 红，D3）= 业务**既不能手写 typed funnel、也不能在 funnel 外用 raw registry** → 达成立项门「Hard 双向锁」。
 
@@ -90,6 +91,7 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
 |------|---------|------|
 | archtest | `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` / `COMMAND-DISPATCH-REGISTER-CALLER-01` / `COMMAND-ASYNC-DISPATCH-CALLER-01`（#1698 3-arg） | `tools/archtest/command_dispatch_funnel_test.go` |
 | archtest | `COMMAND-ASYNC-EMIT-FUNNEL-01`（#1698 producer 上游半边） | `tools/archtest/command_async_emit_caller_test.go` |
+| archtest | `COMMAND-ASYNC-EMIT-CALLER-01`（#2059 producer 下游半边：生成 wrapper caller-allowlist） | `tools/archtest/command_async_emit_wrapper_caller_test.go` |
 | governance | `COMMAND-CONTRACT-SCHEMA-REF-01` / `COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` | `kernel/governance/rules_command.go` |
 | codegen | `kind:command` 生成器 + golden；`COMMAND-CONTRACT-CONSISTENCY-LEVEL-01` 编译期 const-guard | `tools/codegen/contractgen/{builder,generator}.go`（`validateCommandLevel`）+ `templates/{command,types}.tmpl` |
 | runtime | sealed `Registry` | `runtime/command/registry.go` |
@@ -366,3 +368,34 @@ enforcement 索引（§7）**无新增 dispatch-funnel invariant**——active-u
 - 完成回执闭环 E2E —— **Medium**（`TestCertRenewal_CompletionClosesLoop`：ack success → cert 状态推进 → 下一 tick 不再 emit；emit/hook/consumer/wiring 任一断即红）。
 
 enforcement 索引（§7）**无新增 dispatch-funnel invariant**。威胁矩阵的收敛环闭合细节见 ADR-1822 §7 amendment。**无 ✅→⚠️/❌ 降格，无补偿措施**。
+
+## Amendment 2026-06-15(#2059) — producer 侧命令 emit 收口为生成式 typed wrapper（对称 DispatchAsync）
+
+**触发**：#2059（承接 #1674 body §重构档 + #1698 reconcile 决议）。按 ai-robust.md「ADR amendment 必查」逐行重评 §4 + 新增第 5 行矩阵 + 同步 §7 索引。
+
+**flag-cond 触发条件未满足，用户显式 override（诚实记录）**：#2059 的 `flag-cond` 触发条件是「≥2 个产异步命令的 **cell**」。当前仍只有 **1 个** producer cell（`examples/iotdevice/cells/devicecell`，`devicebootstrap` + `devicecertrenewal` + `devicecmd` 三个 slice 共用同一 `command.devicecommand.enqueue.v1` 契约）。触发条件**未满足**——本 amendment 是用户在知悉「单 producer cell 投机抽象/YAGNI」后**显式裁定提前实施**「彻底」档，非自动触发。记录于此以备后续审计：若未来始终只有单 producer cell，本机制是否过度抽象由后续 review 复核。
+
+**根本动机（producer↔consumer 对称缺口）**：#1698/#1757 落地后，consumer 侧已是生成式 typed `DispatchAsync` + 双 caller-funnel（REGISTER-CALLER + ASYNC-DISPATCH-CALLER），但 producer 侧 cell 仍手调 runtime `command.EmitAsync(ctx, clk, emitter, cmdenqueue.DispatchID, …)`——裸 DispatchID + 手填 `subject/commandID`（runtime `EmitAsync` godoc 自述的 transpose footgun 面）。#2059「彻底」档补齐 producer 侧生成式收口，使两侧对称。
+
+**交付**：
+1. **codegen（command.tmpl，golden + 真实 generated 重生成）**：每个 `kind=command` 契约的生成包新增两个 producer typed free function——
+   - `EmitAsync(ctx, clk, emitter, subject, commandID string, req *Request, opts ...command.EmitOption) error` → 委托 runtime `command.EmitAsync(…, DispatchID, …)`；
+   - `EmitAsyncFromIdempotencyKey(ctx, clk, emitter, subject string, req *Request, opts ...command.EmitOption) error` → 委托 runtime 同名 HTTP 桥（commandID 由 ctx 的 Idempotency-Key 派生）。
+   两者 **bake DispatchID**（cell 不再命名 routing topic）+ **锁 payload 为 `*Request`**。无新增 IR 字段（复用 `CommandSpec.DispatchID` / `RequestGoType`）。
+2. **archtest `COMMAND-ASYNC-EMIT-CALLER-01`**（`tools/archtest/command_async_emit_wrapper_caller_test.go`）：锁 runtime **两个** emit 出口（`command.EmitAsync` + `command.EmitAsyncFromIdempotencyKey`）的生产调用方 ⊆ `generated/contracts/command/**` + `runtime/command`。**必须锁两个出口**——只锁 `EmitAsync` 会留下 `EmitAsyncFromIdempotencyKey(…, DispatchID, …)` 裸-DispatchID 旁路，闭环不彻底。含 anti-vacuity（generated `EmitAsync` wrapper 存在性）+ RED fixture（两出口各一 violation 负控）。
+3. **三处生产调用点迁移**到生成式 wrapper：`devicebootstrap/service.go`（`EmitAsync`，移除 runtime command import）、`devicecertrenewal/reconciler.go`（`EmitAsync` + `WithActiveUniqueness`）、`devicecmd/service.go`（`EmitAsyncFromIdempotencyKey`，HTTP #1610 桥）。
+
+**实施中经 archtest 校正的范围（诚实记录）**：原计划假设 `EmitAsyncFromIdempotencyKey` 无生产调用方、其 typed wrapper 推迟生成（避免死代码）。Wave 1 archtest RED **暴露第 3 个调用点** `devicecmd/service.go` 直调 `EmitAsyncFromIdempotencyKey`（早期 `EmitAsync(` grep 漏匹配该名）。故 HTTP→command 桥**已接线**、其 wrapper **非死代码**——两 wrapper 均生成、均有真实调用方。这比原计划更彻底，YAGNI 顾虑消失。
+
+**§4 评级矩阵逐行重评（无降格，新增 1 行）**：
+- `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`：✅ **不变**（上游 Hard / 下游 Medium）。新 producer wrapper 经同一 `command.tmpl` 派生 + golden 字节锁，sole-emitter 半边覆盖**净增**（wrapper 亦不可手写 look-alike）。
+- `COMMAND-DISPATCH-REGISTER-CALLER-01`：✅ **不变**（上游 Medium / 下游 Hard）。Register/Lookup caller-allowlist 不动。
+- `COMMAND-ASYNC-DISPATCH-CALLER-01`：✅ **不变**（上游 Medium / 下游 Hard）。consumer 侧 dispatch funnel 不动；本 amendment 是其 producer 侧孪生。
+- `COMMAND-ASYNC-EMIT-FUNNEL-01`：✅ **不变**（上游 Medium / 下游 Hard）。生成 wrapper 经 sanctioned runtime `command.EmitAsync` 构造 entry（by-construction 合规）；该上游守卫的 `runtime/command` 唯一构造方约束不动。
+- **新增第 5 行 `COMMAND-ASYNC-EMIT-CALLER-01`**（producer 第二层下游半边）：**上游 Medium**（caller-allowlist，Go 无 friend-package 永久天花板，同族不开伪 Hard-升级 issue）/ **下游 Hard**（生成 wrapper codegen + golden bake DispatchID）。与上游 Hard 半边 `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01` 合成 producer 侧第二层闭环双向锁，与 consumer 侧 `COMMAND-ASYNC-DISPATCH-CALLER-01` 对称。
+
+**威胁矩阵重评（ai-robust ADR amendment 必查）**：本 amendment **收紧** producer 攻击面——业务 cell 不能再手填裸 DispatchID / 手填 commandID 经 runtime emit 出口构造命令（runtime `EmitAsync` godoc 自述的 subject/commandID transpose footgun 在生成 wrapper 路径上不再暴露给业务）。新威胁面 = 0：wrapper 是 runtime 出口的 thin typed 委托，未改 sealed `Entry`、未引入 metadata 约定、未改 Claimer 身份语义。**Medium 结构天花板诚实记录**：「仅生成 wrapper 可调 runtime `command.EmitAsync`」与 EMIT-FUNNEL/REGISTER-CALLER 同族 Go 天花板（无 friend-package），archtest caller-allowlist 兜底；**不开伪 Hard-升级 issue**。
+
+**无 ✅→⚠️/❌ 降格，无补偿措施缺口；contract-fanout 处置（正向陈述）**：未改 `command.devicecommand.enqueue.v1` 的 contract.yaml / request·response schema / wire / version——生成 wrapper 是**同一命令契约的派生产物**（消费方，非 wire 契约本身）。`command_gen.go` 的 generated diff 是一等审查材料（PR body Implementation matrix 标注）。未触发 contract-fanout 5 载体（schema / generated-conformance / cell-slice metadata / journey-fixture / governance）的任一跨 cell wire 面：generated diff 限于 producer wrapper 增量，slice `contractUsages`（devicecertrenewal `role: invoke` + waiver 等）不变，无新 errcode/Kind/migration。
+
+**enforcement 索引（§7）新增**：archtest `COMMAND-ASYNC-EMIT-CALLER-01`（`tools/archtest/command_async_emit_wrapper_caller_test.go`）。**无 ✅→⚠️/❌ 降格，无补偿措施**。

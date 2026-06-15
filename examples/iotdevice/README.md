@@ -273,8 +273,9 @@ bus. This is producer **archetype ②** (reconcile → command, #1757), the
 counterpart to the event-reactive bootstrap producer above.
 
 Flow: each interval the loop scans the `devices` table for certificates whose
-`NotAfter` is within the renewal threshold → for each, `command.EmitAsync` emits a
-`command.devicecommand.enqueue.v1` entry with `commandType: rotate-cert` →
+`NotAfter` is within the renewal threshold → for each, the generated
+`cmdenqueue.EmitAsync` wrapper emits a `command.devicecommand.enqueue.v1` entry
+with `commandType: rotate-cert` →
 the outbox relay dispatches it in-process → a `rotate-cert` command lands in the
 device's queue, dequeued like any other command.
 
