@@ -51,6 +51,17 @@ func (b *FixtureBootstrap) violatingHelper(parent context.Context) (context.Cont
 	return context.WithTimeout(parent, b.shutdownTimeout)
 }
 
+// violatingHelperTODO is a freshShutdownCtx-like function that parents on
+// context.TODO() instead of context.Background(). Rule ② must flag this too —
+// only context.Background() is the sanctioned root parent; TODO is a
+// placeholder, not an intentional root.
+//
+//nolint:unused // referenced exclusively by archtest scanner via AST loading.
+func (b *FixtureBootstrap) violatingHelperTODO() (context.Context, context.CancelFunc) {
+	// VIOLATION: parent is context.TODO(), not context.Background().
+	return context.WithTimeout(context.TODO(), b.shutdownTimeout)
+}
+
 // --- GREEN fixtures ---
 
 // compliantHelper is the correct freshShutdownCtx-like function: it always

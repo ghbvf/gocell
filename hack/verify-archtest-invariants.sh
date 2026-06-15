@@ -105,6 +105,23 @@ source hack/lib/archtest.sh
 # fail at PR-merge, not only next-day nightly. Cheap here: pure YAML parse, adds
 # ~0 to the shared-resolver process warm-up already paid by the tests above.
 #
+# SANDBOX-HTTPTEST-TCP-FUNNEL-01 (TestSandboxHTTPTestTCPFunnel01[+_Fixture]) and
+# PHASE10-TEARCTX-PARENT-CHAIN-GUARD-01 (TestPhase10TearctxParentChainGuard01
+# [+_RedFixture_* / _GreenFixture]) are intentionally NOT in this PR-time set —
+# they stay nightly (archtest-nightly.yml + local `make verify`). Both are
+# per-package `Typed(patterns)` packages.Load scans (websocket+oidc, and the
+# bootstrap pkg respectively). Unlike the cheap parse-only PR-time guards above,
+# a Typed scan with explicit patterns does NOT reuse the shared resolver's
+# whole-tree ("./...") warm-up cache key, so each cold-loads its package(s) and
+# adds real wall-clock to the single inv process. This is the SAME treatment as
+# the sibling MQTT-CONNECT-DEADLINE-DECOUPLED-01 per-package funnel (also
+# nightly): targeted-package packages.Load funnels go nightly to respect the
+# 2-CPU/7GB runner budget; only their cheap-parse PR-time-eligible siblings (the
+# compose content-scan above) opt in. Risk accepted: a funnel regression in one
+# of these two surfaces at next-day nightly rather than PR-merge — matching the
+# established MQTT precedent. Revisit (promote to PR-time) only with measurement
+# showing the added cold-load cost fits the inv budget. #2217 review F3.
+#
 # -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
 # bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
 # funnel; same convention as integration / e2e). This gate is a sanctioned

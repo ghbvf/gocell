@@ -49,6 +49,10 @@ var _ = os.Exit // suppress unused import
 
 func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
+	// Probe TCP before starting the Hub goroutine: a sandbox skip raised later
+	// inside nettest.NewServer would leave the Hub running (SkipNow stops only
+	// this goroutine; cleanup registered after the skip-able call never runs).
+	nettest.RequireTCP(t)
 
 	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.SlowPoll

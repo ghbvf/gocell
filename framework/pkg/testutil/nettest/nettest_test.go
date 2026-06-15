@@ -57,3 +57,23 @@ func TestNewTLSServer_ServesOverTLS(t *testing.T) {
 		t.Fatalf("body = %q, want %q", got, "ok")
 	}
 }
+
+// TestNewUnstartedServer_ProbesBeforeBindThenStarts asserts the unstarted funnel
+// returns a server that is reachable only after the caller starts it. The probe
+// (skip-in-sandbox) happens in the constructor because httptest.NewUnstartedServer
+// binds its loopback listener there, not at Start.
+func TestNewUnstartedServer_ProbesBeforeBindThenStarts(t *testing.T) {
+	srv := NewUnstartedServer(t, helloHandler())
+	if srv.URL != "" {
+		t.Fatalf("unstarted server must have empty URL before Start, got %q", srv.URL)
+	}
+	srv.Start()
+	defer srv.Close()
+
+	if srv.URL == "" {
+		t.Fatal("NewUnstartedServer returned an empty URL after Start")
+	}
+	if got := fetch(t, srv.Client(), srv.URL); got != "ok" {
+		t.Fatalf("body = %q, want %q", got, "ok")
+	}
+}

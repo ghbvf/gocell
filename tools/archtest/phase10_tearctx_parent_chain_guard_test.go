@@ -97,6 +97,7 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 	var helperFD *ast.FuncDecl
 	var phase10DiagCount int
 	var helperViolated bool
+	var helperTimeoutCalls int
 
 	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()},
 		[]string{phase10BootstrapPkgPath}),
@@ -128,6 +129,7 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 						phase10DiagCount += countDirectWithTimeoutCalls(p, fd.Body)
 					case "freshShutdownCtx":
 						helperViolated = helperHasNonBackgroundParent(p, fd.Body)
+						helperTimeoutCalls = countDirectWithTimeoutCalls(p, fd.Body)
 					}
 				})
 			}
@@ -153,6 +155,15 @@ func TestPhase10TearctxParentChainGuard01(t *testing.T) {
 		"%s rule②: freshShutdownCtx must pass context.Background() as the first arg "+
 			"to context.WithTimeout/WithDeadline",
 		rulePhase10TearctxParentChainGuard)
+
+	// Rule ② anti-vacuity: freshShutdownCtx must ACTUALLY construct a budget
+	// timeout. A helper that returns context.Background() with a no-op cancel
+	// (zero WithTimeout/WithDeadline calls) would pass the parent check
+	// vacuously while silently removing the shutdown budget. Require ≥1 call.
+	assert.GreaterOrEqual(t, helperTimeoutCalls, 1,
+		"%s rule②: freshShutdownCtx must call context.WithTimeout/WithDeadline at least once "+
+			"(found %d) — a helper with no timeout call passes rule② vacuously",
+		rulePhase10TearctxParentChainGuard, helperTimeoutCalls)
 
 	// No unexpected diagnostics from the scan.
 	Report(t, rulePhase10TearctxParentChainGuard, diags)
@@ -194,8 +205,9 @@ func TestPhase10TearctxParentChainGuard01_RedFixture_Rule1_DirectWithTimeout(t *
 }
 
 // TestPhase10TearctxParentChainGuard01_RedFixture_Rule2_NonBackgroundParent verifies
-// that rule ② correctly flags a freshShutdownCtx-like helper that parents on a
-// non-Background context (the budget-chain collapse pattern).
+// that rule ② correctly flags both budget-chain collapse patterns: a
+// freshShutdownCtx-like helper that parents on an arbitrary non-Background ctx
+// (violatingHelper) AND one that parents on context.TODO() (violatingHelperTODO).
 func TestPhase10TearctxParentChainGuard01_RedFixture_Rule2_NonBackgroundParent(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -204,7 +216,7 @@ func TestPhase10TearctxParentChainGuard01_RedFixture_Rule2_NonBackgroundParent(t
 
 	const fixturePkg = phase10FixturePkg
 
-	var violated bool
+	flagged := map[string]bool{}
 
 	_ = Run(t, Fixture(FixtureOpts{}, []string{fixturePkg}),
 		func(p *Pass) []Diagnostic {
@@ -213,18 +225,25 @@ func TestPhase10TearctxParentChainGuard01_RedFixture_Rule2_NonBackgroundParent(t
 			}
 			for _, f := range p.Files {
 				EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
-					if fd.Name == nil || fd.Name.Name != "violatingHelper" || fd.Body == nil {
+					if fd.Name == nil || fd.Body == nil {
 						return
 					}
-					violated = helperHasNonBackgroundParent(p, fd.Body)
+					switch fd.Name.Name {
+					case "violatingHelper", "violatingHelperTODO":
+						flagged[fd.Name.Name] = helperHasNonBackgroundParent(p, fd.Body)
+					}
 				})
 			}
 			return nil
 		})
 
-	assert.True(t, violated,
+	assert.True(t, flagged["violatingHelper"],
 		"%s rule② RED fixture: scanner must detect non-Background parent in violatingHelper "+
 			"— scanner is broken if this passes",
+		rulePhase10TearctxParentChainGuard)
+	assert.True(t, flagged["violatingHelperTODO"],
+		"%s rule② RED fixture: scanner must detect context.TODO() parent in violatingHelperTODO "+
+			"— TODO is not a sanctioned root parent",
 		rulePhase10TearctxParentChainGuard)
 }
 
@@ -291,9 +310,13 @@ func countDirectWithTimeoutCalls(p *Pass, body *ast.BlockStmt) int {
 
 // helperHasNonBackgroundParent reports whether body contains a
 // context.WithTimeout or context.WithDeadline call whose first argument is NOT
-// a call to context.Background() (or context.TODO()). Used for rule ②.
+// a call to context.Background(). Used for rule ②.
 //
-// A compliant helper always passes context.Background() as Args[0].
+// Only context.Background() is the sanctioned root parent: context.TODO() is a
+// violation too (it is a placeholder, not an intentional root, and parenting a
+// shutdown-budget ctx on it is just as much a budget-isolation hazard as any
+// other non-Background ctx). A compliant helper always passes
+// context.Background() as Args[0].
 func helperHasNonBackgroundParent(p *Pass, body *ast.BlockStmt) bool {
 	violated := false
 	EachInSubtree[ast.CallExpr](body, func(call *ast.CallExpr) {
@@ -316,7 +339,7 @@ func helperHasNonBackgroundParent(p *Pass, body *ast.BlockStmt) bool {
 			return
 		}
 		argPkg, argName, argOK := ResolvePackageRef(p.TypesInfo, arg0.Fun)
-		if !argOK || argPkg != "context" || (argName != "Background" && argName != "TODO") {
+		if !argOK || argPkg != "context" || argName != "Background" {
 			violated = true
 		}
 	})
