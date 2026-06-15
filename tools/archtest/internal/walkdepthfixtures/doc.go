@@ -9,9 +9,16 @@
 // typed function choice is wrong (use the depth-1 EachInChildren instead;
 // ai-robust.md Hard 范本 #1 "typed function choice for walk depth").
 //
-// These fixtures call the REAL scanner helpers so the detector resolves the
+// These fixtures call the REAL walk helpers so the detector resolves the
 // callee by package path (the same Hard type-resolution the live dogfood
-// uses), not by name string. They live under internal/ (not testdata/) so the
+// uses), not by name string — both the scanner-qualified form and the archtest
+// façade form are exercised. They live under internal/ (not testdata/) so the
 // typed pipeline loads them via ./tools/archtest/...; the live dogfood scopes
 // to the top-level tools/archtest dir and therefore never scans them.
+//
+// This package carries no //go:build archtest tag (and needs none):
+// ARCHTEST-LEAF-BUILD-TAG-01 scopes its tag requirement to the top-level
+// tools/archtest dir (depth-1 filter), not internal/ subpackages — the same
+// path-scope that exempts these fixtures from the live dogfood. Mirrors
+// internal/usage02fixtures.
 package walkdepthfixtures

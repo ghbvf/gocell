@@ -59,6 +59,14 @@
 //     filter), never internal/ subpackages. Path-scope, not an allowlist.
 //   - string / comment textual mentions — not generic instantiations; out of
 //     scope by construction (the scan resolves *ast.IndexExpr type args).
+//
+// CI coverage: the heavy production dogfood (TestWalkDepthFuncDeclChildren01,
+// a ./tools/archtest/... typed load) runs nightly via the full archtest
+// 24-shard matrix (auto-discovered by the //go:build archtest tag, no
+// registration). The light reverse self-checks (TestWalkDepthFuncDeclChildren01_Fixtures
+// + _AntiVacuity) ALSO run PR-time via hack/verify-archtest-invariants.sh's
+// -run selector, mirroring the sibling funnel rules (REPLAYDEPS / SAGA-PROJECTION-DEPS
+// / CONTRACT-OWNER-CELL), so a detector regression is caught at PR-time.
 package archtest
 
 import (
@@ -83,10 +91,12 @@ const (
 	// internal/ subpackages (scanner walker self-tests, fixture packages) are
 	// excluded by this depth-1 dir filter — path-scope, not an allowlist.
 	walkDepthRuleDir = "tools/archtest"
-	// walkDepthMinScanned guards against a silently-empty scan (scope drift /
-	// build-tag drop). The top-level tools/archtest dir holds far more than
-	// this many loaded files; a load below it means the scope went vacuous.
-	walkDepthMinScanned = 50
+	// walkDepthMinScanned guards against a silently-shrunken scan (scope drift /
+	// build-tag drop). The top-level tools/archtest dir holds ~400+ loaded
+	// files (default + archtest-tagged), so a floor of 200 still tolerates
+	// normal file churn while catching a >50% scope collapse — far tighter than
+	// merely guarding the vacuous-zero case.
+	walkDepthMinScanned = 200
 )
 
 // walkDepthBannedSubtreeFuncs maps each recursive subtree-axis Each* walk
@@ -107,23 +117,31 @@ func collectWalkDepthFuncDeclViolations(info *types.Info, fset *token.FileSet, f
 		return nil
 	}
 	var diags []Diagnostic
-	add := func(fnExpr ast.Expr, typeArgs []ast.Expr) {
-		if d, ok := walkDepthInstantiationViolation(info, fset, fnExpr, typeArgs, rel); ok {
+	add := func(fnExpr, sTypeArg ast.Expr) {
+		if d, ok := walkDepthInstantiationViolation(info, fset, fnExpr, sTypeArg, rel); ok {
 			diags = append(diags, d)
 		}
 	}
+	// EachInSubtree[S, N] iterates nodes of element type S (N is its *S pointer,
+	// inferred), so only the FIRST type argument decides the iterated node type.
+	// IndexExpr = single explicit arg (the idiomatic EachInSubtree[ast.FuncDecl]);
+	// IndexListExpr = 2+ explicit args, S = Indices[0]. Indexing the single S arg
+	// (not for-ranging the []ast.Expr) keeps SCANNER-FRAMEWORK-USAGE-01 satisfied.
 	EachInSubtree[ast.IndexExpr](file, func(ix *ast.IndexExpr) {
-		add(ix.X, []ast.Expr{ix.Index})
+		add(ix.X, ix.Index)
 	})
 	EachInSubtree[ast.IndexListExpr](file, func(ix *ast.IndexListExpr) {
-		add(ix.X, ix.Indices)
+		if len(ix.Indices) > 0 {
+			add(ix.X, ix.Indices[0])
+		}
 	})
 	return diags
 }
 
-// walkDepthInstantiationViolation is the pure per-instantiation gate.
+// walkDepthInstantiationViolation is the pure per-instantiation gate. sTypeArg
+// is the first (element) type argument of the generic instantiation.
 func walkDepthInstantiationViolation(
-	info *types.Info, fset *token.FileSet, fnExpr ast.Expr, typeArgs []ast.Expr, rel string,
+	info *types.Info, fset *token.FileSet, fnExpr, sTypeArg ast.Expr, rel string,
 ) (Diagnostic, bool) {
 	base := walkDepthBaseIdent(fnExpr)
 	if base == nil {
@@ -136,7 +154,7 @@ func walkDepthInstantiationViolation(
 	if !walkDepthIsBannedSubtreeFunc(fn) {
 		return Diagnostic{}, false
 	}
-	if !walkDepthTypeArgIsASTFuncDecl(info, typeArgs) {
+	if !walkDepthTypeArgIsASTFuncDecl(info, sTypeArg) {
 		return Diagnostic{}, false
 	}
 	return Diagnostic{
@@ -174,23 +192,20 @@ func walkDepthIsBannedSubtreeFunc(fn *types.Func) bool {
 	return banned
 }
 
-// walkDepthTypeArgIsASTFuncDecl reports whether any explicit type argument
-// resolves to go/ast.FuncDecl (type-resolved, alias-proof).
-func walkDepthTypeArgIsASTFuncDecl(info *types.Info, typeArgs []ast.Expr) bool {
-	for _, ta := range typeArgs {
-		sel, ok := ta.(*ast.SelectorExpr)
-		if !ok {
-			continue
-		}
-		tn, ok := info.Uses[sel.Sel].(*types.TypeName)
-		if !ok || tn.Pkg() == nil {
-			continue
-		}
-		if tn.Pkg().Path() == walkDepthGoAstPkgPath && tn.Name() == walkDepthFuncDeclTypeName {
-			return true
-		}
+// walkDepthTypeArgIsASTFuncDecl reports whether the element type argument
+// resolves to go/ast.FuncDecl (type-resolved, alias-proof). Takes a single
+// expr (not a slice) so it never for-ranges over []ast.Expr — see
+// SCANNER-FRAMEWORK-USAGE-01.
+func walkDepthTypeArgIsASTFuncDecl(info *types.Info, sTypeArg ast.Expr) bool {
+	sel, ok := sTypeArg.(*ast.SelectorExpr)
+	if !ok {
+		return false
 	}
-	return false
+	tn, ok := info.Uses[sel.Sel].(*types.TypeName)
+	if !ok || tn.Pkg() == nil {
+		return false
+	}
+	return tn.Pkg().Path() == walkDepthGoAstPkgPath && tn.Name() == walkDepthFuncDeclTypeName
 }
 
 // TestWalkDepthFuncDeclChildren01 is the production dogfood: it scans every
@@ -235,9 +250,10 @@ func TestWalkDepthFuncDeclChildren01(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations,
-		"%s: ast.FuncDecl is depth-1; replace EachInSubtree[ast.FuncDecl] / "+
-			"EachInSubtreeStopAt[ast.FuncDecl] with EachInChildren[ast.FuncDecl].",
-		ruleWalkDepthFuncDeclChildren)
+		"%s: %d site(s) listed above. ast.FuncDecl is depth-1; replace "+
+			"EachInSubtree[ast.FuncDecl] / EachInSubtreeStopAt[ast.FuncDecl] with "+
+			"EachInChildren[ast.FuncDecl].",
+		ruleWalkDepthFuncDeclChildren, len(violations))
 }
 
 // walkDepthLoadFixture returns this rule's diagnostics for a single fixture
@@ -279,6 +295,7 @@ func TestWalkDepthFuncDeclChildren01_Fixtures(t *testing.T) {
 	}{
 		{"red_eachinsubtree_funcdecl", 1},
 		{"red_eachinsubtreestopat_funcdecl", 1},
+		{"red_archtest_facade_eachinsubtree_funcdecl", 1},
 		{"green_eachinchildren_funcdecl", 0},
 		{"green_eachinsubtree_callexpr", 0},
 	}

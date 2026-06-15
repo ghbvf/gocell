@@ -517,6 +517,9 @@ func TestParseCarveOutTableFromADR_ErrorPaths(t *testing.T) {
 				if err == nil {
 					t.Fatalf("want error for %q, got set=%v", tc.name, got)
 				}
+				if !strings.Contains(err.Error(), "no carveout rows found") {
+					t.Errorf("error for %q must be the parser's empty-table error, got: %v", tc.name, err)
+				}
 				if got != nil {
 					t.Errorf("error path must return a nil map, got %v", got)
 				}
