@@ -479,7 +479,7 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	if !e.OccurredAt.IsZero() {
 		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
 	}
-	return &auditlist.ResponseDataItem{
+	item := &auditlist.ResponseDataItem{
 		ID:            e.ID,
 		EventID:       e.EventID,
 		EventType:     e.EventType,
@@ -491,8 +491,16 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		OccurredAt:    occurredAt,
 		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
 		Scope:         rowScope(e.TenantID),
-		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
+	// Only set Payload when redacted bytes are non-empty. An empty []byte stored
+	// as json.RawMessage in the any-typed Payload field is non-nil, so ToMap
+	// includes it and json.Marshal fails with "unexpected end of JSON input"
+	// (#2199). Leaving Payload nil means ToMap omits the key entirely via the
+	// `if i.Payload != nil` guard in generated/contracts/http/audit/list/v1/types_gen.go.
+	if raw := redaction.RedactPayload(e.Payload); len(raw) > 0 {
+		item.Payload = json.RawMessage(raw)
+	}
+	return item
 }
 
 // rowScope classifies an audit row relative to the calling tenant for the wire

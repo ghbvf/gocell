@@ -1901,3 +1901,69 @@ func TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough(t *testing.T) {
 	wantTo := "2026-06-30T23:59:59Z"
 	assert.Equal(t, wantTo, filters.To.UTC().Format(time.RFC3339), "to must reach the cross-tenant store")
 }
+
+// --- Issue #2199: empty Payload must not cause 5xx ---
+
+// TestHandleQuery_EmptyPayload_Returns200 is the regression guard for #2199:
+// an audit entry with nil/empty Payload must not cause 5xx when ToMap tries to
+// marshal an empty json.RawMessage. The fix ensures toListResponseDataItem leaves
+// the Payload field nil when the redacted bytes are empty, so ToMap omits the key
+// and json.Marshal never sees an empty RawMessage.
+//
+// Additionally, items WITH a non-empty payload must still render correctly in the
+// same response.
+func TestHandleQuery_EmptyPayload_Returns200(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// Entry with nil payload (pre-populated rows or framework events may have none).
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-nil-1", EventID: "evt-ep-nil-1", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base,
+		Payload:   nil, // empty / absent payload
+	}))
+	// Entry with empty-slice payload.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-nil-2", EventID: "evt-ep-nil-2", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base.Add(time.Minute),
+		Payload:   []byte{}, // zero-length payload
+	}))
+	// Entry with a non-empty payload — must still render the payload key.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-data-3", EventID: "evt-ep-data-3", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base.Add(seedThirdEntryOffset),
+		Payload:   []byte(`{"k":"v"}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-ep", nil)
+	req = req.WithContext(auditTestCtx("usr-ep", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equalf(t, http.StatusOK, w.Code, "#2199: empty-payload entry must not cause 5xx; body=%s", w.Body.String())
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 3, "all three entries must be present")
+
+	for _, item := range resp.Data {
+		eventID, _ := item["eventId"].(string)
+		if eventID == "evt-ep-data-3" {
+			// Non-empty payload must appear as a valid JSON value.
+			_, hasPayload := item["payload"]
+			assert.True(t, hasPayload, "item with non-empty payload must include 'payload' key")
+		} else {
+			// Empty-payload items must NOT include the 'payload' key (omit nil).
+			_, hasPayload := item["payload"]
+			assert.False(t, hasPayload, "item %s with empty payload must NOT include 'payload' key", eventID)
+		}
+	}
+}
