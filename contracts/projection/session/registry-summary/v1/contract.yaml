@@ -1,0 +1,12 @@
+id: projection.session.registry-summary.v1
+kind: projection
+ownerCell: accesscore
+consistencyLevel: L3
+lifecycle: active
+replayable: true
+endpoints:
+  provider: accesscore
+  readers:
+    - edge-bff
+schemaRefs:
+  payload: payload.schema.json

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.session.registry-summary.v1.request",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

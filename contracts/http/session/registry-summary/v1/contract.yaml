@@ -1,0 +1,27 @@
+id: http.session.registry-summary.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L3
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/sessions/registry-summary
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the session:read permission (the built-in baseline grants the admin and super-admin roles) or carries no tenant scope (tenant-scoped read fails closed)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

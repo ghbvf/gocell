@@ -113,6 +113,19 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermRoleRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// session:read baseline (#1771 / EPIC #1504 PR-04): the new L3 CQRS
+	// session_registry projection summary read. Admin/super-admin only — same
+	// admin-read shape as policy:read / system:read / audit:read above (NOT a
+	// migration of a prior gate; it is the first gate for a brand-new read model).
+	// Row visibility is independently tenant-scoped at the data layer, so this
+	// coarse route gate is defense-in-depth, not the sole control.
+	{
+		ID:         "baseline-session-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read the session registry summary",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermSessionRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 	// Identity-ownership baseline rules (#1977 Batch B): subject.sub == resource.id
 	// grants owner-scoped permissions (user:read, user:write, role:read) to the
 	// owning subject. resource.id is the canonicalized path param forwarded by

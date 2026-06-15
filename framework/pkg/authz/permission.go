@@ -175,6 +175,23 @@ func PermUserWrite() Permission { return permUserWrite }
 // (PR-10c) → RequirePermissionForResource (#1977).
 func PermRoleRead() Permission { return permRoleRead }
 
+// permSessionRead is the package-private singleton backing PermSessionRead().
+// Unexported so no external package can reassign it.
+var permSessionRead = newPermission("session:read")
+
+// PermSessionRead authorizes reading the tenant-scoped session registry
+// projection summary (accesscore sessionprojection slice: GET
+// /api/v1/access/sessions/registry-summary). Unlike the other accesscore perms it
+// is NOT a migration of a prior role-literal gate — it is the first route gate for
+// the new L3 CQRS session_registry read model (#1771 / EPIC #1504 PR-04). The PDP
+// baseline grants it to admin / super-admin (see authorizationdecide baseline.go),
+// mirroring the admin-read shape of policy:read / system:read. Row visibility is
+// independently governed at the data layer (the read model partitions by the
+// principal-derived tenant), so this route gate is coarse defense-in-depth, not
+// the sole control. Same accessor-func-over-private-singleton shape as the other
+// perms (reassignment is a compile error → Hard immutability).
+func PermSessionRead() Permission { return permSessionRead }
+
 // examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its
 // own lightweight PDP (cells/devicecell/authorizer.go) whose baseline grants
 // these actions; the platform registry stays the SOLE minter (the Permission
@@ -263,6 +280,7 @@ var allPermissions = []Permission{
 	permUserRead,
 	permUserWrite,
 	permRoleRead,
+	permSessionRead,
 	permDeviceCommand,
 	permDeviceConsume,
 	permDeviceRead,
