@@ -22,19 +22,13 @@ var GoodFrameworkSentinel = &metadata.ContractMeta{
 	},
 }
 
-// GoodFrameworkSentinelOtherPositions proves A1's sentinel acceptance is
-// position-agnostic (ADR §1a): isSanctionedCellIDExpr matches the sentinel
-// expression at ANY cell-id position, not just owner/provider. A CellMeta.ID of
-// "_framework" is nonsensical, but A1 deliberately leaves that to FMT-C1 /
-// cell-id-pattern rules rather than flagging the sanctioned sentinel expression —
-// so A1 must still produce NO findings here. This anti-vacuity case keeps the
-// "accepted at all positions" claim from being vacuously green.
-var (
-	GoodFrameworkSentinelAtID = &metadata.CellMeta{
-		ID: metadata.FrameworkOwnerSentinel,
-	}
-	GoodFrameworkSentinelOtherEndpoints = &metadata.EndpointsMeta{
-		Publisher: metadata.FrameworkOwnerSentinel,
-		Handler:   metadata.FrameworkOwnerSentinel,
-	}
-)
+// GoodFrameworkSentinelOtherEndpoints exercises the remaining PROVIDER-endpoint
+// positions where the sentinel is sanctioned — EndpointsMeta.Publisher (event) and
+// Handler (command). A1 must produce NO findings here. (The sentinel at the
+// NON-provider position CellMeta.ID is the opposite, RED case — see
+// bad_framework_sentinel_at_id.go.) Together the good/bad pair proves A1 is
+// field-position-aware (ADR §1a), not vacuously green in either direction.
+var GoodFrameworkSentinelOtherEndpoints = &metadata.EndpointsMeta{
+	Publisher: metadata.FrameworkOwnerSentinel,
+	Handler:   metadata.FrameworkOwnerSentinel,
+}

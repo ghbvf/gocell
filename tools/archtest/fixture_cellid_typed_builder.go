@@ -114,30 +114,40 @@ type cellIDFieldPosition struct {
 	structName     string // e.g. "CellMeta"; package path is always metadataPkgPath
 	fieldName      string // e.g. "ID"
 	isSliceElement bool   // true when value is []string and each element is a cell-id
+	// allowFrameworkSentinel marks the owner/provider-endpoint positions where the
+	// reserved metadata.FrameworkOwnerSentinel ("_framework", #1939) is a sanctioned
+	// value (the framework names ITSELF as the contract owner/provider). It is false
+	// at every real-cell position — CellMeta.ID, ProjectMeta.Cells map keys,
+	// SliceMeta.BelongsToCell, AssemblyCellRef.ID, L0DepMeta.Cell, consumer endpoint
+	// lists — where a legal cell id is required and the sentinel must be REJECTED.
+	// A1 stays field-position-aware here; whether a framework-owned command/projection
+	// is *eligible* is a separate concern (FRAMEWORK-OWNED-CONTRACT-SCOPED), so all
+	// provider endpoints (Server/Publisher/Handler/Provider) accept the sentinel.
+	allowFrameworkSentinel bool
 }
 
 var cellIDFieldPositions = []cellIDFieldPosition{
-	{"CellMeta", "ID", false},
-	{"SliceMeta", "BelongsToCell", false},
-	{"L0DepMeta", "Cell", false},
-	{"ContractMeta", "OwnerCell", false},
-	{"EndpointsMeta", "Server", false},
-	{"EndpointsMeta", "Clients", true},
-	{"EndpointsMeta", "Publisher", false},
-	{"EndpointsMeta", "Handler", false},
-	{"EndpointsMeta", "Invokers", true},
-	{"EndpointsMeta", "Provider", false},
-	{"EndpointsMeta", "Readers", true},
-	{"JourneyMeta", "Cells", true},
+	{"CellMeta", "ID", false, false},
+	{"SliceMeta", "BelongsToCell", false, false},
+	{"L0DepMeta", "Cell", false, false},
+	{"ContractMeta", "OwnerCell", false, true},
+	{"EndpointsMeta", "Server", false, true},
+	{"EndpointsMeta", "Clients", true, false},
+	{"EndpointsMeta", "Publisher", false, true},
+	{"EndpointsMeta", "Handler", false, true},
+	{"EndpointsMeta", "Invokers", true, false},
+	{"EndpointsMeta", "Provider", false, true},
+	{"EndpointsMeta", "Readers", true, false},
+	{"JourneyMeta", "Cells", true, false},
 	// AssemblyMeta.Cells is []AssemblyCellRef (#1086): the cell-id moved from
 	// the slice element to AssemblyCellRef.ID, so the enforced position is the
 	// ID field of each AssemblyCellRef struct literal (not the slice element).
-	{"AssemblyCellRef", "ID", false},
+	{"AssemblyCellRef", "ID", false, false},
 	// CellWireSummary.CellID: the derived wire-catalog struct in derived.go whose
 	// CellID field carries cell-id semantics. Fixtures constructing CellWireSummary
 	// live in runtime/ (outside A1's current kernel/ scope) and will be enforced
 	// once #1201 expands scope; this entry is forward-compatible.
-	{"CellWireSummary", "CellID", false},
+	{"CellWireSummary", "CellID", false, false},
 }
 
 // cellIDMapKeyValueStructs lists the named struct types T such that any
@@ -377,7 +387,9 @@ func scanCellIDMapComposite(p *Pass, rel string, comp *ast.CompositeLit, m *type
 	var out []Diagnostic
 	valName := valStruct.Obj().Name()
 	EachInChildren[ast.KeyValueExpr](comp, func(kv *ast.KeyValueExpr) {
-		if !isSanctionedCellIDExpr(p, kv.Key) {
+		// Map keys are real cell ids (ProjectMeta.Cells) — the framework sentinel is
+		// never a valid key, so allowSentinel=false.
+		if !isSanctionedCellIDExpr(p, kv.Key, false) {
 			out = append(out, fmtPositionViolation(p, rel, kv.Key, "map[string]*metadata."+valName+" key"))
 		}
 	})
@@ -421,11 +433,11 @@ func scanCellIDStructComposite(p *Pass, rel string, comp *ast.CompositeLit, t ty
 				return
 			}
 			for _, sliceElt := range sliceComp.Elts {
-				if !isSanctionedCellIDExpr(p, sliceElt) {
+				if !isSanctionedCellIDExpr(p, sliceElt, pos.allowFrameworkSentinel) {
 					out = append(out, fmtPositionViolation(p, rel, sliceElt, "metadata."+structName+"."+fieldName+"[i]"))
 				}
 			}
-		} else if !isSanctionedCellIDExpr(p, kv.Value) {
+		} else if !isSanctionedCellIDExpr(p, kv.Value, pos.allowFrameworkSentinel) {
 			out = append(out, fmtPositionViolation(p, rel, kv.Value, "metadata."+structName+"."+fieldName))
 		}
 	})
@@ -468,24 +480,26 @@ func lookupCellIDFieldPosition(structName, fieldName string) (cellIDFieldPositio
 //     the "CellID" prefix — the closed enumeration path (CellIDAccessCore, etc.).
 //     A5 guarantees that every such var was built via NewCellID(literal).
 //
-//  3. metadata.FrameworkOwnerSentinel const (#1939) — the reserved "_framework"
-//     sentinel is a first-class legal value at owner/provider cell-id positions.
-//     NewCellID("_framework") panics (leading underscore is not a legal cell id),
-//     and metadatatest cannot add a CellID* alias for it (A5 would reject the
-//     non-NewCellID initializer). The sentinel is therefore recognized directly via
-//     TypesInfo identity lock: package path == metadataPkgPath AND object kind ==
-//     *types.Const AND name == "FrameworkOwnerSentinel". This is precise — a
-//     homonymous const in another package resolves to a different package path and
-//     is rejected. Accepting sentinel at all cell-id positions (not just OwnerCell)
-//     is harmless: "_framework" is not a legal cell id per MatchCellID, so if it
-//     inadvertently appears at e.g. CellMeta.ID the existing FMT-C1 rule will
-//     catch it; A1's job is to reject bare string literals, not to enforce
-//     field-position semantics beyond what field-position enumeration already
-//     expresses. Cross-reference: ADR 202606130635-1939-adr-framework-owned-contract.md.
+//  3. metadata.FrameworkOwnerSentinel const (#1939) — ONLY when allowSentinel is
+//     true, i.e. at an owner/provider-endpoint position (ContractMeta.OwnerCell,
+//     EndpointsMeta.Server/Publisher/Handler/Provider). The reserved "_framework"
+//     sentinel names the framework as the contract's owner/provider; it is NOT a
+//     legal cell id (NewCellID("_framework") panics — leading underscore fails
+//     MatchCellID, locked by metadata.TestFrameworkOwnerSentinel_NotALegalCellID),
+//     so at every real-cell position (CellMeta.ID, ProjectMeta.Cells map keys,
+//     SliceMeta.BelongsToCell, AssemblyCellRef.ID, …) allowSentinel is false and the
+//     sentinel is REJECTED — A1 is field-position-aware, mirroring Kubernetes'
+//     field-specific name validators (NameIsDNSLabel vs NameIsDNSSubdomain). The
+//     sentinel is recognized via TypesInfo identity lock: package path ==
+//     metadataPkgPath AND object kind == *types.Const AND name ==
+//     "FrameworkOwnerSentinel" — precise, a homonymous const in another package is
+//     rejected. Whether a framework-owned command/projection is *eligible* is
+//     FRAMEWORK-OWNED-CONTRACT-SCOPED's job, so all provider endpoints accept the
+//     sentinel here. Cross-reference: ADR 202606130635-1939-adr-framework-owned-contract.md.
 //
 // Any other shape — bare BasicLit, Ident→BasicLit chain, dynamic NewCellID arg,
-// third-party const ref — is rejected.
-func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var/sentinel expr forms (selector/ident/call/const); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's sanctioned-form enumeration
+// third-party const ref, the sentinel at a non-owner/provider position — is rejected.
+func isSanctionedCellIDExpr(p *Pass, expr ast.Expr, allowSentinel bool) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var/sentinel expr forms (selector/ident/call/const); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's sanctioned-form enumeration
 	switch e := expr.(type) {
 	case *ast.CallExpr:
 		sel, ok := e.Fun.(*ast.SelectorExpr)
@@ -524,9 +538,11 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyc
 	case *ast.SelectorExpr:
 		obj := p.TypesInfo.Uses[e.Sel]
 		// Form 3: metadata.FrameworkOwnerSentinel const — identity-locked via
-		// TypesInfo to metadataPkgPath + exact name; package-path lock is Hard.
+		// TypesInfo to metadataPkgPath + exact name (Hard), AND only at an
+		// owner/provider position (allowSentinel). At real-cell positions the
+		// sentinel is rejected.
 		if c, isConst := obj.(*types.Const); isConst {
-			return c.Pkg() != nil &&
+			return allowSentinel && c.Pkg() != nil &&
 				c.Pkg().Path() == metadataPkgPath &&
 				c.Name() == frameworkOwnerSentinelName
 		}
@@ -543,13 +559,14 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyc
 		return strings.HasPrefix(v.Name(), "CellID")
 	case *ast.Ident:
 		// Form 3 (in-package usage): bare FrameworkOwnerSentinel inside package
-		// metadata itself — same identity lock as the SelectorExpr branch.
+		// metadata itself — same identity lock + allowSentinel gate as the
+		// SelectorExpr branch.
 		obj := p.TypesInfo.Uses[e]
 		c, isConst := obj.(*types.Const)
 		if !isConst || c.Pkg() == nil {
 			return false
 		}
-		return c.Pkg().Path() == metadataPkgPath && c.Name() == frameworkOwnerSentinelName
+		return allowSentinel && c.Pkg().Path() == metadataPkgPath && c.Name() == frameworkOwnerSentinelName
 	}
 	return false
 }

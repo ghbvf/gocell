@@ -83,4 +83,13 @@ func TestFrameworkOwnerSentinel_NotALegalCellID(t *testing.T) {
 	if strings.Contains(FrameworkOwnerSentinel, "-") {
 		t.Fatalf("FrameworkOwnerSentinel %q must not contain a dash (cell IDs are no-dash concat style)", FrameworkOwnerSentinel)
 	}
+	// Hard-lock the safety property that the archtest FIXTURE-CELLID-TYPED-BUILDER-01
+	// field-aware sentinel gate (#2178) and FMT-C1 depend on: the sentinel is NOT a
+	// MatchCellID-legal cell id, so it can never validly occupy a real-cell position
+	// (CellMeta.ID, BelongsToCell, map keys). If the sentinel ever became
+	// MatchCellID-legal, A1's "reject sentinel at non-provider positions" would lose
+	// its premise and a "_framework" cell id could slip through unnoticed.
+	if MatchCellID(FrameworkOwnerSentinel) {
+		t.Fatalf("FrameworkOwnerSentinel %q must NOT be a MatchCellID-legal cell id (A1/FMT-C1 rely on this)", FrameworkOwnerSentinel)
+	}
 }
