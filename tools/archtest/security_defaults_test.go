@@ -282,6 +282,25 @@ func TestScanComposeCredentialViolations_Structural(t *testing.T) {
 			wantContains: nil,
 		},
 		{
+			name: "non-scalar command item is skipped (env-var name only applies to scalars)",
+			yaml: `services:
+  redis:
+    command:
+      - "redis-server"
+      - ["nested", "list"]
+`,
+			wantContains: nil,
+		},
+		{
+			name: "malformed interpolation without terminator is not flagged",
+			yaml: `services:
+  redis:
+    command:
+      - "${REDIS_PASSWORD"
+`,
+			wantContains: nil,
+		},
+		{
 			name:         "unparseable YAML fails closed",
 			yaml:         "services:\n  db:\n    command: [unterminated\n",
 			wantContains: []string{"not valid YAML"},
