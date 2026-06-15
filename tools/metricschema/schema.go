@@ -239,7 +239,8 @@ func Marshal(schema *Schema) ([]byte, error) {
 // prefixes obs01ProductionPatterns emits — the multi-member parents ("./cmd/...",
 // "./adapters/...", "./examples/...", #2147) expanded to their members, and the
 // top-level single-module roots ("./corecells/...", "./cellmodules/...", #2164)
-// resolved as workspace members — so OBS-01 scans that production code. It keeps only this project's packages
+// resolved as workspace members — so OBS-01 scans that production code. It keeps only
+// this project's packages
 // (packageHasProjectFile), deduped by import path (preferring the syntax-rich copy),
 // and fails closed on any load error.
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {

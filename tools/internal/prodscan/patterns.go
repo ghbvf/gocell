@@ -173,11 +173,18 @@ func SatelliteParentPatterns(root string) []string {
 // Like SatelliteParentPatterns the prefixes are loadable ONLY through the shared
 // satellite-aware loader packagesload.LoadWorkspace; a single-module fixture has no
 // module-root subdir (those dirs are part of the ONE module, no own go.mod), so the
-// increment is EMPTY there. The increment's coverage of every go.work production
-// single-module root is kept honest by the Medium anti-drift guard
-// TestModuleRootMembersCoverGoWorkProductionRoots (tools/metricschema), which fails when
-// a top-level single-module root in go.work is missing from topLevelDirs (#2164's
-// recurrence guard).
+// increment is EMPTY there. Two Medium tests in tools/metricschema keep this honest,
+// the module-root analog of SatelliteParentPatterns' SATELLITE-PARENT-PREFIX-SCAN-01:
+//
+//   - TestModuleRootMembersCoverGoWorkProductionRoots (anti-drift): fails when a
+//     top-level single-module root in go.work is missing from topLevelDirs (#2164's
+//     recurrence guard — coverage completeness).
+//   - TestOBS01CoverageRequiresModuleRootMembers (load-witness) +
+//     TestCheckOBS01DetectsModuleRootMemberLeak (scan-witness): fail if "./corecells/..."
+//     / "./cellmodules/..." stop resolving to non-empty packages through LoadWorkspace —
+//     the "must go through LoadWorkspace" property, machine-checked, not Soft. (Both gates
+//     that compose this increment, OBS-01 and the duration gates, use the SAME prefixes
+//     through the SAME loader, so the OBS-01 witness covers the duration-gate path too.)
 func ModuleRootMemberPatterns(root string) []string {
 	var patterns []string
 	for _, dir := range topLevelDirs {

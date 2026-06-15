@@ -1010,9 +1010,12 @@ func TestOBS01CoverageRequiresSatellites_AntiVacuity(t *testing.T) {
 // The set is fail-closed in BOTH directions (see
 // TestModuleRootMembersCoverGoWorkProductionRoots): a new PRODUCTION single-module
 // root missing from topLevelDirs surfaces as uncovered → CI red; a new NON-production
-// module root missing from this set surfaces as "required but uncovered" → CI red →
-// a human adds it here with a reason. `tests` is auto-excluded (it is a MULTI-MEMBER
-// parent — tests/integration carries its own go.mod — so HasNestedModuleRoot prunes it).
+// module root missing from this set is NOT pruned by goWorkProductionModuleRoots, so it
+// enters `required` while topLevelDirs lacks it → "required but uncovered" → CI red →
+// a human adds it here with a reason. `tests` needs no entry: it IS a module root
+// (tests/go.mod), but it is ALSO a MULTI-MEMBER parent (tests/integration carries its
+// own go.mod), and goWorkProductionModuleRoots' !HasNestedModuleRoot filter prunes it
+// before this set is consulted (a multi-member parent is never a single-module root).
 var moduleRootCoverageExcluded = map[string]bool{
 	"framework": true,
 	"generated": true,
@@ -2556,6 +2559,11 @@ func Record(err error) {
 // nested member, in prodscan.topLevelDirs) rather than under a multi-member parent.
 // OBS-01 reaches it only via prodscan.ModuleRootMemberPatterns ("./corecells/..."),
 // which the satellite-aware loader resolves as a workspace member (#2164).
+//
+// Like writeSatelliteMetricsFixture it reuses the canonical tidied go.mod/go.sum with
+// only the module PATH renamed: go.sum pins the dependency-module hashes (framework,
+// prometheus, …), which are independent of the fixture's own module path, so the rename
+// stays valid under -mod=readonly without re-tidying.
 func writeModuleRootMemberMetricsFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
