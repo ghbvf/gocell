@@ -208,11 +208,15 @@ jobs:
           cache-dependency-path: "**/go.sum"
 
       - name: Pin internal requires & commit (stable only)
-        # Synchronized multi-module release (#1843): pin every publishable LIBRARY
-        # module's internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a local
-        # commit — the single tag target for root and all satellites. It is NEITHER
-        # pushed NOR tagged here: the pinned tree is first re-verified (next step),
-        # so the released commit is never an unverified tree (F1). Snapshots skip.
+        # Synchronized multi-module release (#1843): pin EVERY workspace member's
+        # internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a local commit —
+        # the pin set, a superset of the tagged publishable set. Pinning the full
+        # membership (incl. examples/*, cmd/*, tests/* subdirs) makes the next
+        # step's `go work sync` a no-op, so the pinned tree is drift-free (#2212 —
+        # a publishable-only pin left those members at v0.0.0 and `go work sync`
+        # drifted them). It is NEITHER pushed NOR tagged here: the pinned tree is
+        # first re-verified (next step), so the released commit is never an
+        # unverified tree (F1). Snapshots skip.
         if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
