@@ -36,6 +36,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/framework/runtime/auth/refresh/memstore"
@@ -52,7 +53,7 @@ func setupRowScopeHandler(t *testing.T) (http.Handler, *mem.UserRepository) {
 	repo := mem.NewStore(clock.Real()).UserRepository()
 	clk := storetest.NewFakeClock(time.Now())
 	rs, err := refreshmem.New(refresh.Policy{
-		ReuseInterval:  2 * time.Second,
+		ReuseInterval:  testtime.D2s,
 		MaxAge:         time.Hour,
 		MaxIdle:        refresh.DefaultMaxIdle,
 		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
