@@ -7,8 +7,8 @@
 // that the workflow's "Tag modules" step consumes; with --print-installable-tags
 // it emits the installable binary git tags; with --installable it strips
 // replace+pins internal requires in every installable binary module; with
-// --dry-run it previews the set and tags without writing. It is invoked by
-// .github/workflows/release.yml.
+// --dry-run it previews the pin set, stable tags, and installable tags without
+// writing. It is invoked by .github/workflows/release.yml.
 package main
 
 import (
@@ -55,7 +55,7 @@ func parseFlags() (flags, error) {
 	installable := flag.Bool("installable", false,
 		"strip replace+pin internal requires in every installable binary module")
 	dryRun := flag.Bool("dry-run", false,
-		"preview the publishable set and tags without writing go.mod files")
+		"preview the pin set, stable tags, and installable tags without writing go.mod files")
 	flag.Parse()
 
 	if *version == "" {

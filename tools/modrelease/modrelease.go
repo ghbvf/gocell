@@ -23,9 +23,11 @@
 // `require github.com/ghbvf/gocell[/path] v0.0.0` + a local
 // `replace … => ../relative`. `v0.0.0` is an unpublished placeholder: an external
 // consumer's `go get github.com/ghbvf/gocell/adapters/postgres@<tag>` cannot
-// resolve it. The release rewrites every internal require to the real release
-// version (v0.0.0 / pseudo / a prior real version → vX.Y.Z) and tags each module
-// `<reldir>/vX.Y.Z`.
+// resolve it. The release pins every workspace member's internal requires to the
+// real release version (v0.0.0 / pseudo / a prior real version → vX.Y.Z) and tags
+// ONLY the publishable modules `<reldir>/vX.Y.Z` — non-publishable members
+// (examples/*, cmd/*, tests/* subdirs) are pinned but never tagged, per the
+// pin-set ⊇ tag-set split above.
 //
 // # Keep replace (NOT stripped)
 //
