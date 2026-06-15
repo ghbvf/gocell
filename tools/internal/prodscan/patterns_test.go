@@ -133,6 +133,64 @@ func TestPatternsWithSatellites(t *testing.T) {
 	})
 }
 
+// TestSatelliteParentPatterns covers the single-sourced satellite increment (#2147)
+// that both PatternsWithSatellites and the OBS-01 scan compose onto their base.
+func TestSatelliteParentPatterns(t *testing.T) {
+	t.Run("real workspace yields exactly the multi-member parents", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"framework/kernel/k.go":    "package kernel\n",
+			"cmd/gocell/go.mod":        "module x/cmd/gocell\n",
+			"cmd/gocell/main.go":       "package main\n",
+			"adapters/postgres/go.mod": "module x/adapters/postgres\n",
+			"adapters/postgres/pg.go":  "package postgres\n",
+			"examples/iot/go.mod":      "module x/examples/iot\n",
+			"examples/iot/main.go":     "package main\n",
+			// cellmodules is a plain module root (own go.mod, no nested member) — it
+			// is NOT a satellite parent and must be excluded by !IsModuleRoot.
+			"cellmodules/go.mod": "module x/cellmodules\n",
+			"cellmodules/m.go":   "package cellmodules\n",
+			// tests/ + tools/ are PatternsExtended-only scope, never satellites.
+			"tests/e2e/e.go": "package e2e\n",
+			"tools/t/t.go":   "package t\n",
+		})
+		got := SatelliteParentPatterns(root)
+		gotSet := map[string]bool{}
+		for _, p := range got {
+			gotSet[p] = true
+		}
+		for _, want := range []string{"./cmd/...", "./adapters/...", "./examples/..."} {
+			if !gotSet[want] {
+				t.Errorf("SatelliteParentPatterns missing %q; got %v", want, got)
+			}
+		}
+		if len(got) != 3 {
+			t.Errorf("SatelliteParentPatterns = %v, want exactly the 3 multi-member parents "+
+				"(no framework/cellmodules/tests/tools)", got)
+		}
+		// OBS-01 composition = Patterns + increment, and must NOT pull in tests/ or
+		// tools/ (PatternsExtended scope) — the split is by base, not loader capability.
+		obs01 := map[string]bool{}
+		for _, p := range append(Patterns(root), SatelliteParentPatterns(root)...) {
+			obs01[p] = true
+		}
+		for _, forbidden := range []string{"./tests/...", "./tools/..."} {
+			if obs01[forbidden] {
+				t.Errorf("OBS-01 composition (Patterns + satellites) must exclude %q", forbidden)
+			}
+		}
+	})
+
+	t.Run("single-module fixture yields nothing", func(t *testing.T) {
+		root := writeTree(t, map[string]string{
+			"go.mod":      "module x\n",
+			"cmd/main.go": "package main\n",
+		})
+		if got := SatelliteParentPatterns(root); len(got) != 0 {
+			t.Errorf("SatelliteParentPatterns on single-module fixture = %v, want empty", got)
+		}
+	})
+}
+
 // TestPatternsKeepsSingleModuleFixtureDirs proves the prune is real-workspace-only:
 // a single-module fixture writes cmd/pkg/... as part of its ONE module (no nested
 // go.mod), so those dirs stay scannable.

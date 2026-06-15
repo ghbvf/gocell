@@ -22,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
-	"github.com/ghbvf/gocell/tools/packagesload"
 )
 
 func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
@@ -143,10 +142,11 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 // promwrap export set for the funnel-enforcement side.
 func TestPrometheusConstructor_RecognizesPromwrapFunnel(t *testing.T) {
 	root := repoRoot(t)
-	// promwrap now lives in the adapters/prometheus go.work satellite module
-	// (#1558), invisible to a GOWORK=off ModeModule load from the repo root;
-	// ModeWorkspace resolves it as a workspace member.
-	pkgs, err := loadPackagesWithMode(t.Context(), root, false, packagesload.ModeWorkspace, promwrapPkg)
+	// promwrap lives in the adapters/prometheus go.work satellite module (#1558),
+	// invisible to a GOWORK=off ModeModule load from the repo root. The shared
+	// satellite-aware loadPackages resolves the import path to its owning member and
+	// loads it (#2147).
+	pkgs, err := loadPackages(t.Context(), root, promwrapPkg)
 	require.NoError(t, err)
 
 	var exported []string
@@ -938,6 +938,86 @@ func TestOBS01CoverageRequiresFramework_AntiVacuity(t *testing.T) {
 	covered := prodscan.PatternTopLevels([]string{".", "./cells/...", "./adapters/..."})
 	assert.False(t, covered["framework"],
 		"PatternTopLevels must not report framework covered when no framework pattern is present")
+}
+
+// TestOBS01CoverageRequiresSatellites is the #2147 satellite counterpart of
+// TestOBS01CoverageRequiresFramework: it asserts the independent, hardcoded fact
+// that the multi-member satellite parents (cmd/adapters/examples, each holding
+// several go.work member modules) MUST be OBS-01-covered, via two checks that do
+// NOT depend on each other:
+//
+//  1. the OBS-01 production pattern set's top-levels include cmd/adapters/examples;
+//     and
+//  2. those satellite parent patterns actually LOAD non-empty project packages
+//     through the EXACT loadPackages path OBS-01 uses (expand "./<parent>/..." to
+//     its members, then per-member load) — a load-witness strictly stronger than
+//     string presence: it catches a parent that is present in the SoR but expands
+//     to zero members (the pre-#2147 silent match-zero).
+func TestOBS01CoverageRequiresSatellites(t *testing.T) {
+	root := repoRoot(t)
+
+	// (1) coverage: the OBS-01 SoR patterns map back to the satellite top-levels.
+	covered := prodscan.PatternTopLevels(obs01ProductionPatterns(root))
+	for _, sat := range []string{"cmd", "adapters", "examples"} {
+		assert.Truef(t, covered[sat],
+			"OBS-01 production scan must cover satellite parent %q (cmd/adapters/examples hold go.work member modules — #2147)", sat)
+	}
+
+	// (2) load-witness: the satellite parents load non-empty through OBS-01's loader.
+	// loadPackages is the SAME entry CheckOBS01 → checkOBS01WithPatterns uses; the
+	// merged satellite-aware loader expands each "./<parent>/..." to its members and
+	// loads them. A regression to silent match-zero loads nothing and fails here.
+	pkgs, err := loadPackages(t.Context(), root, "./cmd/...", "./adapters/...", "./examples/...")
+	require.NoError(t, err)
+	require.NotEmpty(t, pkgs,
+		"satellite parent patterns loaded zero project packages — OBS-01 silently stopped scanning satellites")
+	seen := map[string]bool{}
+	for _, p := range pkgs {
+		switch {
+		case strings.Contains(p.PkgPath, "/cmd/"):
+			seen["cmd"] = true
+		case strings.Contains(p.PkgPath, "/adapters/"):
+			seen["adapters"] = true
+		case strings.Contains(p.PkgPath, "/examples/"):
+			seen["examples"] = true
+		}
+	}
+	for _, sat := range []string{"cmd", "adapters", "examples"} {
+		assert.Truef(t, seen[sat], "satellite %q loaded no project package under the OBS-01 scan", sat)
+	}
+}
+
+// TestOBS01CoverageRequiresSatellites_AntiVacuity proves check (1) of
+// TestOBS01CoverageRequiresSatellites is not恒真: a synthetic production pattern
+// set with no satellite parent must NOT report cmd/adapters/examples as covered.
+func TestOBS01CoverageRequiresSatellites_AntiVacuity(t *testing.T) {
+	covered := prodscan.PatternTopLevels([]string{".", "./framework/kernel/..."})
+	for _, sat := range []string{"cmd", "adapters", "examples"} {
+		assert.Falsef(t, covered[sat],
+			"PatternTopLevels must not report satellite %q covered when no satellite pattern is present", sat)
+	}
+}
+
+// TestCheckOBS01DetectsSatelliteMemberLeak is the #2147 anti-vacuity witness that
+// OBS-01 actually SCANS satellite (cmd/adapters/examples) production code. It builds
+// a multi-member go.work workspace whose sole satellite member (examples/leakydemo)
+// leaks an errcode classifier (errcode.IsInfraError) into a metric label.
+//
+// On the pre-#2147 loader the satellite parent prefix "./examples/..." is pruned by
+// HasNestedModuleRoot and never re-emitted, so the member is never loaded and the
+// leak goes uncaught (CheckOBS01 errors / yields 0 diagnostics → this test RED). The
+// merged satellite-aware loader expands "./examples/..." to examples/leakydemo and
+// scans it, catching the leak (GREEN). The member is a self-complete module (the
+// canonical tidied fixture go.mod/go.sum, module path renamed), so the per-member
+// GOWORK=off load resolves it under -mod=readonly without a go.work.sum.
+func TestCheckOBS01DetectsSatelliteMemberLeak(t *testing.T) {
+	root := writeSatelliteMetricsFixture(t)
+	diagnostics, err := CheckOBS01(t.Context(), root)
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+	assert.Equal(t, "examples/leakydemo/leak.go", filepath.ToSlash(diagnostics[0].File),
+		"diagnostic must point exactly at the satellite member leak file — proves satellite code is scanned")
 }
 
 func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
@@ -2242,6 +2322,68 @@ func writeMetricsFixture(t *testing.T) string {
 	return root
 }
 
+// writeSatelliteMetricsFixture builds a multi-member go.work workspace with one
+// satellite member (examples/leakydemo) that leaks an errcode classifier into a
+// metric label — the #2147 RED witness that OBS-01 scans satellite production code.
+//
+// The member reuses the canonical tidied fixture go.mod/go.sum (module path renamed)
+// so it is a self-complete module: the satellite-aware loader expands "./examples/..."
+// to examples/leakydemo and loads it GOWORK=off via its own go.mod under -mod=readonly,
+// needing no go.work.sum. go.work exists solely so workspace.Modules enumerates the
+// member (driving the parent-prefix expansion); HasNestedModuleRoot(root/examples) is
+// true because examples/leakydemo carries a go.mod.
+func writeSatelliteMetricsFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mod, sum := canonicalMetricsFixtureMod(t)
+	const newModulePath = "module example.com/leakydemo"
+	mod = strings.Replace(mod, "module example.com/metricsfixture", newModulePath, 1)
+	require.Contains(t, mod, newModulePath,
+		"fixture go.mod module-path replacement failed — canonicalMetricsFixtureMod format changed?")
+	// Pin the same toolchain version as the real repo go.work (no hardcoded drift).
+	writeFile(t, root, "go.work", repoGoWorkGoDirective(t)+"\n\nuse ./examples/leakydemo\n")
+	writeFile(t, root, "examples/leakydemo/go.mod", mod)
+	writeFile(t, root, "examples/leakydemo/go.sum", sum)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", "acknowledgements: []\n")
+	writeFile(t, root, "examples/leakydemo/leak.go", `package leakydemo
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+)
+
+var leakProvider = metrics.NopProvider{}
+var leakCounter, _ = leakProvider.CounterVec(metrics.CounterOpts{
+	Name:       "satellite_leak_total",
+	LabelNames: []string{"reason"},
+})
+
+func Record(err error) {
+	leakCounter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc(context.Background())
+}
+`)
+	return root
+}
+
+// repoGoWorkGoDirective returns the real repo go.work's `go X.Y.Z` line so a fixture
+// workspace pins the same toolchain version the test binary runs under — no hardcoded
+// version that drifts when the repo bumps Go.
+func repoGoWorkGoDirective(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "go.work"))
+	require.NoError(t, err)
+	for _, line := range strings.Split(string(data), "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "go ") {
+			return trimmed
+		}
+	}
+	t.Fatal("repo go.work has no `go` directive")
+	return ""
+}
+
 // writeMetricsFixtureFiles lays down the throwaway metrics-fixture module tree:
 // a clone of the slimmed post-#1558 root go.mod plus the prometheus-adapter
 // require/replace, a cmd/app entrypoint, and reachable/unreachable packages.
@@ -2414,15 +2556,23 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 				return nil
 			}
 			top := strings.Split(rel, "/")[0]
-			// A top-level dir that prodscan.Patterns prunes is not required by this
-			// coverage guard either — symmetric with the scan, sharing the same
-			// prodscan single source. Two cases, both deferred to the ModeWorkspace
-			// migration gh #2136: a go.work satellite MODULE ROOT (own go.mod, e.g.
-			// cellmodules/ #1559 — IsModuleRoot), and a MULTI-MEMBER PARENT
-			// (cmd/adapters/examples holding member modules one level deeper —
-			// HasNestedModuleRoot), unaddressable by a root-relative ModeModule
-			// "./<dir>/..." post-#1565.
-			if rel == top && (prodscan.IsModuleRoot(path) || prodscan.HasNestedModuleRoot(path)) {
+			// A pure go.work satellite MODULE ROOT (own go.mod — cellmodules/ #1559,
+			// corecells/) stays excluded from this root-relative coverage guard: OBS-01
+			// addresses such a module only by its own member pattern, not a
+			// root-relative "./<dir>/..." prefix (its satellite coverage is a separate
+			// concern). framework/ is also a module root and is handled independently by
+			// TestOBS01CoverageRequiresFramework.
+			if rel == top && prodscan.IsModuleRoot(path) {
+				return filepath.SkipDir
+			}
+			// A MULTI-MEMBER PARENT (cmd/adapters/examples, holding go.work member
+			// modules one level deeper — HasNestedModuleRoot) IS required since #2147:
+			// the merged satellite-aware loader (packagesload.LoadWorkspace) expands
+			// "./<parent>/..." to its members and OBS-01 scans them. Register the parent
+			// top-level as required, then skip the descent — the members' production
+			// files live in nested modules the satellite-aware loader reaches on its own.
+			if rel == top && prodscan.HasNestedModuleRoot(path) {
+				out[top] = true
 				return filepath.SkipDir
 			}
 			if strings.HasPrefix(d.Name(), ".") || obs01CoverageExcludedTop(top) || d.Name() == "testdata" {

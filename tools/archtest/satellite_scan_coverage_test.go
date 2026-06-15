@@ -14,8 +14,9 @@
 // Many security/authz funnels — fence-token mint, no-deleted-auth-symbols,
 // credential-invalidate, capability-provider, … — declare coverage over exactly
 // these satellite dirs; with the silent skip they passed VACUOUSLY (scanned
-// nothing in cmd/adapters/examples). tools/workspace.ExpandParentPrefix now
-// expands each prefix to its real members so they are actually loaded.
+// nothing in cmd/adapters/examples). The shared satellite-aware loader
+// packagesload.LoadWorkspace now expands each prefix to its real members so they are
+// actually loaded.
 //
 // This guard loads the prefixes through the SAME typed path the funnels use
 // (Run + Typed) and asserts each prefix yields packages from its member modules.
