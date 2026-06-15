@@ -14,6 +14,7 @@ import (
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	kernelctxkeys "github.com/ghbvf/gocell/framework/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	pkgctxkeys "github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
@@ -139,12 +140,55 @@ func TestStreamAuth_ValidTokenReachesHandlerWithPrincipal(t *testing.T) {
 		return nil
 	}
 	ss := &fakeServerStream{ctx: bearerCtx()}
-	err := StreamAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}})(nil, ss, streamInfo(), handler)
+	// #2008: the non-public stream method also passes the PDP gate before the
+	// handler runs, so wire a permitting resolver + authorizer.
+	err := StreamAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
+		WithPermissionResolver(permResolverFor(streamMethod)),
+		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
+	)(nil, ss, streamInfo(), handler)
 	if err != nil {
 		t.Fatalf("valid token must pass StreamAuth, got %v", err)
 	}
 	if gotPrincipal == nil || gotPrincipal.Subject != "user-1" {
 		t.Fatalf("handler must see the principal-enriched ctx, got %+v", gotPrincipal)
+	}
+}
+
+// TestStreamAuth_PermissionGate proves the #2008 PDP gate fires at stream-open for
+// a server-streaming RPC (the gate runs in the shared authorize core, so unary and
+// stream share it). One representative per outcome class — the exhaustive table is
+// the unary TestUnaryAuth_PermissionGate; here we assert the shared core applies to
+// streams too (no stream-specific gate code).
+func TestStreamAuth_PermissionGate(t *testing.T) {
+	resolver := WithPermissionResolver(permResolverFor(streamMethod))
+	v := stubVerifier{claims: kauth.Claims{Subject: "user-1"}}
+
+	cases := []struct {
+		name     string
+		opts     []AuthOption
+		wantCode codes.Code // codes.OK = handler reached
+	}{
+		{"allow permits", []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})}, codes.OK},
+		{"deny denies", []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("no")})}, codes.PermissionDenied},
+		{"no mapping denies", []AuthOption{WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})}, codes.PermissionDenied},
+		{"obligation denies", []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: allowWithObligation()})}, codes.PermissionDenied},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := false
+			handler := func(any, grpc.ServerStream) error { reached = true; return nil }
+			ss := &fakeServerStream{ctx: bearerCtx()}
+			err := StreamAuth(v, tc.opts...)(nil, ss, streamInfo(), handler)
+			if tc.wantCode == codes.OK {
+				if err != nil || !reached {
+					t.Fatalf("want permit + handler reached; err=%v reached=%v", err, reached)
+				}
+				return
+			}
+			if status.Code(err) != tc.wantCode || reached {
+				t.Fatalf("code=%v want %v; reached=%v (want false)", status.Code(err), tc.wantCode, reached)
+			}
+		})
 	}
 }
 

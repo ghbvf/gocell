@@ -371,6 +371,56 @@ func newPermissionLiteral(expr ast.Expr) (string, bool) {
 	return s, true
 }
 
+// TestPermissionByName_ResolvesClosedSet pins that PermissionByName round-trips
+// every action string in the closed registry to its sealed singleton (identity,
+// not a fresh value). This is the string→Permission resolver the gRPC method
+// permission overlay relies on (#2008): a contract carries the action string
+// (e.g. "device:command"), and the registrar resolves it back to the sealed
+// Permission. Resolving (not minting) preserves the seal — there is still no way
+// to construct a Permission outside this file's registry.
+func TestPermissionByName_ResolvesClosedSet(t *testing.T) {
+	for _, p := range Permissions() {
+		got, ok := PermissionByName(p.String())
+		if !ok {
+			t.Errorf("PermissionByName(%q) ok=false, want true", p.String())
+			continue
+		}
+		if got != p {
+			t.Errorf("PermissionByName(%q) returned a non-identical Permission; "+
+				"must return the closed-registry singleton", p.String())
+		}
+	}
+}
+
+// TestPermissionByName_Unknown pins fail-closed resolution: an unknown or empty
+// action string yields the zero Permission + ok=false, so a typo'd contract
+// overlay cannot resolve to a valid gate (the registrar fails fast on ok=false).
+func TestPermissionByName_Unknown(t *testing.T) {
+	cases := []string{"", "nope:read", "device:commandx", "DEVICE:COMMAND", "admin"}
+	for _, s := range cases {
+		got, ok := PermissionByName(s)
+		if ok {
+			t.Errorf("PermissionByName(%q) ok=true, want false (unknown)", s)
+		}
+		if !got.IsZero() {
+			t.Errorf("PermissionByName(%q) returned non-zero Permission for unknown string", s)
+		}
+	}
+}
+
+// TestIsKnownPermissionString pins the static closed-set predicate FMT-41 uses to
+// reject a typo'd permission in a gRPC method overlay at validate time.
+func TestIsKnownPermissionString(t *testing.T) {
+	if !IsKnownPermissionString("device:command") {
+		t.Error("IsKnownPermissionString(\"device:command\") = false, want true")
+	}
+	for _, s := range []string{"", "nope:read", "DEVICE:COMMAND"} {
+		if IsKnownPermissionString(s) {
+			t.Errorf("IsKnownPermissionString(%q) = true, want false", s)
+		}
+	}
+}
+
 // returnsPermission reports whether ft is the signature `() Permission`.
 func returnsPermission(ft *ast.FuncType) bool {
 	if ft.Params != nil && len(ft.Params.List) != 0 {

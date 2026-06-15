@@ -34,6 +34,13 @@ type Deps struct {
 	Clock clock.Clock
 	// Verifier authenticates bearer tokens (required; nil fails closed).
 	Verifier auth.IntentTokenVerifier
+	// Authorizer is the ABAC PDP the per-method permission gate consults (#2008),
+	// the gRPC analog of bootstrap.WithPrimaryAuthorizer for HTTP. The composition
+	// root supplies the same cell-provided Authorizer it wires into the HTTP primary
+	// listener so gRPC method authorization is the identical decision. nil is
+	// permitted (a server with no permission-gated methods still boots); the gate
+	// then fail-closes (deny) at request time for any non-public method.
+	Authorizer auth.Authorizer
 	// AuthOptions configures the auth interceptor (public-method and
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
@@ -71,26 +78,37 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 		UnaryTracing(deps.Tracer),
 		UnaryAccessLog(deps.Clock),
 		UnaryMetrics(deps.Collector, deps.Clock, validCellIDs),
-		UnaryAuth(deps.Verifier, authOptionsWithPublicMethods(deps.AuthOptions, reg)...),
+		UnaryAuth(deps.Verifier, authChainOptions(deps, reg)...),
 		UnaryRecovery(),
 	)
 }
 
-// authOptionsWithPublicMethods returns the composition-root AuthOptions with the
-// registrar-sourced public-method predicate added. The registrar is the SINGLE
-// runtime source of the public-method bypass set (#1675): chain.go installs
-// WithPublicMethod(reg.IsPublicMethod) — derived from each cell's
-// endpoints.grpc.methods[] overlay — and GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01
-// forbids any OTHER production reference to WithPublicMethod, so the composed
-// (OR) union has exactly one member in production: the registrar. WithPublicMethod
-// composes additively (see its doc), so this is the sole production installer; test
-// harnesses may OR-in synthetic exemptions via deps.AuthOptions (allowed only in
-// _test.go). A fresh slice is returned so the unary and stream chains (sharing one
-// Deps) never alias-append into the same backing array.
-func authOptionsWithPublicMethods(opts []AuthOption, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
-	out := make([]AuthOption, 0, len(opts)+1)
-	out = append(out, opts...)
-	out = append(out, WithPublicMethod(reg.IsPublicMethod))
+// authChainOptions returns the composition-root AuthOptions with the
+// registrar/authorizer-sourced predicates added. The registrar is the SINGLE
+// runtime source of BOTH gRPC auth dimensions:
+//
+//   - public-method bypass (#1675): WithPublicMethod(reg.IsPublicMethod), derived
+//     from each cell's endpoints.grpc.methods[] (public:true). Guarded by
+//     GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01.
+//   - per-method permission gate (#2008): WithPermissionResolver(reg.PermissionForMethod),
+//     derived from endpoints.grpc.methods[].permission, plus WithPDPAuthorizer(deps.Authorizer)
+//     — the cell-provided PDP, the gRPC analog of bootstrap.WithPrimaryAuthorizer.
+//     Guarded by GRPC-PERMISSION-GATE-WIRING-FUNNEL-01.
+//
+// chain.go is the SOLE production installer of all three; the funnel archtests
+// forbid any other production reference, so each composed source has exactly one
+// member in production: the registrar/authorizer. Test harnesses may add synthetic
+// options via deps.AuthOptions (allowed only in _test.go). A fresh slice is returned
+// so the unary and stream chains (sharing one Deps) never alias-append into the same
+// backing array.
+func authChainOptions(deps Deps, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
+	out := make([]AuthOption, 0, len(deps.AuthOptions)+3)
+	out = append(out, deps.AuthOptions...)
+	out = append(out,
+		WithPublicMethod(reg.IsPublicMethod),
+		WithPermissionResolver(reg.PermissionForMethod),
+		WithPDPAuthorizer(deps.Authorizer),
+	)
 	return out
 }
 

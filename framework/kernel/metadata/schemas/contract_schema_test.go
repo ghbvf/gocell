@@ -766,9 +766,10 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			expectValid: false,
 		},
 		{
-			name: "method entry unknown property rejected (#1675, item additionalProperties — forward-protects #2008 ABAC fields)",
-			// The item-level additionalProperties:false seals the overlay shape so a
-			// typo'd or premature ABAC field (#2008) cannot slip in silently. public:true
+			name: "method entry unknown property rejected (item additionalProperties — nested authz object is not a known field)",
+			// The item-level additionalProperties:false seals the overlay shape: the
+			// ABAC dimension is a flat `permission` scalar (#2008), NOT a nested
+			// `authz` object, so a stray authz object is still rejected. public:true
 			// is present so the rejection is specifically the unknown authz property.
 			grpcBlock: `{
 				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
@@ -777,18 +778,46 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			expectValid: false,
 		},
 		{
-			name: "method entry missing public rejected (#1675, required public — vacuous-entry guard)",
-			// public is required: an entry exists iff it asserts public:true. A
-			// name-only entry is vacuous (omission ≡ authed), rejected at the schema
-			// surface in lockstep with governance FMT-41.
+			name: "method entry missing both public and permission rejected (#2008 vacuous-entry anyOf)",
+			// A name-only entry asserts no non-default — vacuous (omission ≡ authed),
+			// rejected at the schema surface (anyOf: public:true OR permission) in
+			// lockstep with governance FMT-41.
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check"}]}`,
 			expectValid: false,
 		},
 		{
-			name: "method entry public:false rejected (#1675, const:true — vacuous-entry guard)",
-			// public:false ≡ omission (authed). const:true rejects it so the overlay
-			// carries only meaningful entries; #2008 relaxes when ABAC fields land.
+			name: "method entry public:false (no permission) rejected (const:true + vacuous anyOf)",
+			// public:false ≡ omission (authed); const:true rejects it and the anyOf
+			// has no permission to satisfy it either.
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "public": false}]}`,
+			expectValid: false,
+		},
+		{
+			name: "methods overlay with permission accepted (#2008)",
+			// A non-public RPC declares its ABAC action via the flat permission
+			// scalar; anyOf is satisfied (permission present), no public.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"methods": [{"name": "IssueCommand", "permission": "device:command"}]
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "method entry with both public and permission rejected (#2008 mutex)",
+			// public ⊕ permission: a JWT-exempt RPC has no subject to authorize; the
+			// if/then mutex rejects the combination.
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "public": true, "permission": "device:command"}]
+			}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry empty permission rejected (#2008 minLength)",
+			// permission must be a non-empty string (the closed-set membership check
+			// lives in FMT-41, not the schema).
+			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "permission": ""}]}`,
 			expectValid: false,
 		},
 	}

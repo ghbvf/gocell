@@ -107,6 +107,56 @@ func TestBuildGrpcServiceSpecFromCU_PublicMethods(t *testing.T) {
 	}
 }
 
+// TestBuildGrpcServiceSpecFromCU_MethodPermissions verifies the per-method
+// permission overlay (#2008) is composed into GrpcServiceGenSpec.MethodPermissions
+// as (full method → action) pairs, sorted by full method name for deterministic
+// golden output. Only permission entries contribute; a public entry does not.
+func TestBuildGrpcServiceSpecFromCU_MethodPermissions(t *testing.T) {
+	t.Parallel()
+
+	cell := &metadata.CellMeta{
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	contract := &metadata.ContractMeta{
+		ID: "grpc.device.command.v1", Kind: "grpc",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "demo",
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "device.command.v1.DeviceCommandService",
+				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				// WatchCommands sorts before IssueCommand by full method name; the
+				// builder must sort, so the output order is deterministic regardless
+				// of overlay declaration order. A public entry contributes nothing here.
+				Methods: []metadata.GRPCMethodMeta{
+					{Name: "IssueCommand", Permission: "device:command"},
+					{Name: "WatchCommands", Permission: "device:command"},
+					{Name: "PingPublic", Public: true},
+				},
+			},
+		},
+	}
+	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
+	slc := &metadata.SliceMeta{
+		ID: "command", BelongsToCell: "demo", Dir: "command",
+		File:           "cells/demo/slices/command/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{cu},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+
+	got, err := buildGrpcServiceSpecFromCU(p, "demo", "command", cu, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []MethodPermission{
+		{FullMethod: "/device.command.v1.DeviceCommandService/IssueCommand", Permission: "device:command"},
+		{FullMethod: "/device.command.v1.DeviceCommandService/WatchCommands", Permission: "device:command"},
+	}
+	if !slices.Equal(got.MethodPermissions, want) {
+		t.Errorf("MethodPermissions = %+v, want %+v (sorted by full method; public entry excluded)", got.MethodPermissions, want)
+	}
+}
+
 // TestEnrichGrpcServices_BogusOverlayMethodRejected proves the cellgen path
 // (gocell generate cell) fail-closes a public-method overlay entry that names an
 // RPC absent from the proto service — the sibling of contractgen's
@@ -130,17 +180,24 @@ func TestEnrichGrpcServices_BogusOverlayMethodRejected(t *testing.T) {
 	}
 }
 
-// TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods covers the template's
-// {{- if .PublicMethods }} FALSE arm: a grpc contract with no methods overlay must
-// render a GRPCServiceSpec WITHOUT a PublicMethods field (fail-closed default).
-// Guards against a regression where the template emits an empty PublicMethods slice.
-func TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods(t *testing.T) {
+// TestRenderCell_GRPC_PermissionOnly_OmitsPublicMethods covers the template's
+// {{- if .PublicMethods }} FALSE arm: a grpc contract whose overlay carries only
+// permission entries (no public:true) must render a GRPCServiceSpec WITHOUT a
+// PublicMethods field, but WITH a MethodPermissions map (#2008). Guards against a
+// regression where the template emits an empty PublicMethods slice. (A no-overlay
+// grpc contract is no longer renderable under #2008 strict fail-closed — the
+// completeness pre-pass rejects an authed RPC with no permission; that path is
+// covered by TestEnrichGrpcServices_IncompleteOverlayRejected.)
+func TestRenderCell_GRPC_PermissionOnly_OmitsPublicMethods(t *testing.T) {
 	t.Parallel()
 	root := synthGRPCRoot(t)
 
-	// buildGRPCProject() declares an overlay; strip it for the no-overlay arm.
+	// Permission-only overlay (the synth proto exposes only IssueCommand): no
+	// public entry → PublicMethods omitted; permission entry → MethodPermissions present.
 	pm := buildGRPCProject()
-	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = nil
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command"},
+	}
 
 	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
 	if err != nil {
@@ -159,7 +216,34 @@ func TestRenderCell_GRPC_NoOverlay_OmitsPublicMethods(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	if bytes.Contains(out, []byte("PublicMethods")) {
-		t.Errorf("no-overlay grpc cell must omit the PublicMethods field, got:\n%s", out)
+		t.Errorf("permission-only grpc cell must omit the PublicMethods field, got:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("MethodPermissions")) {
+		t.Errorf("permission-only grpc cell must render the MethodPermissions field, got:\n%s", out)
+	}
+}
+
+// TestEnrichGrpcServices_IncompleteOverlayRejected proves the #2008 completeness
+// pre-pass: a non-public proto RPC with no permission overlay entry is rejected at
+// codegen (it would be a silently-dead 403 method at runtime — strict fail-closed).
+// The synth proto exposes IssueCommand; an empty overlay leaves it uncovered.
+func TestEnrichGrpcServices_IncompleteOverlayRejected(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = nil // no overlay → IssueCommand uncovered
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	err = EnrichGrpcServicesWithProtoInfo(spec, root)
+	if err == nil {
+		t.Fatal("EnrichGrpcServicesWithProtoInfo must reject an incomplete overlay (uncovered authed RPC)")
+	}
+	if !strings.Contains(err.Error(), "no endpoints.grpc.methods entry") {
+		t.Errorf("error must name the completeness violation, got: %v", err)
 	}
 }
 

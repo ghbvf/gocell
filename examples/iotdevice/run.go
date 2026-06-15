@@ -207,9 +207,14 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// server-streaming RPC (WatchCommands), so the minted drain cancels in-flight
 	// watches instead of holding the graceful-stop budget.
 	grpcDeps := interceptor.Deps{
-		Verifier:        jwtVerifier,
-		Clock:           clk,
-		Collector:       grpcCollector,
+		Verifier:  jwtVerifier,
+		Clock:     clk,
+		Collector: grpcCollector,
+		// #2008: the gRPC per-method PDP gate consults the same cell-provided
+		// Authorizer the HTTP primary listener uses (wired below via
+		// PrimaryAuthorizerOption), so gRPC method authorization is the identical
+		// ABAC decision. dc is constructed above, so dc.Authorizer() is available.
+		Authorizer:      dc.Authorizer(),
 		CellIDClosedSet: asm.CellIDs(),
 	}
 	// Resolve the gRPC addr ONCE and bind it in both the adapter config and

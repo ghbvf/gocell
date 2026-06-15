@@ -290,3 +290,95 @@ referential pre-pass" provably hold.
 | Layering (`kernel/` ↛ grpc) | **Unchanged.** `GRPCServiceSpec.PublicMethods` is a `[]string` data field (no grpc import); referential integrity stays in the tools layer (kernel⊥tools preserved). |
 | Auth granularity / security | **Improves (fail-closed), strictly safer than the deleted service-level bool.** Two load-bearing properties: (1) the overlay is a per-method **annotation**, NOT a method-set re-declaration — D5's "proto is the single source of the method set" is untouched; (2) the #1672-deleted threat ("a single service-level bool silently marks *every* RPC of a multi-method service public") is **structurally absent** in this shape — public is opt-in **per named method**, each name is proto-validated (Hard pre-pass) and golden-locked, the default is fail-closed (authed), and the runtime source is the registrar alone (funnel archtest). You cannot mark a whole service public with one flag; you must enumerate each method, and each must survive referential + golden + governance gates. |
 | AI-robustness | **Improves.** Every overlay field has a live reader (no dead config); errors are largely unexpressible (schema Hard) or CI-caught (codegen funnel Hard + FMT-41/funnel Medium). The ABAC deferral to #2008 avoids reintroducing dead config. |
+
+## Amendment 2026-06-15 — #2008: per-method ABAC `permission` overlay + interceptor PDP gate (delivers #1675's ABAC deferral)
+
+#1675 deferred the ABAC fields to #2008 (§"范围边界" above). #2008 delivers them:
+non-public gRPC RPCs now pass the same ABAC PDP decision as HTTP routes, via a
+**transport-level interceptor gate driven by a contract-derived method→permission
+map** — replacing the prior **hand-written `s.authorize()` predicate inside the
+devicecommandrpc handler** (the "手写谓词" the issue targets). `permission` is
+**authorization** (runs after authentication); it is the authorization sibling of
+#1675's `public` (authentication bypass) — separate sources, separate interceptor
+options.
+
+### Design
+
+The funnel mirrors the #1675 public-method funnel:
+
+```
+contract endpoints.grpc.methods[].permission: "device:command"
+  → GRPCMethodMeta.Permission (kernel/metadata)
+  → FMT-41 vacuous/mutex/closed-set guards + contractgen/cellgen completeness pre-pass
+  → cellgen GrpcServiceGenSpec.MethodPermissions → cell_gen.go GRPCServiceSpec.MethodPermissions (map[string]string)
+  → registrar.methodPermissions (string→sealed authz.Permission, fail-fast on unknown) → PermissionForMethod
+  → interceptor authorize() PDP gate (unary + stream share one core)
+  → auth.Authorizer.Authorize(subject, fullMethod, permission.String())
+```
+
+The composition root wires the **same** cell-provided Authorizer into the gRPC
+interceptor (`interceptor.Deps.Authorizer = dc.Authorizer()`) that
+`bootstrap.WithPrimaryAuthorizer` wires into the HTTP primary listener — so gRPC
+method authorization is the identical PDP decision.
+
+### Strict fail-closed (supersedes #1675's "sparse, absent⇒authed" for the permission dimension)
+
+Under #2008 a non-public RPC with **no** permission overlay entry is **DENIED** at
+the gate (no mapping → deny), not merely authed. The overlay is therefore
+**complete** for non-public methods: every authed RPC is either `public:true` or
+carries a `permission`. The contractgen/cellgen completeness pre-pass rejects an
+uncovered non-public proto method at codegen — turning "forgot the overlay → silently
+dead 403 method" into a build failure (the build-time enforcement of the strict
+fail-closed model). Resource forwarded to the PDP is the full method name (coarse,
+mirrors HTTP `RequirePermission` forwarding `r.URL.Path`).
+
+### Supersedes specific #1675 statements
+
+- Schema item shape: `required:["name","public"]` → **`required:["name"]`**; `public`
+  keeps `const:true` (public:false stays meaningless) but is no longer required; a new
+  flat `permission` (string, minLength:1) is added; a vacuous-entry `anyOf`
+  (public:true OR permission) and a public ⊕ permission `if/then` mutex replace the
+  bare const-only lock.
+- FMT-41 vacuous guard: "must assert public:true" → **"must assert ≥1 non-default
+  (public:true OR permission)"**, plus a public⊕permission mutex and a closed-set
+  check (`authz.IsKnownPermissionString`, governance→pkg/authz, layering-legal).
+- "Zero production grpc contracts adopt the overlay yet" → **iotdevice
+  `grpc.device.command.v1` adopts it** (IssueCommand + WatchCommands, both
+  `device:command`); the hand-written `devicecommandrpc.Server.authorize` is removed.
+
+### Enforcement (permission overlay)
+
+| 载体 | 强度 | 守卫 |
+|---|---|---|
+| schema item shape (`required:[name]`, `permission` minLength:1, vacuous anyOf, public⊕permission mutex) | **Hard** | `contract_schema_test.go` cases (permission-only valid; mutex/empty-permission/missing-both invalid) |
+| referential + **completeness** (every non-public proto RPC covered by public OR permission) | **Hard** (codegen funnel) | cellgen `EnrichGrpcServicesWithProtoInfo` → `validateGrpcMethodOverlayAgainstProto` |
+| permission ∈ closed authz registry | **Hard + Medium** | governance **FMT-41** (`authz.IsKnownPermissionString`, static) **+** registrar `authz.PermissionByName` fail-fast at registration (runtime) |
+| cellgen `MethodPermissions` emission | **Hard** (byte golden) | iotdevice `cell_gen.go` (verified by `gocell verify codegen-cell`) |
+| public ⊕ permission mutex + vacuous-entry | **Hard + Medium** | schema (Hard) **+** governance **FMT-41** (Medium) |
+| runtime single-source (registrar `PermissionForMethod` + composition-root Authorizer = sole production gate source) | **Medium** | archtest **GRPC-PERMISSION-GATE-WIRING-FUNNEL-01**, two dimensions: (1) production `WithPermissionResolver`/`WithPDPAuthorizer` refs ⊆ {chain.go}; (2) `authConfig.permissionFor`/`authConfig.authorizer` field writes ⊆ {auth.go} |
+| fail-closed (no mapping / no Authorizer / deny / non-zero obligation / PDP error → deny) | structural + tested | interceptor `authorizePermission` decision table (unary + stream table tests) |
+
+### Deferred (registered follow-up issues / documented boundary)
+
+- **Owner-scoped per-message resource extraction** (the analog of HTTP
+  `RequirePermissionForResource`): not feasible generically in an interceptor (`req`
+  is `any`; a stream has no message at open). `device:command` is a coarse role-based
+  baseline that ignores `resource`, so the coarse gate is correct for the current
+  consumer; per-message resource extraction is a documented boundary.
+- **gRPC PDP-decision metrics parity** (HTTP wraps `NewObservableAuthorizer`):
+  framework-level gRPC wiring needs a collector/clock in the chain — separate scope,
+  follow-up issue.
+- **transport-neutral `authz.MethodPolicyResolver`** (the issue's "重构"): would
+  require migrating HTTP's per-route hand-written gates to contract-derived metadata —
+  out of scope, follow-up issue.
+- **`internalOnly`**: PR-11 internal cell-to-cell gRPC boundary.
+
+### 威胁矩阵 re-eval (#2008)
+
+| Concern | Re-eval (#2008) |
+|---|---|
+| Wire / schema break | **Safe (pre-GA window).** `permission` is additive; `required` narrows to `[name]` (a relaxation); the iotdevice contract + cell_gen + handler update atomically in one PR. |
+| PII / redaction | **Unchanged.** The gate logs nothing new to wire; gRPC status messages are const literals (subject/action only in server-side slog, same as the prior handler gate). |
+| Layering (`kernel/` ↛ grpc, `kernel/governance` → pkg/authz) | **Safe.** `GRPCServiceSpec.MethodPermissions` is `map[string]string` (no authz import in kernel); string→Permission resolution happens in runtime/grpc. governance→pkg/authz is layering-legal (authz imports only errcode/tenant/stdlib; covered by the existing kernel `framework/pkg` depguard allow). |
+| Auth granularity / security | **Improves (fail-closed).** Authorization moves from a per-handler hand-written predicate to a declarative, contract-derived, transport-level gate enforced before the handler (403-before-validation preserved). Strict fail-closed: a non-public method with no permission is denied (and rejected at codegen). HTTP F5 obligation-fail-closed is mirrored. The gate runs inside the shared `authorize` core, so unary + stream are at parity and a panicking PDP collapses to codes.Internal (existing stage guard). |
+| AI-robustness | **Improves.** The method→permission map is codegen-derived + golden-locked (Hard); a typo'd permission fails statically (FMT-41 closed-set) and at registration (fail-fast); the runtime gate source is funnel-locked (GRPC-PERMISSION-GATE-WIRING-FUNNEL-01); the completeness pre-pass makes "forgot a permission" a build failure rather than a silent dead method. |

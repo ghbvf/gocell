@@ -99,6 +99,23 @@ type GRPCServiceSpec struct {
 	// method public (inert) or, worse, drift from the contract. Generated
 	// cell_gen.go is the only sanctioned writer.
 	PublicMethods []string
+
+	// MethodPermissions maps each non-public FULL method name
+	// (/{proto.Service}/{Method}) to the ABAC action string it requires (#2008),
+	// e.g. "/device.command.v1.DeviceCommandService/IssueCommand" → "device:command".
+	// Derived by cellgen from the contract's endpoints.grpc.methods[] overlay (the
+	// permission entries), keyed identically to PublicMethods and the registrar's
+	// attribution map. The runtime registrar resolves each string to a sealed
+	// authz.Permission (fail-fast on an unknown action) and the auth interceptor
+	// gates the RPC against it via the PDP. It is a data field (raw strings, not
+	// authz.Permission) so kernel can hold it without importing framework/pkg/authz
+	// — string→Permission resolution happens in the runtime layer.
+	//
+	// Strict fail-closed (#2008): a non-public method MUST appear here or it is
+	// DENIED at the gate. This field is cellgen-OWNED for the same reason as
+	// PublicMethods — the contractgen completeness pre-pass guarantees every authed
+	// proto method has a permission entry, which hand-writing would bypass.
+	MethodPermissions map[string]string
 }
 
 // Validate returns a non-nil error when any required field is missing.

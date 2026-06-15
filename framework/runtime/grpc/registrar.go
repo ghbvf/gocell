@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
@@ -60,6 +61,14 @@ type ServiceRegistrar struct {
 	// an absent method is authed (fail-closed). Populated during Register, like
 	// the methods attribution map.
 	publicMethods map[string]struct{}
+	// methodPermissions maps each non-public FULL method name to the sealed
+	// authz.Permission it requires (#2008), resolved from
+	// GRPCServiceSpec.MethodPermissions at Register time (a string that is not a
+	// member of the closed authz registry fails fast there). It is the single
+	// runtime source the auth interceptor consults via PermissionForMethod for the
+	// PDP gate — the authorization sibling of publicMethods (authentication bypass).
+	// An absent method has no mapping → the gate DENIES (strict fail-closed).
+	methodPermissions map[string]authz.Permission
 	// names maps a registered gRPC ServiceName → its owning spec, used both for
 	// cross-spec dedup and to report first/current owner on a collision (shared
 	// with cellScopedRegistrar).
@@ -84,9 +93,10 @@ type serviceOwner struct {
 // has populated it during the bootstrap drain.
 func NewServiceRegistrar() *ServiceRegistrar {
 	return &ServiceRegistrar{
-		methods:       make(map[string]string),
-		publicMethods: make(map[string]struct{}),
-		names:         make(map[string]serviceOwner),
+		methods:           make(map[string]string),
+		publicMethods:     make(map[string]struct{}),
+		methodPermissions: make(map[string]authz.Permission),
+		names:             make(map[string]serviceOwner),
 	}
 }
 
@@ -212,6 +222,28 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 	for _, m := range spec.PublicMethods {
 		r.publicMethods[m] = struct{}{}
 	}
+
+	// Record the per-method ABAC permission overlay (#2008): spec.MethodPermissions
+	// (cellgen-derived from endpoints.grpc.methods[] permission entries, keyed
+	// identically to the attribution map) become the auth interceptor's PDP gate
+	// source via PermissionForMethod. Each action string is resolved to its sealed
+	// authz.Permission HERE, fail-fast on an unknown action: the contractgen +
+	// FMT-41 build-time guards already reject an unknown permission, so a string
+	// that survives to runtime is a wiring bug (hand-written MethodPermissions
+	// bypassing codegen) — deny startup rather than silently gate on a forged
+	// action. Recorded under the same write lock as the attribution map.
+	for method, permName := range spec.MethodPermissions {
+		perm, ok := authz.PermissionByName(permName)
+		if !ok {
+			panic(panicregister.Approved("grpc-registrar-unknown-permission",
+				errcode.Assertion(
+					"grpc: GRPCServiceSpec.MethodPermissions[%q]=%q is not a known authz.Permission "+
+						"(contractID=%q, cellID=%q); the per-method permission overlay must reference the "+
+						"closed authz registry — declare it via endpoints.grpc.methods[].permission",
+					method, permName, spec.ContractID, spec.CellID)))
+		}
+		r.methodPermissions[method] = perm
+	}
 	return nil
 }
 
@@ -237,6 +269,22 @@ func (r *ServiceRegistrar) IsPublicMethod(fullMethod string) bool {
 	defer r.mu.RUnlock()
 	_, ok := r.publicMethods[fullMethod]
 	return ok
+}
+
+// PermissionForMethod returns the sealed authz.Permission a non-public RPC
+// requires (#2008), resolved from the cell's endpoints.grpc.methods[].permission
+// overlay at Register time. The second return value is false when fullMethod has
+// no permission mapping — the fail-closed default the auth interceptor's PDP gate
+// treats as DENY (a non-public RPC with no declared permission is a dead method,
+// not an authn-only one). Safe for concurrent use. The auth interceptor installs
+// this as its WithPermissionResolver, making the registrar the single runtime
+// source of the method→permission map — the authorization sibling of
+// IsPublicMethod (authentication bypass).
+func (r *ServiceRegistrar) PermissionForMethod(fullMethod string) (authz.Permission, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	p, ok := r.methodPermissions[fullMethod]
+	return p, ok
 }
 
 // ---------------------------------------------------------------------------

@@ -682,11 +682,11 @@
                   },
                   "methods": {
                     "type": "array",
-                    "description": "Sparse per-RPC auth overlay (#1675). Only RPCs needing a non-default auth flag appear; absent methods are authed (fail-closed). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41).",
+                    "description": "Per-RPC auth overlay (#1675 public; #2008 ABAC permission). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41). Under #2008 strict fail-closed the overlay is COMPLETE for non-public methods: every authed RPC carries a permission, and the contractgen completeness pre-pass rejects a non-public proto method with no entry (else it would be a dead 403).",
                     "items": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["name", "public"],
+                      "required": ["name"],
                       "properties": {
                         "name": {
                           "type": "string",
@@ -696,9 +696,28 @@
                         "public": {
                           "type": "boolean",
                           "const": true,
-                          "description": "Marks this RPC JWT-exempt. In #1675 public is the ONLY flag, so an entry exists iff public:true — const:true rejects public:false / omitted-public at the author surface, mirroring governance FMT-41's vacuous-entry guard (schema Hard + FMT-41 Medium, defense-in-depth). #2008 adds ABAC fields and relaxes BOTH this const and FMT-41 to 'asserts ≥1 non-default flag'."
+                          "description": "Marks this RPC JWT-exempt (#1675). const:true rejects public:false / omitted-public at the author surface (public:false is meaningless — absent = authed). Mutually exclusive with permission: a JWT-exempt RPC has no authenticated subject to authorize."
+                        },
+                        "permission": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "ABAC action string the non-public RPC requires (#2008), e.g. device:command. Carried as the PDP `action`; cellgen derives GRPCServiceSpec.MethodPermissions and the runtime registrar resolves it to a sealed authz.Permission. Must be a member of the closed authz registry — FMT-41 validates membership statically (the schema cannot). Mutually exclusive with public."
                         }
-                      }
+                      },
+                      "allOf": [
+                        {
+                          "description": "Vacuous-entry lock (#2008 widens #1675's const:true guard): an entry must assert ≥1 non-default — public:true OR a permission. {name} alone (or public:false) is rejected.",
+                          "anyOf": [
+                            { "required": ["public"] },
+                            { "required": ["permission"] }
+                          ]
+                        },
+                        {
+                          "description": "public ⊕ permission mutex: a JWT-exempt RPC has no authenticated subject, so requiring a permission on it is contradictory.",
+                          "if": { "required": ["public"], "properties": { "public": { "const": true } } },
+                          "then": { "not": { "required": ["permission"] } }
+                        }
+                      ]
                     }
                   }
                 }

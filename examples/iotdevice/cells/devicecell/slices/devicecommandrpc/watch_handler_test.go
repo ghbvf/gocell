@@ -41,26 +41,13 @@ func newWatchStream(ctx context.Context) *fakeWatchStream {
 	return &fakeWatchStream{ctx: ctx, sentCh: make(chan *commandv1.WatchCommandsResponse, 8)}
 }
 
-// TestServer_WatchCommands_Unauthorized asserts the PDP gate runs at the handler
-// edge before any work: a stream with no principal is rejected as
-// ErrAuthUnauthorized (authentication precedes authorization — PR-10d aligns the
-// gRPC edge with the HTTP enforcePermission 401-before-403 contract; the prior
-// hand-rolled authorizeCommandRole returned 403 for the no-principal case).
-func TestServer_WatchCommands_Unauthorized(t *testing.T) {
-	t.Parallel()
-	srv := newTestServer(t)
-	err := srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, newWatchStream(context.Background()))
-	var ce *errcode.Error
-	if !errors.As(err, &ce) || ce.Code != errcode.ErrAuthUnauthorized {
-		t.Fatalf("want ErrAuthUnauthorized, got %v", err)
-	}
-}
-
 // TestServer_WatchCommands_EmptyDeviceID asserts device_id is validated.
+// Authorization (device:command) is enforced by the interceptor before the
+// handler (#2008), so this exercises the handler's own validation only.
 func TestServer_WatchCommands_EmptyDeviceID(t *testing.T) {
 	t.Parallel()
 	srv := newTestServer(t)
-	err := srv.WatchCommands(&commandv1.WatchCommandsRequest{}, newWatchStream(operatorCtx(context.Background())))
+	err := srv.WatchCommands(&commandv1.WatchCommandsRequest{}, newWatchStream(context.Background()))
 	var ce *errcode.Error
 	if !errors.As(err, &ce) || ce.Code != errcode.ErrValidationFailed {
 		t.Fatalf("want ErrValidationFailed, got %v", err)
@@ -77,7 +64,7 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 	srv := newTestServer(t)
 
 	// Seed one active command for the device via the same enqueue path.
-	if _, err := srv.IssueCommand(operatorCtx(context.Background()), &commandv1.IssueCommandRequest{
+	if _, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
 		DeviceId:    seededDeviceID,
 		CommandType: "reboot",
 		Payload:     []byte("{}"),
@@ -85,7 +72,7 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 		t.Fatalf("seed command: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(operatorCtx(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
 	stream := newWatchStream(ctx)
 	done := make(chan error, 1)
 	go func() {
@@ -117,27 +104,18 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 	}
 }
 
-// principalServerStream injects an operator principal into the stream context so
-// the handler's role gate passes (the gRPC analog of authInject in the
-// IssueCommand over-gRPC test; production uses interceptor.StreamAuth).
-type principalServerStream struct {
-	grpc.ServerStream
-	ctx context.Context
-}
-
-func (s *principalServerStream) Context() context.Context { return s.ctx }
-
 // TestServer_WatchCommands_OverGRPC drives the server-streaming RPC end-to-end
 // over an in-process bufconn: the handler is registered via the buf-generated
 // RegisterDeviceCommandServiceServer (the same call cellgen emits), a real
 // grpc.ServerStream carries the snapshot, and the generated client streams it
 // back. It asserts the seeded active command arrives in the snapshot and that a
 // client-side cancel ends the stream (the drain/disconnect discipline over real
-// transport, which the fake-stream tests cannot exercise).
+// transport, which the fake-stream tests cannot exercise). No auth interceptor is
+// wired — authorization is exercised at the interceptor layer (#2008).
 func TestServer_WatchCommands_OverGRPC(t *testing.T) {
 	t.Parallel()
 	srv := newTestServer(t)
-	if _, err := srv.IssueCommand(operatorCtx(context.Background()), &commandv1.IssueCommandRequest{
+	if _, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
 		DeviceId:    seededDeviceID,
 		CommandType: "reboot",
 		Payload:     []byte("{}"),
@@ -146,10 +124,7 @@ func TestServer_WatchCommands_OverGRPC(t *testing.T) {
 	}
 
 	lis := bufconn.Listen(1024 * 1024)
-	streamAuthInject := func(s any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, h grpc.StreamHandler) error {
-		return h(s, &principalServerStream{ServerStream: ss, ctx: operatorCtx(ss.Context())})
-	}
-	grpcServer := grpc.NewServer(grpc.StreamInterceptor(streamAuthInject))
+	grpcServer := grpc.NewServer()
 	commandv1.RegisterDeviceCommandServiceServer(grpcServer, srv)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()
