@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/metautil"
@@ -144,7 +145,7 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 // ref: graphile/worker resetLockedAt.ts — outer UPDATE re-asserts locked_by
 // ref: river_job.sql / pgxjob — CTE + SKIP LOCKED batched reclaim
 //
-// $1 claimTTL interval text, $2 maxAttempts, $3 kout.StateDead.String(), $4 kout.StatePending.String(),
+// $1 claimTTL interval (pgtype.Interval), $2 maxAttempts, $3 kout.StateDead.String(), $4 kout.StatePending.String(),
 // $5 baseDelayMicros, $6 kout.StateClaiming.String(), $7 maxDelayMicros, $8 batchSize.
 const reclaimStaleQuery = `WITH picked AS (
 		SELECT id, lease_id, attempts FROM outbox_entries
@@ -251,14 +252,13 @@ func (s *PGOutboxStore) MarkRetry(
 	ctx context.Context, id, leaseID string,
 	attempts int, nextRetryAt time.Time, lastError string,
 ) (bool, error) {
-	// Convert time.Time to a PG interval offset from now().
-	// We use an absolute timestamp approach: compute delay from now, then
-	// express as "N microseconds" interval added to now() in SQL.
-	// This matches the writeBack approach: pass a duration interval string
-	// (pgx serializes time.Duration as int64 nanoseconds which PG cannot cast
-	// to interval directly — SQLSTATE 42846).
+	// Compute the backoff delay from now and pass it as a typed pgtype.Interval
+	// (Microseconds) so `now() + $3` casts cleanly. A raw time.Duration is int64
+	// nanoseconds which PG cannot cast to interval (SQLSTATE 42846); pgtype.Interval
+	// is the pgx/v5 idiomatic typed entry. Aligns with the saga journal typed-interval
+	// path (#2058).
 	delay := max(s.clock.Until(nextRetryAt), 0)
-	delayInterval := fmt.Sprintf("%d microseconds", delay.Microseconds())
+	delayInterval := pgtype.Interval{Microseconds: delay.Microseconds(), Valid: true}
 
 	errMsg := sanitizeError(lastError, 1000)
 
@@ -295,10 +295,18 @@ func (s *PGOutboxStore) ReclaimStale(
 	baseDelay, maxDelay time.Duration,
 	batchSize int,
 ) (int, error) {
-	// pgx serializes time.Duration as int64 nanoseconds which PostgreSQL cannot
-	// cast to interval (SQLSTATE 42846). Pass claimTTL as "N microseconds" text;
-	// baseDelay and maxDelay as int64 microseconds multiplied by interval '1 microsecond'.
-	claimTTLInterval := fmt.Sprintf("%d microseconds", claimTTL.Microseconds())
+	// A raw time.Duration is int64 nanoseconds which PostgreSQL cannot cast to
+	// interval (SQLSTATE 42846). Pass claimTTL as a typed pgtype.Interval (pgx/v5
+	// idiomatic, aligns with saga #2058); baseDelay and maxDelay stay int64
+	// microseconds multiplied by interval '1 microsecond' in SQL.
+	//
+	// The SQL keeps `$1::interval` even though the value is already interval-typed:
+	// `now() - $1` is ambiguous (timestamptz - interval = timestamptz OR
+	// timestamptz - timestamptz = interval), so PG would otherwise infer $1 as
+	// timestamptz and `claimed_at < (interval)` fails (42883). The cast pins the
+	// overload at parse time. (MarkRetry's `now() + $3` needs no cast — `+` only
+	// has the timestamptz+interval overload, so it is unambiguous.)
+	claimTTLInterval := pgtype.Interval{Microseconds: claimTTL.Microseconds(), Valid: true}
 
 	ct, err := s.db.Exec(ctx, reclaimStaleQuery,
 		claimTTLInterval, maxAttempts,
@@ -383,8 +391,9 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 // observability, principal) into scan, applying the per-column oversize guards.
 // It is the single source of the scan-side decode/cap logic shared by the relay
 // claim path (scanClaimedEntry) and the projection journal replay path
-// (projection_replay_source.go) — both reconstruct a kout.Entry from
-// outbox_entries rows and must defend identically against unbounded allocation
+// (projection_event_source.go) — both reconstruct a kout.Entry from DB rows
+// (the claim query from outbox_entries, the replay path from projection_events)
+// and must defend identically against unbounded allocation
 // from a corrupted or maliciously-crafted row (the three columns face the same
 // DoS vector). Each caller owns its own rows.Scan (the column sets differ: the
 // claim query interleaves relay state, the replay query carries the seq

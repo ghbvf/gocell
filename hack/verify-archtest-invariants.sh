@@ -88,6 +88,17 @@ source hack/lib/archtest.sh
 # close-out). #2024 pr-review F4. The sub-cases are the synthetic red/green
 # fixtures that prove the validator is non-vacuous at PR-merge.
 #
+# REPLAYDEPS-INMEM-FUNNEL-01 and SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01 (each: the
+# rule + RedFixture + ScanCore/Nonce + NoDotImportBlindSpot) are BOTH in this set:
+# they are sibling sealed single-pod-primitive funnels (claimer/nonce vs saga-
+# projection locker) and must be PR-time gated symmetrically — a funnel regression
+# is cheap to detect here (pure AST, no packages.Load) and should fail at PR-merge,
+# not only next-day nightly. #2182 (asymmetry close-out); funnels #1391/#2060.
+#
+# NOTE: fast-lane membership is still a manual test-name allowlist (Soft); deriving
+# it from the rule declarations is the #1279 consolidation-guard generalization,
+# tracked separately — not done here.
+#
 # -tags=archtest: the archtest leaf is gated behind `//go:build archtest` so a
 # bare `go test ./...` keeps it off the make verify / PR critical path (build-tag
 # funnel; same convention as integration / e2e). This gate is a sanctioned
@@ -95,7 +106,7 @@ source hack/lib/archtest.sh
 # renamed tag (which yields "[no test files]" → 0 tests → false green) into a
 # hard failure — `-run` over an empty test set exits 0 otherwise.
 if ! output="$(go test -tags="$ARCHTEST_BUILD_TAGS" ./tools/archtest \
-  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous|TestArchtestCIGoworkActive|TestArchtestCIGoworkActive_RejectsGoworkOff|TestArchtestCIGoworkActive_AcceptsGoworkActive|TestArchtestCIGoworkActive_IgnoresNonArchtestWorkflow|TestREPLAYDEPS_INMEM_FUNNEL_01|TestREPLAYDEPS_INMEM_FUNNEL_01_ClaimerRedFixture|TestREPLAYDEPS_INMEM_FUNNEL_01_NonceRedFixture|TestREPLAYDEPS_INMEM_FUNNEL_01_NoDotImportBlindSpot)$' \
+  -run '^(TestProdClockInjection|TestKernelClockLeafFallback|TestKernelClockLeafFallbackFixtures|TestProdClockInjectionFixtures|TestProdDurationConst|TestProdDurationConstFixtures|TestTestTimeLiteralConst|TestTestSleepDiscipline|TestTestTimeLiteralFixtures|TestPanicRegistered|TestPanicRegisteredScannerFixtures|TestArchtestModulePathFunnel|TestModulePathFunnel_TypedReconstruction|TestFenceTokenMintFunnel_AllowlistEnforced|TestMetadatatestImportScope|TestFixtureCellIDTypedBuilder_NewCellIDBodyShape|TestFixtureCellIDTypedBuilder_VarInitializerShape|TestRootModuleNoReplace01|TestRootModuleNoReplace01_NegativeControl|TestPlatformCellScanCoverage01|TestPlatformCellScanCoverage01_AntiVacuity|TestArchtest_AllLeafTestFiles_HaveArchtestBuildTag|TestArchtest_InvariantsScriptContainsFunnelGuard|TestPermissionBasedAuthzAllowlist_FrozenEmpty|TestPermissionBasedAuthz_ReverseFixture|TestContractOwnerCellFunnel_NoBypass|TestContractOwnerCellFunnel_DetectorIsNotVacuous|TestArchtestCIGoworkActive|TestArchtestCIGoworkActive_RejectsGoworkOff|TestArchtestCIGoworkActive_AcceptsGoworkActive|TestArchtestCIGoworkActive_IgnoresNonArchtestWorkflow|TestREPLAYDEPS_INMEM_FUNNEL_01|TestREPLAYDEPS_INMEM_FUNNEL_01_ClaimerRedFixture|TestREPLAYDEPS_INMEM_FUNNEL_01_NonceRedFixture|TestREPLAYDEPS_INMEM_FUNNEL_01_NoDotImportBlindSpot|TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01|TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01_RedFixture|TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01_ScanCore_SyntheticTree|TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01_NoDotImportBlindSpot)$' \
   -count=1 -timeout 5m 2>&1)"; then
   printf '%s\n' "$output"
   exit 1
