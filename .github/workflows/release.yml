@@ -247,16 +247,18 @@ jobs:
           bash hack/verify-workspace.sh
 
       - name: Tag modules
-        # Snapshots tag the bare $TAG only. Stable mints the bare $TAG as the GitHub
-        # Release MARKER tag (NOT a module tag: post-#1565 no module sits at the repo
-        # root, so modrelease's --print-tag-paths correctly emits only the per-module
-        # <reldir>/vX.Y.Z library tags — see modrelease_test.go TestTagPaths). The
-        # workflow prepends the bare marker to those library tags and pushes the
-        # whole set --atomic so a partial set never lands. This restores the pre-#1565
-        # ref topology — a bare vX.Y.Z at the release commit alongside every library
-        # tag — which `gh release create --verify-tag`, goreleaser {{.Tag}}, and the
-        # verify-job resume sentinel all resolve against (k8s/gopls convention; #2134).
-        # Guarded by RELEASE-STABLE-MARKER-TAG-01.
+        # Snapshots tag the bare $TAG only. Stable consumes modrelease's
+        # --print-stable-tags — the SINGLE SOURCE for the push set: the bare $TAG
+        # MARKER tag FIRST (NOT a module tag: post-#1565 no module sits at the repo
+        # root) followed by the per-module <reldir>/vX.Y.Z library tags. The whole
+        # set is pushed --atomic so a partial set never lands. This restores the
+        # pre-#1565 ref topology — a bare vX.Y.Z at the release commit alongside
+        # every library tag — which `gh release create --verify-tag`, goreleaser
+        # {{.Tag}}, and the verify-job resume sentinel all resolve against
+        # (k8s/gopls convention; #2134). modrelease OWNS the marker (StableTags,
+        # byte-locked by STABLE-RELEASE-TAG-SET-01); the workflow's consumed shape
+        # is guarded by RELEASE-STABLE-MARKER-TAG-01 (#2141, Hard-ized from the
+        # prior shell hand-mint).
         #
         # Resume: the verify job's tag_exists check inspects only the bare MARKER tag.
         # The --atomic push makes marker + library tags land all-or-nothing, so the
@@ -274,24 +276,23 @@ jobs:
             git push origin "$TAG"
             exit 0
           fi
-          mapfile -t module_tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-tag-paths)
-          # Sanity floor only — the EXACT publishable set is Hard golden-locked by
-          # PUBLISHABLE-MODULE-SET-01 (modrelease testdata/publishable.golden). The
-          # >=2 here just catches modrelease returning empty/garbage at release time.
-          if [ "${#module_tags[@]}" -lt 2 ]; then
-            echo "::error::modrelease produced ${#module_tags[@]} library tag(s) for $TAG; expected the full publishable module set."
+          # SINGLE SOURCE: --print-stable-tags emits the full push set in push
+          # order — the bare $TAG marker FIRST + the publishable library tags.
+          # modrelease owns the marker (StableTags); the workflow no longer hand-mints
+          # it (was `tags=("$TAG" "${module_tags[@]}")`). The EXACT set is Hard
+          # golden-locked by STABLE-RELEASE-TAG-SET-01 (testdata/stable_tags.golden);
+          # this consumed shape is guarded by RELEASE-STABLE-MARKER-TAG-01.
+          mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-stable-tags)
+          # Sanity floor only (the EXACT set is the golden above): >=3 = marker +
+          # >=2 library tags, and the marker MUST be first — catches modrelease
+          # returning empty/garbage or a marker-less set at release time.
+          if [ "${#tags[@]}" -lt 3 ] || [ "${tags[0]}" != "$TAG" ]; then
+            echo "::error::modrelease --print-stable-tags must emit the bare marker '$TAG' first + the full publishable set; got ${#tags[@]} tag(s), first='${tags[0]:-}'."
             exit 1
           fi
-          # The bare $TAG is the GitHub Release MARKER tag, prepended to the per-module
-          # library tags. modrelease never emits it (post-#1565 no module sits at the
-          # repo root; see modrelease_test.go TestTagPaths), so the workflow mints it
-          # here — restoring the pre-#1565 ref topology that `gh release create
-          # --verify-tag`, goreleaser {{.Tag}}, and the verify-job resume sentinel
-          # resolve against (#2134, RELEASE-STABLE-MARKER-TAG-01).
-          tags=("$TAG" "${module_tags[@]}")
           # Operator-visible preview of the exact set about to be pushed.
           {
-            echo "### Release $TAG — marker tag + ${#module_tags[@]} library module tags"
+            echo "### Release $TAG — ${#tags[@]} synchronized tags (bare marker + $(( ${#tags[@]} - 1 )) library module tags)"
             printf -- '- %s\n' "${tags[@]}"
           } >>"$GITHUB_STEP_SUMMARY"
           # Push the now-verified pin commit to develop (only if one was created).
