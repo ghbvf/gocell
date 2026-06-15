@@ -320,6 +320,39 @@ func TagPaths(root, version string) ([]string, error) {
 	return out, nil
 }
 
+// StableTags returns the FULL git tag set a stable release pushes, in push
+// order: the bare vX.Y.Z release MARKER tag FIRST, followed by every publishable
+// library module tag from [TagPaths].
+//
+// The marker is the repo-level release ref that `gh release create --verify-tag`,
+// goreleaser {{.Tag}}, and the verify-job resume sentinel all resolve against
+// (k8s/gopls convention: bare vX.Y.Z = release marker, <subdir>/vX.Y.Z = the
+// go-get module tag). Post-#1565 no module sits at the repo root, so [TagPaths]
+// never emits the bare marker; StableTags mints it via the SAME [tagPathFor]
+// root-ref convention ("." → bare version), so the "<bare version> = release
+// marker" shape is single-sourced, not a re-spelled literal.
+//
+// This is the single source the release workflow's "Tag modules" step consumes
+// (modrelease/cmd --print-stable-tags); it replaces the pre-#2141 shell-minted
+// `tags=("$TAG" "${module_tags[@]}")` construction, and testdata/stable_tags.golden
+// byte-locks the resulting set (STABLE-RELEASE-TAG-SET-01, Hard) — including the
+// marker's bare-version shape, which is frozen by that whole-set golden, not by an
+// independent guard on tagPathFor. TestStableReleaseTagSet01_MarkerFirst additionally
+// proves StableTags == [marker] ++ [TagPaths].
+//
+// Contrast [TagPaths] (--print-tag-paths): library tags ONLY, no marker — still
+// used by the release workflow's stable-resume verification path, which proves
+// every library tag peels to the marker commit (the marker itself is verified
+// separately via `git rev-parse "$TAG"`).
+func StableTags(root, version string) ([]string, error) {
+	libTags, err := TagPaths(root, version)
+	if err != nil {
+		return nil, err
+	}
+	marker := tagPathFor(".", version)
+	return append([]string{marker}, libTags...), nil
+}
+
 // installableBinaries is the frozen closed set of workspace use-dirs that are
 // go-install-able binaries. It is the single source for [InstallableBinaries]
 // and [InstallableTagPaths]. To add a new installable binary, append its

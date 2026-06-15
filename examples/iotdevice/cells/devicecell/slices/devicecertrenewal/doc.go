@@ -1,8 +1,8 @@
 // Package devicecertrenewal is the cert-renewal producer slice: a STATELESS
 // reconcile.Reconciler that, on each tick, scans the device repository for
 // near-expiry certificates (cert_expires_at on the devices row, #1819) and
-// enqueues a rotate-cert async command per device via runtime/command.EmitAsync
-// with active-uniqueness (#1820).
+// enqueues a rotate-cert async command per device via the generated
+// cmdenqueue.EmitAsync wrapper with active-uniqueness (#1820).
 //
 // It is the iotdevice archetype-② reference (reconcile → command, issue #1757),
 // the counterpart to the event-reactive devicebootstrap producer. The slice owns

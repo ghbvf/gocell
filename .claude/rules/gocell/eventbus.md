@@ -103,6 +103,17 @@ webhook、grpc serve、event subscribe 遵循同一范式：声明在 metadata�
 命令 dispatch 通过 generated typed API 和 Claimer 两阶段去重。producer 侧 key、
 consumer 侧 claim、composition-root wiring 必须同源；不得新增裸字符串 dispatch。
 
+producer 与 consumer **双侧**都收口到 codegen typed API：cell 经生成式
+`<cmd>.EmitAsync` / `<cmd>.EmitAsyncFromIdempotencyKey`（per-command wrapper，bake
+DispatchID + 锁 payload 为 `*Request`）发命令，**不**直调 runtime `command.EmitAsync`
+（裸 DispatchID）。三层嵌套 funnel：业务 → 生成 wrapper（`COMMAND-ASYNC-EMIT-CALLER-01`
+锁两个 runtime emit 出口的调用方为 generated/runtime） → runtime `command.EmitAsync`
+（`COMMAND-ASYNC-EMIT-FUNNEL-01` 锁裸 `outbox.Emit`/`NewEntry` 命令 topic 构造）→
+`outbox.NewEntry`。consumer 侧对称由 `COMMAND-ASYNC-DISPATCH-CALLER-01` +
+`COMMAND-DISPATCH-REGISTER-CALLER-01` 锁。wrapper 存在性 codegen+golden Hard、caller
+funnel type-aware scan Medium（Go 天花板，#2059）。符号/盲区见对应 archtest godoc 与 ADR
+`202606040550-1044`。
+
 ## Projection
 
 projection consumer 必须 wire `bootstrap.WithConsumerBase`。投影事件载体使用

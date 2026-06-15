@@ -299,8 +299,10 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 // consumer). It is the async sibling of Enqueue (which writes Pending directly).
 //
 // The commandID is sourced from the request's validated Idempotency-Key in ctx by
-// the bridge commandruntime.EmitAsyncFromIdempotencyKey — NOT a parameter here —
-// so the subject/commandID transpose footgun is structurally inexpressible. The
+// the generated cmdenqueue.EmitAsyncFromIdempotencyKey wrapper (which bakes in
+// DispatchID and delegates to runtime commandruntime.EmitAsyncFromIdempotencyKey)
+// — NOT a parameter here — so the subject/commandID transpose footgun is
+// structurally inexpressible. The
 // emit is wrapped in txRunner.RunInTx so the durable PG outbox writer gets a tx
 // (no-op in demo mode). A nil emitter (async path not wired) fail-fasts.
 func (s *Service) EnqueueAsync(ctx context.Context, deviceID, commandType, payload string) error {
@@ -323,8 +325,8 @@ func (s *Service) EnqueueAsync(ctx context.Context, deviceID, commandType, paylo
 	}
 	req := cmdenqueue.Request{DeviceID: deviceID, CommandType: commandType, Payload: payload}
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		return commandruntime.EmitAsyncFromIdempotencyKey(
-			txCtx, s.clock, s.emitter, cmdenqueue.DispatchID, deviceID, req)
+		return cmdenqueue.EmitAsyncFromIdempotencyKey(
+			txCtx, s.clock, s.emitter, deviceID, &req)
 	}); err != nil {
 		return err
 	}

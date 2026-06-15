@@ -124,9 +124,9 @@ GROUP BY definition_id ORDER BY events DESC;
 
 ---
 
-## 场景 4：实例停在 leader-elect skip 不推进 / distlock 后端故障（#1109 指标）
+## 场景 4：coordinator 推进受阻 / loop 故障（#1109 coordinator 指标）
 
-对应告警 `GoCellSagaInstanceStuckSkipping` 与 `GoCellSagaLockAcquireFailures`（`docs/ops/alerting-rules.md`）。仅在 leader-elect 模式（`WithLeaderElect`）且接入真实 metrics Provider 后才会触发——saga 接入生产 cell（PR-09 / #978）前这两条告警沉默。
+对应告警 `GoCellSagaInstanceStuckSkipping`、`GoCellSagaLockAcquireFailures`（4a/4b，leader-elect 故障）与 `GoCellSagaTickErrors`（4c，coordinator loop ClaimPending 故障）（`docs/ops/alerting-rules.md`）。4a/4b 仅在 leader-elect 模式（`WithLeaderElect`）下有意义；三条均需接入真实 metrics Provider 后才触发——saga 接入生产 cell（PR-09 / #978）前沉默。
 
 ### 4a：stuck skipping（`GoCellSagaInstanceStuckSkipping`）
 
@@ -160,6 +160,16 @@ ORDER BY updated_at ASC LIMIT 20;
 **根因**：distlock 后端（Redis）不可达 / 认证失败 / 命令被拒。
 
 **处置**：按 Redis 连接故障处置（网络、ACL、连接池、TLS）。恢复后 skip 自动回落、drive 恢复。该路径下 backend error 文本经 `redaction.RedactAny` 脱敏后入 slog（`reason=backend_error`），用 `instance_id` / `lock_key` 关联具体实例。
+
+### 4c：tick 持续 error（`GoCellSagaTickErrors`）
+
+**症状**：`saga_tick_total{result="error"}` 持续 >0——coordinator loop 仍在 tick（goroutine 存活），但每次 `ClaimPending` 返回错误、抢不到工作。区别于 4a/4b（leader-elect skip，loop 健康只是不持锁）与场景 1（tick 平坦 = loop 停滞）：这里 tick 在涨、但全落 error 分支。不依赖 leader-elect 模式——无论单进程还是 leader-elect，ClaimPending 故障都会触发。
+
+**根因**：`ClaimPending` 失败——journal/DB 不可达、migration drift、连接池耗尽、查询超时等 journal 后端故障。错误经 `slog.Warn("saga: tick failed")` 落日志（`runtime/saga/coordinator.go::tickLoop`）。
+
+**诊断**：查 PG/journal 可用性（连接、迁移状态、连接池水位）；对照 server log 的 "saga: tick failed" WARN 行取脱敏后 last_error；`saga_tick_total{result="claimed"|"empty"}` 应同时停止增长（所有 tick 落 error 分支）。
+
+**处置**：恢复 journal 后端连通性 / 修复 migration drift。loop 是 level-triggered，journal 恢复后下一个 tick 自动回到 claimed/empty，无需人工重启 coordinator。
 
 ---
 

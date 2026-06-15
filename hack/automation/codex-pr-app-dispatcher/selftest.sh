@@ -11,9 +11,16 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd -P)"
 
 PASS_COUNT=0
 FAIL_COUNT=0
+CHECK_COUNT=0
+# EXPECTED_CHECKS is the anti-vacuity anchor: the exact number of assert_* calls
+# across all scenarios below. If a scenario returns early or is silently skipped
+# (e.g. a handshake abort under load) CHECK_COUNT drifts from this and the run
+# hard-fails instead of false-greening on a 0-fail partial run. Update this when
+# adding/removing a check. (Same pattern as hack/automation/bucket-coverage-selftest.sh.)
+EXPECTED_CHECKS=18
 
-pass() { echo "PASS [$1]"; PASS_COUNT=$((PASS_COUNT + 1)); }
-fail() { echo "FAIL [$1]: $2"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
+pass() { echo "PASS [$1]"; PASS_COUNT=$((PASS_COUNT + 1)); CHECK_COUNT=$((CHECK_COUNT + 1)); }
+fail() { echo "FAIL [$1]: $2"; FAIL_COUNT=$((FAIL_COUNT + 1)); CHECK_COUNT=$((CHECK_COUNT + 1)); }
 
 assert_contains() {
     local name="$1" file="$2" needle="$3"
@@ -156,6 +163,11 @@ CODEXSTUB
 chmod +x "${STUB_BIN}/codex"
 
 run_router() {
+    # APP_SERVER_REQUEST_TIMEOUT is generous (30s) so a stub JSON-RPC handshake that
+    # is slow under heavy parallel CI load does not abort Scenario 1 (the ~8% flake
+    # at 5s, #2130). The stub always responds in milliseconds on the happy path, so
+    # this never adds wall-clock; no scenario waits for the timeout to fire (S4 returns
+    # a forced error; S5 skips dispatch). It only raises the previously-flaky ceiling.
     env \
         PATH="${STUB_BIN}:${PATH}" \
         GOCELL_APP_ROUTER_HOME="${ROUTER_HOME}" \
@@ -164,7 +176,7 @@ run_router() {
         GOCELL_APP_ROUTER_AUTHORS="alice bot" \
         GOCELL_APP_ROUTER_PR_COOLDOWN_SECONDS="${ROUTER_COOLDOWN:-1800}" \
         GOCELL_APP_ROUTER_GH_TIMEOUT=5 \
-        GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT=5 \
+        GOCELL_APP_ROUTER_APP_SERVER_REQUEST_TIMEOUT=30 \
         CODEX_BIN="${STUB_BIN}/codex" \
         GH_BIN="${STUB_BIN}/gh" \
         GH_REVIEW_LIST_FILE="${REVIEW_LIST}" \
@@ -249,5 +261,9 @@ assert_not_contains "S5-no-ledger-conflict" "${ROUTER_HOME}/state/dispatched" "4
 assert_not_contains "S5-no-ledger-conflict-check" "${ROUTER_HOME}/state/dispatched" "4@${OID4}:check"
 
 echo ""
-echo "codex-pr-app-dispatcher selftest: ${PASS_COUNT} passed, ${FAIL_COUNT} failed"
+echo "codex-pr-app-dispatcher selftest: ${PASS_COUNT} passed, ${FAIL_COUNT} failed (${CHECK_COUNT}/${EXPECTED_CHECKS} checks ran)"
+if [[ "${CHECK_COUNT}" -ne "${EXPECTED_CHECKS}" ]]; then
+    echo "ANTI-VACUITY FAIL: ran ${CHECK_COUNT} checks, expected ${EXPECTED_CHECKS} — a scenario was skipped (false-green risk)" >&2
+    exit 1
+fi
 [[ "${FAIL_COUNT}" -eq 0 ]]

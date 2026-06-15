@@ -3987,9 +3987,8 @@ func TestSAGA_PROJECTION_DEPS_INMEM_FUNNEL_01_RedFixture(t *testing.T) {
 	line, ok, err := firstQualifiedSelectorLine(path, distlockModule, "distlock", "NewInProcessDriver")
 	require.NoError(t, err, "parse RED fixture")
 	if !ok {
-		t.Error("SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01 RED fixture: detector found no " +
+		t.Fatal("SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01 RED fixture: detector found no " +
 			"distlock.NewInProcessDriver; firstQualifiedSelectorLine may be broken")
-		return
 	}
 	t.Logf("RED fixture hit at line %d", line)
 }

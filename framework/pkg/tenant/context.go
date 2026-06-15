@@ -25,6 +25,14 @@ import (
 // failure mode impossible to express by accident. ParseTenantID re-validates
 // (and canonicalizes) defensively even though the auth bridge already did so.
 //
+// INVARIANT (#1882 / #1883): this fail-closed empty/nil rejection is the Hard layer
+// that makes "empty ctx tenant ⟹ cross-tenant authority" unexpressible on the
+// sanctioned path. A saga-journal projection replays under the system principal with
+// an empty tenant (kernel/projection.InstallSystemPrincipal; ADR #1609 §5); a handler
+// deriving scope via FromContext therefore gets a 403, never a footgun "". The raw
+// reader ctxkeys.TenantIDFrom is the only path around this and is pinned to an infra
+// allowlist by CTXKEYS-TENANT-READ-CALLER-01.
+//
 // CLASSIFICATION — the failure-path error is a typed *errcode.Error classified
 // as KindPermissionDenied (HTTP 403 Forbidden), single-sourced here so every
 // tenant-scoped handler maps a missing/invalid tenant to a 403 instead of a

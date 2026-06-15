@@ -121,6 +121,11 @@ func TestPolicyCodec_RowScopeExhaustiveRoundTrip(t *testing.T) {
 
 	n := 0
 	for s := tenant.RowScope(1); s.Valid(); s++ {
+		if s == tenant.RowScopeAll {
+			// Policy rules never authorize the cross-tenant "all" scope; the codec
+			// rejects it on both directions (asserted in RowScopeAllRejected, #2028).
+			continue
+		}
 		n++
 		c, err := encodeRowScope(s)
 		require.NoErrorf(t, err, "rowScope %d must encode", s)
@@ -129,7 +134,19 @@ func TestPolicyCodec_RowScopeExhaustiveRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equalf(t, s, got, "rowScope %d must round-trip", s)
 	}
-	require.GreaterOrEqual(t, n, 4, "anti-vacuity: every valid RowScope must be exercised")
+	require.GreaterOrEqual(t, n, 3, "anti-vacuity: every policy-authorable RowScope (self/device/tenant) must be exercised")
+}
+
+// TestPolicyCodec_RowScopeAllRejected proves the policy codec fail-closes on the
+// cross-tenant "all" scope in BOTH directions. A policy rule must never authorize
+// RowScopeAll — it is reserved for the audited super-admin derivation (sealed
+// tenant.NewCrossTenantVisibility). The converter rejects it on write; the codec
+// rejects it too so the data layer itself is fail-closed (defense-in-depth, #2028).
+func TestPolicyCodec_RowScopeAllRejected(t *testing.T) {
+	_, err := encodeRowScope(tenant.RowScopeAll)
+	require.Error(t, err, "encodeRowScope must reject RowScopeAll (not a policy obligation)")
+	_, err = decodeRowScope("all")
+	require.Error(t, err, "decodeRowScope must reject the 'all' code (not a policy obligation)")
 }
 
 // ─── fail-closed ───────────────────────────────────────────────────────────

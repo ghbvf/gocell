@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
@@ -775,12 +776,12 @@ func TestService_QueryCrossTenant_WithStore_ReturnsPaged(t *testing.T) {
 		{
 			ID: "ct-3", EventID: "evt-ct-3", EventType: "vis.v1",
 			ActorID: "sa", TenantID: auditQueryTestTenant,
-			Timestamp: base.Add(2 * time.Second), Payload: []byte("{}"),
+			Timestamp: base.Add(testtime.D2s), Payload: []byte("{}"),
 		},
 		{
 			ID: "ct-4", EventID: "evt-ct-4", EventType: "vis.v1",
 			ActorID: "sa", TenantID: auditQueryTestTenantB,
-			Timestamp: base.Add(3 * time.Second), Payload: []byte("{}"),
+			Timestamp: base.Add(testtime.D3s), Payload: []byte("{}"),
 		},
 	}
 	fake := &fakeCtStore{entries: entries}

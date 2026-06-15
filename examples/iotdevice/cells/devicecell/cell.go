@@ -126,7 +126,7 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 }
 
 // WithBootstrapTxManager sets the CellTxManager injected into the devicebootstrap
-// reactive slice. That slice wraps command.EmitAsync in txRunner.RunInTx so
+// reactive slice. That slice wraps cmdenqueue.EmitAsync in txRunner.RunInTx so
 // durable mode (PG outbox writer) gets a real transaction in ctx. The cell
 // defaults the field to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so
 // demo mode and tests work without wiring it.

@@ -1,11 +1,13 @@
 // Command modrelease drives the synchronized multi-module release transform for
 // the GoCell workspace. With --version it rewrites every publishable library
 // module's internal require versions in place (keeping replace); with
-// --print-tag-paths it emits the per-module git tags (one per line) for the
-// release workflow's tag loop; with --print-installable-tags it emits the
-// installable binary git tags; with --installable it strips replace+pins
-// internal requires in every installable binary module; with --dry-run it
-// previews the set and tags without writing. It is invoked by
+// --print-tag-paths it emits the per-module library git tags (one per line) for
+// the release workflow's resume-verification path; with --print-stable-tags it
+// emits the FULL stable push set (the bare vX.Y.Z marker first + library tags)
+// that the workflow's "Tag modules" step consumes; with --print-installable-tags
+// it emits the installable binary git tags; with --installable it strips
+// replace+pins internal requires in every installable binary module; with
+// --dry-run it previews the set and tags without writing. It is invoked by
 // .github/workflows/release.yml.
 package main
 
@@ -36,6 +38,7 @@ func p(format string, a ...any) { _, _ = fmt.Fprintf(os.Stdout, format, a...) }
 type flags struct {
 	version              string
 	printTags            bool
+	printStableTags      bool
 	printInstallableTags bool
 	installable          bool
 	dryRun               bool
@@ -44,7 +47,9 @@ type flags struct {
 func parseFlags() (flags, error) {
 	version := flag.String("version", "", "release version tag, e.g. v1.2.3 (required)")
 	printTags := flag.Bool("print-tag-paths", false,
-		"print per-module git tags (one per line) instead of bumping")
+		"print per-module library git tags (one per line) instead of bumping")
+	printStableTags := flag.Bool("print-stable-tags", false,
+		"print the full stable push set (bare vX.Y.Z marker first + library tags) for release.yml mapfile")
 	printInstallableTags := flag.Bool("print-installable-tags", false,
 		"print installable binary git tags (one per line) for release.yml mapfile")
 	installable := flag.Bool("installable", false,
@@ -56,9 +61,24 @@ func parseFlags() (flags, error) {
 	if *version == "" {
 		return flags{}, fmt.Errorf("--version is required (e.g. --version v1.2.3)")
 	}
+	// The mode flags are mutually exclusive — run()'s switch silently honors the
+	// first set case, so passing two (e.g. --print-stable-tags --print-tag-paths)
+	// would quietly emit the wrong tag set into release.yml's `mapfile`. Reject
+	// rather than pick one arbitrarily. (No flag set = the default bump mode.)
+	modes := 0
+	for _, set := range []bool{*printTags, *printStableTags, *printInstallableTags, *installable, *dryRun} {
+		if set {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return flags{}, fmt.Errorf("--print-tag-paths / --print-stable-tags / --print-installable-tags / " +
+			"--installable / --dry-run are mutually exclusive; pass at most one")
+	}
 	return flags{
 		version:              *version,
 		printTags:            *printTags,
+		printStableTags:      *printStableTags,
 		printInstallableTags: *printInstallableTags,
 		installable:          *installable,
 		dryRun:               *dryRun,
@@ -78,6 +98,8 @@ func run() error {
 	switch {
 	case f.printTags:
 		return printTagPaths(root, f.version)
+	case f.printStableTags:
+		return printStableTagPaths(root, f.version)
 	case f.printInstallableTags:
 		return printInstallableTagPaths(root, f.version)
 	case f.dryRun:
@@ -97,6 +119,21 @@ func printTagPaths(root, version string) error {
 	// log isn't flooded.
 	slog.SetLogLoggerLevel(slog.LevelWarn)
 	tags, err := modrelease.TagPaths(root, version)
+	if err != nil {
+		return err
+	}
+	for _, t := range tags {
+		p("%s\n", t)
+	}
+	return nil
+}
+
+// printStableTagPaths emits the full stable push set one per line: the bare
+// vX.Y.Z marker FIRST, then library tags. Silences INFO logs so the output is
+// machine-parseable by release.yml's `mapfile -t tags`.
+func printStableTagPaths(root, version string) error {
+	slog.SetLogLoggerLevel(slog.LevelWarn)
+	tags, err := modrelease.StableTags(root, version)
 	if err != nil {
 		return err
 	}
@@ -166,7 +203,10 @@ func preview(root, version string) error {
 	if err != nil {
 		return err
 	}
-	tags, err := modrelease.TagPaths(root, version)
+	// The fresh stable push set is StableTags (bare marker first + library tags),
+	// matching what release.yml's "Tag modules" step consumes via --print-stable-tags
+	// — so dry-run previews the marker, not just the library tags.
+	stable, err := modrelease.StableTags(root, version)
 	if err != nil {
 		return err
 	}
@@ -183,8 +223,8 @@ func preview(root, version string) error {
 	for _, m := range mods {
 		p("  %s (%s)\n", m.Dir, m.ImportPath)
 	}
-	p("would create %d library tags:\n", len(tags))
-	for _, t := range tags {
+	p("fresh stable release would push %d tags (bare marker first + %d library):\n", len(stable), len(stable)-1)
+	for _, t := range stable {
 		p("  %s\n", t)
 	}
 	p("%d installable binaries would have replace stripped and internal requires pinned to %s:\n",

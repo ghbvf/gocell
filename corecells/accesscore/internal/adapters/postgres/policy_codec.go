@@ -79,6 +79,11 @@ var (
 	// rowScopeToCode maps only the NON-zero RowScope values. The zero value is a
 	// valid obligation meaning "no row-scope constraint" (authz.Obligations); it
 	// encodes to "" and is handled explicitly in encode/decodeRowScope, not here.
+	// RowScopeAll IS listed (it is a valid tenant code) but encode/decodeRowScope
+	// reject it at the policy layer (#2028) — a policy rule never authorizes the
+	// audited cross-tenant scope. The entry stays so the codec golden test can
+	// assert the full tenant rowScope code table; the runtime rejection is a
+	// separate, independent guard (not a hole in this map).
 	rowScopeToCode = map[tenant.RowScope]string{
 		tenant.RowScopeSelf:   "self",
 		tenant.RowScopeDevice: "device",
@@ -177,9 +182,20 @@ func decodeSource(c string) (abac.AttributeSource, error) {
 
 // encodeRowScope maps the zero value (no obligation) to "" and every other valid
 // scope to its frozen code via String(); an out-of-range value is an error (fail-closed).
+//
+// RowScopeAll is rejected on both encode and decode: a policy rule must never
+// authorize the cross-tenant "all" scope. That scope is reserved for the audited
+// super-admin derivation (sealed tenant.NewCrossTenantVisibility), not policy
+// obligations. The converter rejects rowScope=all on write; rejecting it here too
+// makes the codec layer itself fail-closed (defense-in-depth, #2028).
 func encodeRowScope(rs tenant.RowScope) (string, error) {
 	if rs == 0 {
 		return "", nil
+	}
+	if rs == tenant.RowScopeAll {
+		return "", fmt.Errorf(
+			"policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only",
+			rs.String())
 	}
 	if _, ok := rowScopeToCode[rs]; !ok {
 		return "", fmt.Errorf("policy_codec: cannot encode unknown rowScope %d", uint8(rs))
@@ -189,11 +205,15 @@ func encodeRowScope(rs tenant.RowScope) (string, error) {
 
 // decodeRowScope delegates to tenant.ParseRowScope which already implements the
 // empty-string → zero value (no obligation) semantics. An unknown non-empty code
-// is an error (fail-closed).
+// is an error (fail-closed). RowScopeAll is additionally rejected: see
+// encodeRowScope — policy obligations never carry the audited cross-tenant scope (#2028).
 func decodeRowScope(c string) (tenant.RowScope, error) {
 	rs, err := tenant.ParseRowScope(c)
 	if err != nil {
 		return 0, fmt.Errorf("policy_codec: unknown rowScope code %q", c)
+	}
+	if rs == tenant.RowScopeAll {
+		return 0, fmt.Errorf("policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only", c)
 	}
 	return rs, nil
 }

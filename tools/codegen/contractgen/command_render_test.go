@@ -124,6 +124,20 @@ func TestRender_Command_ContainsKeySymbols(t *testing.T) {
 		{"Dispatch func", "func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Response, error)"},
 		{"AsyncDispatchFunc assert", "var _ command.AsyncDispatchFunc = DispatchAsync"},
 		{"DispatchAsync func", "func DispatchAsync(ctx context.Context, reg *command.Registry, entry kout.Entry) error"},
+		// #2059 producer wrappers: per-command typed EmitAsync +
+		// EmitAsyncFromIdempotencyKey that bake DispatchID + lock the payload to
+		// *Request (symmetric to consumer DispatchAsync; callers locked by archtest
+		// COMMAND-ASYNC-EMIT-CALLER-01). Fragments kept short for lll; the full
+		// signatures are byte-locked by the golden test above.
+		{"EmitAsync wrapper", "func EmitAsync(ctx context.Context, clk clock.Clock,"},
+		{"EmitAsync bakes DispatchID", "command.EmitAsync(ctx, clk, emitter, DispatchID, subject, commandID, req, opts...)"},
+		{"EmitFromIdemKey wrapper", "func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock,"},
+		{"EmitFromIdemKey bakes DispatchID", "command.EmitAsyncFromIdempotencyKey(ctx, clk, emitter, DispatchID, subject, req, opts...)"},
+		// #2059 F1: both producer wrappers fail-fast on nil request (mirror Dispatch)
+		// so a nil *Request never becomes a `null` outbox poison entry.
+		{"EmitAsync nil-req guard", `"command.synth.do.v1 emit async: request must not be nil"`},
+		{"EmitFromIdemKey nil-req guard", `"command.synth.do.v1 emit async (idempotency-key): request must not be nil"`},
+		{"clock import", `"github.com/ghbvf/gocell/framework/kernel/clock"`},
 		// #1588 value funnel: unconditional request-schema embed + validator +
 		// the DispatchAsync Validate call (the async command-entry value check).
 		{"requestSchemaJSON embed", "var requestSchemaJSON = []byte("},

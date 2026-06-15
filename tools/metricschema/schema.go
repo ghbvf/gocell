@@ -14,6 +14,7 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 const (
@@ -209,20 +211,42 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 	return schema, nil
 }
 
-// containingModuleDir returns the deepest directory at or above dir (a
-// projectRoot-relative path) that holds a go.mod — i.e. the go.work satellite
-// module that owns dir — or "" when dir belongs to the repo root module. Build
-// uses a non-empty result to recognize a satellite example entrypoint and switch
-// the package load to ModeWorkspace (NOT GOWORK=off): ModeWorkspace resolves the
-// satellite AND core as workspace members in one graph, whereas a repo-root
-// ModeModule load cannot see a nested module's packages at all (#1556).
+// containingModuleDir returns the go.work satellite member that owns dir (a
+// projectRoot-relative path) — the member whose directory is the longest prefix
+// of dir — or "" when dir belongs to the repo root module. Build uses a non-empty
+// result to recognize a satellite example entrypoint and switch the package load
+// to ModeWorkspace (NOT GOWORK=off): ModeWorkspace resolves the satellite AND core
+// as workspace members in one graph, whereas a repo-root ModeModule load cannot
+// see a nested module's packages at all (#1556).
+//
+// Owner-resolution is single-sourced through workspace.Modules — the same member
+// set packagesload uses (#2167) — rather than a bespoke go.mod filesystem walk:
+// the decision is precisely "is dir inside a go.work member", which only the
+// registered member set answers (a nested go.mod absent from go.work is not a
+// member and ModeWorkspace would not resolve it either). A Modules error degrades
+// to root ownership ("") → ModeModule; any real satellite resolution failure then
+// surfaces from the subsequent package load with a clear "package not found".
 func containingModuleDir(projectRoot, dir string) string {
-	for d := filepath.Clean(dir); d != "." && d != ""; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(projectRoot, d, "go.mod")); err == nil {
-			return d
+	mods, err := workspace.Modules(projectRoot)
+	if err != nil {
+		// Degrade to root ownership (ModeModule). Surface the cause so a malformed
+		// go.work isn't diagnosed only via a downstream "package not found" (#2167 review).
+		slog.Warn("metricschema: workspace.Modules failed; treating entrypoint as root-module-owned",
+			slog.String("project_root", projectRoot), slog.Any("error", err))
+		return ""
+	}
+	target := filepath.ToSlash(filepath.Clean(dir))
+	best := ""
+	for _, m := range mods {
+		md := filepath.ToSlash(filepath.Clean(m.Dir))
+		if md == "." || md == "" {
+			continue // root module is represented by "" (not a satellite)
+		}
+		if (target == md || strings.HasPrefix(target, md+"/")) && len(md) > len(best) {
+			best = md
 		}
 	}
-	return ""
+	return best
 }
 
 // Marshal serializes schema with the generated-file header.
@@ -235,10 +259,12 @@ func Marshal(schema *Schema) ([]byte, error) {
 }
 
 // loadPackages loads the OBS-01 production scan patterns through the shared
-// satellite-aware loader packagesload.LoadWorkspace, which expands the multi-member
-// satellite parent-prefixes obs01ProductionPatterns now emits ("./cmd/...",
-// "./adapters/...", "./examples/...") to their go.work members so OBS-01 scans
-// satellite production code (#2147). It keeps only this project's packages
+// satellite-aware loader packagesload.LoadWorkspace, which resolves the satellite
+// prefixes obs01ProductionPatterns emits — the multi-member parents ("./cmd/...",
+// "./adapters/...", "./examples/...", #2147) expanded to their members, and the
+// top-level single-module roots ("./corecells/...", "./cellmodules/...", #2164)
+// resolved as workspace members — so OBS-01 scans that production code. It keeps only
+// this project's packages
 // (packageHasProjectFile), deduped by import path (preferring the syntax-rich copy),
 // and fails closed on any load error.
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
@@ -1971,13 +1997,15 @@ func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ..
 }
 
 // obs01ProductionPatterns is the OBS-01 production-scan source-of-record: the
-// satellite-free base (prodscan.Patterns) plus the multi-member satellite parent
-// prefixes (cmd/adapters/examples), which the shared satellite-aware loader
-// (loadPackages → packagesload.LoadWorkspace) expands to their go.work members so
-// satellite production code is scanned for metric-PII leaks (#2147). It does NOT use
-// PatternsExtended — OBS-01 never scanned tests/ or tools/.
+// satellite-free base (prodscan.Patterns) plus BOTH satellite increments — the
+// multi-member satellite parent prefixes (cmd/adapters/examples, #2147) and the
+// top-level single-module roots (corecells/cellmodules, #2164). The shared
+// satellite-aware loader (loadPackages → packagesload.LoadWorkspace) resolves each to
+// its go.work member(s) so that production code is scanned for metric-PII leaks. It
+// does NOT use PatternsExtended — OBS-01 never scanned tests/ or tools/.
 func obs01ProductionPatterns(projectRoot string) []string {
-	return append(prodscan.Patterns(projectRoot), prodscan.SatelliteParentPatterns(projectRoot)...)
+	patterns := append(prodscan.Patterns(projectRoot), prodscan.SatelliteParentPatterns(projectRoot)...)
+	return append(patterns, prodscan.ModuleRootMemberPatterns(projectRoot)...)
 }
 
 func dedupeDiagnostics(in []Diagnostic) []Diagnostic {
