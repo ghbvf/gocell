@@ -69,6 +69,14 @@
 //   - The anti-vacuity guard (every allowlisted file must reference TenantIDFrom ≥1×)
 //     is the reverse self-check: it proves the scanner resolves the real references and
 //     forbids a stale entry becoming a silent bypass slot.
+//   - Anti-vacuity is FILE-level, not reference-level: kernel/outbox/principal.go holds
+//     TWO references (a direct call at :142 and a function-value pass to
+//     withContextMetadata at :182). The reverse check marks the file observed once, so
+//     the :142 direct call alone satisfies it; the :182 function-value resolution is not
+//     separately asserted here. It is covered by the SAME ResolvePackageRef(*ast.Ident)
+//     path that the realip/principal-write sibling funnels exercise on their own
+//     function-value sites (access_log.go / RestoreToContext), so the mechanism is
+//     proven; a per-reference assertion would only duplicate that shared coverage.
 package archtest
 
 import (
