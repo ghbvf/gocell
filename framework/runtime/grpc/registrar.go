@@ -369,9 +369,9 @@ func (r *ServiceRegistrar) PermissionForMethod(fullMethod string) (authz.Permiss
 // Register sets it true before fn(scoped) and false after, so a registrar
 // retained past the callback (or used after Serve) fails fast.
 type cellScopedRegistrar struct {
-	inner      grpc.ServiceRegistrar
-	cellID     string
-	contractID string
+	inner        grpc.ServiceRegistrar
+	cellID       string
+	contractID   string
 	methods      map[string]string       // shared with ServiceRegistrar
 	names        map[string]serviceOwner // shared with ServiceRegistrar
 	localMethods map[string]struct{}     // full-method keys registered by THIS spec (F2 referential check)
