@@ -215,6 +215,7 @@ linters:
             - go.opentelemetry.io/otel
             - golang.org/x/sync
             - google.golang.org/grpc  # runtime/grpc/interceptor: gRPC transport library (the grpc analogue of go-chi/chi for runtime/http; adapters/grpc owns the server, runtime/grpc owns the cross-cutting interceptors)
+            - google.golang.org/genproto/googleapis/rpc/errdetails  # runtime/grpc/interceptor: google.rpc.ErrorInfo detail carried on auth/authz deny statuses (#2008 F6, machine-readable reason)
             - gopkg.in/yaml.v3
           deny:
             - pkg: github.com/ghbvf/gocell/framework/pkg/pgquery

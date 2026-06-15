@@ -71,6 +71,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -281,29 +282,67 @@ func TestArchtest_GRPCPermissionGateWiringFunnel01(t *testing.T) {
 // case: running the identical scans with an EMPTY allowlist must flag the live
 // chain.go references and the live auth.go field writes, proving neither matcher is
 // vacuously green.
+//
+// Per-symbol anti-vacuity: every name in permissionGateOptionFuncs must appear in at
+// least one ref diagnostic, and every name in permissionGateFields must appear in at
+// least one field-write diagnostic. Dropping coverage of ANY single symbol makes the
+// corresponding loop iteration fail — the aggregate NotEmpty check alone would not
+// catch that regression.
 func TestArchtest_GRPCPermissionGateWiringFunnel01_NegativeControl(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	// Dimension 1: option-func references (chain.go).
 	diags, observed := scanPermissionGateRefs(t, map[string]struct{}{})
 	require.NotEmpty(t, diags,
 		"negative control: an empty allowlist must flag the live permission-gate option references")
 	require.Contains(t, observed, "runtime/grpc/interceptor/chain.go",
 		"negative control: chain.go must host the sanctioned option references")
-	found := false
-	for _, d := range diags {
-		if d.Rel == "runtime/grpc/interceptor/chain.go" {
-			found = true
-		}
-	}
-	assert.True(t, found,
-		"negative control: the chain.go reference must be the flagged out-of-allowlist diagnostic")
 
+	// Per-symbol assertion: each protected option func must be individually flagged.
+	// The diagnostic message format is:
+	//   "GRPC-PERMISSION-GATE-WIRING-FUNNEL-01: interceptor.<name> is referenced from ..."
+	// so strings.Contains on the name is sufficient and precise.
+	for _, name := range permissionGateOptionFuncs {
+		name := name // capture
+		found := false
+		for _, d := range diags {
+			if strings.Contains(d.Message, "interceptor."+name) {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found,
+			"negative control: option func %q must be individually flagged when allowlist is empty — "+
+				"dropping scanner coverage of this symbol would not have been caught by the aggregate check",
+			name)
+	}
+
+	// Dimension 2: field writes (auth.go).
 	fieldDiags, fieldObserved := scanPermissionGateFieldWrites(t, map[string]struct{}{})
 	require.NotEmpty(t, fieldDiags,
 		"negative control: an empty allowlist must flag the live authConfig field writes")
 	require.Contains(t, fieldObserved, "runtime/grpc/interceptor/auth.go",
 		"negative control: auth.go must host the sanctioned authConfig.permissionFor/authorizer writes")
+
+	// Per-symbol assertion: each protected field must be individually flagged.
+	// The diagnostic message format is:
+	//   "GRPC-PERMISSION-GATE-WIRING-FUNNEL-01: authConfig.<field> (a gRPC PDP-gate state slot) ..."
+	// so strings.Contains on "authConfig.<field>" is sufficient and precise.
+	for _, field := range permissionGateFields {
+		field := field // capture
+		found := false
+		for _, d := range fieldDiags {
+			if strings.Contains(d.Message, "authConfig."+field) {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found,
+			"negative control: field %q must be individually flagged when allowlist is empty — "+
+				"dropping scanner coverage of this field would not have been caught by the aggregate check",
+			field)
+	}
 }

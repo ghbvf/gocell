@@ -120,6 +120,9 @@ grpcurl -plaintext \
 # → {"ackId":"cmd-...","acknowledgedAtUnixNano":"..."}
 # Auth boundaries: omit the -H → Unauthenticated (no bearer); a token whose roles
 # lack admin/operator → PermissionDenied (the device:command ABAC gate, fail-closed).
+# Each denial also carries a machine-readable google.rpc.ErrorInfo detail
+# (Reason ∈ {AUTHENTICATION_REQUIRED, INSUFFICIENT_PERMISSIONS, ...},
+# Domain=gocell.authz.grpc), so clients branch on Reason instead of the message text.
 ```
 
 ## Docker Mode

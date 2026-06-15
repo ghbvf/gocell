@@ -689,3 +689,186 @@ func contractsSlice(m map[string]*metadata.ContractMeta) []*metadata.ContractMet
 	}
 	return out
 }
+
+// synthGRPCMultiRoot returns the absolute path to the synth_grpc_multi testdata
+// tree. The proto file under this root is:
+//
+//	contracts/grpc/device/command/v1/device_command_multi.proto
+//
+// It exposes three RPCs: IssueCommand, WatchCommands, CancelCommand — the
+// minimum set required to exercise "partial missing" (forget one of N methods).
+func synthGRPCMultiRoot(t *testing.T) string {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth_grpc_multi"))
+	if err != nil {
+		t.Fatalf("synthGRPCMultiRoot: %v", err)
+	}
+	return abs
+}
+
+// buildGRPCProjectMulti builds a ProjectMeta pointing at the three-RPC
+// synth_grpc_multi proto. Methods overlay is left empty so each test case can
+// set it independently.
+func buildGRPCProjectMulti() *metadata.ProjectMeta {
+	cell := &metadata.CellMeta{
+		ID:           "demo",
+		Dir:          "demo",
+		File:         "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	slc := &metadata.SliceMeta{
+		ID:            "command",
+		BelongsToCell: "demo",
+		Dir:           "command",
+		File:          "cells/demo/slices/command/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{
+			{Contract: "grpc.device.command.v1", Role: "serve"},
+		},
+	}
+	contract := &metadata.ContractMeta{
+		ID:   "grpc.device.command.v1",
+		Kind: "grpc",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "demo",
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "device.command.v1.DeviceCommandService",
+				// Points at the three-RPC proto (IssueCommand, WatchCommands, CancelCommand).
+				Proto:   "contracts/grpc/device/command/v1/device_command_multi.proto",
+				Methods: nil, // set per test case
+			},
+		},
+	}
+	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+}
+
+// TestEnrichGrpcServices_CompletenessGate_MultiRPC is the primary regression for
+// F4 (review finding): the single-RPC synth proto cannot cover "partial missing"
+// — a service with N RPCs where one is forgotten. This table-driven test uses the
+// three-RPC synth_grpc_multi proto (IssueCommand, WatchCommands, CancelCommand)
+// to exercise three of the four gate scenarios:
+//
+//   - Scenario 1 (full coverage): every RPC covered → PASS.
+//   - Scenario 2 (partial missing): one of three RPCs has neither permission nor
+//     public → FAIL with the completeness error.
+//   - Scenario 3 (unknown method key): an overlay entry naming a method absent
+//     from the proto → FAIL with the referential error.
+//
+// Scenario 4 (unknown permission value) is addressed by
+// TestEnrichGrpcServices_UnknownPermission_PassesCellgenGate below — the cellgen
+// completeness gate does NOT validate the permission string against the closed
+// authz registry; that guard lives in governance FMT-41
+// (kernel/governance.validateFMT41ForContract → authz.IsKnownPermissionString).
+func TestEnrichGrpcServices_CompletenessGate_MultiRPC(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCMultiRoot(t)
+
+	cases := []struct {
+		name    string
+		methods []metadata.GRPCMethodMeta
+		wantErr string // empty → expect success
+	}{
+		{
+			// Scenario 1: all three RPCs covered — two with permission, one public.
+			// EnrichGrpcServicesWithProtoInfo must accept this overlay and return nil.
+			name: "scenario1_full_coverage_passes",
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "IssueCommand", Permission: "device:command"},
+				{Name: "WatchCommands", Permission: "device:command"},
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "",
+		},
+		{
+			// Scenario 2 (partial missing): WatchCommands has neither permission nor
+			// public — it is uncovered. The completeness pre-pass must reject it with
+			// the "no endpoints.grpc.methods entry" message identifying the uncovered
+			// method. This is the core multi-RPC risk: single-RPC protos cannot
+			// exercise this path because omitting the sole RPC looks like "no overlay"
+			// rather than "partial overlay".
+			name: "scenario2_partial_missing_rejected",
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "IssueCommand", Permission: "device:command"},
+				// WatchCommands deliberately omitted: partial coverage.
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "no endpoints.grpc.methods entry",
+		},
+		{
+			// Scenario 3 (unknown method key): overlay names "BogusMethod" which
+			// does not exist in the proto service. The referential guard must reject
+			// it — a stale overlay entry would be silently inert at runtime.
+			name: "scenario3_unknown_method_key_rejected",
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "IssueCommand", Permission: "device:command"},
+				{Name: "WatchCommands", Permission: "device:command"},
+				{Name: "BogusMethod", Permission: "device:command"}, // not an RPC of the proto
+			},
+			wantErr: "not an RPC of the proto service",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pm := buildGRPCProjectMulti()
+			pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = tc.methods
+
+			spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+			if err != nil {
+				t.Fatalf("BuildCellSpec: %v", err)
+			}
+			err = EnrichGrpcServicesWithProtoInfo(spec, root)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestEnrichGrpcServices_UnknownPermission_PassesCellgenGate documents that the
+// cellgen completeness gate (validateGrpcMethodOverlayAgainstProto, called from
+// EnrichGrpcServicesWithProtoInfo) does NOT validate whether a permission string
+// is a member of the closed authz registry. A bogus permission string like
+// "totally:bogus" passes cellgen successfully — it is syntactically non-empty,
+// so the completeness check treats the RPC as covered. The closed-set guard lives
+// in governance FMT-41 (kernel/governance.validateFMT41ForContract →
+// authz.IsKnownPermissionString) which operates at `gocell validate` time on the
+// YAML metadata, before codegen runs. The runtime registrar also re-checks via
+// authz.PermissionByName (fail-fast at bootstrap). This test is a contract-of-absence:
+// if this test FAILS (i.e. cellgen starts rejecting unknown permission strings),
+// update the test AND this documentation to reflect the new behavior.
+func TestEnrichGrpcServices_UnknownPermission_PassesCellgenGate(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCMultiRoot(t)
+
+	// All three RPCs covered; WatchCommands carries a permission string that is
+	// NOT in the closed authz registry. Cellgen must accept this (completeness
+	// satisfied) — governance FMT-41 and the runtime registrar are the actual guards.
+	pm := buildGRPCProjectMulti()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command"},
+		{Name: "WatchCommands", Permission: "totally:bogus"}, // unknown permission string
+		{Name: "CancelCommand", Public: true},
+	}
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	// Scenario 4: cellgen does NOT catch unknown permission strings.
+	// If this assertion fires the cellgen gate has been strengthened — update the
+	// test and the doc comment above.
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Errorf("cellgen completeness gate must NOT reject unknown permission strings "+
+			"(that is FMT-41's job); got unexpected error: %v", err)
+	}
+}

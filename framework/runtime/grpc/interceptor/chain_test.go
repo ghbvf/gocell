@@ -229,7 +229,8 @@ func TestNewStreamChain_RegistrarPublicMethodExempts(t *testing.T) {
 // PermissionDenied instead of reaching the handler.
 func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	handlerReached := false
-	reg := runtimegrpc.NewServiceRegistrar()
+	// Registers a permission-gated spec, so declare a wired gate (#2008 F1).
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(true))
 	deps := Deps{
 		Collector: metrics.NewInMemoryGRPCCollector(),
 		Clock:     clock.Real(),

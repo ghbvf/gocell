@@ -161,10 +161,14 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 // no duplicates, methods⇒codegen:true, and — in #1675 where public is the only
 // flag — each entry must assert public:true).
 //
-// #1675 carries only the public flag. ABAC fields (permission/resource/action)
-// and internalOnly are deferred to #2008, where they land together with their
-// live PDP consumer — adding them here would be dead config (the anti-pattern
-// #1672 deleted when it removed the vestigial service-level auth.public).
+// #1675 carried only the public flag; #2008 extended the overlay with the ABAC
+// Permission field (GRPCMethodMeta.Permission) — the action a non-public RPC
+// requires, consumed by the runtime interceptor's PDP gate. Both Public and
+// Permission are now live exported fields (mutually exclusive per RPC). The PDP
+// resource is the full method name (coarse, applied at the gate, not authored
+// here); per-message owner-scoped resource extraction and an internalOnly flag
+// remain unmodeled (no live consumer — adding them would be dead config, the
+// anti-pattern #1672 deleted when it removed the vestigial service-level auth.public).
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — the proto service name is the wire identity.

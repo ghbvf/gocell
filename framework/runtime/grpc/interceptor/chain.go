@@ -4,9 +4,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
@@ -37,17 +39,23 @@ type Deps struct {
 	// Authorizer is the ABAC PDP the per-method permission gate consults (#2008),
 	// the gRPC analog of bootstrap.WithPrimaryAuthorizer for HTTP. The composition
 	// root supplies the same cell-provided Authorizer it wires into the HTTP primary
-	// listener so gRPC method authorization is the identical decision. nil is
-	// permitted (a server with no permission-gated methods still boots); the gate
-	// then fail-closes (deny) at request time for any non-public method.
+	// listener so gRPC method authorization is the identical decision.
 	//
-	// WARNING: unlike the HTTP path — where bootstrap.ResolveAuthorizer fails fast at
-	// router build if a provider is nil — gRPC has no startup guard yet. A cell that
-	// declares permission-gated methods (endpoints.grpc.methods[].permission) but
-	// leaves this nil will DENY every such RPC at request time (fail-closed, but
-	// surfaced at first call rather than boot). A startup parity guard is a tracked
-	// follow-up; until then wire dc.Authorizer() whenever any gRPC method is gated.
+	// nil is permitted ONLY when no cell declares permission-gated methods. NewServerInterceptors
+	// threads whether this is non-nil into the minted registrar (WithPermissionGate); if any
+	// registered spec carries endpoints.grpc.methods[].permission while this is nil, Register
+	// fail-fasts at startup (phase7b drain, after Init, before Serve) — parity with HTTP's
+	// bootstrap.ResolveAuthorizer pre-serve guard (#2008 F1). A gated method with no Authorizer
+	// no longer boots-and-403s-at-request-time; the wiring bug surfaces at boot.
 	Authorizer auth.Authorizer
+	// MetricsProvider is the assembly's metrics backend. When it is a REAL provider
+	// (kernelmetrics.IsReal — non-nil, non-Nop) NewServerInterceptors wraps Authorizer in
+	// auth.NewObservableAuthorizer so every gRPC PDP decision is counted + timed under the same
+	// auth_pdp_decision_* series HTTP uses (#2008 F8 — transport parity; the metric family is
+	// shared via the provider's registerOrReuse, no transport label, no double-registration).
+	// A Nop/nil provider leaves Authorizer bare (metrics are best-effort and never gate the
+	// verdict), mirroring the HTTP bootstrap hasRealMetricsProvider gate.
+	MetricsProvider kernelmetrics.Provider
 	// AuthOptions configures the auth interceptor (public-method and
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
@@ -133,7 +141,30 @@ func authChainOptions(deps Deps, reg *runtimegrpc.ServiceRegistrar) []AuthOption
 // two. It also closes the "forgot newStreamChain" streaming-auth gap while keeping
 // adapters/grpc free of a direct interceptor import.
 func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
-	reg := runtimegrpc.NewServiceRegistrar()
+	// F1 (#2008): capture whether a PDP Authorizer backs the gate BEFORE the F8
+	// wrap (the observable decorator is always non-nil, so reading after would mask
+	// a nil source). The minted registrar carries this bit so Register fail-fasts
+	// at startup if a permission-gated spec is registered with no Authorizer.
+	permissionGateWired := !validation.IsNilInterface(deps.Authorizer)
+
+	// F8 (#2008): wrap the PDP Authorizer with decision metrics when a real metrics
+	// provider is configured, so gRPC PDP decisions reach the same auth_pdp_decision_*
+	// series as HTTP (transport parity). Centralized here — every gRPC cell gets it,
+	// not per-composition-root. Skipped when there is no Authorizer (nothing to gate)
+	// or no real provider (metrics are best-effort, never gate the verdict). The metric
+	// family is shared with the HTTP path via the provider's registerOrReuse (same name +
+	// labels), so wrapping in both transports does not double-register.
+	if permissionGateWired && kernelmetrics.IsReal(deps.MetricsProvider) {
+		pdpMetrics, err := auth.NewPDPMetrics(deps.MetricsProvider)
+		if err != nil {
+			panic(panicregister.Approved("grpc-interceptor-pdp-metrics",
+				errcode.Assertion(
+					"interceptor.NewServerInterceptors: register PDP decision metrics: %v", err)))
+		}
+		deps.Authorizer = auth.NewObservableAuthorizer(deps.Clock, deps.Authorizer, pdpMetrics)
+	}
+
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(permissionGateWired))
 	drain := runtimegrpc.NewDrainSignal()
 	return runtimegrpc.NewServerInterceptorsBundle(
 		[]grpc.ServerOption{

@@ -73,6 +73,31 @@ type ServiceRegistrar struct {
 	// cross-spec dedup and to report first/current owner on a collision (shared
 	// with cellScopedRegistrar).
 	names map[string]serviceOwner
+	// permissionGateWired records whether the auth interceptor chain that mints
+	// this registrar was supplied a PDP Authorizer (#2008, F1 startup parity).
+	// NewServerInterceptors threads !IsNilInterface(deps.Authorizer) here via
+	// WithPermissionGate. Register fail-fasts when a spec declares
+	// permission-gated methods (non-empty MethodPermissions) but this is false —
+	// the gRPC analog of HTTP's bootstrap.ResolveAuthorizer startup guard: a
+	// permission-gated method with no Authorizer would otherwise boot, pass
+	// grpc_ready, and DENY every protected RPC at request time. The phase7b drain
+	// (Init done, pre-Serve) surfaces the wiring bug at startup instead.
+	permissionGateWired bool
+}
+
+// RegistrarOption configures a ServiceRegistrar at construction. The only option
+// today is WithPermissionGate; the variadic form keeps NewServiceRegistrar's
+// existing zero-arg call sites (tests minting a bare registrar) compiling while
+// letting NewServerInterceptors declare the PDP-gate wiring state.
+type RegistrarOption func(*ServiceRegistrar)
+
+// WithPermissionGate declares whether the auth interceptor that mints this
+// registrar was wired a PDP Authorizer (#2008, F1). interceptor.NewServerInterceptors
+// passes !validation.IsNilInterface(deps.Authorizer); Register then refuses to
+// register a spec with permission-gated methods when no Authorizer backs the gate
+// (startup fail-fast, mirroring HTTP's ResolveAuthorizer pre-serve guard).
+func WithPermissionGate(wired bool) RegistrarOption {
+	return func(r *ServiceRegistrar) { r.permissionGateWired = wired }
 }
 
 // serviceOwner records which spec first registered a given gRPC ServiceName, so
@@ -91,13 +116,17 @@ type serviceOwner struct {
 // grpc.NewServer has been constructed with that chain. CellIDForMethod is callable
 // immediately (the map exists from construction); it returns matches once Register
 // has populated it during the bootstrap drain.
-func NewServiceRegistrar() *ServiceRegistrar {
-	return &ServiceRegistrar{
+func NewServiceRegistrar(opts ...RegistrarOption) *ServiceRegistrar {
+	r := &ServiceRegistrar{
 		methods:           make(map[string]string),
 		publicMethods:     make(map[string]struct{}),
 		methodPermissions: make(map[string]authz.Permission),
 		names:             make(map[string]serviceOwner),
 	}
+	for _, o := range opts {
+		o(r)
+	}
+	return r
 }
 
 // BindServer sets the delegation target (typically *grpc.Server) that Register
@@ -187,12 +216,13 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 	}
 
 	scoped := &cellScopedRegistrar{
-		inner:      r.inner,
-		cellID:     spec.CellID,
-		contractID: spec.ContractID,
-		methods:    r.methods,
-		names:      r.names,
-		active:     true,
+		inner:        r.inner,
+		cellID:       spec.CellID,
+		contractID:   spec.ContractID,
+		methods:      r.methods,
+		names:        r.names,
+		localMethods: make(map[string]struct{}),
+		active:       true,
 	}
 	fn(scoped)
 	// Close the scope: a registrar retained by the callback can no longer register
@@ -211,28 +241,63 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 				spec.ContractID, spec.CellID, scoped.count)))
 	}
 
+	// Startup parity guard (#2008, F1): a spec with permission-gated methods needs
+	// a PDP Authorizer behind the gate. Without one the gate denies every such RPC
+	// at request time (fail-closed, but surfaced at first call rather than boot) —
+	// the HTTP path fails fast at bootstrap.ResolveAuthorizer before serving. This
+	// drain runs in phase7b (after Init, before Serve), so the panic surfaces the
+	// missing composition-root wiring (interceptor.Deps.Authorizer, threaded here
+	// via WithPermissionGate) at startup, achieving HTTP/gRPC parity.
+	if len(spec.MethodPermissions) > 0 && !r.permissionGateWired {
+		panic(panicregister.Approved("grpc-registrar-permission-gate-unwired",
+			errcode.Assertion(
+				"grpc: GRPCServiceSpec.MethodPermissions declares %d permission-gated method(s) "+
+					"(contractID=%q, cellID=%q) but no PDP Authorizer is wired into the gRPC auth "+
+					"interceptor; set interceptor.Deps.Authorizer in the composition root (the gRPC "+
+					"analog of bootstrap.WithPrimaryAuthorizer)",
+				len(spec.MethodPermissions), spec.ContractID, spec.CellID)))
+	}
+
 	// Record the per-method public-auth overlay (#1675): spec.PublicMethods
 	// (cellgen-derived from endpoints.grpc.methods[] public:true entries, keyed
 	// identically to the attribution map's /{ServiceName}/{method}) become the
 	// auth interceptor's bypass set via IsPublicMethod. Referential integrity —
-	// each entry ∈ the proto method set — is enforced at build time (contractgen
-	// pre-pass + cellgen golden + governance FMT-41); a stale entry would be inert
-	// at runtime (no RPC matches it), never fail-open. Recorded under the same
-	// write lock as the attribution map.
+	// each entry ∈ this spec's registered method set — is enforced at build time
+	// (contractgen pre-pass + cellgen golden + governance FMT-41) AND re-checked
+	// here at runtime (#2008, F2 defense-in-depth: a hand-written spec bypassing
+	// codegen, or a stale key, fails fast rather than carrying an inert entry).
+	// Recorded under the same write lock as the attribution map.
 	for _, m := range spec.PublicMethods {
+		if _, ok := scoped.localMethods[m]; !ok {
+			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
+				errcode.Assertion(
+					"grpc: GRPCServiceSpec.PublicMethods[%q] does not name a method registered by this "+
+						"spec (contractID=%q, cellID=%q); the public-method overlay must reference a real "+
+						"RPC — declare it via endpoints.grpc.methods[].public",
+					m, spec.ContractID, spec.CellID)))
+		}
 		r.publicMethods[m] = struct{}{}
 	}
 
 	// Record the per-method ABAC permission overlay (#2008): spec.MethodPermissions
 	// (cellgen-derived from endpoints.grpc.methods[] permission entries, keyed
 	// identically to the attribution map) become the auth interceptor's PDP gate
-	// source via PermissionForMethod. Each action string is resolved to its sealed
-	// authz.Permission HERE, fail-fast on an unknown action: the contractgen +
-	// FMT-41 build-time guards already reject an unknown permission, so a string
-	// that survives to runtime is a wiring bug (hand-written MethodPermissions
-	// bypassing codegen) — deny startup rather than silently gate on a forged
-	// action. Recorded under the same write lock as the attribution map.
+	// source via PermissionForMethod. Two fail-fast checks (both wiring bugs only
+	// reachable by a hand-written spec bypassing codegen, since contractgen +
+	// FMT-41 already guard the build): the full-method KEY must name a method this
+	// spec registered (F2 referential integrity — a stale key would DENY a
+	// non-existent RPC, a dead 403), and the permission VALUE must be a member of
+	// the closed authz registry. Recorded under the same write lock as the
+	// attribution map.
 	for method, permName := range spec.MethodPermissions {
+		if _, ok := scoped.localMethods[method]; !ok {
+			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
+				errcode.Assertion(
+					"grpc: GRPCServiceSpec.MethodPermissions[%q] does not name a method registered by "+
+						"this spec (contractID=%q, cellID=%q); the permission overlay must reference a real "+
+						"RPC — declare it via endpoints.grpc.methods[].permission",
+					method, spec.ContractID, spec.CellID)))
+		}
 		perm, ok := authz.PermissionByName(permName)
 		if !ok {
 			panic(panicregister.Approved("grpc-registrar-unknown-permission",
@@ -307,10 +372,11 @@ type cellScopedRegistrar struct {
 	inner      grpc.ServiceRegistrar
 	cellID     string
 	contractID string
-	methods    map[string]string       // shared with ServiceRegistrar
-	names      map[string]serviceOwner // shared with ServiceRegistrar
-	active     bool                    // true only during the spec.Register callback
-	count      int                     // number of RegisterService calls in this scope
+	methods      map[string]string       // shared with ServiceRegistrar
+	names        map[string]serviceOwner // shared with ServiceRegistrar
+	localMethods map[string]struct{}     // full-method keys registered by THIS spec (F2 referential check)
+	active       bool                    // true only during the spec.Register callback
+	count        int                     // number of RegisterService calls in this scope
 }
 
 // RegisterService implements grpc.ServiceRegistrar. It:
@@ -348,15 +414,17 @@ func (c *cellScopedRegistrar) RegisterService(sd *grpc.ServiceDesc, impl any) {
 	}
 	c.names[svcName] = serviceOwner{cellID: c.cellID, contractID: c.contractID}
 
-	// Record every unary method.
+	// Record every unary method (shared attribution map + this spec's local set).
 	for _, m := range sd.Methods {
 		key := fmt.Sprintf("/%s/%s", svcName, m.MethodName)
 		c.methods[key] = c.cellID
+		c.localMethods[key] = struct{}{}
 	}
 	// Record every streaming method.
 	for _, s := range sd.Streams {
 		key := fmt.Sprintf("/%s/%s", svcName, s.StreamName)
 		c.methods[key] = c.cellID
+		c.localMethods[key] = struct{}{}
 	}
 
 	c.inner.RegisterService(sd, impl)

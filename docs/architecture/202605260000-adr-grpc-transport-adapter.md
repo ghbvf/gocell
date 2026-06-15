@@ -365,24 +365,90 @@ mirrors HTTP `RequirePermission` forwarding `r.URL.Path`).
   is `any`; a stream has no message at open). `device:command` is a coarse role-based
   baseline that ignores `resource`, so the coarse gate is correct for the current
   consumer; per-message resource extraction is a documented boundary (related to #2207).
-- **gRPC PDP-decision metrics parity** (HTTP wraps `NewObservableAuthorizer`):
-  framework-level gRPC wiring needs a collector/clock in the chain — **#2206**.
 - **transport-neutral `authz.MethodPolicyResolver`** (the issue's "重构"): would
   require migrating HTTP's per-route hand-written gates to contract-derived metadata —
-  **#2205**.
+  **#2205** (still open).
 - **gRPC `WatchCommands` device:consume** (allow device-self to watch own queue;
-  the gRPC analog of the HTTP dequeue `device:consume` ownership gate) — **#2207**.
-- **gRPC startup fail-fast for a nil Authorizer with permission-gated methods**
-  (HTTP has `ResolveAuthorizer` at router build; gRPC fail-closes at request time
-  instead) — a tracked DX parity follow-up.
+  the gRPC analog of the HTTP dequeue `device:consume` ownership gate) — **#2207** (still open).
 - **`internalOnly`**: PR-11 internal cell-to-cell gRPC boundary.
+
+> **Delivered in the 2026-06-16 #2204 review hardening** (see amendment below), no
+> longer deferred: **gRPC startup fail-fast for a nil Authorizer** (was a tracked DX
+> parity follow-up) and **gRPC PDP-decision metrics parity** (was **#2206**, now
+> closed). The threat-matrix rows below are re-evaluated accordingly.
 
 ### 威胁矩阵 re-eval (#2008)
 
 | Concern | Re-eval (#2008) |
 |---|---|
 | Wire / schema break | **Safe (pre-GA window).** `permission` is additive; `required` narrows to `[name]` (a relaxation); the iotdevice contract + cell_gen + handler update atomically in one PR. |
-| PII / redaction | **Unchanged.** The gate logs nothing new to wire; gRPC status messages are const literals (subject/action only in server-side slog, same as the prior handler gate). |
+| PII / redaction | **Unchanged.** The gate logs nothing new to wire; gRPC status messages are const literals (subject/action only in server-side slog, same as the prior handler gate). The #2204 review adds a machine-readable `google.rpc.ErrorInfo` detail to deny statuses, but its `Metadata` carries only non-PII routing keys (method, and permission when resolved) — never subject or token (see the 2026-06-16 amendment, F6). |
 | Layering (`kernel/` ↛ grpc, `kernel/governance` → pkg/authz) | **Safe.** `GRPCServiceSpec.MethodPermissions` is `map[string]string` (no authz import in kernel); string→Permission resolution happens in runtime/grpc. governance→pkg/authz is layering-legal (authz imports only errcode/tenant/stdlib; covered by the existing kernel `framework/pkg` depguard allow). |
 | Auth granularity / security | **Improves (fail-closed).** Authorization moves from a per-handler hand-written predicate to a declarative, contract-derived, transport-level gate enforced before the handler (403-before-validation preserved). Strict fail-closed: a non-public method with no permission is denied (and rejected at codegen). HTTP F5 obligation-fail-closed is mirrored. The gate runs inside the shared `authorize` core, so unary + stream are at parity and a panicking PDP collapses to codes.Internal (existing stage guard). |
-| AI-robustness | **Improves.** The method→permission map is codegen-derived + golden-locked (Hard); a typo'd permission fails statically (FMT-41 closed-set) and at registration (fail-fast); the runtime gate source is funnel-locked (GRPC-PERMISSION-GATE-WIRING-FUNNEL-01); the completeness pre-pass makes "forgot a permission" a build failure rather than a silent dead method. |
+| AI-robustness | **Improves.** The method→permission map is codegen-derived + golden-locked (Hard); a typo'd permission fails statically (FMT-41 closed-set) and at registration (fail-fast); the runtime gate source is funnel-locked (GRPC-PERMISSION-GATE-WIRING-FUNNEL-01); the completeness pre-pass makes "forgot a permission" a build failure rather than a silent dead method. The #2204 review adds two registration-time fail-fast guards (F1 nil-Authorizer-with-gated-methods; F2 method-key referential integrity) — both Medium runtime guards surfaced at the phase7b drain, before serve (see the 2026-06-16 amendment). |
+
+## Amendment 2026-06-16 — #2204 review hardening: startup parity, error model, metrics parity, referential integrity
+
+The six-dimension review of #2204 surfaced gaps between the #2008 gRPC PDP gate and
+its HTTP sibling. They are delivered in the same PR (not deferred) — the gate now
+reaches availability + operability parity with HTTP. Each item below states its
+mechanism + AI-robust rating; the #2008 threat matrix rows above are re-evaluated.
+
+### F1 — startup fail-fast for a permission-gated spec with no Authorizer (Medium)
+
+HTTP fails fast at router build (`bootstrap.ResolveAuthorizer`) when a permission-gated
+listener has no Authorizer. gRPC previously fail-closed only at request time (boot +
+`grpc_ready` pass, then every protected RPC 403s at first call). Now `NewServerInterceptors`
+threads `!IsNilInterface(deps.Authorizer)` into the minted registrar
+(`runtimegrpc.WithPermissionGate`); `ServiceRegistrar.Register` fail-fasts (panicregister
+`grpc-registrar-permission-gate-unwired`) when a spec carries non-empty `MethodPermissions`
+but no Authorizer is wired. The drain runs in phase7b (after Init, before Serve), so the
+wiring bug surfaces at startup — true HTTP parity. Guard rating Medium (registration-time
+runtime fail-fast); covered by `registrar_test.go` (unwired→panic / wired→ok / no-gated→ok).
+
+### F2 — method-key referential integrity at registration (Medium)
+
+`MethodPermissions` / `PublicMethods` overlay KEYS are now cross-checked at `Register`
+against the methods the spec actually registered (collected per-callback in
+`cellScopedRegistrar.localMethods`); an unknown full-method key fail-fasts
+(`grpc-registrar-unknown-method-key`) instead of silently producing a dead 403 at request
+time. This is defense-in-depth alongside the build-time contractgen + FMT-41 guards (it
+catches a hand-written spec bypassing codegen). Covered by `registrar_test.go`.
+
+### F6 — machine-readable deny reasons via google.rpc.ErrorInfo (Hard enum)
+
+Every gRPC auth/authz denial now carries a `google.rpc.ErrorInfo` detail (canonical
+code + human message for humans; `Reason` + `Domain="gocell.authz.grpc"` + non-PII
+`Metadata` for clients), so a client distinguishes no-mapping / not-wired / denied /
+obligation / unavailable / invalid-token / password-reset without parsing English text.
+`Reason` is drawn from a **sealed closed set** (`denyReason`, unexported field +
+package-level values + `allDenyReasons` registry) — `deniedStatus` only accepts a
+`denyReason`, so a raw string can never reach the slot (Hard). ALL interceptor denial
+branches route through the one helper (authz gate AND pre-PDP authn — no half-migrated
+bare `status.Error`). `Metadata` carries only method (+ permission when resolved), never
+subject/token (PII row re-eval above). Covered by `auth_reason_test.go`.
+
+### F8 — gRPC PDP-decision metrics parity (centralized)
+
+`interceptor.Deps` gains `MetricsProvider`; `NewServerInterceptors` wraps the Authorizer
+in `auth.NewObservableAuthorizer` when a real provider is configured (`kernelmetrics.IsReal`
+— the single source now shared with bootstrap `hasRealMetricsProvider`), so gRPC PDP
+decisions reach the same `auth_pdp_decision_*` series as HTTP. Centralized in the chain
+(every gRPC cell gets it, not per-composition-root). The metric family is shared with the
+HTTP path via the provider's `registerOrReuse` (same name + labels → no double-registration,
+no transport label, no cardinality blowup). A Nop/nil provider leaves the Authorizer bare
+(metrics best-effort, never gate the verdict). This **closes #2206**. Covered by
+`chain_pdp_metrics_test.go` + `isreal_test.go`.
+
+### Test + governance closure
+
+- iotdevice assembly-level e2e (`cells/devicecell/grpc_pdp_gate_test.go`): real
+  `deviceAuthorizer` + real overlay + real interceptor over a socket — asserts the gate's
+  allow/deny/unauthenticated verdicts for unary (IssueCommand) and stream (WatchCommands).
+- cellgen completeness negative control extended to a multi-RPC fixture (full / partial-missing
+  / unknown-key); the unknown-permission-VALUE check is FMT-41 + registrar, documented as a
+  cellgen contract-of-absence test.
+- `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` negative control strengthened to per-symbol
+  anti-vacuity (each protected option func / field individually asserted).
+- Stale "ABAC fields deferred to #2008" godoc in `kernel/metadata/schema_types.go` corrected
+  (`Public` + `Permission` are both live exported overlay fields).

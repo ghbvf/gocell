@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -35,7 +36,87 @@ const (
 	msgGRPCInsufficientPermissions   = "insufficient permissions"
 	msgGRPCObligationsNotEnforceable = "authorization decision carries obligations not enforceable at this gate"
 	msgGRPCAuthorizationDenied       = "authorization denied"
+	msgGRPCMissingAuthMetadata       = "missing or invalid authorization metadata"
+	msgGRPCPasswordResetRequired     = "password reset required before accessing this method"
+	msgGRPCInvalidToken              = "invalid token"
+	msgGRPCAuthnServiceUnavailable   = "authentication service unavailable"
+	msgGRPCAuthzServiceUnavailable   = "authorization service unavailable"
 )
+
+// denyReason is the sealed, machine-readable reason carried in the
+// google.rpc.ErrorInfo detail of every gRPC auth/authz denial (#2008 F6). It lets
+// clients branch on a stable enum instead of parsing the English status message,
+// which differs only by canonical code (three distinct authz failure modes all map
+// to codes.PermissionDenied). The set is CLOSED: the unexported field + package-level
+// values mean no caller outside this package can mint a reason, and deniedStatus only
+// accepts a denyReason — a raw string can never reach the ErrorInfo.Reason slot.
+type denyReason struct{ s string }
+
+// String returns the wire spelling carried in ErrorInfo.Reason.
+func (r denyReason) String() string { return r.s }
+
+// denyReasonDomain is the google.rpc.ErrorInfo.Domain qualifying every reason in
+// this package, so a client keys on (Domain, Reason) without colliding with other
+// services' ErrorInfo reasons.
+const denyReasonDomain = "gocell.authz.grpc"
+
+// The closed set of gRPC auth/authz denial reasons. Every deny/auth-failure return
+// point in this file routes through exactly one of these. authn (pre-PDP) and authz
+// (PDP gate) reasons share one enum so the whole interceptor error model is uniform
+// (no half-migrated bare status.Error).
+var (
+	reasonInvalidAuthMetadata     = denyReason{"INVALID_AUTH_METADATA"}
+	reasonInvalidToken            = denyReason{"INVALID_TOKEN"}
+	reasonAuthnServiceUnavailable = denyReason{"AUTHN_SERVICE_UNAVAILABLE"}
+	reasonPasswordResetRequired   = denyReason{"PASSWORD_RESET_REQUIRED"}
+	reasonAuthenticationRequired  = denyReason{"AUTHENTICATION_REQUIRED"}
+	reasonNoPermissionMapping     = denyReason{"NO_PERMISSION_MAPPING"}
+	reasonAuthzNotWired           = denyReason{"AUTHZ_NOT_WIRED"}
+	reasonInsufficientPermissions = denyReason{"INSUFFICIENT_PERMISSIONS"}
+	reasonObligationsUnsupported  = denyReason{"OBLIGATIONS_UNSUPPORTED"}
+	reasonPDPUnavailable          = denyReason{"PDP_UNAVAILABLE"}
+	reasonAuthorizationDenied     = denyReason{"AUTHORIZATION_DENIED"}
+)
+
+// allDenyReasons registers every reason for anti-vacuity tests (uniqueness +
+// non-empty spelling). A new reason MUST be added here or the registry test fails.
+var allDenyReasons = []denyReason{
+	reasonInvalidAuthMetadata, reasonInvalidToken, reasonAuthnServiceUnavailable,
+	reasonPasswordResetRequired, reasonAuthenticationRequired, reasonNoPermissionMapping,
+	reasonAuthzNotWired, reasonInsufficientPermissions, reasonObligationsUnsupported,
+	reasonPDPUnavailable, reasonAuthorizationDenied,
+}
+
+// deniedStatus builds a gRPC status carrying a machine-readable google.rpc.ErrorInfo
+// detail (#2008 F6): the canonical code + human message serve humans, while
+// ErrorInfo.Reason (the sealed enum) + Domain + Metadata let clients reliably
+// distinguish no-mapping / not-wired / denied / obligation / unavailable. Metadata
+// carries only non-PII routing keys (method, and permission when known) — never the
+// subject or token. If attaching the detail ever fails (not expected — ErrorInfo is a
+// static proto), the bare status is returned so a denial is never downgraded.
+func deniedStatus(code codes.Code, msg string, reason denyReason, md map[string]string) error {
+	st := status.New(code, msg)
+	enriched, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason:   reason.String(),
+		Domain:   denyReasonDomain,
+		Metadata: md,
+	})
+	if err != nil {
+		return st.Err()
+	}
+	return enriched.Err()
+}
+
+// denyMeta builds the non-PII ErrorInfo.Metadata for a denial: always the method,
+// plus the required permission when the gate has resolved it. An empty permission
+// is omitted (the pre-PDP authn denials have no permission context).
+func denyMeta(method, permission string) map[string]string {
+	md := map[string]string{"method": method}
+	if permission != "" {
+		md["permission"] = permission
+	}
+	return md
+}
 
 // AuthOption configures the auth interceptor.
 type AuthOption func(*authConfig)
@@ -212,16 +293,18 @@ func authorize(
 
 	token, ok := bearerFromMetadata(ctx)
 	if !ok {
-		return ctx, status.Error(codes.Unauthenticated, "missing or invalid authorization metadata")
+		return ctx, deniedStatus(codes.Unauthenticated, msgGRPCMissingAuthMetadata,
+			reasonInvalidAuthMetadata, denyMeta(fullMethod, ""))
 	}
 
 	authCtx, p, verr := auth.AuthenticateBearer(ctx, verifier, token)
 	if verr != nil {
-		return ctx, authErrorToStatus(verr)
+		return ctx, authErrorToStatus(verr, fullMethod)
 	}
 
 	if auth.PasswordResetBlocked(p, callPredicate(cfg.passwordResetExempt, fullMethod)) {
-		return ctx, status.Error(codes.PermissionDenied, "password reset required before accessing this method")
+		return ctx, deniedStatus(codes.PermissionDenied, msgGRPCPasswordResetRequired,
+			reasonPasswordResetRequired, denyMeta(fullMethod, ""))
 	}
 
 	// PDP authorization gate (#2008): after authentication, a non-public RPC must
@@ -266,20 +349,23 @@ func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal,
 		// routine policy deny in operator logs.
 		slog.WarnContext(ctx, "grpc authz: no permission mapping for method — denying (fail-closed)",
 			slog.String("method", fullMethod))
-		return status.Error(codes.PermissionDenied, msgGRPCNoPermissionMapping)
+		return deniedStatus(codes.PermissionDenied, msgGRPCNoPermissionMapping,
+			reasonNoPermissionMapping, denyMeta(fullMethod, ""))
 	}
 	if p == nil || p.Subject == "" {
-		return status.Error(codes.Unauthenticated, msgGRPCAuthRequired)
+		return deniedStatus(codes.Unauthenticated, msgGRPCAuthRequired,
+			reasonAuthenticationRequired, denyMeta(fullMethod, perm.String()))
 	}
 	if validation.IsNilInterface(cfg.authorizer) {
 		slog.ErrorContext(ctx, "grpc authz: Authorizer not wired — denying (fail-closed)",
 			slog.String("method", fullMethod), slog.String("subject", p.Subject), slog.String("permission", perm.String()))
-		return status.Error(codes.PermissionDenied, msgGRPCAuthzNotWired)
+		return deniedStatus(codes.PermissionDenied, msgGRPCAuthzNotWired,
+			reasonAuthzNotWired, denyMeta(fullMethod, perm.String()))
 	}
 	dec, err := cfg.authorizer.Authorize(ctx, p.Subject, fullMethod, perm.String())
 	if err != nil {
 		logGRPCAuthorizeError(ctx, err, fullMethod, p.Subject, perm.String())
-		return pdpErrorToStatus(err)
+		return pdpErrorToStatus(err, fullMethod, perm.String())
 	}
 	if !dec.IsAllow() {
 		// Routine policy deny: INFO with the diagnostic reason (Deny()'s reason is
@@ -287,12 +373,14 @@ func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal,
 		slog.InfoContext(ctx, "grpc authz: permission denied by PDP",
 			slog.String("method", fullMethod), slog.String("subject", p.Subject),
 			slog.String("permission", perm.String()), slog.String("reason", dec.Reason()))
-		return status.Error(codes.PermissionDenied, msgGRPCInsufficientPermissions)
+		return deniedStatus(codes.PermissionDenied, msgGRPCInsufficientPermissions,
+			reasonInsufficientPermissions, denyMeta(fullMethod, perm.String()))
 	}
 	if obl := dec.Obligations(); !obl.IsZero() {
 		slog.WarnContext(ctx, "grpc authz: Allow carries obligations not enforceable at this gate — denying (fail-closed)",
 			slog.String("method", fullMethod), slog.String("subject", p.Subject), slog.String("permission", perm.String()))
-		return status.Error(codes.PermissionDenied, msgGRPCObligationsNotEnforceable)
+		return deniedStatus(codes.PermissionDenied, msgGRPCObligationsNotEnforceable,
+			reasonObligationsUnsupported, denyMeta(fullMethod, perm.String()))
 	}
 	return nil
 }
@@ -337,17 +425,20 @@ func resolveMethodPermission(resolver PermissionResolver, fullMethod string) (au
 	return perm, true
 }
 
-// pdpErrorToStatus classifies an Authorizer.Authorize error into a gRPC status,
-// mirroring authErrorToStatus: a KindUnavailable policy-store outage surfaces as
-// codes.Unavailable; every other error is an enumeration-safe codes.PermissionDenied
-// (the Authorizer contract guarantees a non-Allow decision on error, so treating
-// any error as deny is sound).
-func pdpErrorToStatus(err error) error {
+// pdpErrorToStatus classifies an Authorizer.Authorize error into a gRPC status with
+// a machine-readable reason (#2008 F6), mirroring authErrorToStatus: a KindUnavailable
+// policy-store outage surfaces as codes.Unavailable (reasonPDPUnavailable); every
+// other error is an enumeration-safe codes.PermissionDenied (reasonAuthorizationDenied)
+// — the Authorizer contract guarantees a non-Allow decision on error, so treating any
+// error as deny is sound.
+func pdpErrorToStatus(err error, fullMethod, permission string) error {
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
-		return status.Error(codes.Unavailable, "authorization service unavailable")
+		return deniedStatus(codes.Unavailable, msgGRPCAuthzServiceUnavailable,
+			reasonPDPUnavailable, denyMeta(fullMethod, permission))
 	}
-	return status.Error(codes.PermissionDenied, msgGRPCAuthorizationDenied)
+	return deniedStatus(codes.PermissionDenied, msgGRPCAuthorizationDenied,
+		reasonAuthorizationDenied, denyMeta(fullMethod, permission))
 }
 
 // callPredicate invokes an externally-supplied auth predicate (public-method /
@@ -391,15 +482,19 @@ func bearerFromMetadata(ctx context.Context) (string, bool) {
 	return token, true
 }
 
-// authErrorToStatus classifies a verifier error into a gRPC status, mirroring
-// the HTTP handleAuthRequest mapping: a KindUnavailable infra outage surfaces as
-// codes.Unavailable; every other verification failure is an enumeration-safe
-// codes.Unauthenticated. The general errcode.Kind → codes.Code table for
-// handler-returned errors is a separate, later-PR concern.
-func authErrorToStatus(err error) error {
+// authErrorToStatus classifies a verifier error into a gRPC status with a
+// machine-readable reason (#2008 F6), mirroring the HTTP handleAuthRequest mapping:
+// a KindUnavailable infra outage surfaces as codes.Unavailable
+// (reasonAuthnServiceUnavailable); every other verification failure is an
+// enumeration-safe codes.Unauthenticated (reasonInvalidToken). The general
+// errcode.Kind → codes.Code table for handler-returned errors is a separate,
+// later-PR concern.
+func authErrorToStatus(err error, fullMethod string) error {
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
-		return status.Error(codes.Unavailable, "authentication service unavailable")
+		return deniedStatus(codes.Unavailable, msgGRPCAuthnServiceUnavailable,
+			reasonAuthnServiceUnavailable, denyMeta(fullMethod, ""))
 	}
-	return status.Error(codes.Unauthenticated, "invalid token")
+	return deniedStatus(codes.Unauthenticated, msgGRPCInvalidToken,
+		reasonInvalidToken, denyMeta(fullMethod, ""))
 }
