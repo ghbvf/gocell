@@ -185,7 +185,11 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 	if err != nil {
 		return err
 	}
-	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy, rec)
+	cbSettings := b.webhookCBSettings
+	if !b.webhookCBSettingsSet {
+		cbSettings = kwh.DefaultCircuitBreakerSettings()
+	}
+	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy, rec, cbSettings)
 	if err != nil {
 		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
 	}

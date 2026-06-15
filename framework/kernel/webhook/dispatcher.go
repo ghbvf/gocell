@@ -52,6 +52,11 @@ type Dispatcher struct {
 	// (buildConsumer constructs one per webhook-dispatch contract).
 	recorder Metrics
 	source   string
+	// cbSettings holds the circuit-breaker thresholds supplied via
+	// WithCircuitBreakerSettings. cbSettingsSet distinguishes "option provided
+	// with specific values" from "option not provided → use defaults".
+	cbSettings    CircuitBreakerSettings
+	cbSettingsSet bool
 }
 
 // DispatcherOption customizes a Dispatcher at construction time.
@@ -74,6 +79,23 @@ func WithMetrics(rec Metrics, source string) DispatcherOption {
 	return func(dp *Dispatcher) {
 		dp.recorder = rec
 		dp.source = source
+	}
+}
+
+// WithCircuitBreakerSettings overrides the per-endpoint circuit-breaker
+// thresholds for this dispatcher. All three fields (TripThreshold, OpenTimeout,
+// HalfOpenProbes) must be positive; a zero or negative value causes
+// [NewDispatcher] to return an error (fail-fast — no silent noop, per
+// runtime-api.md §Option 范式). Omitting this option uses the defaults that
+// match the original hardcoded values (TripThreshold=5, OpenTimeout=60s,
+// HalfOpenProbes=1).
+//
+// There is intentionally no Enabled/Disabled field: disabling the circuit
+// breaker is not a supported configuration (no-disable invariant).
+func WithCircuitBreakerSettings(s CircuitBreakerSettings) DispatcherOption {
+	return func(dp *Dispatcher) {
+		dp.cbSettings = s
+		dp.cbSettingsSet = true
 	}
 }
 
@@ -109,11 +131,20 @@ func NewDispatcher(
 		policy:   policy,
 		selector: selector,
 		timeout:  defaultDeliveryTimeout,
-		circuit:  newCircuitGate(clk),
 	}
 	for _, o := range opts {
 		o(d)
 	}
+	// Resolve circuit-breaker settings AFTER options: if WithCircuitBreakerSettings
+	// was provided, validate and use it; otherwise fall back to defaults.
+	cbSettings := defaultCircuitBreakerSettings()
+	if d.cbSettingsSet {
+		if err := d.cbSettings.Validate(); err != nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid, err.Error())
+		}
+		cbSettings = d.cbSettings
+	}
+	d.circuit = newCircuitGate(clk, cbSettings)
 	// Build the client AFTER options so WithDeliveryTimeout is honored. The
 	// transport's DialContext and the CheckRedirect both come from the SSRF
 	// policy; there is intentionally no way to inject a foreign client.

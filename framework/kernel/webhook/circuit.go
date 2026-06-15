@@ -70,33 +70,79 @@ func circuitFingerprint(s string) string {
 	return fmt.Sprintf("%08x", h.Sum32())
 }
 
-// Circuit-breaker defaults for outbound webhook delivery. These mirror the
-// sony/gobreaker standard defaults but are stated explicitly here so the
-// dispatcher's resilience posture is self-documenting and decoupled from the
-// kernel breaker's own zero-value defaults.
-const (
-	// circuitTripThreshold trips an endpoint's breaker once consecutive
-	// delivery failures EXCEED this count (so the threshold+1'th failure opens).
-	circuitTripThreshold = 5
-	// circuitOpenTimeout is how long an endpoint stays open (fast-failing)
-	// before the breaker admits a single half-open probe.
-	circuitOpenTimeout = 60 * time.Second
-	// circuitHalfOpenProbes is the number of probe deliveries admitted while
-	// half-open; a single probe is enough to decide recovery.
-	circuitHalfOpenProbes = 1
-	// circuitGateMaxEndpoints bounds the per-endpoint breaker registry so a
-	// selector that fans out to unbounded distinct target URLs cannot grow
-	// memory without limit (DoS guard). Mirrors kernel/reconcile/backoff.go's
-	// maxBackoffEntries. At this cardinality eviction is a pathological safety
-	// valve, not a hot path.
-	circuitGateMaxEndpoints = 1024
-)
+// circuitGateMaxEndpoints bounds the per-endpoint breaker registry so a
+// selector that fans out to unbounded distinct target URLs cannot grow
+// memory without limit (DoS guard). Mirrors kernel/reconcile/backoff.go's
+// maxBackoffEntries. At this cardinality eviction is a pathological safety
+// valve, not a hot path. Orthogonal to CB thresholds — not user-configurable.
+const circuitGateMaxEndpoints = 1024
 
-// circuitReadyToTrip opens the breaker once consecutive failures exceed
-// circuitTripThreshold. Package-level so every per-endpoint breaker shares one
-// function value rather than allocating a closure per endpoint.
-func circuitReadyToTrip(c circuitbreaker.Counts) bool {
-	return c.ConsecutiveFailures > circuitTripThreshold
+// CircuitBreakerSettings holds the per-deployment tunable thresholds for the
+// outbound webhook per-endpoint circuit breaker. The zero value is invalid;
+// use [defaultCircuitBreakerSettings] to obtain valid defaults, or construct
+// with all fields positive and call [CircuitBreakerSettings.validate].
+//
+// Design: no Enabled/Disabled field — "disable the circuit breaker" must be
+// inexpressible at the type level. Options only tune thresholds.
+//
+// ref: sony/gobreaker Settings (MaxRequests/Interval/Timeout/ReadyToTrip) for
+// naming inspiration; GoCell adapts to the webhook-delivery semantics.
+type CircuitBreakerSettings struct {
+	// TripThreshold is the number of consecutive endpoint-health failures that
+	// MUST BE EXCEEDED before the breaker opens. The (TripThreshold+1)'th
+	// consecutive failure opens the circuit. Must be > 0.
+	TripThreshold int
+	// OpenTimeout is how long the breaker stays open (fast-failing deliveries)
+	// before admitting a single half-open probe. Must be > 0.
+	OpenTimeout time.Duration
+	// HalfOpenProbes is the maximum number of probe deliveries admitted while
+	// half-open; one probe is sufficient to decide recovery in normal deployments.
+	// Must be > 0.
+	HalfOpenProbes int
+}
+
+// DefaultCircuitBreakerSettings returns the default per-endpoint circuit-breaker
+// thresholds (TripThreshold=5, OpenTimeout=60s, HalfOpenProbes=1). These equal
+// the values formerly hard-coded as package constants and are used when
+// [WithCircuitBreakerSettings] is not provided. Callers (bootstrap's
+// [WithWebhookCircuitBreaker], dispatch.BuildConsumers) use this to populate the
+// explicit settings parameter rather than accepting a zero value.
+func DefaultCircuitBreakerSettings() CircuitBreakerSettings {
+	return CircuitBreakerSettings{
+		TripThreshold:  5,
+		OpenTimeout:    60 * time.Second,
+		HalfOpenProbes: 1,
+	}
+}
+
+// defaultCircuitBreakerSettings is the package-internal alias used by
+// Dispatcher construction and tests to avoid exporting the symbol redundantly.
+func defaultCircuitBreakerSettings() CircuitBreakerSettings { return DefaultCircuitBreakerSettings() }
+
+// Validate returns a non-nil error if any field is ≤ 0 (fail-fast; complies
+// with runtime-api.md §Option 范式: "强依赖 option 必须 fail-fast，不静默 noop").
+// Called by [WithCircuitBreakerSettings] at Dispatcher construction time and by
+// bootstrap's [WithWebhookCircuitBreaker] at option-apply time.
+func (s CircuitBreakerSettings) Validate() error {
+	if s.TripThreshold <= 0 {
+		return fmt.Errorf("webhook circuit breaker: TripThreshold must be > 0, got %d", s.TripThreshold)
+	}
+	if s.OpenTimeout <= 0 {
+		return fmt.Errorf("webhook circuit breaker: OpenTimeout must be > 0, got %s", s.OpenTimeout)
+	}
+	if s.HalfOpenProbes <= 0 {
+		return fmt.Errorf("webhook circuit breaker: HalfOpenProbes must be > 0, got %d", s.HalfOpenProbes)
+	}
+	return nil
+}
+
+// makeCircuitReadyToTrip returns a ReadyToTrip predicate that opens the breaker
+// once consecutive failures exceed tripThreshold. A closure per circuitGate is
+// acceptable (one gate per Dispatcher, not one per endpoint).
+func makeCircuitReadyToTrip(tripThreshold int) func(circuitbreaker.Counts) bool {
+	return func(c circuitbreaker.Counts) bool {
+		return c.ConsecutiveFailures > uint32(tripThreshold) //nolint:gosec // tripThreshold is validated > 0
+	}
 }
 
 // errCircuitProbeFailure is the sentinel handed to a breaker's done callback
@@ -134,16 +180,17 @@ func circuitProbeOutcome(statusCode int, transportErr error) error {
 // The map is bounded (circuitGateMaxEndpoints) as a DoS guard.
 type circuitGate struct {
 	clk      clock.Clock
+	settings CircuitBreakerSettings
 	mu       sync.Mutex
 	breakers map[string]*circuitbreaker.Breaker
 }
 
 // newCircuitGate builds an enabled circuit gate. clk is the dispatcher's clock,
 // shared so open→half-open transitions advance with the same time source the
-// tests drive.
-func newCircuitGate(clk clock.Clock) *circuitGate {
+// tests drive. settings must have been validated before calling newCircuitGate.
+func newCircuitGate(clk clock.Clock, settings CircuitBreakerSettings) *circuitGate {
 	clock.MustHaveClock(clk, "webhook.newCircuitGate")
-	return &circuitGate{clk: clk, breakers: make(map[string]*circuitbreaker.Breaker)}
+	return &circuitGate{clk: clk, settings: settings, breakers: make(map[string]*circuitbreaker.Breaker)}
 }
 
 // Allow gates a delivery for key. It returns allowed=true and a done callback
@@ -193,10 +240,10 @@ func (g *circuitGate) breakerFor(key circuitEndpointKey) *circuitbreaker.Breaker
 		}
 	}
 	b, err := circuitbreaker.New(circuitbreaker.Config{
-		Name:        key.logName(), // safe log label: host#fingerprint, no path/query
-		MaxRequests: circuitHalfOpenProbes,
-		Timeout:     circuitOpenTimeout,
-		ReadyToTrip: circuitReadyToTrip,
+		Name:        key.logName(),                     // safe log label: host#fingerprint, no path/query
+		MaxRequests: uint32(g.settings.HalfOpenProbes), //nolint:gosec // validated > 0
+		Timeout:     g.settings.OpenTimeout,
+		ReadyToTrip: makeCircuitReadyToTrip(g.settings.TripThreshold),
 	}, g.clk)
 	if err != nil {
 		return nil

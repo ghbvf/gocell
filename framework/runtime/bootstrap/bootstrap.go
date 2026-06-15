@@ -220,6 +220,13 @@ type Bootstrap struct {
 	// dispatcher. The dispatcher reuses webhookSourceStore for signing secrets.
 	webhookSSRFPolicy *kwh.SafePolicy
 
+	// webhookCBSettings holds the per-deployment circuit-breaker thresholds
+	// injected via WithWebhookCircuitBreaker. webhookCBSettingsSet distinguishes
+	// "option provided" from "not provided → use defaults". Validated at
+	// option-apply time so a bad value fails at bootstrap rather than first delivery.
+	webhookCBSettings    kwh.CircuitBreakerSettings
+	webhookCBSettingsSet bool
+
 	// webhookMetrics is the single shared kwh.Metrics collector registered once
 	// (cached here) so the receiver (phase5) and dispatcher (phase6) record to
 	// the same fixed-name instruments instead of re-registering the metric
