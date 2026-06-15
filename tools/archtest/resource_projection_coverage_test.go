@@ -101,6 +101,16 @@ var resourceReadProjectionCarveOut = map[string]struct{}{
 	// Legitimately exempt per the rule's "genuinely non-maskable resource" branch.
 	// Carve-out rationale + threat model: docs/architecture/202606130640-1860-adr-syscore-health-aggregation.md.
 	"http.admin.health.cells.v1": {},
+
+	// http.session.registry-summary.v1 (#1771): the accesscore session_registry
+	// read returns a single tenant-scoped scalar aggregate {totalSessions:int64} —
+	// NO per-row resource, NO maskable column axis (the tenant filter is applied at
+	// the RowScope row level in the service, not as a response column). Routing a
+	// scalar count through the tenant column-masking funnel (responseProjection)
+	// would be dishonest (an empty mask over a non-tabular count). Legitimately
+	// exempt per the rule's "genuinely non-maskable resource" branch.
+	// Carve-out rationale: docs/architecture/202606071600-1504-adr-projection-event-journal.md §Amendment 2026-06-16.
+	"http.session.registry-summary.v1": {},
 }
 
 // minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read GET
@@ -109,10 +119,11 @@ var resourceReadProjectionCarveOut = map[string]struct{}{
 // scan (e.g. if responseHasTopLevelDataResource stops detecting the data envelope
 // shape, the count would collapse to zero and the test would pass vacuously).
 // The scan counts every resource-bearing GET before the carve-out gate; this
-// floor is the STABLE minimum (projection-marked platform reads + the #1860
-// carve-out = 11). The live count can sit above it while a newly-merged unmarked
-// read still awaits its marker, so the floor is a lower bound, not the exact total.
-const minExpectedResourceReadGETs = 11
+// floor is the STABLE minimum (projection-marked platform reads + the #1860 and
+// #1771 carve-outs = 12). The live count can sit above it while a newly-merged
+// unmarked read still awaits its marker, so the floor is a lower bound, not the
+// exact total.
+const minExpectedResourceReadGETs = 12
 
 // TestResourceProjectionCoverage01 asserts every resource-bearing GET read
 // contract is responseProjection-marked (or carved out), and that no carve-out

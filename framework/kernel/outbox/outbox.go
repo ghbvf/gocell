@@ -1002,19 +1002,29 @@ type SubscriberIntakeStopper interface {
 // SerialInOrderGuarantor is an optional Subscriber-implementer extension
 // contract. Business handlers must never reference this interface.
 //
-// A Subscriber that implements it and returns true ASSERTS that it delivers a
-// single subscription's stream strictly serially and in order: at most one
-// delivery is dispatched at a time and the next is handed off only after the
-// previous handler returns. This is the precondition L3 CQRS projection
-// subscriptions REQUIRE — projection exactly-once rests on a monotonic
-// checkpoint (applyOne skips any event whose stream position ≤ the stored
-// checkpoint), which is only SOUND under serial in-order delivery. Under
-// concurrent delivery (e.g. the AMQP subscriber dispatching one goroutine per
-// delivery with prefetch>1) a higher position can commit the checkpoint before
-// a lower position is applied, silently dropping the lower event's distinct
-// apply (a projection gap). See kernel/projection/doc.go "Ordering precondition"
-// and ADR docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md
-// §6 threat row 4.
+// A Subscriber that implements it and returns true ASSERTS that it HONORS
+// per-subscription serial mode: a Subscription with SerialMode=true is delivered
+// strictly serially and in order — at most one delivery is dispatched at a time
+// and the next is handed off only after the previous handler returns. (It does
+// NOT assert that EVERY subscription is serial: subscriptions not flagged
+// SerialMode may be delivered concurrently for throughput. The projection drain
+// is the only site that sets SerialMode, and the guard below only ever runs for
+// projection subscriptions, so a capability assertion is sufficient.)
+//
+// Serial in-order delivery is the precondition L3 CQRS projection subscriptions
+// REQUIRE — projection exactly-once rests on a monotonic checkpoint (applyOne
+// skips any event whose stream position ≤ the stored checkpoint), which is only
+// SOUND under serial in-order delivery. Under concurrent delivery (e.g. the AMQP
+// subscriber's default: one goroutine per delivery with prefetch>1) a higher
+// position can commit the checkpoint before a lower position is applied, silently
+// dropping the lower event's distinct apply (a projection gap). A serial-capable
+// transport narrows to single-flight for a SerialMode subscription: the in-memory
+// bus is unconditionally serial; the AMQP subscriber sets prefetch=1 +
+// x-single-active-consumer + synchronous dispatch and keeps transient retries on
+// the in-place (head) requeue path, never the delay tier (tail re-entry would
+// reorder — Subscription.Validate forbids pairing SerialMode with a delay
+// schedule). See kernel/projection/doc.go "Ordering precondition" and ADR
+// docs/architecture/202605261620-adr-cqrs-projection-lifecycle-harness.md §6 threat row 4.
 //
 // Scope of the guarantee: it holds for a SINGLE subscriber on a given
 // (consumerGroup, topic). A projection's consumer group is derived as
@@ -1032,9 +1042,10 @@ type SubscriberIntakeStopper interface {
 //
 // Guarded by archtest PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01, which freezes
 // this method set and pins the implementer set to exactly the qualifying
-// transports. A new transport that implements this marker MUST also be added to
-// that archtest's implementer golden (serialGuarantorSoleImpl), or sub-rule B
-// fails CI — by design, so adding a serial transport is a deliberate update.
+// transports ({runtime/eventbus.InMemoryEventBus, adapters/rabbitmq.Subscriber}).
+// A new transport that implements this marker MUST also be added to that
+// archtest's implementer golden, or sub-rule B fails CI — by design, so adding a
+// serial transport is a deliberate update.
 type SerialInOrderGuarantor interface {
 	GuaranteesSerialInOrderDelivery() bool
 }

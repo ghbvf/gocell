@@ -450,6 +450,13 @@ type SubscriptionRequest struct {
 	// see that field for semantics. Empty for ordinary event subscriptions;
 	// the webhook-dispatch drain sets it to DefaultSvixSchedule().Delays().
 	BrokerDelaySchedule []time.Duration
+
+	// SerialMode requests strictly serial, in-order delivery for this subscription.
+	// It flows through to outbox.Subscription.SerialMode; see that field for
+	// semantics. Set ONLY by the bootstrap projection drain (wireOneProjection) for
+	// outbox projections; ordinary event subscriptions leave it false. Mutually
+	// exclusive with BrokerDelaySchedule (Subscription.Validate enforces it).
+	SerialMode bool
 }
 
 // SubscriptionOption mutates a SubscriptionRequest to attach optional metadata.
@@ -472,6 +479,16 @@ func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
 func WithSubscriptionBrokerDelaySchedule(delays []time.Duration) SubscriptionOption {
 	return func(r *SubscriptionRequest) {
 		r.BrokerDelaySchedule = slices.Clone(delays)
+	}
+}
+
+// WithSubscriptionSerialMode opts the subscription into strictly serial, in-order
+// delivery (the projection precondition). Set only by the bootstrap projection
+// drain; flows to outbox.Subscription.SerialMode. Mutually exclusive with
+// WithSubscriptionBrokerDelaySchedule (Subscription.Validate rejects both set).
+func WithSubscriptionSerialMode() SubscriptionOption {
+	return func(r *SubscriptionRequest) {
+		r.SerialMode = true
 	}
 }
 

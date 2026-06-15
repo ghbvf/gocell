@@ -28,6 +28,11 @@ import (
 type subscriptionRun struct {
 	ch          AMQPChannel
 	consumerTag string
+	// serialMode, when true, makes consumeLoop/drainRemaining dispatch each
+	// delivery synchronously (single-flight) instead of one goroutine per
+	// delivery — the strict in-order guarantee a projection subscription requires
+	// (paired with prefetch=1 + x-single-active-consumer set in subscribeOnce).
+	serialMode bool
 	// conn is the Connection that allocated ch. Used by waitAndClose to call
 	// CloseEphemeralChannel (the single canonical AMQPChannel destruction path)
 	// so that inUseChannels is decremented on every subscription teardown.
@@ -54,11 +59,12 @@ type subscriptionRun struct {
 // and the Connection that allocated the channel. conn is required so that
 // waitAndClose can call conn.CloseEphemeralChannel (the single canonical
 // AMQPChannel destruction path) to correctly decrement inUseChannels.
-func newSubscriptionRun(ch AMQPChannel, tag string, conn *Connection) *subscriptionRun {
+func newSubscriptionRun(ch AMQPChannel, tag string, conn *Connection, serialMode bool) *subscriptionRun {
 	return &subscriptionRun{
 		ch:          ch,
 		consumerTag: tag,
 		conn:        conn,
+		serialMode:  serialMode,
 		wgDoneCh:    make(chan struct{}),
 	}
 }

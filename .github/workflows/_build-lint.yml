@@ -366,9 +366,11 @@ jobs:
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
       # correctness is always checked on the kernel shard (static_checks gate).
+      # -tags=e2e,pg so the real-PG suites (encryption, sessionprojection) gated
+      # behind `e2e && pg` are also compile-verified, not just the e2e-only files.
       - name: Vet e2e package (compile verification)
         if: matrix.static_checks
-        run: go vet -tags=e2e ./tests/e2e/...
+        run: go vet -tags=e2e,pg ./tests/e2e/...
 
       # Kernel coverage gate — parses the per-shard coverage profile produced
       # by the Test step (covermode=atomic, one statement-block per row) and
@@ -949,9 +951,15 @@ jobs:
         # covers ./tests/e2e/... + corebundle code paths under -tags=
         # integration,e2e via testcontainers; adding a profile here would
         # only re-record the HTTP client lines and dilute Sonar's view.
+        # -tags=e2e,pg: the real-PG suites (encryption, sessionprojection) are
+        # gated behind `//go:build e2e && pg` so demo-mode builds see an empty
+        # package; this harness provisions PG + RabbitMQ + corebundle (postgres
+        # topology), so the pg tag must be passed for those tests to execute (the
+        # flip the per-package doc.go anticipated). e2egate fails the job if a
+        # pg-tagged package compiled but ran zero tests.
         run: |
           set -o pipefail
-          go test -tags=e2e -json -count=1 -timeout=120s ./tests/e2e/... \
+          go test -tags=e2e,pg -json -count=1 -timeout=120s ./tests/e2e/... \
             | tee "$RUNNER_TEMP/e2e.json" \
             | "$RUNNER_TEMP/e2egate"
       - name: Capture compose logs

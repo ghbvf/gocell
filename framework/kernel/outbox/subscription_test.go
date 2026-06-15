@@ -83,6 +83,22 @@ func TestSubscription_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "serialMode alone is valid",
+			mutate:  func(s *Subscription) { s.SerialMode = true },
+			wantErr: false,
+		},
+		{
+			// The delay tier requeues at the queue tail after a TTL, which would
+			// reorder relative to later positions a serial stream already delivered.
+			name: "serialMode with brokerDelaySchedule is mutually exclusive",
+			mutate: func(s *Subscription) {
+				s.SerialMode = true
+				s.BrokerDelaySchedule = []time.Duration{testtime.D1s}
+			},
+			wantErr:     true,
+			errContains: "SerialMode",
+		},
+		{
 			name:    "valid",
 			mutate:  func(*Subscription) {},
 			wantErr: false,

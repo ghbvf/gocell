@@ -31,6 +31,19 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）的�
 - 写路径唯一收口：emit 期同事务双写装饰器（`journalingOutboxWriter`，`PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01` Hard/Hard），仅对 `slice.yaml contractUsages` 声明的 projection-source topic 集双写（topic-filter，增长有界 by construction）。
 - `projection_checkpoints` 表（migration 045）存每个投影的 offset 与 owner（v1 不写 owner）。
 
+### 事件传输：serial 投影订阅（PG + RabbitMQ，#1771）
+
+投影要求**严格串行、有序**投递（exactly-once checkpoint 的前提）。PG 拓扑事件传输是 RabbitMQ，默认并发（prefetch>1，每投递一个 goroutine）。框架对**投影订阅**自动启用 serial mode（`outbox.Subscription.SerialMode`，仅 projection drain 置位），RabbitMQ subscriber 据此：
+
+- **prefetch=1**：broker 同时只下发一条未 ack 消息——使瞬态重试的 in-place requeue（`Nack(requeue=true)`，队头重入）保序，并使单飞投递精确。
+- **`x-single-active-consumer`**：跨 channel/pod 同一队列只有一个 active consumer（其余 standby failover），单流不被竞争消费者拆分。
+- **同步单飞投递**：下一条投递在上一条 handler 返回后才交付。
+- **瞬态重试仅走 in-place 队头 requeue，不走 DLX+TTL 延迟层**（延迟层队尾重入会相对已应用的后继位点乱序 → checkpoint gap）；`Subscription.Validate` 拒绝 `SerialMode` 与 `BrokerDelaySchedule` 并存。
+
+> **运维注意（队列参数迁移，406 PRECONDITION_FAILED）**：`x-single-active-consumer` 是队列声明参数，**声明后不可变**。若某投影队列曾在无此参数时被声明（如本特性落地前的旧部署），重启 corebundle 会在 `QueueDeclare` 得 `406 PRECONDITION_FAILED`。处置：停消费者后**删除并重新声明该投影队列**（队列名 `<cellID>-<projectionID>.<topic>`，如 `accesscore-session_registry.event.session.created.v1`），重启即以正确参数重建。CI / 全新部署用全新 volume 无此问题。
+
+非 serial 的普通事件订阅不受影响（保持并发吞吐，不加 SAC）。机制 + 威胁矩阵见 ADR `202605261620` §Amendment 2026-06-16 与 `202606071600-1504` §Amendment 2026-06-16。
+
 ---
 
 ## Rebuild 运维
@@ -184,3 +197,11 @@ v1 投影运行在 **单 pod** 边界（继承 #1100 Q5）：
 - 双 pod 并发 rebuild 会 double-apply（无 CAS fencing）。
 - 多 pod fencing CAS（`AdvanceIfOwner`）推迟到 PR-PG，待真实多 pod 消费者出现。
 - 生产运维须保证单 pod 消费同一 projection；`ConsumerBase` 串行只序列化同 pod live 路径，不覆盖跨 pod rebuild。
+
+### 进程内读模型重启后空（experimental，无启动自动 rebuild）
+
+`session_registry`（及任何进程内 map 读模型）在进程重启后从**空**状态开始，并**不**在启动时自动从 durable journal rebuild——读模型仅由重启后到达的 **live** 事件重新填充，直到人工触发 rebuild（需 AdminListener，corebundle 暂不支持，见 #2209）。
+
+**影响**：重启后 `registry-summary` 等查询可能在一段时间内**低估**（如 `totalSessions` 偏低），直到 live 事件追平或人工 rebuild。`session_registry` 当前是 `experimental` 投影，此为已知文档化限制。
+
+启动自动 rebuild（`WithProjectionAutoRebuildOnStartup` + readyz 在 `Phase()==Live` 前 gate）是独立 follow-up（见对应 backlog issue），durable journal 已具备 rebuild 能力，落地后重启即可恢复完整读模型。

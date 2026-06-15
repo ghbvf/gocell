@@ -74,11 +74,14 @@
 // This serial in-order delivery is now ENFORCED at the bootstrap projection
 // drain (PR-04d, #1369): a transport opts in by implementing
 // outbox.SerialInOrderGuarantor and returning true; the drain rejects wiring a
-// projection onto any subscriber that does not (fail-closed-by-absence). Only
-// runtime/eventbus.InMemoryEventBus qualifies today (single-goroutine consume);
-// AMQP/MQTT (concurrent dispatch) fail fast rather than silently dropping
-// positions. This intra-consumer-group ordering precondition is distinct from
-// the multi-pod boundary below. See ADR §6 threat row 4 + §Amendment 2026-06-02.
+// projection onto any subscriber that does not (fail-closed-by-absence). Two
+// transports qualify: runtime/eventbus.InMemoryEventBus (unconditionally serial,
+// single-goroutine consume) and adapters/rabbitmq.Subscriber, which HONORS
+// per-subscription serial mode — for a Subscription with SerialMode=true it uses
+// prefetch=1 + x-single-active-consumer + synchronous dispatch (#1771). MQTT
+// (concurrent dispatch) fails fast rather than silently dropping positions. This
+// intra-consumer-group ordering precondition is distinct from the multi-pod
+// boundary below. See ADR §6 threat row 4 + §Amendment 2026-06-02.
 //
 // # v1 operational boundaries
 //
@@ -109,7 +112,7 @@
 //   - PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 — a projection may only be
 //     carried by a transport implementing outbox.SerialInOrderGuarantor (true);
 //     the bootstrap drain fail-fasts otherwise. Marker freeze + exact implementer
-//     set {InMemoryEventBus} + single guard callsite.
+//     set {InMemoryEventBus, rabbitmq.Subscriber} + single guard callsite.
 //     Archtest: tools/archtest/projection_serial_delivery_enforcement_test.go.
 //     Green from PR-04d (#1369).
 //

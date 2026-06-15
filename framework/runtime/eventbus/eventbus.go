@@ -332,11 +332,13 @@ func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
 }
 
 // GuaranteesSerialInOrderDelivery satisfies outbox.SerialInOrderGuarantor: the
-// in-memory bus is the one transport that may carry an L3 projection
-// subscription. Each subscription runs one consume goroutine that reads its
-// buffered channel FIFO and invokes the handler synchronously (see Subscribe),
-// so a single subscription's stream is delivered strictly serially and in
-// order — the precondition projection exactly-once requires (ADR §6 row 4).
+// in-memory bus honors per-subscription serial mode vacuously, because it is
+// UNCONDITIONALLY serial. Each subscription runs one consume goroutine that reads
+// its buffered channel FIFO and invokes the handler synchronously (see Subscribe),
+// so a single subscription's stream is delivered strictly serially and in order
+// regardless of the Subscription.SerialMode flag — the precondition projection
+// exactly-once requires (ADR §6 row 4). (The AMQP subscriber, by contrast, is
+// concurrent by default and narrows to serial only for SerialMode subscriptions.)
 //
 // The guarantee is scoped to a SINGLE subscriber on a (consumerGroup, topic):
 // a projection's group is "<cellID>-<projectionID>" with exactly one

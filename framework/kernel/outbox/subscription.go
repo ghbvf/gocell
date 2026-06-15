@@ -66,6 +66,24 @@ type Subscription struct {
 	// — enforced by the shared outboxtest DelayedRedelivery conformance feature,
 	// not by an opt-in capability flag.
 	BrokerDelaySchedule []time.Duration
+
+	// SerialMode, when true, requests strictly serial, in-order delivery of this
+	// single subscription's stream: at most one delivery in flight, the next handed
+	// off only after the previous handler returns. It is the precondition L3 CQRS
+	// projection subscriptions require, set ONLY by the bootstrap projection drain
+	// (cell.WithSubscriptionSerialMode) for outbox projections; ordinary
+	// subscriptions leave it false and keep concurrent dispatch.
+	//
+	// A serial-capable transport honors it by narrowing to single-flight delivery
+	// (e.g. rabbitmq: prefetch=1 + x-single-active-consumer + synchronous dispatch);
+	// the in-memory bus already delivers every subscription serially, so it honors
+	// the flag vacuously. A Subscriber advertises support via outbox.SerialInOrderGuarantor.
+	//
+	// SerialMode is mutually exclusive with BrokerDelaySchedule (see Validate): the
+	// delay tier requeues at the queue TAIL after a TTL, which reorders relative to
+	// already-delivered later positions — a checkpoint gap for a projection. Serial
+	// retries rely on in-place head requeue under prefetch=1 instead.
+	SerialMode bool
 }
 
 // Validate returns an error when required fields are missing.
@@ -102,6 +120,16 @@ func (s Subscription) Validate() error {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"outbox: subscription BrokerDelaySchedule entries must be positive durations")
 		}
+	}
+	// SerialMode and BrokerDelaySchedule are mutually exclusive: the delay tier
+	// requeues at the queue tail after a TTL, which reorders relative to later
+	// positions already delivered serially — a checkpoint gap for the projection
+	// SerialMode exists to protect. Serial retries use in-place head requeue under
+	// prefetch=1 instead, so a serial subscription must never carry a delay schedule.
+	if s.SerialMode && len(s.BrokerDelaySchedule) > 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox: subscription SerialMode is mutually exclusive with BrokerDelaySchedule "+
+				"(the delay tier's tail re-entry would break serial in-order delivery)")
 	}
 	return nil
 }

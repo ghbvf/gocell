@@ -284,6 +284,13 @@ func (sc *SubscriberConfig) setDefaults() {
 //
 // ref: nats-io/nats.go Subscription state encapsulation
 // ref: uber-go/fx per-component lifecycle
+//
+// Compile-time conformance: the subscriber is a serial-capable transport, so it
+// implements outbox.SerialInOrderGuarantor (it honors per-subscription serial
+// mode). The implementer set is pinned by archtest
+// PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01 sub-rule B.
+var _ outbox.SerialInOrderGuarantor = (*Subscriber)(nil)
+
 type Subscriber struct {
 	conn   *Connection
 	config SubscriberConfig
@@ -353,7 +360,18 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 // Precondition: s.config.DLXExchange must be non-empty. Both call sites
 // (Subscribe, Setup) validate this, but the guard here prevents accidental
 // misuse from future code paths.
-func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string, schedule []time.Duration) error {
+// serialPrefetch returns 1 for a serial (projection) subscription — at most one
+// unacked message at a time, the precondition that makes in-place head requeue
+// order-preserving and synchronous single-flight dispatch exact — otherwise the
+// configured prefetch (ordinary subscriptions keep their throughput tuning).
+func serialPrefetch(configured int, serialMode bool) int {
+	if serialMode {
+		return 1
+	}
+	return configured
+}
+
+func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string, schedule []time.Duration, serialMode bool) error {
 	if s.config.DLXExchange == "" {
 		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
 	}
@@ -375,6 +393,17 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string, sc
 	}
 	if s.config.DLXRoutingKey != "" {
 		queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
+	}
+	// A serial (projection) queue is declared single-active-consumer: across
+	// channels/pods the broker keeps exactly one consumer active (others stand by
+	// for failover), so a single subscription's stream is never split across
+	// competing consumers — the cross-pod half of the strict-ordering guarantee.
+	// The projection queue name is unique per <cellID>-<projectionID>.<topic>, so
+	// the arg cannot collide with a shared non-serial queue. NOTE: the arg is
+	// immutable after declare — adding it to a queue that already exists without it
+	// raises 406 PRECONDITION_FAILED (ops must redeclare; see the runbook).
+	if serialMode {
+		queueArgs["x-single-active-consumer"] = true
 	}
 
 	// Declare queue.
@@ -497,7 +526,7 @@ func (s *Subscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	defer s.conn.ReleaseChannel(ch)
 
 	queueName := s.resolveQueueName(sub.Topic, sub.ConsumerGroup)
-	return s.declareTopology(ch, sub.Topic, queueName, sub.BrokerDelaySchedule)
+	return s.declareTopology(ch, sub.Topic, queueName, sub.BrokerDelaySchedule, sub.SerialMode)
 }
 
 // Ready implements outbox.Subscriber. RabbitMQ topology is declared synchronously
@@ -550,9 +579,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 
 	queueName := s.resolveQueueName(topic, consumerGroup)
 	schedule := sub.BrokerDelaySchedule
+	serialMode := sub.SerialMode
 
 	for {
-		err := s.subscribeOnce(subCtx, topic, queueName, schedule, handler)
+		err := s.subscribeOnce(subCtx, topic, queueName, schedule, serialMode, handler)
 		if err == nil {
 			return nil // Clean exit: ctx canceled or subscriber closed.
 		}
@@ -629,6 +659,7 @@ func (s *Subscriber) subscribeOnce(
 	ctx context.Context,
 	topic, queueName string,
 	schedule []time.Duration,
+	serialMode bool,
 	handler outbox.SubscriberHandler,
 ) error {
 	ch, err := s.conn.AcquireChannel()
@@ -649,15 +680,15 @@ func (s *Subscriber) subscribeOnce(
 		return permanent()
 	}
 
-	// Set QoS.
-	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
+	// Set QoS (serialPrefetch forces 1 for serial subscriptions — see its godoc).
+	if err := ch.Qos(serialPrefetch(s.config.PrefetchCount, serialMode), 0, false); err != nil {
 		return setupErr("rabbitmq: set qos", err, func() error {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: set qos failed", err)
 		})
 	}
 
 	// Declare topology (exchange, DLX, queue, binding) — idempotent.
-	if err := s.declareTopology(ch, topic, queueName, schedule); err != nil {
+	if err := s.declareTopology(ch, topic, queueName, schedule, serialMode); err != nil {
 		return setupErr("rabbitmq: declare topology", err, func() error {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: declare topology failed", err)
 		})
@@ -684,7 +715,7 @@ func (s *Subscriber) subscribeOnce(
 	// Create and track a subscriptionRun for this invocation.
 	// Pass s.conn so waitAndClose can call CloseEphemeralChannel (the single
 	// canonical AMQPChannel destruction path, decrementing inUseChannels).
-	run := newSubscriptionRun(ch, consumerTag, s.conn)
+	run := newSubscriptionRun(ch, consumerTag, s.conn, serialMode)
 	s.addRun(run)
 	// NOTE: removeRun is called explicitly below — only after waitAndClose succeeds.
 	// If waitAndClose times out, the run is intentionally kept in s.runs so that
@@ -694,7 +725,8 @@ func (s *Subscriber) subscribeOnce(
 		slog.String(logKeyTopic, topic),
 		slog.String("queue", queueName),
 		slog.String("consumer", consumerTag),
-		slog.Int("prefetch", s.config.PrefetchCount))
+		slog.Int("prefetch", serialPrefetch(s.config.PrefetchCount, serialMode)),
+		slog.Bool("serial_mode", serialMode))
 
 	loopErr := s.consumeLoop(ctx, run, deliveries, topic, queueName, schedule, handler)
 
@@ -799,7 +831,6 @@ func (s *Subscriber) consumeLoop(
 	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) error {
-	ch := run.ch
 	for {
 		// Priority check: if StopIntake has fired, we MUST enter drainRemaining
 		// even when closeCh or ctx.Done is also ready. This preserves the
@@ -844,15 +875,38 @@ func (s *Subscriber) consumeLoop(
 				return fmt.Errorf("%w: delivery channel closed", errSubscriptionLost)
 			}
 
-			s.wg.Add(1)
-			run.registerDelivery()
-			go func(d amqp.Delivery) {
-				defer s.wg.Done()
-				defer run.markDeliveryDone()
-				s.processDelivery(ctx, ch, d, topic, queueName, schedule, handler)
-			}(delivery)
+			s.dispatchDelivery(ctx, run, delivery, topic, queueName, schedule, handler)
 		}
 	}
+}
+
+// dispatchDelivery processes one delivery with the run's in-flight accounting.
+// In serial mode (run.serialMode) it runs SYNCHRONOUSLY — the consume loop reads
+// the next delivery only after this handler returns, which together with prefetch=1
+// gives single-flight, strictly in-order delivery for a projection subscription.
+// Otherwise it dispatches on its own goroutine for throughput. The s.wg /
+// run.registerDelivery / markDeliveryDone accounting is identical on both paths so
+// StopIntake drain and subscribeOnce's waitAndClose observe every in-flight delivery.
+func (s *Subscriber) dispatchDelivery(
+	ctx context.Context,
+	run *subscriptionRun,
+	d amqp.Delivery,
+	topic, queueName string,
+	schedule []time.Duration,
+	handler outbox.SubscriberHandler,
+) {
+	s.wg.Add(1)
+	run.registerDelivery()
+	process := func(d amqp.Delivery) {
+		defer s.wg.Done()
+		defer run.markDeliveryDone()
+		s.processDelivery(ctx, run.ch, d, topic, queueName, schedule, handler)
+	}
+	if run.serialMode {
+		process(d)
+		return
+	}
+	go process(d)
 }
 
 // testOnlyDrainDeadlineOverride is non-zero only in tests that need to
@@ -904,7 +958,6 @@ func (s *Subscriber) drainRemaining(
 	schedule []time.Duration,
 	handler outbox.SubscriberHandler,
 ) error {
-	ch := run.ch
 	timer := s.clock.NewTimerAt(s.clock.Now().Add(currentDrainDeadline()))
 	defer timer.Stop()
 
@@ -916,13 +969,7 @@ func (s *Subscriber) drainRemaining(
 					slog.String(logKeyTopic, topic))
 				return nil
 			}
-			s.wg.Add(1)
-			run.registerDelivery()
-			go func(d amqp.Delivery) {
-				defer s.wg.Done()
-				defer run.markDeliveryDone()
-				s.processDelivery(ctx, ch, d, topic, queueName, schedule, handler)
-			}(d)
+			s.dispatchDelivery(ctx, run, d, topic, queueName, schedule, handler)
 		case <-timer.C():
 			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
 				slog.String(logKeyTopic, topic),
@@ -1657,6 +1704,26 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPCloseTimeout,
 			"rabbitmq: StopIntake drain budget exceeded")
 	}
+}
+
+// GuaranteesSerialInOrderDelivery satisfies outbox.SerialInOrderGuarantor: the
+// RabbitMQ subscriber HONORS per-subscription serial mode. A Subscription with
+// SerialMode=true is consumed with prefetch=1 (one unacked message at a time),
+// x-single-active-consumer (exactly one active consumer across channels/pods),
+// and synchronous single-flight dispatch (the next delivery is handed off only
+// after the previous handler returns) — so that subscription's stream is
+// delivered strictly serially and in order, the precondition an L3 projection
+// requires (ADR 202606071600-1504 §6 row 4). Transient requeue stays in-place
+// (Nack requeue=true → head re-entry under prefetch=1), never the delay tier,
+// so ordering is preserved on retry (Subscription.Validate forbids the pairing).
+//
+// The method has no subscription argument, so it asserts the CAPABILITY: ordinary
+// subscriptions (SerialMode=false) keep concurrent goroutine-per-delivery dispatch
+// for throughput. The bootstrap projection drain is the only site that sets
+// SerialMode, and the serial-delivery guard only ever runs for projection
+// subscriptions, so returning true is the honest contract.
+func (s *Subscriber) GuaranteesSerialInOrderDelivery() bool {
+	return true
 }
 
 // ---------------------------------------------------------------------------

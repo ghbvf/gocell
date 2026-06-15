@@ -109,6 +109,11 @@ func parseSubscriptionFixtureSrc(t *testing.T, src string) (*ast.File, *token.Fi
 // (runtime/bootstrap/phases_events.go) via cell.WithSubscriptionBrokerDelaySchedule,
 // so contractgen/cellgen templates intentionally do not set it (the zero value —
 // nil — is correct for every codegen-registered cell subscription).
+//
+// SerialMode (#1771) is the same wiring-injected shape: the Subscriber (consume
+// side) honors it, and the projection bootstrap drain sets it via
+// cell.WithSubscriptionSerialMode for outbox projections — never codegen-injected,
+// so the zero value (false) is correct for every codegen-registered subscription.
 var subscriptionAllowedFields = map[string]struct{}{
 	"Topic":               {},
 	"ConsumerGroup":       {},
@@ -118,6 +123,7 @@ var subscriptionAllowedFields = map[string]struct{}{
 	"ContractKind":        {},
 	"ContractTransport":   {},
 	"BrokerDelaySchedule": {},
+	"SerialMode":          {},
 }
 
 // collectSubscriptionFieldViolations walks an AST for a struct named
@@ -166,7 +172,7 @@ func collectSubscriptionFieldViolations(f *ast.File, fset *token.FileSet, label 
 }
 
 // TestSubscriptionFieldsFrozen enforces SUBSCRIPTION-FIELDS-FROZEN-01:
-// kernel/outbox.Subscription must declare exactly the eight fields listed in
+// kernel/outbox.Subscription must declare exactly the nine fields listed in
 // subscriptionAllowedFields. Drift in this field set silently changes what
 // every cell handler can/must produce on a Subscription literal AND what
 // codegen (contractgen + cellgen) must inject; freezing the set keeps the
@@ -232,6 +238,7 @@ type Subscription struct {
 	ContractKind        string
 	ContractTransport   string
 	BrokerDelaySchedule []time.Duration
+	SerialMode          bool
 }`,
 			wantFound: true,
 		},
@@ -247,6 +254,7 @@ type Subscription struct {
 	ContractKind        string
 	ContractTransport   string
 	BrokerDelaySchedule []time.Duration
+	SerialMode          bool
 	Extra               string
 }`,
 			wantFound:   true,
@@ -263,6 +271,7 @@ type Subscription struct {
 	ContractKind        string
 	ContractTransport   string
 	BrokerDelaySchedule []time.Duration
+	SerialMode          bool
 }`,
 			wantFound:   true,
 			wantMissing: true,
@@ -279,6 +288,7 @@ type Subscription struct {
 	ContractKind        string
 	ContractTransport   string
 	BrokerDelaySchedule []time.Duration
+	SerialMode          bool
 	EmbeddedBase
 }`,
 			wantFound:   true,

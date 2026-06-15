@@ -111,16 +111,20 @@ const (
 	// drain entrypoint, used to scope the drain-path binding scan.
 	serialGuardBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime/bootstrap"
 
-	// serialGuarantorSoleImpl is the ONLY production type permitted to implement
-	// the marker — the serial in-memory bus. AMQP/MQTT and the
-	// contractTracingSubscriber decorator stay absent (fail-closed); sub-rule D
-	// (decorator must not shadow the marker) is subsumed by the exact-set check
-	// in TestProjectionSerialDeliveryEnforcement01_ImplementerSet.
+	// serialGuarantorInMemImpl and serialGuarantorRabbitImpl are the EXACT set of
+	// production types permitted to implement the marker: the serial in-memory bus,
+	// and the RabbitMQ subscriber, which HONORS per-subscription serial mode
+	// (prefetch=1 + x-single-active-consumer + synchronous single-flight dispatch,
+	// #1771) for projection subscriptions while keeping ordinary subscriptions
+	// concurrent. MQTT and the contractTracingSubscriber decorator stay absent
+	// (fail-closed); sub-rule D (decorator must not shadow the marker) is subsumed by
+	// the exact-set check in TestProjectionSerialDeliveryEnforcement01_ImplementerSet.
 	//
-	// Adding a second legitimate serial transport (e.g. an ordered NATS consumer)
-	// is a DELIBERATE update: add it here AND it begins to qualify for projections.
-	// The exact-set assertion fails CI until this golden is updated — intended.
-	serialGuarantorSoleImpl = PlatformFrameworkModulePath + "/runtime/eventbus.InMemoryEventBus"
+	// Adding a third legitimate serial transport (e.g. an ordered NATS consumer) is a
+	// DELIBERATE update: add it here AND it begins to qualify for projections. The
+	// exact-set assertion fails CI until this golden is updated — intended.
+	serialGuarantorInMemImpl  = PlatformFrameworkModulePath + "/runtime/eventbus.InMemoryEventBus"
+	serialGuarantorRabbitImpl = PlatformModulePath + "/adapters/rabbitmq.Subscriber"
 )
 
 // TestProjectionSerialDeliveryEnforcement01_MarkerFrozen (sub-rule A): the marker
@@ -145,23 +149,26 @@ func TestProjectionSerialDeliveryEnforcement01_MarkerFrozen(t *testing.T) {
 
 // TestProjectionSerialDeliveryEnforcement01_ImplementerSet (sub-rules B + D): the
 // set of production types implementing outbox.SerialInOrderGuarantor is exactly
-// {runtime/eventbus.InMemoryEventBus}. Any concurrent transport or the
-// contractTracingSubscriber decorator implementing it would break fail-closed.
+// {runtime/eventbus.InMemoryEventBus, adapters/rabbitmq.Subscriber} — the in-memory
+// bus and the RabbitMQ subscriber's per-subscription serial mode (#1771). Any other
+// concurrent transport or the contractTracingSubscriber decorator implementing it
+// would break fail-closed.
 func TestProjectionSerialDeliveryEnforcement01_ImplementerSet(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	root := findModuleRoot(t)
-	prodPatterns := prodscan.Patterns(root)
-
-	// Resolve the marker interface and collect impls from the SAME load so
-	// types.Implements uses pointer-identical *types.Named descriptors.
+	// Production scope (NOT the base prodscan.Patterns used by sub-rule C): the
+	// implementer set must include satellite/adapter modules (adapters/rabbitmq is
+	// its own go.work member), so the scan that proves the EXACT set has to load the
+	// full production workspace — otherwise an adapter implementing the marker is an
+	// undetected blind spot. Production loads everything in one workspace load, so
+	// types.Implements still sees pointer-identical *types.Named descriptors.
 	var iface *types.Interface
 	var implPkgs []*types.Package
 
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
+	_ = Run(t, Production(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
 				return nil
@@ -209,12 +216,15 @@ func TestProjectionSerialDeliveryEnforcement01_ImplementerSet(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := []string{serialGuarantorSoleImpl}
+	want := []string{serialGuarantorInMemImpl, serialGuarantorRabbitImpl}
+	sort.Strings(want)
 	assert.Equal(t, want, got,
 		"PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01: the marker implementer set must be exactly "+
-			"{InMemoryEventBus}. A concurrent transport (AMQP/MQTT) or the contractTracingSubscriber "+
-			"decorator implementing SerialInOrderGuarantor would defeat fail-closed-by-absence — "+
-			"projections would be wired onto a non-serial transport. (sub-rules B + D)")
+			"{InMemoryEventBus, rabbitmq.Subscriber}. An unlisted concurrent transport (MQTT) or the "+
+			"contractTracingSubscriber decorator implementing SerialInOrderGuarantor would defeat "+
+			"fail-closed-by-absence — projections would be wired onto a non-serial transport. "+
+			"rabbitmq qualifies only because it honors per-subscription serial mode (prefetch=1 + "+
+			"x-single-active-consumer + synchronous dispatch). (sub-rules B + D)")
 }
 
 // TestProjectionSerialDeliveryEnforcement01_GuardCallsite (sub-rule C): the only

@@ -2003,9 +2003,9 @@ func TestSubscriber_AddRemoveRun(t *testing.T) {
 		runs:    make(map[*subscriptionRun]struct{}),
 	}
 
-	r1 := newSubscriptionRun(newMockChannel(), "tag1", nil)
-	r2 := newSubscriptionRun(newMockChannel(), "tag2", nil)
-	r3 := newSubscriptionRun(newMockChannel(), "tag3", nil)
+	r1 := newSubscriptionRun(newMockChannel(), "tag1", nil, false)
+	r2 := newSubscriptionRun(newMockChannel(), "tag2", nil, false)
+	r3 := newSubscriptionRun(newMockChannel(), "tag3", nil, false)
 
 	sub.addRun(r1)
 	sub.addRun(r2)
@@ -2026,7 +2026,7 @@ func TestSubscriber_AddRemoveRun(t *testing.T) {
 	sub.runsMu.Unlock()
 
 	// Remove a run that is not tracked — should be a no-op.
-	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown", nil))
+	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown", nil, false))
 
 	sub.runsMu.Lock()
 	assert.Len(t, sub.runs, 2)
@@ -2058,7 +2058,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
-	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue", nil,
+	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue", nil, false,
 		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.Ack()
 		}))

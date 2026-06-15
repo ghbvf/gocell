@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/contractspec"
@@ -191,4 +192,23 @@ func TestAddContractHandler_OwnerCellIDDistinctFromConsumerGroup(t *testing.T) {
 	sub := r.handlers[0].subscription()
 	assert.Equal(t, consumerGroup, sub.ConsumerGroup, "ConsumerGroup must be preserved as-is")
 	assert.Equal(t, ownerCellID, sub.CellID, "CellID must be ownerCellID, not consumerGroup")
+}
+
+// TestAddContractHandler_SerialModeThreadsToSubscription verifies the SerialMode
+// option flows from cell.WithSubscriptionSerialMode through handlerConfig into the
+// final outbox.Subscription — the path the bootstrap projection drain relies on to
+// flag a projection subscription serial for the transport (#1771). Ordinary
+// subscriptions (no option) stay SerialMode=false.
+func TestAddContractHandler_SerialModeThreadsToSubscription(t *testing.T) {
+	t.Parallel()
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
+
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "cg-plain", "accesscore"))
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "cg-proj", "accesscore",
+		cell.WithSubscriptionSerialMode()))
+
+	require.Equal(t, 2, len(r.handlers))
+	assert.False(t, r.handlers[0].subscription().SerialMode, "ordinary subscription stays concurrent (SerialMode=false)")
+	assert.True(t, r.handlers[1].subscription().SerialMode,
+		"WithSubscriptionSerialMode must thread SerialMode=true onto the final Subscription")
 }

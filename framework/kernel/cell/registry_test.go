@@ -320,6 +320,25 @@ func TestWithSubscriptionBrokerDelaySchedule_ClonesInput(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestWithSubscriptionSerialMode (#1771)
+// ---------------------------------------------------------------------------
+
+func TestWithSubscriptionSerialMode(t *testing.T) {
+	rec := NewRegistryRecorder(nil, outbox.DurabilityDurable)
+	spec := testRegistrySpec("session.created")
+
+	// Default: SerialMode is false (ordinary concurrent subscription).
+	require.NoError(t, rec.Subscribe(spec, noopHandler, "cg-plain", "accesscore"))
+	// Opt-in: the projection drain sets SerialMode via WithSubscriptionSerialMode.
+	require.NoError(t, rec.Subscribe(spec, noopHandler, "cg-proj", "accesscore", WithSubscriptionSerialMode()))
+
+	snap := rec.Snapshot()
+	require.Len(t, snap.Subscriptions, 2)
+	assert.False(t, snap.Subscriptions[0].SerialMode, "ordinary subscription must default to SerialMode=false")
+	assert.True(t, snap.Subscriptions[1].SerialMode, "WithSubscriptionSerialMode must set SerialMode=true")
+}
+
+// ---------------------------------------------------------------------------
 // TestRegistry_Lifecycle_EmptyName_Panics
 // ---------------------------------------------------------------------------
 

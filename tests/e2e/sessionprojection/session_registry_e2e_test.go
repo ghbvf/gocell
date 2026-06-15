@@ -81,7 +81,7 @@ func pollTotalSessions(t *testing.T, token string, want int64, timeout time.Dura
 		if last >= want {
 			return last
 		}
-		_ = clk.Sleep(context.Background(), clk.Now().Add(500*time.Millisecond))
+		_ = clk.Sleep(context.Background(), clk.Now().Add(testtime.D500ms))
 	}
 	return last
 }

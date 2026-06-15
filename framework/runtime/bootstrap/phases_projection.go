@@ -435,7 +435,14 @@ func (b *Bootstrap) drainCellProjections(ctx context.Context, s *phaseState, evt
 // router: the captured wrapped handler, the Coordinator's readiness probes, a
 // named Close teardown, and the rebuild-endpoint coordinator index.
 func (b *Bootstrap) wireOneProjection(s *phaseState, evtRouter *eventrouter.Router, w projectionWiring) error {
-	var opts []cell.SubscriptionOption
+	// A projection REQUIRES strictly serial, in-order delivery (the precondition
+	// checkSubscriberGuaranteesSerialDelivery enforces against the raw transport).
+	// Flag the subscription serial so a serial-capable transport (in-memory bus, or
+	// rabbitmq's prefetch=1 + single-active-consumer mode) narrows to single-flight
+	// delivery for this stream. Never paired with a BrokerDelaySchedule — the delay
+	// tier's tail re-entry would break in-order delivery (Subscription.Validate rejects
+	// the combination). Ordinary subscriptions (drainCellSubscriptions) are untouched.
+	opts := []cell.SubscriptionOption{cell.WithSubscriptionSerialMode()}
 	if w.sub.SliceID != "" {
 		opts = append(opts, cell.WithSubscriptionSliceID(w.sub.SliceID))
 	}

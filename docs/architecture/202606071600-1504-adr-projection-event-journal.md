@@ -351,3 +351,13 @@ PR-02（#1769）落地 D4 写路径装饰器 + I2/I5 时做了两处相对 PR-00
    `CAPABILITY-PROVIDER-FUNNEL-01` 禁构造集（仅 cap_wiring + tests）。
 
 来源：`/ship 1769`（内置 review 前自审：彻底/不向后兼容/优雅简洁/AI-HARD 四原则三层自查）。
+
+## §Amendment 2026-06-16（#1771 PR-04 — production-default flip 在 PG 拓扑实际可达）
+
+§9 PR-04 行与 §结论"关键不变式（已满足）"原称 production-default flip（删 gate）已完成。**实测发现该 flip 在唯一真实生产拓扑（PG + RabbitMQ）下不可达**：PG 拓扑事件传输是 RabbitMQ subscriber（`cellmodules/eventtransport`），它当时**不实现** `outbox.SerialInOrderGuarantor`，故 accesscore 声明的 `session_registry` 投影在 `drainCellProjections` 串行守卫处 fail-closed → corebundle 启动 `exited(1)`（CI `pr-ci/e2e` 已坐实）。删 gate 是必要但**不充分**条件——投影声明本身（非 gate）才是 boot 阻塞，而串行守卫是硬 fail-closed 无旁路（设计如此，旁路即静默投影 gap）。
+
+**修复（本 PR，扩 #1771）**：给 RabbitMQ subscriber 加 per-subscription serial mode（`outbox.Subscription.SerialMode`，仅投影 drain 经 `cell.WithSubscriptionSerialMode` 置位）——`SerialMode=true` 订阅用 prefetch=1 + `x-single-active-consumer` + 同步单飞投递消费，串行守卫遂通过，corebundle 在 PG 拓扑可启动。机制 + 威胁矩阵重评见父 ADR `202605261620` §Amendment 2026-06-16。CI e2e 入口同改 `-tags=e2e,pg` 使 `session_registry` live 收敛 e2e 真实执行。
+
+**逐项重评**：D1/D9（flip）状态 `已声明完成` → **`实际可达且已验证`**（real-broker 集成测试 serial-order + single-flight + SAC + requeue-no-gap 证）；D6(b) 多 pod fencing **不变**（仍 deferred PR-PG）——SAC 是 broker 连接态 failover，配合既有 durable checkpoint 单调 skip 给 live 路径 at-least-once 幂等，非 `owner` 列 CAS fencing。其余决策行不变。startup auto-rebuild（重启后进程内读模型空）是独立 follow-up（experimental `session_registry` 文档化限制），不阻塞本 flip。
+
+**RESOURCE-PROJECTION-COVERAGE-01 carve-out（ADR 注册同步）**：read 端点 `http.session.registry-summary.v1` 返回单一租户内标量聚合 `{totalSessions:int64}`——无 per-row resource、无可掩码列轴（租户过滤在 service 的 RowScope 行级施加，非响应列），把标量计数走租户列掩码 funnel（`responseProjection`）是空掩码、不诚实。故按该 archtest "genuinely non-maskable resource" 分支登记 `resourceReadProjectionCarveOut`（function-level carve-out），rationale 即本段——anti-vacuity floor `minExpectedResourceReadGETs` 同 PR 由 11 升 12。

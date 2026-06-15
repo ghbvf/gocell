@@ -120,6 +120,7 @@ type handlerConfig struct {
 	sliceID             string
 	contract            contractspec.ContractSpec
 	brokerDelaySchedule []time.Duration // #1458: per-attempt webhook retry delays (empty for ordinary subscriptions).
+	serialMode          bool            // strictly serial in-order delivery; set only for outbox projections (#1771).
 }
 
 // Router manages event subscription lifecycle. It is populated from
@@ -248,6 +249,7 @@ func (r *Router) AddContractHandler(
 		CellID:              ownerCellID,
 		SliceID:             req.SliceID,
 		BrokerDelaySchedule: req.BrokerDelaySchedule,
+		SerialMode:          req.SerialMode,
 	}
 	r.mu.Lock()
 	currentValidators := make([]cell.SubscriptionValidator, len(r.validators))
@@ -277,6 +279,7 @@ func (r *Router) AddContractHandler(
 		sliceID:             req.SliceID,
 		contract:            spec,
 		brokerDelaySchedule: req.BrokerDelaySchedule,
+		serialMode:          req.SerialMode,
 	})
 	return nil
 }
@@ -597,6 +600,7 @@ func (h handlerConfig) subscription() outbox.Subscription {
 		CellID:              h.cellID,
 		SliceID:             h.sliceID,
 		BrokerDelaySchedule: h.brokerDelaySchedule,
+		SerialMode:          h.serialMode,
 	}
 	if h.contract.ID != "" {
 		sub.ContractID = h.contract.ID

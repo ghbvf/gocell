@@ -439,7 +439,7 @@ package godoc (not duplicated here).
 | **PROJECTION-CHECKPOINT-TX-BOUND-01** | PR-01 stub → PR-02 green | **Medium** (`SaveOffset` impl must obtain tx via `persistence.TxFromContext`; raw `db.Exec` / `*sql.Tx` form fails). Rides the existing `PG-REPO-AMBIENT-TX-01` Hard funnel for the PG adapter. | typed-param / ambient-tx form |
 | ~~PROJECTION-CHECKPOINT-OWNER-COLUMN-V1-RESERVED-01~~ | PR-02 → **retired PR-PG (#1630 Batch 2)** | ~~Medium~~ (SQL-literal scan). **Retired** in the same PR that introduced `AdvanceIfOwner`. Replacement: `OwnerCheckpointStore` interface narrowing (type-system Hard: `SaveOffset` absent from interface) + `SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01` (Medium). | ~~input-struct field exclusion (SQL-write variant)~~ |
 | **PROJECTION-CONSISTENCY-01** (codegen funnel) | gh #960 (delivered) | 下游 **Hard** — contractgen emits `const _ = uint(cellvocab.<level> - cellvocab.L3)` into the projection `types_gen.go`; a level below L3 overflows uint at compile time, so an invalid `codegen=true` projection cannot exist in a buildable tree. 上游 **Hard** (structural, not caller-allowlist) — `generateOneContract` renders `types.tmpl` unconditionally for every `kind:projection` contract and the guard sits in an unconditional `{{if eq .Kind "projection"}}` block, so a generated projection `types_gen.go` cannot exist without the guard; the byte-lock is the committed `generated/.../types_gen.go` + `hack/verify-codegen-contract.sh` regenerate-and-diff CI. The governance rule `PROJECTION-CONSISTENCY-01` is the **Medium** backstop for the two vectors the codegen funnel cannot reach (`codegen=false` contracts + in-memory fixtures). The original "parser load-time `jsonschema.Validate`" framing was **rejected** (a parse-time validator is a Medium runtime guard and does not cover the in-memory vector — see §Amendment 2026-06-02 #960). | codegen funnel + compile-error downstream |
-| **PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01** | PR-04d (#1369) green | **Medium** (single axis — runtime drain fail-fast + fail-closed-by-absence capability marker; injected-Subscriber dynamic property has no compile-time expression, same ceiling as #851 / #893). Sub-rules: marker freeze / exact implementer set `{InMemoryEventBus}` / single guard callsite. Hard path (sealed projection-transport token) = gh #1475. | runtime invariant guard + typed marker (fail-closed-by-absence) |
+| **PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01** | PR-04d (#1369) green | **Medium** (single axis — runtime drain fail-fast + fail-closed-by-absence capability marker; injected-Subscriber dynamic property has no compile-time expression, same ceiling as #851 / #893). Sub-rules: marker freeze / exact implementer set `{InMemoryEventBus, rabbitmq.Subscriber}` (#1771; scanned via `Production` scope so adapter implementers are not a blind spot) / single guard callsite. Hard path (sealed projection-transport token) = gh #1475. | runtime invariant guard + typed marker (fail-closed-by-absence) |
 
 Sealed-marker note: `CellCheckpointStore` (PR-00 `cell_marker.go`) is the
 sealed-marker Hard at the field/assignment layer (external code cannot express
@@ -564,7 +564,9 @@ enforcement lands") is replaced by a hard bootstrap guard.
   subscription → FIFO in-order). The guarantee is scoped to a single subscriber on
   a `(consumerGroup, topic)`; a projection's group is `"<cellID>-<projectionID>"`
   with exactly one subscription registered by the drain, so the precondition
-  holds. AMQP/MQTT do **not** implement it.
+  holds. AMQP/MQTT do **not** implement it. (Superseded 2026-06-16 #1771: the
+  RabbitMQ subscriber now implements it for `SerialMode` subscriptions — see the
+  2026-06-16 amendment. MQTT still does not.)
 - `runtime/bootstrap/phases_projection.go::checkSubscriberGuaranteesSerialDelivery`
   type-asserts the raw wired transport (`s.sub`, not the `contractTracingSubscriber`
   decorator, which wraps rather than embeds and does not forward the marker)
@@ -598,6 +600,61 @@ gh #1475.
   fail-closed / GAP-8 / multi-pod mechanism. Row 7's multi-pod boundary remains a
   documented v1 limitation (distinct from Row 4's intra-pod concurrency, which this
   amendment closes).
+
+## Amendment 2026-06-16 (#1771 — RabbitMQ per-subscription serial projection mode)
+
+The 2026-06-02 amendment's "only `runtime/eventbus.InMemoryEventBus` qualifies; AMQP/MQTT
+do not implement it" framing was a **v1 limitation, not a permanent property**, and it made
+the EPIC #1504 production-default flip (durable journal as the PG-topology default)
+**unreachable**: PG topology wires the RabbitMQ subscriber, so a declared projection
+fail-closed at the drain and corebundle could not boot. #1771 closes that by giving the
+RabbitMQ subscriber a provable per-subscription serial mode — so the implementer set is now
+**`{InMemoryEventBus, rabbitmq.Subscriber}`** and the conflicting "in-memory bus only" /
+"AMQP does not implement it" statements above and in §7 are superseded by this amendment.
+
+**Mechanism.**
+
+- `outbox.Subscription.SerialMode` (new, wiring-injected like `BrokerDelaySchedule`): set
+  ONLY by the projection drain (`wireOneProjection` via `cell.WithSubscriptionSerialMode`) for
+  outbox projections. Ordinary subscriptions leave it false and keep concurrent dispatch.
+- `adapters/rabbitmq.Subscriber` now implements `SerialInOrderGuarantor` (returns true) as a
+  CAPABILITY: it HONORS serial mode. For a `SerialMode=true` subscription it consumes with
+  prefetch=1 (one unacked message) + `x-single-active-consumer` (one active consumer across
+  channels/pods) + synchronous single-flight dispatch (next delivery handed off only after the
+  previous handler returns). The in-memory bus stays unconditionally serial (honors the flag
+  vacuously).
+- **Ordering on retry.** Serial transient retries use the in-place head requeue
+  (`Nack(requeue=true)`), which under prefetch=1 redelivers the failed position before its
+  successor — order-preserving. The DLX+TTL delay tier (tail re-entry) would reorder relative
+  to already-applied later positions → a checkpoint gap, so `Subscription.Validate` REJECTS
+  `SerialMode` paired with a non-empty `BrokerDelaySchedule` (the ordering invariant is a
+  validation error, not just a code path). Empirically proven by the real-broker integration
+  test `TestIntegration_SerialMode_RequeuePreservesOrderNoGap`.
+
+**Threat-matrix re-evaluation (逐行重评).**
+
+- **Row 4** (out-of-order / concurrent delivery): ✅ → **✅ (unchanged, now reachable in
+  production)**. The guard is identical; the only change is that the production PG transport
+  (RabbitMQ) now satisfies it for projection subscriptions instead of fail-closing. A
+  non-serial-mode subscription on RabbitMQ still gets concurrent dispatch (correct — only
+  projections request serial), and MQTT / any non-implementer still fails fast.
+- **Row 7** (multi-pod): **unchanged**. `x-single-active-consumer` keeps exactly one active
+  consumer across pods (at-least-once; redelivery on failover), which combined with the
+  existing durable `projection_checkpoints` (monotonic skip) + never-cleaned journal gives
+  idempotent replay — so the live path is single-writer in practice. This does NOT replace the
+  reserved `owner`-column pessimistic claim (still deferred, ADR §3 Q5 / the `202606071600-1504`
+  multi-pod amendment): SAC is broker-connection-state failover, not a fencing token.
+- **Rows 1, 2, 3, 5, 6**: **unchanged** — #1771 adds only a per-subscription transport mode.
+
+**AI-robust rating: Medium** (unchanged ceiling). Adding the implementer is **Hard**-gated:
+`PROJECTION-SERIAL-DELIVERY-ENFORCEMENT-01` sub-rule B fails CI until the golden implementer set
+is updated (it now scans the satellite/adapter modules via `Production` scope so an adapter
+implementer can no longer be an undetected blind spot). The `SerialMode ⊥ BrokerDelaySchedule`
+validation makes the tail-re-entry ordering hazard unrepresentable in a valid Subscription. The
+residual self-attestation ceiling (Go cannot compile-prove an injected interface delivers
+serially, #1475 family) is unchanged; the real-broker integration suite (serial order +
+single-flight + SAC + requeue-no-gap) is the practical anti-regression that a future change to
+the rabbitmq consume path cannot silently defeat.
 
 ## Amendment 2026-06-02 (#960 — PROJECTION-CONSISTENCY-01 → Hard via contractgen codegen funnel, NOT parser jsonschema)
 

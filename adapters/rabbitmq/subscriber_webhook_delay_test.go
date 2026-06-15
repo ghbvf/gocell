@@ -175,7 +175,7 @@ func TestDeclareTopology_WithDelaySchedule_DeclaresDelayTiers(t *testing.T) {
 	topic := "session.created"
 	queueName := "cg-1.session.created"
 
-	err := sub.declareTopology(ch, topic, queueName, schedule)
+	err := sub.declareTopology(ch, topic, queueName, schedule, false)
 	require.NoError(t, err)
 
 	ch.mu.Lock()
@@ -303,7 +303,7 @@ func TestDeclareTopology_EmptySchedule_NoDelayTopology(t *testing.T) {
 	sub := NewSubscriber(clock.Real(), conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	// Empty schedule: no delay topology should be declared.
-	err := sub.declareTopology(ch, "my.topic", "my-queue", nil)
+	err := sub.declareTopology(ch, "my.topic", "my-queue", nil, false)
 	require.NoError(t, err)
 
 	ch.mu.Lock()
