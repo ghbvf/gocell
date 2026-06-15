@@ -13,9 +13,7 @@
 //   - RoleGood      = "role:operator"  — correctly namespaced business role.
 //   - RoleAdminAlias = "admin"         — sanctioned platform role alias.
 //   - RoleSuperAdmin  = "superadmin"   — sanctioned platform role alias.
-//   - RoleUnrelated   = "something"    — identifier does NOT start with "Role",
-//     so the scanner ignores it entirely (naming-pattern exemption).
-//   - constNoRolePrefix = "bare"       — unexported, does not start with "Role";
+//   - notARole = "bare"               — unexported, does not start with "Role";
 //     ignored by the Role* naming filter.
 package roleprefixfixture
 

@@ -44,7 +44,7 @@ cd gocell
 bash scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 13 values in `.env.local` (see §Secrets table for the
+The script generates 14 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -145,9 +145,14 @@ You should see at least two event types produced by the steps above:
 
 - Omit `actorId` — permissioned ledger-wide read; requires `audit:read` permission.
 - `?actorId=<your userId>` — explicit self-read; exempt from the permission gate (the
-  caller is reading their own rows).
+  caller is reading their own rows). Note: this exemption applies only at the routing
+  gate layer; data-layer row visibility is still governed independently by the
+  principal's RowScope (self → only the caller's own rows).
 - `?actorId=system` — filters to system-actor events only (setup, migrations, and
-  other platform operations).
+  other platform operations). Unlike `?actorId=<your userId>`, this does NOT trigger
+  the self-read exemption (the caller's subject is a UUID and can never equal the
+  string `"system"`); the request still requires `audit:read` permission (satisfied
+  here by the admin token).
 
 To see only system-actor events (useful for verifying what setup/admin wrote):
 

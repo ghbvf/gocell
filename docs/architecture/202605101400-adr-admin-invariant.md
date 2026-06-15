@@ -96,7 +96,7 @@ func (g *LastAdminGuard) CheckRemove(ctx context.Context, userID string, hasAdmi
 改用：
 
 - 应用层 `LastAdminGuard.CheckRemove` 在 tx 内执行
-- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`；trigger 在 count 前持有 transaction-scoped advisory lock，序列化 direct SQL / cascade delete 并发
+- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role_id='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role_id='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`；trigger 在 count 前持有 transaction-scoped advisory lock，序列化 direct SQL / cascade delete 并发
 - trigger 不替代应用层校验（应用层错误码更精准），是 DB 兜底防直连 SQL 误删
 
 > 注：migration 024（S4.0）进一步把本节的 admin 计数收紧为「effective admin = active AND admin role」，其 Up 强化 / Down 弱化语义见 §3.6。
@@ -177,6 +177,19 @@ destructive Down 由 Go 层 sealed `DestructiveDownPermit`（`adapters/postgres/
 `Migrator.Down` 的 `permit` 位置参，唯一构造器 `AllowDestructiveDown`）门控：包外无法伪造，
 非授权调用方无法触达 Down 路径（issue #1248）。migration 024 内的三行 inline WARNING 与本节
 描述同源。
+
+**回滚后运维验证**
+
+回滚完成后执行以下 SQL 确认仍存在至少一个 effective admin：
+
+```sql
+SELECT count(*) FROM role_assignments ra
+  JOIN users u ON u.id = ra.user_id
+ WHERE ra.role_id='admin' AND u.status='active';
+```
+
+若结果为 0，必须在回滚完成前手动 reactivate 一个 admin，或（若系统从未初始化）经
+`/api/v1/access/setup/admin` 恢复。
 
 **参考**
 

@@ -64,7 +64,8 @@
 //   - The allowlist {"admin", "superadmin"} is manually kept in sync with
 //     framework/runtime/auth/roles.go. ROLE-ADMIN-LITERAL-01 provides indirect
 //     coverage for "admin"; "superadmin" has no separate literal guard (residual
-//     blind spot — tracked in ADR 202606151430-639 §3).
+//     blind spot — this godoc is the authoritative blind-spot record;
+//     ADR 202606151430-639 §3.1 summarizes enforcement).
 //
 // # Anti-vacuity
 //
@@ -112,7 +113,7 @@ const (
 //
 // Blind spot: if roles.go gains a new reserved name it must also be added
 // here; there is no compile-time enforcement of that sync (residual Medium
-// ceiling documented in ADR 202606151430-639 §3).
+// ceiling documented in ADR 202606151430-639 §3.1).
 var rolePrefixPlatformAllowlist = map[string]struct{}{
 	"admin":      {},
 	"superadmin": {},
@@ -208,7 +209,9 @@ func TestRolePrefixNamespaced01(t *testing.T) {
 
 // TestRolePrefixNamespaced01_RedFixture is the negative control: the scanner
 // run against roleprefixfixture must fire on exactly the one RED case
-// (RoleBad = "operator") and leave the four GREEN cases untouched.
+// (RoleBad = "operator") and leave the three GREEN Role* cases (RoleGood /
+// RoleAdminAlias / RoleSuperAdmin) untouched; the non-Role* notARole is
+// ignored by the naming filter.
 func TestRolePrefixNamespaced01_RedFixture(t *testing.T) {
 	t.Parallel()
 
