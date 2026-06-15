@@ -87,7 +87,7 @@ Rebuild 经过 Coordinator 的四阶段状态机（对齐 Axon TrackingEventProc
 3. **PhaseReplay** — 从 `projection_events` 全量重放（`global_seq > 0`），topic-filtered，逐行经 `Apply` 写入读模型，同事务 advance checkpoint。
 4. **PhaseCatchup** — 追赶 `(head0, head1]` 区间（replay 期间新增的事件），追完后恢复 live 投递（PhaseLive）。
 
-Rebuild 期间读模型处于 stale 状态（非 503，业务 read 仍可服务旧数据，参见 Q4-supplement）。`Coordinator.Phase()` 暴露当前阶段；业务 read path 可按需检查并返回 503。
+Rebuild 期间业务 read 的语义取决于读模型是否持久化。`session_registry`（及任何进程内读模型）在 **PhaseReset** 经 `onReset` hook 清空整张读模型表，因此 reset 后到 replay 追平之前，query **返回空 / 低估值（如 `totalSessions: 0`），而非旧数据**——不要按「stale 但仍服务旧值」排障。`Coordinator.Phase()` 暴露当前阶段：若暴露不完整读模型不可接受，业务 read path 应据此在 rebuild 期间显式返回 503。要让 rebuild 期间仍服务旧数据，需持久化读模型或双 buffer rebuild（per-投影产品决策；`session_registry` 当前不持久化，故 rebuild 期返回空/低估值）。
 
 ### 诊断 Rebuild 进度
 

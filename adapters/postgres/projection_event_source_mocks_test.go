@@ -96,12 +96,14 @@ func (m *mockProjTx) Query(_ context.Context, sql string, args ...any) (pgx.Rows
 	return m.rows, nil
 }
 
-// mockProjRow implements pgx.Row, writing value into the first *int64 dest (the
-// seq / head scalar), or returning scanErr.
+// mockProjRow implements pgx.Row, writing value into each *int64 dest (the seq /
+// head scalar) and bools into successive *bool dests (the RepoReady privilege
+// flags), or returning scanErr.
 type mockProjRow struct {
 	sql     string
 	args    []any
 	value   int64
+	bools   []bool
 	scanErr error
 }
 
@@ -109,9 +111,16 @@ func (r *mockProjRow) Scan(dest ...any) error {
 	if r.scanErr != nil {
 		return r.scanErr
 	}
-	if len(dest) > 0 {
-		if p, ok := dest[0].(*int64); ok {
+	bi := 0
+	for _, d := range dest {
+		switch p := d.(type) {
+		case *int64:
 			*p = r.value
+		case *bool:
+			if bi < len(r.bools) {
+				*p = r.bools[bi]
+			}
+			bi++
 		}
 	}
 	return nil

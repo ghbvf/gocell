@@ -37,10 +37,19 @@ FROM projection_events
 WHERE global_seq > $1
 ORDER BY global_seq`
 
-// projectionJournalReadySQL is a representative zero-cost query against projection_events.
-// It returns no rows but exercises schema existence and table-level permissions, surfacing
-// migration drift a pool-level ping cannot detect (matches audit_ledger / session_store).
-const projectionJournalReadySQL = `SELECT 1 FROM projection_events WHERE false`
+// projectionJournalReadySQL asserts the serving role still holds BOTH table-level
+// privileges the durable journal depends on: SELECT (rebuild replay reads) and INSERT
+// (the emit-time same-transaction double-write that appends every projection-source
+// event, journaling_outbox_writer.go). migration 058 grants the serving role SELECT +
+// INSERT and REVOKEs UPDATE/DELETE; a GRANT drift that strips INSERT would otherwise
+// leave readyz green while every session-creating write fails on the journal append —
+// the exact fail-open the prior `SELECT 1 ... WHERE false` probe could not see (it only
+// proved SELECT + table existence). has_table_privilege additionally raises when
+// projection_events is absent, so this one round-trip still surfaces the schema/migration
+// drift a pool-level ping cannot detect (matches audit_ledger / session_store).
+const projectionJournalReadySQL = `SELECT
+	has_table_privilege(current_user, 'projection_events', 'SELECT'),
+	has_table_privilege(current_user, 'projection_events', 'INSERT')`
 
 // projectionEventPositionByIDSQL resolves a live-delivered entry's journal position by its
 // id. This is the live-carrier resolution lookup (ResolveCarrier): unlike the transient-outbox
@@ -207,14 +216,26 @@ func (s *PGProjectionEventSource) ResolveCarrier(
 	return projection.NewJournalEvent(base, globalSeq), nil
 }
 
-// RepoReady implements healthz.RepoProber. It issues a cheap non-transactional representative
-// query against projection_events so schema/migration drift and table-level permission loss
-// surface as a differentiated failure domain distinct from the pool-level postgres_ready probe.
-// Health handler contexts carry no pgx.Tx, so pgexec routes directly to the pool.
+// RepoReady implements healthz.RepoProber. It issues a cheap non-transactional privilege
+// catalog read against projection_events so schema/migration drift and table-level permission
+// loss surface as a differentiated failure domain distinct from the pool-level postgres_ready
+// probe. A missing SELECT *or* INSERT grant fails the probe closed — INSERT is the production
+// write capability the emit-time journal double-write needs, so a SELECT-only probe would stay
+// green through an INSERT-stripping GRANT drift that silently breaks every session-creating
+// write. Health handler contexts carry no pgx.Tx, so pgexec routes directly to the pool.
 func (s *PGProjectionEventSource) RepoReady(ctx context.Context) error {
-	if _, err := s.db.Exec(ctx, projectionJournalReadySQL); err != nil {
+	var canSelect, canInsert bool
+	if err := s.db.QueryRow(ctx, projectionJournalReadySQL).Scan(&canSelect, &canInsert); err != nil {
+		// has_table_privilege raises on an absent relation, so a dropped/un-migrated
+		// projection_events lands here (schema drift), distinct from a permission gap below.
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"projection journal: repo ready", err)
+	}
+	if !canSelect || !canInsert {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaShape,
+			"projection journal: serving role lacks SELECT+INSERT on projection_events; migration 058 "+
+				"must have run granting the serving role both (SELECT for rebuild replay, INSERT for the "+
+				"emit-time journal double-write) — a stripped INSERT breaks every session-creating write")
 	}
 	return nil
 }

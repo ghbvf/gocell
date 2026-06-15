@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionprojection"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
@@ -36,6 +37,32 @@ func (a *testAdminAuthorizer) Authorize(_ context.Context, _, _, _ string) (auth
 // withAllowAuthorizer wraps ctx with an allow-all authorizer.
 func withAllowAuthorizer(ctx context.Context) context.Context {
 	return auth.WithAuthorizer(ctx, &testAdminAuthorizer{})
+}
+
+// testDenyAuthorizer is an auth.Authorizer that denies every request, modeling
+// a PDP that withholds session:read so the route-level gate must 403.
+type testDenyAuthorizer struct{}
+
+func (a *testDenyAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return authz.Deny("test: session:read denied"), nil
+}
+
+// withDenyAuthorizer wraps ctx with a deny-all authorizer.
+func withDenyAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, &testDenyAuthorizer{})
+}
+
+// userCtxWithTenant returns a context carrying a tenant-scoped user principal
+// (no Authorizer) — the base for route-gate cases that vary only the PDP wiring.
+func userCtxWithTenant(roles ...string) context.Context {
+	p := &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "route-gate-user",
+		Roles:      roles,
+		TenantID:   testTenantIDStr,
+		AuthMethod: "test",
+	}
+	return auth.WithPrincipal(context.Background(), p)
 }
 
 // adminCtx returns a context with an admin principal carrying testTenantID.
@@ -94,13 +121,19 @@ func seedSession(t *testing.T, svc *sessionprojection.Service, tenantStr, sessio
 	require.NoError(t, err, "seed session %s", sessionID)
 }
 
-// newHandlerMux builds an http.Handler that serves the registry-summary endpoint.
+// newHandlerMux builds an http.Handler that serves the registry-summary endpoint
+// through the generated RegisterRoutes path. This is deliberate: RegisterRoutes
+// runs auth.Mount, which wraps the handler in the RequirePermission(session:read)
+// policy middleware. A bare mux.Handle of the generated handler would skip that
+// wrapper (the generated ServeHTTP only calls the inner handler), so every PDP
+// deny / missing-Authorizer case would silently pass — exactly the route-level
+// auth surface the cases below exercise.
 func newHandlerMux(t *testing.T, svc *sessionprojection.Service) http.Handler {
 	t.Helper()
 	policy := auth.RequirePermission(authz.PermSessionRead())
 	h := registrysummary.NewHandler(sessionprojection.NewSummaryAdapter(svc), policy)
-	mux := http.NewServeMux()
-	mux.Handle("/api/v1/access/sessions/registry-summary", h)
+	mux := celltest.NewTestMux()
+	require.NoError(t, h.RegisterRoutes(mux), "RegisterRoutes must mount the policy-wrapped handler")
 	return mux
 }
 
@@ -144,8 +177,42 @@ func TestHandler_NoTenant_Returns403(t *testing.T) {
 	assertErrCode(t, w, "ERR_AUTH_FORBIDDEN")
 }
 
+// TestHandler_RouteGate_NoAuthorizer_Returns403 verifies the route-level PDP
+// gate fails closed when no Authorizer is wired into the request context. The
+// principal is a valid tenant-scoped user, so the only thing missing is the
+// PDP — proving the gate (not the service) rejects. This case is only reachable
+// because newHandlerMux mounts the policy-wrapped handler via RegisterRoutes.
+func TestHandler_RouteGate_NoAuthorizer_Returns403(t *testing.T) {
+	t.Parallel()
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	w := doRequest(t, mux, userCtxWithTenant("admin"))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assertErrCode(t, w, "ERR_AUTH_FORBIDDEN")
+}
+
+// TestHandler_RouteGate_DenyAuthorizer_Returns403 verifies the route-level PDP
+// gate rejects a principal the PDP denies session:read for, even with a valid
+// tenant — the deny path the previous bare-handler mount never exercised.
+func TestHandler_RouteGate_DenyAuthorizer_Returns403(t *testing.T) {
+	t.Parallel()
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	w := doRequest(t, mux, withDenyAuthorizer(userCtxWithTenant("viewer")))
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assertErrCode(t, w, "ERR_AUTH_FORBIDDEN")
+}
+
 // TestHandler_Admin_Returns200_EmptyCount verifies the normal path: admin with
-// a valid tenant gets HTTP 200 with TotalSessions = 0 (no sessions yet).
+// a valid tenant gets HTTP 200 with TotalSessions = 0 (no sessions yet). With
+// newHandlerMux now mounting via RegisterRoutes, this also asserts the allow
+// path of the route-level gate (allow Authorizer + admin → permit → 200).
 func TestHandler_Admin_Returns200_EmptyCount(t *testing.T) {
 	t.Parallel()
 	svc, err := sessionprojection.NewService()

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -266,17 +265,36 @@ func TestPGProjectionEventSource_ResolveCarrier_BoundedLookup(t *testing.T) {
 
 func TestPGProjectionEventSource_RepoReady(t *testing.T) {
 	t.Parallel()
-	t.Run("success", func(t *testing.T) {
+	t.Run("success when serving role holds SELECT+INSERT", func(t *testing.T) {
 		t.Parallel()
-		tx := &mockExecTx{}
+		tx := &mockProjTx{row: &mockProjRow{bools: []bool{true, true}}}
 		s, ctx := newEventSourceWithTx(tx)
 		require.NoError(t, s.RepoReady(ctx))
-		assert.Equal(t, projectionJournalReadySQL, tx.execSQL)
+		assert.Equal(t, projectionJournalReadySQL, tx.row.sql,
+			"RepoReady must probe via the privilege-catalog query")
 	})
-	t.Run("query error wrapped", func(t *testing.T) {
+	t.Run("missing INSERT fails closed", func(t *testing.T) {
+		t.Parallel()
+		// SELECT granted, INSERT stripped (the GRANT-drift fail-open a SELECT-only
+		// probe could not catch) — must be rejected, not silently ready.
+		tx := &mockProjTx{row: &mockProjRow{bools: []bool{true, false}}}
+		s, ctx := newEventSourceWithTx(tx)
+		err := s.RepoReady(ctx)
+		require.Error(t, err)
+		assert.Equal(t, ErrAdapterPGSchemaShape, codeOf(t, err))
+	})
+	t.Run("missing SELECT fails closed", func(t *testing.T) {
+		t.Parallel()
+		tx := &mockProjTx{row: &mockProjRow{bools: []bool{false, true}}}
+		s, ctx := newEventSourceWithTx(tx)
+		err := s.RepoReady(ctx)
+		require.Error(t, err)
+		assert.Equal(t, ErrAdapterPGSchemaShape, codeOf(t, err))
+	})
+	t.Run("query error wrapped (absent relation / drift)", func(t *testing.T) {
 		t.Parallel()
 		sentinel := errors.New("ready boom")
-		tx := &mockExecTx{execErr: sentinel}
+		tx := &mockProjTx{row: &mockProjRow{scanErr: sentinel}}
 		s, ctx := newEventSourceWithTx(tx)
 		err := s.RepoReady(ctx)
 		require.Error(t, err)
@@ -291,16 +309,4 @@ func assertProjPermanent(t *testing.T, err error) {
 	var permErr *kout.PermanentError
 	assert.True(t, errors.As(err, &permErr),
 		"an unresolvable carrier must be permanent (Cursor invariant #4), not transient")
-}
-
-// mockExecTx embeds pgx.Tx and overrides Exec to drive RepoReady deterministically.
-type mockExecTx struct {
-	pgx.Tx
-	execSQL string
-	execErr error
-}
-
-func (m *mockExecTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
-	m.execSQL = sql
-	return pgconn.CommandTag{}, m.execErr
 }
