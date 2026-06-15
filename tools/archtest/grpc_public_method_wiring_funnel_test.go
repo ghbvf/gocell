@@ -122,28 +122,23 @@ func scanPublicMethodFieldWrites(t *testing.T, allowlist map[string]struct{}) ([
 			rel := p.Rel(file)
 			// Form A: assignment LHS — c.publicMethod = ...
 			EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
-				for _, lhs := range as.Lhs {
-					sel, ok := lhs.(*ast.SelectorExpr)
-					if !ok || sel.Sel.Name != "publicMethod" {
-						continue
+				EachInChildren[ast.SelectorExpr](as, func(sel *ast.SelectorExpr) {
+					if sel.Sel.Name != "publicMethod" {
+						return
 					}
 					if s := p.TypesInfo.Selections[sel]; s != nil && isAuthConfigPublicMethodField(s.Obj()) {
 						flag(rel, sel.Pos())
 					}
-				}
+				})
 			})
 			// Form B: composite literal key — authConfig{publicMethod: ...}
 			EachInSubtree[ast.CompositeLit](file, func(cl *ast.CompositeLit) {
-				for _, elt := range cl.Elts {
-					kv, ok := elt.(*ast.KeyValueExpr)
-					if !ok {
-						continue
-					}
+				EachInChildren[ast.KeyValueExpr](cl, func(kv *ast.KeyValueExpr) {
 					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "publicMethod" &&
 						isAuthConfigPublicMethodField(p.TypesInfo.Uses[key]) {
 						flag(rel, key.Pos())
 					}
-				}
+				})
 			})
 		}
 		return d

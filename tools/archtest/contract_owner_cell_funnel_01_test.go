@@ -43,8 +43,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,39 +62,28 @@ func cellsIndexedByOwnerCell(fset *token.FileSet, files []*ast.File) []string {
 	var hits []string
 	for _, f := range files {
 		// Pass 1 (file-wide): the direct shape `<expr>.Cells[<expr>.OwnerCell]`.
-		ast.Inspect(f, func(n ast.Node) bool {
-			ix, ok := n.(*ast.IndexExpr)
-			if !ok {
-				return true
-			}
+		EachInSubtree[ast.IndexExpr](f, func(ix *ast.IndexExpr) {
 			if isSelectorNamed(ix.X, "Cells") && isSelectorNamed(ix.Index, "OwnerCell") {
 				hits = append(hits, fset.Position(ix.Pos()).String())
 			}
-			return true
 		})
 		// Pass 2 (per-function): the single-hop local-alias shape. Taint is
 		// collected per function so an alias name cannot leak across boundaries.
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil {
-				continue
+		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			if fn.Body == nil {
+				return
 			}
 			taint := ownerCellTaintedIdents(fn)
 			if len(taint) == 0 {
-				continue
+				return
 			}
-			ast.Inspect(fn, func(n ast.Node) bool {
-				ix, ok := n.(*ast.IndexExpr)
-				if !ok {
-					return true
-				}
+			EachInSubtree[ast.IndexExpr](fn, func(ix *ast.IndexExpr) {
 				id, ok := ix.Index.(*ast.Ident)
 				if ok && isSelectorNamed(ix.X, "Cells") && taint[id.Name] {
 					hits = append(hits, fset.Position(ix.Pos()).String())
 				}
-				return true
 			})
-		}
+		})
 	}
 	return hits
 }
@@ -110,24 +97,21 @@ func cellsIndexedByOwnerCell(fset *token.FileSet, files []*ast.File) []string {
 // residual bypasses are out of scope for this AST guard (see the package doc).
 func ownerCellTaintedIdents(fn *ast.FuncDecl) map[string]bool {
 	taint := map[string]bool{}
-	ast.Inspect(fn, func(n ast.Node) bool {
-		switch s := n.(type) {
-		case *ast.AssignStmt:
-			for i, rhs := range s.Rhs {
-				if i < len(s.Lhs) && isSelectorNamed(rhs, "OwnerCell") {
-					if id, ok := s.Lhs[i].(*ast.Ident); ok {
-						taint[id.Name] = true
-					}
-				}
-			}
-		case *ast.ValueSpec:
-			for i, val := range s.Values {
-				if i < len(s.Names) && isSelectorNamed(val, "OwnerCell") {
-					taint[s.Names[i].Name] = true
+	EachInSubtree[ast.AssignStmt](fn, func(s *ast.AssignStmt) {
+		for i, rhs := range s.Rhs {
+			if i < len(s.Lhs) && isSelectorNamed(rhs, "OwnerCell") {
+				if id, ok := s.Lhs[i].(*ast.Ident); ok {
+					taint[id.Name] = true
 				}
 			}
 		}
-		return true
+	})
+	EachInSubtree[ast.ValueSpec](fn, func(s *ast.ValueSpec) {
+		for i, val := range s.Values {
+			if i < len(s.Names) && isSelectorNamed(val, "OwnerCell") {
+				taint[s.Names[i].Name] = true
+			}
+		}
 	})
 	return taint
 }
@@ -144,27 +128,21 @@ func isSelectorNamed(expr ast.Expr, name string) bool {
 // through ContractOwner.Cell().
 func TestContractOwnerCellFunnel_NoBypass(t *testing.T) {
 	root := findModuleRoot(t)
-	dir := filepath.Join(root, "framework", "kernel", "governance")
-
-	entries, err := os.ReadDir(dir)
+	paths, err := DirsScope(root, []string{"framework/kernel/governance"}).Files()
 	if err != nil {
 		t.Fatalf("read kernel/governance: %v", err)
 	}
+	if len(paths) == 0 {
+		t.Fatal("anti-vacuity: parsed 0 non-test files from kernel/governance")
+	}
 	fset := token.NewFileSet()
 	var files []*ast.File
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+	for _, path := range paths {
+		f, perr := parser.ParseFile(fset, path, nil, 0)
 		if perr != nil {
-			t.Fatalf("parse %s: %v", name, perr)
+			t.Fatalf("parse %s: %v", path, perr)
 		}
 		files = append(files, f)
-	}
-	if len(files) == 0 {
-		t.Fatal("anti-vacuity: parsed 0 non-test files from kernel/governance")
 	}
 
 	if hits := cellsIndexedByOwnerCell(fset, files); len(hits) > 0 {
