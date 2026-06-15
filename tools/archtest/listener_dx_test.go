@@ -253,7 +253,7 @@ func forbiddenProductionSurfaceViolationsPass(p *Pass, file *ast.File) []Diagnos
 func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	t.Helper()
 	// RouteGroup struct is defined in registry.go (merged in batch 1/4).
-	const rel = "kernel/cell/registry.go"
+	const rel = "framework/kernel/cell/registry.go"
 	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
@@ -312,7 +312,7 @@ func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 
 func authMountSignatureViolations(t *testing.T, root string) []string {
 	t.Helper()
-	const rel = "runtime/auth/route.go"
+	const rel = "framework/runtime/auth/route.go"
 	path := filepath.Join(root, filepath.FromSlash(rel))
 
 	var result []string
