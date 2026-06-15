@@ -144,7 +144,12 @@ func (s CertScope) Issuer() IssuerID { return s.issuer }
 // Device returns the scope device.
 func (s CertScope) Device() DeviceID { return s.device }
 
-// IsZero reports whether s is the invalid zero value (any dimension absent).
+// IsZero reports whether s is the zero value (any dimension absent). Because
+// CertScope is sealed (the only minter is [NewCertScope], which validates the
+// tenant as a canonical UUID and rejects empty issuer/device), a non-zero
+// CertScope is guaranteed well-formed — so IsZero is a sufficient guard on any
+// API taking a CertScope. It is a zero-value test, not a re-validation: a value
+// that survived NewCertScope is already canonical.
 func (s CertScope) IsZero() bool {
 	return s.tenant == "" || s.issuer.IsZero() || s.device.IsZero()
 }
@@ -169,29 +174,68 @@ type SubjectAltNames struct {
 }
 
 // NewSubjectAltNames returns a sealed SAN set. Empty is allowed (a request may
-// carry no SANs); individual DNS entries must be non-blank. The slices are
-// defensively copied so the sealed value cannot be mutated post-construction.
+// carry no SANs); individual DNS entries must be non-blank, IP entries must be a
+// valid (non-empty) net.IP, and URI entries must be non-nil. The entries are
+// DEEP copied (net.IP byte slices and *url.URL values, not just the outer
+// slices) so the sealed value cannot be mutated through an aliased element.
 func NewSubjectAltNames(dnsNames []string, ipAddrs []net.IP, uris []*url.URL) (SubjectAltNames, error) {
 	for _, d := range dnsNames {
 		if strings.TrimSpace(d) == "" {
 			return SubjectAltNames{}, errCertRequestInvalid("dns SAN must not be blank")
 		}
 	}
+	for _, ip := range ipAddrs {
+		if len(ip) == 0 {
+			return SubjectAltNames{}, errCertRequestInvalid("ip SAN must not be empty")
+		}
+	}
+	for _, u := range uris {
+		if u == nil {
+			return SubjectAltNames{}, errCertRequestInvalid("uri SAN must not be nil")
+		}
+	}
 	return SubjectAltNames{
 		dnsNames: append([]string(nil), dnsNames...),
-		ipAddrs:  append([]net.IP(nil), ipAddrs...),
-		uris:     append([]*url.URL(nil), uris...),
+		ipAddrs:  deepCopyIPs(ipAddrs),
+		uris:     deepCopyURLs(uris),
 	}, nil
+}
+
+// deepCopyIPs copies the outer slice AND each net.IP's bytes, so a caller cannot
+// mutate the sealed SAN set through a retained net.IP element.
+func deepCopyIPs(in []net.IP) []net.IP {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]net.IP, len(in))
+	for i, ip := range in {
+		out[i] = append(net.IP(nil), ip...)
+	}
+	return out
+}
+
+// deepCopyURLs copies the outer slice AND each *url.URL (by value), so a caller
+// cannot mutate the sealed SAN set through a retained URL pointer.
+func deepCopyURLs(in []*url.URL) []*url.URL {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*url.URL, len(in))
+	for i, u := range in {
+		dup := *u
+		out[i] = &dup
+	}
+	return out
 }
 
 // DNSNames returns a copy of the DNS SANs.
 func (s SubjectAltNames) DNSNames() []string { return append([]string(nil), s.dnsNames...) }
 
-// IPAddresses returns a copy of the IP SANs.
-func (s SubjectAltNames) IPAddresses() []net.IP { return append([]net.IP(nil), s.ipAddrs...) }
+// IPAddresses returns a deep copy of the IP SANs.
+func (s SubjectAltNames) IPAddresses() []net.IP { return deepCopyIPs(s.ipAddrs) }
 
-// URIs returns a copy of the URI SANs.
-func (s SubjectAltNames) URIs() []*url.URL { return append([]*url.URL(nil), s.uris...) }
+// URIs returns a deep copy of the URI SANs.
+func (s SubjectAltNames) URIs() []*url.URL { return deepCopyURLs(s.uris) }
 
 // IsEmpty reports whether the SAN set carries no entries.
 func (s SubjectAltNames) IsEmpty() bool {
@@ -217,6 +261,9 @@ func NewKeyUsages(keyUsage x509.KeyUsage, extKeyUsage ...x509.ExtKeyUsage) (KeyU
 		extKeyUsage: append([]x509.ExtKeyUsage(nil), extKeyUsage...),
 	}, nil
 }
+
+// IsZero reports whether k is the invalid zero value (no key-usage bits).
+func (k KeyUsages) IsZero() bool { return k.keyUsage == 0 }
 
 // KeyUsage returns the requested x509.KeyUsage bitmask.
 func (k KeyUsages) KeyUsage() x509.KeyUsage { return k.keyUsage }
@@ -309,7 +356,7 @@ func NewCertRequest(
 		return CertRequest{}, errcode.Wrap(errcode.KindInvalid, errCertRequestInvalidCode,
 			msgCSRUnparseable, err)
 	}
-	if usages.keyUsage == 0 {
+	if usages.IsZero() {
 		return CertRequest{}, errCertRequestInvalid("key usage must not be empty")
 	}
 	if ttl <= 0 {
@@ -426,6 +473,10 @@ func (c IssuedCert) Epoch() uint64 { return c.epoch }
 // Certificate parses and returns the certificate for full X.509 access. It is
 // the convenience accessor over the canonical DER (re-parsed on demand) — the
 // seam stores opaque bytes, not a *x509.Certificate, to stay protocol-neutral.
+// Each call re-parses the DER; callers needing repeated full access (e.g. a
+// lifecycle reconciler) should cache the returned value. The cheap identity
+// fields ([IssuedCert.Serial] / [IssuedCert.NotAfter] / [IssuedCert.NotBefore])
+// are pre-derived and need no re-parse.
 func (c IssuedCert) Certificate() (*x509.Certificate, error) {
 	cert, err := x509.ParseCertificate(c.certDER)
 	if err != nil {

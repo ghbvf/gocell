@@ -18,8 +18,8 @@ func TestRevocationReasonClosedSet(t *testing.T) {
 	}
 
 	reasons := cs.RevocationReasons()
-	if len(reasons) != 6 {
-		t.Fatalf("expected 6 RFC 5280 reasons, got %d", len(reasons))
+	if len(reasons) != 10 {
+		t.Fatalf("expected 10 RFC 5280 reasons, got %d", len(reasons))
 	}
 	// Every registered reason is non-zero and stringifies to its mnemonic.
 	for _, r := range reasons {
@@ -35,6 +35,10 @@ func TestRevocationReasonClosedSet(t *testing.T) {
 		cs.ReasonAffiliationChanged().String():   "affiliationChanged",
 		cs.ReasonSuperseded().String():           "superseded",
 		cs.ReasonCessationOfOperation().String(): "cessationOfOperation",
+		cs.ReasonCertificateHold().String():      "certificateHold",
+		cs.ReasonRemoveFromCRL().String():        "removeFromCRL",
+		cs.ReasonPrivilegeWithdrawn().String():   "privilegeWithdrawn",
+		cs.ReasonAACompromise().String():         "aACompromise",
 	} {
 		if got != want {
 			t.Errorf("reason mnemonic = %q, want %q", got, want)
@@ -96,9 +100,10 @@ func TestRevocationStoreScopeIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	issuer, _ := cs.NewIssuerID("ca-root")
+	issuerB, _ := cs.NewIssuerID("ca-other")
 	dev, _ := cs.NewDeviceID("device-1")
+	devB, _ := cs.NewDeviceID("device-2")
 	scopeA, _ := cs.NewCertScope(mustTenant(t, testTenant), issuer, dev)
-	scopeB, _ := cs.NewCertScope(mustTenant(t, testTenantB), issuer, dev)
 	serial, _ := cs.NewSerial("1a2b3c")
 
 	if err := store.Revoke(ctx, scopeA, serial, cs.ReasonKeyCompromise()); err != nil {
@@ -111,21 +116,47 @@ func TestRevocationStoreScopeIsolation(t *testing.T) {
 		t.Fatalf("scope A list: %v %+v", err, listA)
 	}
 
-	// Invisible across the tenant boundary (fail-closed by scope key) — a
-	// tenant-B principal cannot see tenant-A's serial.
-	listB, err := store.RevocationList(ctx, scopeB)
-	if err != nil {
-		t.Fatalf("scope B list: %v", err)
+	// FR-007: the serial is invisible across EVERY isolation dimension — a query
+	// under a different tenant, issuer, or device must not surface it. A bare
+	// serial never crosses an isolation domain.
+	crossScopes := map[string]cs.CertScope{
+		"cross-tenant": mustScopeFrom(t, testTenantB, issuer, dev),
+		"cross-issuer": mustScopeFrom(t, testTenant, issuerB, dev),
+		"cross-device": mustScopeFrom(t, testTenant, issuer, devB),
 	}
-	if len(listB) != 0 {
-		t.Errorf("cross-tenant query leaked %d entries; serial must be invisible across scope", len(listB))
+	for name, sc := range crossScopes {
+		list, err := store.RevocationList(ctx, sc)
+		if err != nil {
+			t.Fatalf("%s list: %v", name, err)
+		}
+		if len(list) != 0 {
+			t.Errorf("%s query leaked %d entries; serial must be invisible across scope", name, len(list))
+		}
+	}
+
+	// Revoke under a different scope must not touch scope A's entry.
+	if err := store.Revoke(ctx, crossScopes["cross-issuer"], serial, cs.ReasonSuperseded()); err != nil {
+		t.Fatalf("cross-issuer revoke: %v", err)
+	}
+	if listA, _ = store.RevocationList(ctx, scopeA); len(listA) != 1 || listA[0].Reason != cs.ReasonKeyCompromise() {
+		t.Error("cross-issuer Revoke must not mutate scope A's entry")
 	}
 
 	// Tidy is scope-bounded.
-	if err := store.Tidy(ctx, scopeB, time.Now()); err != nil {
-		t.Fatalf("tidy scope B: %v", err)
+	if err := store.Tidy(ctx, crossScopes["cross-tenant"], time.Now()); err != nil {
+		t.Fatalf("tidy cross-tenant: %v", err)
 	}
 	if listA, _ = store.RevocationList(ctx, scopeA); len(listA) != 1 {
-		t.Error("tidy of scope B must not affect scope A")
+		t.Error("tidy of another scope must not affect scope A")
 	}
+}
+
+// mustScopeFrom builds a CertScope from explicit dimensions for isolation tests.
+func mustScopeFrom(t *testing.T, tenantID string, issuer cs.IssuerID, dev cs.DeviceID) cs.CertScope {
+	t.Helper()
+	sc, err := cs.NewCertScope(mustTenant(t, tenantID), issuer, dev)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+	return sc
 }

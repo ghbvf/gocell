@@ -38,6 +38,17 @@
 // serial is never a query key); specific-certificate lookup downstream must
 // carry a typed CertScope.
 //
+// CertScope requires a non-empty tenant by construction. A lifecycle reconciler
+// (PR-7) runs under the tenantless system identity (#1821 clears ctx tenant), so
+// it MUST source the tenant dimension from the scanned device row — NOT from
+// ctx — when building a CertScope / CertRequest; reading tenant from ctx there
+// would fail NewCertScope. This is the spec #1821 caveat's correct path.
+//
+// The Signer / Authorizer / RevocationStore interfaces are independent seams:
+// the composition root (PR-10) MAY bind them to different adapters (e.g. a Vault
+// PKI Signer with a PostgreSQL RevocationStore). Nothing here couples them to a
+// single provider.
+//
 // # Enforced invariants
 //
 // CERT-VALUE-SEALED-CONSTRUCTION-01 (Hard). Every cross-trust-boundary input and
@@ -52,6 +63,15 @@
 // NOT sealed: they carry no forgeable security boundary.) The archtest is the
 // reverse self-check that pins the seal against a regression that re-exports a
 // field or adds a second minter surface.
+//
+// Note: only POPULATED literals are blocked. A zero-value literal (e.g.
+// CertScope{}, SignConstraints{}) still compiles outside the package — Go
+// permits the empty literal of a struct with unexported fields. That is by
+// design and harmless: each sealed type's zero value is explicitly INVALID
+// (IsZero / !Granted), so a zero value is a fail-closed deny, never a usable
+// forgery (e.g. an Authorizer returning SignConstraints{} is a valid "deny"
+// path). Constructed (non-zero) values are the only valid ones, and the sealed
+// constructors guarantee they are well-formed.
 //
 // CERT-SIGN-FUNNEL-01 (funnel; upstream Hard, downstream Medium). Upstream Hard:
 // [IssuedCert] / [CertRequest] field sealing makes forged signing material

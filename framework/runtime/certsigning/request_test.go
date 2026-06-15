@@ -147,15 +147,33 @@ func TestNewIssuerID(t *testing.T) {
 
 func TestNewDeviceID(t *testing.T) {
 	t.Parallel()
-	if _, err := cs.NewDeviceID(""); err == nil {
-		t.Error("empty device should error")
+	tests := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{name: "valid", in: "dev-1"},
+		{name: "empty", in: "", wantErr: true},
+		{name: "too long", in: string(make([]byte, 300)), wantErr: true},
 	}
-	if _, err := cs.NewDeviceID(string(make([]byte, 300))); err == nil {
-		t.Error("over-long device should error")
-	}
-	d, err := cs.NewDeviceID("dev-1")
-	if err != nil || d.String() != "dev-1" || d.IsZero() {
-		t.Fatalf("valid device: %v %q", err, d.String())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			d, err := cs.NewDeviceID(tc.in)
+			if tc.wantErr {
+				assertCode(t, err, errcode.ErrCertScopeInvalid)
+				if !d.IsZero() {
+					t.Error("expected zero DeviceID on error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if d.String() != tc.in || d.IsZero() {
+				t.Errorf("DeviceID round-trip: got %q", d.String())
+			}
+		})
 	}
 }
 
@@ -261,6 +279,16 @@ func TestNewSubjectAltNames(t *testing.T) {
 		_, err := cs.NewSubjectAltNames([]string{" "}, nil, nil)
 		assertCode(t, err, errcode.ErrCertRequestInvalid)
 	})
+	t.Run("empty ip rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := cs.NewSubjectAltNames(nil, []net.IP{{}}, nil)
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
+	t.Run("nil uri rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := cs.NewSubjectAltNames(nil, nil, []*url.URL{nil})
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
 	t.Run("empty ok", func(t *testing.T) {
 		t.Parallel()
 		sans, err := cs.NewSubjectAltNames(nil, nil, nil)
@@ -268,7 +296,7 @@ func TestNewSubjectAltNames(t *testing.T) {
 			t.Fatalf("empty SANs: %v isEmpty=%v", err, sans.IsEmpty())
 		}
 	})
-	t.Run("copies inputs", func(t *testing.T) {
+	t.Run("deep-copies inputs", func(t *testing.T) {
 		t.Parallel()
 		dns := []string{"a.example"}
 		ips := []net.IP{net.ParseIP("10.0.0.1")}
@@ -277,17 +305,25 @@ func TestNewSubjectAltNames(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
+		// Mutating the caller's inputs must not change the sealed value.
 		dns[0] = "mutated"
+		ips[0][0] = 0xff
+		uris[0].Host = "mutated"
 		if got := sans.DNSNames(); got[0] != "a.example" {
-			t.Errorf("SAN not defensively copied: %q", got[0])
+			t.Errorf("DNS not defensively copied: %q", got[0])
 		}
-		// accessor returns copy
-		sans.DNSNames()[0] = "mutated2"
-		if sans.DNSNames()[0] != "a.example" {
-			t.Error("DNSNames accessor must return a copy")
+		if got := sans.IPAddresses(); !got[0].Equal(net.ParseIP("10.0.0.1")) {
+			t.Errorf("IP not deep-copied: %v", got[0])
 		}
-		if len(sans.IPAddresses()) != 1 || len(sans.URIs()) != 1 {
-			t.Error("IP/URI accessors mismatch")
+		if got := sans.URIs(); got[0].Host != "x" {
+			t.Errorf("URI not deep-copied: %q", got[0].Host)
+		}
+		// Accessors return copies — mutating the result must not change internals.
+		sans.DNSNames()[0] = "x"
+		sans.IPAddresses()[0][0] = 0xff
+		sans.URIs()[0].Host = "y"
+		if sans.DNSNames()[0] != "a.example" || !sans.IPAddresses()[0].Equal(net.ParseIP("10.0.0.1")) || sans.URIs()[0].Host != "x" {
+			t.Error("accessors must return deep copies")
 		}
 	})
 }

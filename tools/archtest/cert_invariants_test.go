@@ -109,6 +109,8 @@ var certConstructorSurface = map[string]map[string]struct{}{
 	"RevocationReason": {
 		"ReasonUnspecified": {}, "ReasonKeyCompromise": {}, "ReasonCACompromise": {},
 		"ReasonAffiliationChanged": {}, "ReasonSuperseded": {}, "ReasonCessationOfOperation": {},
+		"ReasonCertificateHold": {}, "ReasonRemoveFromCRL": {}, "ReasonPrivilegeWithdrawn": {},
+		"ReasonAACompromise": {},
 	},
 }
 
@@ -147,12 +149,13 @@ func TestCertValueSealedConstruction01_SoleConstructionSurface(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	pkgPath := certSigningPkgPath()
-	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{certSigningPattern}),
+	var visited bool
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{certSigningPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != pkgPath {
 				return nil
 			}
+			visited = true
 			scope := p.Pkg.Scope()
 			var out []Diagnostic
 			for typeName, expected := range certConstructorSurface {
@@ -181,6 +184,10 @@ func TestCertValueSealedConstruction01_SoleConstructionSurface(t *testing.T) {
 			return out
 		})
 	Report(t, "CERT-VALUE-SEALED-CONSTRUCTION-01/SoleConstructionSurface", diags)
+	if !visited {
+		t.Fatal("CERT-VALUE-SEALED-CONSTRUCTION-01/SoleConstructionSurface: certsigning package was never " +
+			"scanned (Typed load returned no matching package) — the check is vacuous; fix the load pattern")
+	}
 }
 
 // ── CERT-SIGN-FUNNEL-01 ────────────────────────────────────────────────────
@@ -271,12 +278,13 @@ func TestCertRevokeScoped01_StoreMethodsCarryScope(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	pkgPath := certSigningPkgPath()
-	var diags []Diagnostic
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{certSigningPattern}),
+	var visited bool
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{certSigningPattern}),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil || p.Pkg.Path() != pkgPath {
 				return nil
 			}
+			visited = true
 			scope := p.Pkg.Scope()
 			storeObj := scope.Lookup("RevocationStore")
 			if storeObj == nil {
@@ -324,6 +332,10 @@ func TestCertRevokeScoped01_StoreMethodsCarryScope(t *testing.T) {
 			return out
 		})
 	Report(t, "CERT-REVOKE-SCOPED-01/StoreMethodsCarryScope", diags)
+	if !visited {
+		t.Fatal("CERT-REVOKE-SCOPED-01/StoreMethodsCarryScope: certsigning package was never scanned " +
+			"(Typed load returned no matching package) — the check is vacuous; fix the load pattern")
+	}
 }
 
 // lookupType returns the types.Type of a named type in scope, or nil.

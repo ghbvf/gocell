@@ -29,25 +29,45 @@ var (
 	reasonAffiliationChanged   = RevocationReason{v: "affiliationChanged"}
 	reasonSuperseded           = RevocationReason{v: "superseded"}
 	reasonCessationOfOperation = RevocationReason{v: "cessationOfOperation"}
+	reasonCertificateHold      = RevocationReason{v: "certificateHold"}
+	reasonRemoveFromCRL        = RevocationReason{v: "removeFromCRL"}
+	reasonPrivilegeWithdrawn   = RevocationReason{v: "privilegeWithdrawn"}
+	reasonAACompromise         = RevocationReason{v: "aACompromise"}
 )
 
 // ReasonUnspecified is RFC 5280 reason code 0.
 func ReasonUnspecified() RevocationReason { return reasonUnspecified }
 
-// ReasonKeyCompromise is RFC 5280 reason code 1.
+// ReasonKeyCompromise is RFC 5280 reason code 1. Use when the certificate's
+// private key is known or suspected compromised.
 func ReasonKeyCompromise() RevocationReason { return reasonKeyCompromise }
 
-// ReasonCACompromise is RFC 5280 reason code 2.
+// ReasonCACompromise is RFC 5280 reason code 2 (the issuing CA key is compromised).
 func ReasonCACompromise() RevocationReason { return reasonCACompromise }
 
 // ReasonAffiliationChanged is RFC 5280 reason code 3.
 func ReasonAffiliationChanged() RevocationReason { return reasonAffiliationChanged }
 
-// ReasonSuperseded is RFC 5280 reason code 4.
+// ReasonSuperseded is RFC 5280 reason code 4 (a replacement certificate was issued).
 func ReasonSuperseded() RevocationReason { return reasonSuperseded }
 
 // ReasonCessationOfOperation is RFC 5280 reason code 5.
 func ReasonCessationOfOperation() RevocationReason { return reasonCessationOfOperation }
+
+// ReasonCertificateHold is RFC 5280 reason code 6 (temporary suspension; may be
+// lifted via ReasonRemoveFromCRL).
+func ReasonCertificateHold() RevocationReason { return reasonCertificateHold }
+
+// ReasonRemoveFromCRL is RFC 5280 reason code 8 (remove a held entry — un-hold).
+func ReasonRemoveFromCRL() RevocationReason { return reasonRemoveFromCRL }
+
+// ReasonPrivilegeWithdrawn is RFC 5280 reason code 9. Use when a device's
+// authorization to hold the certificate is withdrawn (MDM de-enrollment / ZT
+// privilege revocation).
+func ReasonPrivilegeWithdrawn() RevocationReason { return reasonPrivilegeWithdrawn }
+
+// ReasonAACompromise is RFC 5280 reason code 10 (attribute-authority compromise).
+func ReasonAACompromise() RevocationReason { return reasonAACompromise }
 
 // String returns the reason mnemonic; a zero value renders as reasonUnknown
 // (fail-closed), never the empty string.
@@ -72,10 +92,15 @@ var allRevocationReasons = []RevocationReason{
 	reasonAffiliationChanged,
 	reasonSuperseded,
 	reasonCessationOfOperation,
+	reasonCertificateHold,
+	reasonRemoveFromCRL,
+	reasonPrivilegeWithdrawn,
+	reasonAACompromise,
 }
 
-// RevocationReasons returns a copy of the closed set of revocation reasons (for
-// enumeration / validation by callers and adapters).
+// RevocationReasons returns a defensive copy of the closed set of every RFC 5280
+// §5.3.1 revocation reason this seam supports (for enumeration or adapter
+// validation). Mutating the result does not affect the registry.
 func RevocationReasons() []RevocationReason {
 	return append([]RevocationReason(nil), allRevocationReasons...)
 }
@@ -85,6 +110,10 @@ func RevocationReasons() []RevocationReason {
 // sealing ceremony) — the security-bearing values it carries ([Serial],
 // [RevocationReason]) are themselves sealed, so a forged RevokedCertificate
 // still cannot name a forged serial or out-of-spec reason.
+//
+// RevokedAt MUST be UTC: implementations normalize to UTC before returning, so
+// callers can compare it against the [RevocationStore.Tidy] before instant and
+// CRL thisUpdate/nextUpdate without timezone ambiguity.
 type RevokedCertificate struct {
 	Serial    Serial
 	Reason    RevocationReason

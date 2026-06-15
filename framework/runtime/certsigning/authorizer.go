@@ -50,6 +50,11 @@ type SignConstraints struct {
 // NewSignConstraints returns a granted SignConstraints with a positive maximum
 // TTL and the allowed SAN set. A non-positive maxTTL is rejected — a granted
 // constraint with no positive lifetime ceiling is meaningless.
+//
+// Allowed-SAN semantics are deny-by-default: an empty allowedSANs
+// ([SubjectAltNames.IsEmpty] true) means the Signer MUST NOT include any SAN —
+// a request carrying SANs is rejected. To permit SANs the Authorizer must
+// enumerate them explicitly. (An empty set is NOT "any SAN allowed".)
 func NewSignConstraints(maxTTL time.Duration, allowedSANs SubjectAltNames) (SignConstraints, error) {
 	if maxTTL <= 0 {
 		return SignConstraints{}, errCertRequestInvalid("max ttl must be positive")
@@ -64,7 +69,8 @@ func (c SignConstraints) Granted() bool { return c.granted }
 // MaxTTL returns the maximum certificate lifetime the Signer may grant.
 func (c SignConstraints) MaxTTL() time.Duration { return c.maxTTL }
 
-// AllowedSANs returns the SANs the Signer may include.
+// AllowedSANs returns the SANs the Signer may include. Deny-by-default: an empty
+// result means no SAN is permitted (see [NewSignConstraints]).
 func (c SignConstraints) AllowedSANs() SubjectAltNames { return c.allowedSANs }
 
 // Authorizer decides whether a device may obtain a certificate and, on a grant,

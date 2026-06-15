@@ -22,8 +22,11 @@ type Signer interface {
 	// request itself, never blindly from the CSR.
 	Sign(ctx context.Context, req CertRequest) (IssuedCert, error)
 
-	// TrustBundle returns the CA trust anchors as DER-encoded certificates (the
-	// EST /cacerts payload). It is a read-only output (no sealing ceremony) — the
-	// caller verifies issued chains against it.
+	// TrustBundle returns the CA trust anchors as DER-encoded certificates,
+	// ordered leaf-issuer first to root last (the order an EST /cacerts response
+	// is built from). It is a read-only output (no sealing ceremony) — the caller
+	// verifies issued chains against it. Each element is a single certificate
+	// DER; the EST front-end (PR-8b) is responsible for packaging them into the
+	// RFC 7030 application/pkcs7-mime /cacerts response.
 	TrustBundle(ctx context.Context) ([][]byte, error)
 }
