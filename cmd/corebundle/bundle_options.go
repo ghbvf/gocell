@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"strconv"
 
 	"github.com/ghbvf/gocell/framework/kernel/auth"
 
@@ -230,64 +228,33 @@ func buildInternalAuthChain(shared *composition.SharedDeps) ([]auth.ListenerAuth
 // PG mode only. In memory mode (shared.PG == nil) it returns no options: the
 // projection harness requires a durable checkpoint store, not an in-memory fake,
 // so a projection declared without PG fails fast in the bootstrap phase6 drain
-// (checkProjectionDeps), which is the correct outcome. corebundle ships no
-// projection cell today, so these options are dormant until one is added —
-// forward-provisioning per #1368.
+// (checkProjectionDeps), which is the correct outcome.
 //
-// envProjectionPGJournalPreview gates wiring of the durable projection source. It
-// defaults OFF: the production posture stays FAIL-CLOSED (a projection declared in
-// PG mode without the opt-in fails fast in the phase6 drain — wiring no source is
-// the gate, never a silent unsafe reader). Unlike before #1504, the gated source is
-// now the durable, production-safe projection_events journal (append-only, migration
-// 058 REVOKE; live carriers resolved by id against the never-cleaned journal), so
-// gate-on is no longer "preview/unsafe" — it is the e2e proving ground (T-06-2).
-// The gate itself is removed (production-default flip) in #1771 PR-04, gated on
-// T-06-2 e2e + PR-05 no-DELETE per ADR 202606071600-1504 §9 / D9.
-const envProjectionPGJournalPreview = "GOCELL_PROJECTION_PG_JOURNAL_PREVIEW"
-
-func projectionPGJournalPreviewEnabled() bool {
-	v, _ := strconv.ParseBool(os.Getenv(envProjectionPGJournalPreview))
-	return v
-}
-
+// EPIC #1504 PR-04 (#1771) removed the former GOCELL_PROJECTION_PG_JOURNAL_PREVIEW
+// fail-closed gate: the projection_events journal source is durable and
+// production-safe (append-only migration 058 REVOKE; live carriers resolved by id
+// against the never-cleaned journal; T-06-2 e2e + PR-05 no-DELETE in place), so it
+// is now the production DEFAULT, not an opt-in preview. It is wired whenever PG mode
+// is active AND a projection is actually declared (generatedProjectionSourceTopics()
+// non-empty) — deployments that ship no projection carry no dormant journal probe or
+// projection options, while any cell that declares a projection (e.g. accesscore's
+// session_registry) gets the durable source by default. See ADR 202606071600-1504 §9/D9.
 func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Option, error) {
 	if shared.PG == nil {
 		return nil, nil
 	}
-	if !projectionPGJournalPreviewEnabled() {
-		// Fail-closed gate: do NOT silently wire the projection source. A projection
-		// declared in PG mode without the opt-in fails fast at bootstrap (phase6
-		// checkProjectionDeps). The gated source IS production-safe (durable journal);
-		// the gate only defers the production-default flip (gate removal) until T-06-2
-		// e2e + the PR-05 no-DELETE guardrail — #1771 PR-04, per ADR 202606071600-1504 §9/D9.
-		logArgs := []any{
-			slog.String("gate_env", envProjectionPGJournalPreview),
-			slog.Bool("wired", false),
-			slog.String("gated_source", "projection_events (durable, production-safe)"),
-			slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"),
-		}
-		if len(generatedProjectionSourceTopics()) == 0 {
-			// No projection declared (corebundle's default today): gate-off is a benign
-			// empty-workload default, not actionable — log at Info to avoid startup noise
-			// on every deployment that ships no projection (controller-runtime posture:
-			// an empty workload does not warn).
-			slog.Info("projection: no durable journal source wired (no projection declared; gate off)", logArgs...)
-		} else {
-			// A projection IS declared but the gate is off, so it will fail fast in the
-			// phase6 drain. Actionable: warn so the operator sets the gate to wire it.
-			slog.Warn("projection: a projection is declared but its durable journal source is gated off; bootstrap will fail fast",
-				logArgs...)
-		}
+	// Wire only when a projection is declared. generatedProjectionSourceTopics() is
+	// the cellgen-derived, golden-locked set of outbox-projection source topics;
+	// empty = no projection, so skip wiring (no dormant journal readyz probe or
+	// projection options on deployments with nothing to serve).
+	if len(generatedProjectionSourceTopics()) == 0 {
+		slog.Info("projection: no durable journal source wired (no projection declared)",
+			slog.Bool("wired", false))
 		return nil, nil
 	}
-	// Info (not Warn): wiring the durable, production-safe journal source under the gate is
-	// a deliberate lifecycle opt-in, not a degraded mode — positions come from the
-	// append-only projection_events journal (never cleaned). The gate remains until PR-04.
-	slog.Info("projection: durable journal source wired under gate (positions from append-only projection_events; production-safe)",
-		slog.String("gate_env", envProjectionPGJournalPreview),
+	slog.Info("projection: durable journal source wired (positions from append-only projection_events; production default)",
 		slog.Bool("wired", true),
-		slog.String("source", "projection_events"),
-		slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
+		slog.String("source", "projection_events"))
 	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if err != nil {
 		return nil, fmt.Errorf("projection pg pool: %w", err)
@@ -313,5 +280,12 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 		// Differentiated repo-readiness probe for the journal (schema/migration drift
 		// + table-permission loss), distinct from the pool-level postgres_ready probe.
 		bootstrap.WithHealthChecker(adapterpg.ProbeProjectionJournalReady, source.RepoReady),
+		// NOTE: the operator HTTP rebuild endpoint
+		// (POST /admin/v1/projection/{cell}/{name}/rebuild, framework-owned via
+		// bootstrap.WithProjectionRebuildEndpoint) is intentionally NOT wired here: it
+		// requires a cell.AdminListener + operator-credential auth, a corebundle
+		// listener surface this PR (#1771) does not add. Rebuild correctness is proven
+		// by the adapters/postgres testcontainers white-box test (T-06-2); wiring the
+		// operator rebuild endpoint in corebundle is tracked as a follow-up.
 	}, nil
 }

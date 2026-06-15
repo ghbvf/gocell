@@ -65,6 +65,9 @@ func NewService(opts ...Option) (*Service, error) {
 	for _, o := range opts {
 		o(s)
 	}
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

@@ -46,7 +46,9 @@ func generatedCapabilities() []capability.Kind {
 // red-flags stale output. ALWAYS emitted (nil when empty) so the decorator wiring
 // can call it unconditionally.
 func generatedProjectionSourceTopics() []string {
-	return nil
+	return []string{
+		"event.session.created.v1",
+	}
 }
 
 // generatedPostgresCells is the sorted list of cell IDs whose cell.yaml declares

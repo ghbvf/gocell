@@ -21,13 +21,13 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）的�
 
 ### projection_events 表特性
 
-`projection_events` 是 **append-only** 永久 journal（migration 045 建表，migration 058 serving-role 权限收紧）：
+`projection_events` 是 **append-only** 永久 journal（migration 058 建表 + serving-role 权限收紧；`projection_checkpoints` 见 migration 045）：
 
 - `global_seq BIGINT GENERATED ALWAYS AS IDENTITY`——单调递增位置，从不复用（gaps 合法）。
 - DB 引擎强制 append-only：migration 058 对 serving role `gocell_app` 执行 `REVOKE UPDATE, DELETE ON projection_events`（Hard，不可绕）。
 - code-level `DELETE`/`TRUNCATE projection_events` 字面量由 archtest `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`（Medium 纵深）守卫。
 - 写路径唯一收口：emit 期同事务双写装饰器（`journalingOutboxWriter`，`PROJECTION-EVENT-JOURNAL-APPEND-CALLER-01` Hard/Hard），仅对 `slice.yaml contractUsages` 声明的 projection-source topic 集双写（topic-filter，增长有界 by construction）。
-- `projection_checkpoints` 表（migration 044）存每个投影的 offset 与 owner（v1 不写 owner）。
+- `projection_checkpoints` 表（migration 045）存每个投影的 offset 与 owner（v1 不写 owner）。
 
 ---
 
@@ -35,22 +35,24 @@ outbox 派生投影的 durable journal（`projection_events`，EPIC #1504）的�
 
 ### 触发 Rebuild
 
-Rebuild 是**异步**操作，通过 AdminListener 的框架控制面端点触发：
+Rebuild 是**异步**操作，由框架提供的控制面端点触发：
 
 ```
 POST /admin/v1/projection/{cell}/{projection}/rebuild
 ```
 
-以 accesscore / session_registry 投影为例：
+> **corebundle 当前未挂载此端点**：该端点是 framework-owned（`bootstrap.WithProjectionRebuildEndpoint`），挂在 `cell.AdminListener` 上、用 operator 凭据（`AuthOperator`）鉴权。corebundle 本版（#1771）只声明 Primary / Internal / Health 三个 listener，**未加 AdminListener**，故未启用该端点——在 corebundle 接 AdminListener + operator auth + rebuild 端点是独立 follow-up（见 backlog）。`examples/todoorder` 演示了条件化接线（env 有 operator 凭据时才挂，见 `examples/todoorder/run.go` + `auth.go`）。
+>
+> rebuild 正确性（cold-start / rebuild-from-0 / cleaned-outbox 独立性 / 幂等）由 `adapters/postgres/projection_rebuild_e2e_integration_test.go` 白盒集成测试证明（T-06-2）；也可在已挂载该端点的部署（如 todoorder 范式）经下面的 HTTP 流程触发。
+
+启用端点的部署上，以 accesscore / session_registry 投影为例：
 
 ```bash
-# 使用 operator 凭据（HTTP Basic Auth，GOCELL_OPERATOR_ADMIN_USER / GOCELL_OPERATOR_ADMIN_PASSWORD）
+# 使用 operator 凭据（HTTP Basic Auth，GOCELL_OPERATOR_ADMIN_USERNAME / GOCELL_OPERATOR_ADMIN_PASSWORD）
 curl -X POST \
-  --user "$GOCELL_OPERATOR_ADMIN_USER:$GOCELL_OPERATOR_ADMIN_PASSWORD" \
-  "http://127.0.0.1:9093/admin/v1/projection/accesscore/session_registry/rebuild"
+  --user "$GOCELL_OPERATOR_ADMIN_USERNAME:$GOCELL_OPERATOR_ADMIN_PASSWORD" \
+  "http://<admin-listener-addr>/admin/v1/projection/accesscore/session_registry/rebuild"
 ```
-
-AdminListener 默认监听 `127.0.0.1:9093`（loopback-isolated，仅本地可达）。
 
 ### HTTP 响应语义
 
