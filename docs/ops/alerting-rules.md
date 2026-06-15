@@ -1322,6 +1322,33 @@ cannot confirm leadership and skips every instance fail-closed.
     description: "Cell {{ $labels.cell }} leader-elect is failing on distlock backend I/O (>0.05/sec over 5min). Check the distlock backend (Redis) health. Runbook: docs/ops/saga-runbook.md"
 ```
 
+### GoCellSagaTickErrors
+
+The Coordinator's ClaimPending cycle itself fails every tick — the loop goroutine
+is alive (tick rate is non-zero) but cannot claim work. A distinct failure domain
+from leader-elect skips (4a/4b): journal/DB unreachable, migration drift, or
+transaction-pool exhaustion.
+
+```yaml
+# rate() = events/sec; `> 0.05` fires at >0.05 errored ClaimPending cycles/sec
+# (≈ 3/min) over the 5m window — matched to GoCellSagaLockAcquireFailures since
+# both are backend-fault rates. result="error" means ClaimPending returned an
+# error (journal/backend fault); a sustained rate is the loop alive-but-wedged,
+# not idle. No `unless` liveness term needed: unlike a flat tick rate (loop
+# stalled — the series simply stops updating, which is the absent-series case),
+# an errored tick is a present, positive series, so a direct threshold fires
+# correctly. The #1454 absent-series pitfall only bites when ANDing a liveness
+# term; this alert deliberately does not combine one.
+- alert: GoCellSagaTickErrors
+  expr: sum(rate(gocell_saga_tick_total{result="error"}[5m])) by (cell) > 0.05
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga coordinator tick errors (loop alive, cannot claim work)"
+    description: "Cell {{ $labels.cell }} Coordinator ClaimPending is failing (>0.05/sec over 5min) — journal/DB unreachable or migration drift. Runbook: docs/ops/saga-runbook.md"
+```
+
 **StatusCompensationFailed terminal state**: when a saga instance reaches
 `status=compensation_failed` (status=8 in PG), the compensation phase itself failed.
 This is distinct from `status=failed` (forward failure, no rollback attempted).
