@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/ghbvf/gocell/tools/packagesload"
+	"github.com/ghbvf/gocell/tools/workspace"
 )
 
 const (
@@ -209,20 +210,38 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 	return schema, nil
 }
 
-// containingModuleDir returns the deepest directory at or above dir (a
-// projectRoot-relative path) that holds a go.mod — i.e. the go.work satellite
-// module that owns dir — or "" when dir belongs to the repo root module. Build
-// uses a non-empty result to recognize a satellite example entrypoint and switch
-// the package load to ModeWorkspace (NOT GOWORK=off): ModeWorkspace resolves the
-// satellite AND core as workspace members in one graph, whereas a repo-root
-// ModeModule load cannot see a nested module's packages at all (#1556).
+// containingModuleDir returns the go.work satellite member that owns dir (a
+// projectRoot-relative path) — the member whose directory is the longest prefix
+// of dir — or "" when dir belongs to the repo root module. Build uses a non-empty
+// result to recognize a satellite example entrypoint and switch the package load
+// to ModeWorkspace (NOT GOWORK=off): ModeWorkspace resolves the satellite AND core
+// as workspace members in one graph, whereas a repo-root ModeModule load cannot
+// see a nested module's packages at all (#1556).
+//
+// Owner-resolution is single-sourced through workspace.Modules — the same member
+// set packagesload uses (#2167) — rather than a bespoke go.mod filesystem walk:
+// the decision is precisely "is dir inside a go.work member", which only the
+// registered member set answers (a nested go.mod absent from go.work is not a
+// member and ModeWorkspace would not resolve it either). A Modules error degrades
+// to root ownership ("") → ModeModule; any real satellite resolution failure then
+// surfaces from the subsequent package load with a clear "package not found".
 func containingModuleDir(projectRoot, dir string) string {
-	for d := filepath.Clean(dir); d != "." && d != ""; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(projectRoot, d, "go.mod")); err == nil {
-			return d
+	mods, err := workspace.Modules(projectRoot)
+	if err != nil {
+		return ""
+	}
+	target := filepath.ToSlash(filepath.Clean(dir))
+	best := ""
+	for _, m := range mods {
+		md := filepath.ToSlash(filepath.Clean(m.Dir))
+		if md == "." || md == "" {
+			continue // root module is represented by "" (not a satellite)
+		}
+		if (target == md || strings.HasPrefix(target, md+"/")) && len(md) > len(best) {
+			best = md
 		}
 	}
-	return ""
+	return best
 }
 
 // Marshal serializes schema with the generated-file header.
