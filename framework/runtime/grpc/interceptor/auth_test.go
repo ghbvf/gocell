@@ -203,6 +203,39 @@ func TestUnaryAuth_PermissionGate(t *testing.T) {
 	}
 }
 
+// TestUnaryAuth_PermissionGate_LogsDeny asserts the PDP gate emits a structured
+// log on deny (the observability parity with HTTP enforcePermission): an operator
+// triaging a denial can recover subject / method / permission / reason from the log
+// without reconstructing it from the access log (which carries only the status code).
+func TestUnaryAuth_PermissionGate_LogsDeny(t *testing.T) {
+	const method = "/pkg.Svc/Do"
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+
+	var buf bytes.Buffer
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	_, err := UnaryAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
+		WithPermissionResolver(permResolverFor(method)),
+		WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("test-deny-reason")}),
+	)(bearerCtx(), nil, info, okHandler(new(bool)))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
+	}
+	got := buf.String()
+	wantFields := []string{
+		"permission denied by PDP",
+		`"method":"/pkg.Svc/Do"`,
+		`"subject":"user-1"`,
+		`"permission":"device:command"`,
+		`"reason":"test-deny-reason"`,
+	}
+	for _, want := range wantFields {
+		if !strings.Contains(got, want) {
+			t.Errorf("deny log missing %q; got: %s", want, got)
+		}
+	}
+}
+
 func assertUnaryAuthForwardsPrincipal(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 

@@ -3,6 +3,7 @@ package interceptor
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -13,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
@@ -21,6 +23,19 @@ import (
 // per the go-grpc-middleware / RFC 7235 convention. gRPC metadata keys are
 // always lowercase, so the HTTP "Authorization" header getter cannot be reused.
 const authMetadataKey = "authorization"
+
+// Canonical gRPC status messages for the #2008 PDP gate. Extracted as consts so
+// the gate's wire descriptions are single-source within the package (mirroring the
+// runtime/auth msg* consts on the HTTP side) and cannot drift across the unary +
+// stream paths that share the authorize core.
+const (
+	msgGRPCNoPermissionMapping       = "no authorization permission mapped for this method"
+	msgGRPCAuthRequired              = "authentication required"
+	msgGRPCAuthzNotWired             = "authorization policy engine not wired"
+	msgGRPCInsufficientPermissions   = "insufficient permissions"
+	msgGRPCObligationsNotEnforceable = "authorization decision carries obligations not enforceable at this gate"
+	msgGRPCAuthorizationDenied       = "authorization denied"
+)
 
 // AuthOption configures the auth interceptor.
 type AuthOption func(*authConfig)
@@ -247,25 +262,64 @@ func authorize(
 func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal, fullMethod string) error {
 	perm, ok := resolveMethodPermission(cfg.permissionFor, fullMethod)
 	if !ok {
-		return status.Error(codes.PermissionDenied, "no authorization permission mapped for this method")
+		// Misconfiguration (or a dead method): WARN so it is distinguishable from a
+		// routine policy deny in operator logs.
+		slog.WarnContext(ctx, "grpc authz: no permission mapping for method — denying (fail-closed)",
+			slog.String("method", fullMethod))
+		return status.Error(codes.PermissionDenied, msgGRPCNoPermissionMapping)
 	}
 	if p == nil || p.Subject == "" {
-		return status.Error(codes.Unauthenticated, "authentication required")
+		return status.Error(codes.Unauthenticated, msgGRPCAuthRequired)
 	}
 	if validation.IsNilInterface(cfg.authorizer) {
-		return status.Error(codes.PermissionDenied, "authorization policy engine not wired")
+		slog.ErrorContext(ctx, "grpc authz: Authorizer not wired — denying (fail-closed)",
+			slog.String("method", fullMethod), slog.String("subject", p.Subject), slog.String("permission", perm.String()))
+		return status.Error(codes.PermissionDenied, msgGRPCAuthzNotWired)
 	}
 	dec, err := cfg.authorizer.Authorize(ctx, p.Subject, fullMethod, perm.String())
 	if err != nil {
+		logGRPCAuthorizeError(ctx, err, fullMethod, p.Subject, perm.String())
 		return pdpErrorToStatus(err)
 	}
 	if !dec.IsAllow() {
-		return status.Error(codes.PermissionDenied, "insufficient permissions")
+		// Routine policy deny: INFO with the diagnostic reason (Deny()'s reason is
+		// programmer-authored, never PII — observability.md / decision.go contract).
+		slog.InfoContext(ctx, "grpc authz: permission denied by PDP",
+			slog.String("method", fullMethod), slog.String("subject", p.Subject),
+			slog.String("permission", perm.String()), slog.String("reason", dec.Reason()))
+		return status.Error(codes.PermissionDenied, msgGRPCInsufficientPermissions)
 	}
 	if obl := dec.Obligations(); !obl.IsZero() {
-		return status.Error(codes.PermissionDenied, "authorization decision carries obligations not enforceable at this gate")
+		slog.WarnContext(ctx, "grpc authz: Allow carries obligations not enforceable at this gate — denying (fail-closed)",
+			slog.String("method", fullMethod), slog.String("subject", p.Subject), slog.String("permission", perm.String()))
+		return status.Error(codes.PermissionDenied, msgGRPCObligationsNotEnforceable)
 	}
 	return nil
+}
+
+// logGRPCAuthorizeError logs an Authorizer.Authorize error at the appropriate
+// level (the gRPC sibling of runtime/auth.logAuthorizerError): a KindPermissionDenied
+// (expected tenant-missing deny) is WARN; all others ERROR. The error is redacted
+// before logging per observability.md §Redaction, so a PDP-store failure is
+// diagnosable without leaking sensitive detail to the log sink.
+func logGRPCAuthorizeError(ctx context.Context, err error, fullMethod, subject, permission string) {
+	var ec *errcode.Error
+	kind := errcode.KindInternal
+	if errors.As(err, &ec) {
+		kind = ec.Kind
+	}
+	args := []any{
+		slog.Any("error", redaction.RedactError(err)),
+		slog.Int("kind_status", kind.Status()),
+		slog.String("method", fullMethod),
+		slog.String("subject", subject),
+		slog.String("permission", permission),
+	}
+	if kind == errcode.KindPermissionDenied {
+		slog.WarnContext(ctx, "grpc authz: Authorizer.Authorize returned error", args...)
+	} else {
+		slog.ErrorContext(ctx, "grpc authz: Authorizer.Authorize returned error", args...)
+	}
 }
 
 // resolveMethodPermission looks up the method's required permission, reporting
@@ -293,7 +347,7 @@ func pdpErrorToStatus(err error) error {
 	if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
 		return status.Error(codes.Unavailable, "authorization service unavailable")
 	}
-	return status.Error(codes.PermissionDenied, "authorization denied")
+	return status.Error(codes.PermissionDenied, msgGRPCAuthorizationDenied)
 }
 
 // callPredicate invokes an externally-supplied auth predicate (public-method /

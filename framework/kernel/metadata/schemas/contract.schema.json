@@ -682,7 +682,7 @@
                   },
                   "methods": {
                     "type": "array",
-                    "description": "Per-RPC auth overlay (#1675 public; #2008 ABAC permission). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41). Under #2008 strict fail-closed the overlay is COMPLETE for non-public methods: every authed RPC carries a permission, and the contractgen completeness pre-pass rejects a non-public proto method with no entry (else it would be a dead 403).",
+                    "description": "Per-RPC auth overlay (#1675 public; #2008 ABAC permission). The .proto remains the single source for the method SET — entries only annotate existing methods (referential integrity enforced by the contractgen pre-pass + governance FMT-41). Under #2008 strict fail-closed the overlay is COMPLETE for non-public methods: every authed RPC carries a permission, and the cellgen completeness pre-pass (gocell generate cell) rejects a non-public proto method with no entry (else it would be a dead 403).",
                     "items": {
                       "type": "object",
                       "additionalProperties": false,

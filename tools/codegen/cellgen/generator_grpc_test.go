@@ -221,6 +221,15 @@ func TestRenderCell_GRPC_PermissionOnly_OmitsPublicMethods(t *testing.T) {
 	if !bytes.Contains(out, []byte("MethodPermissions")) {
 		t.Errorf("permission-only grpc cell must render the MethodPermissions field, got:\n%s", out)
 	}
+	// Regression: guard against an empty-map render where the field name is present
+	// but the mapping content is missing. Verify both the full method name and the
+	// permission action string appear in the rendered output.
+	if !bytes.Contains(out, []byte("/device.command.v1.DeviceCommandService/IssueCommand")) {
+		t.Errorf("MethodPermissions must contain the full method name, got:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("device:command")) {
+		t.Errorf("MethodPermissions must contain the permission action string, got:\n%s", out)
+	}
 }
 
 // TestEnrichGrpcServices_IncompleteOverlayRejected proves the #2008 completeness

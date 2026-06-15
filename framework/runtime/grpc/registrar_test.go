@@ -291,6 +291,55 @@ func TestServiceRegistrar_Register_UnknownPermission_Panics(t *testing.T) {
 	}, "an unknown permission action string must fail fast at registration")
 }
 
+// TestServiceRegistrar_PermissionForMethod_MultiSpecAggregation verifies
+// MethodPermissions are aggregated ACROSS multiple registered specs (each cell
+// contributes its own permission map to the one shared registrar the auth interceptor
+// consults), and that registering two specs with distinct ServiceNames does not cause
+// one spec's permissions to overwrite the other's.
+func TestServiceRegistrar_PermissionForMethod_MultiSpecAggregation(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	specA := synthSpec("grpc.health.a.v1", "cell-a", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	specA.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	require.NoError(t, reg.Register(specA))
+
+	// A second spec with a DIFFERENT ServiceName contributes its own permission map;
+	// service-name dedup forbids re-registering grpc.health.v1.Health.
+	specB := cell.GRPCServiceSpec{
+		ContractID: "grpc.spy.b.v1",
+		CellID:     "cell-b",
+		Listener:   cell.PrimaryListener,
+		MethodPermissions: map[string]string{
+			"/spy.v1.Spy/Ping": authz.PermDeviceCommand().String(),
+		},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&grpc.ServiceDesc{
+				ServiceName: "spy.v1.Spy",
+				HandlerType: (*any)(nil),
+				Methods:     []grpc.MethodDesc{{MethodName: "Ping"}},
+			}, struct{}{})
+		},
+	}
+	require.NoError(t, reg.Register(specB))
+
+	permA, okA := reg.PermissionForMethod("/grpc.health.v1.Health/Watch")
+	assert.True(t, okA, "specA's method permission must be present after aggregation")
+	assert.Equal(t, authz.PermDeviceCommand(), permA, "specA permission must equal PermDeviceCommand")
+
+	permB, okB := reg.PermissionForMethod("/spy.v1.Spy/Ping")
+	assert.True(t, okB, "specB's method permission must be present after aggregation")
+	assert.Equal(t, authz.PermDeviceCommand(), permB, "specB permission must equal PermDeviceCommand")
+
+	_, okUnknown := reg.PermissionForMethod("/spy.v1.Spy/Other")
+	assert.False(t, okUnknown, "undeclared method has no permission mapping (fail-closed)")
+}
+
 // --- Case 5: bad Register fn type panics -------------------------------------
 
 // TestServiceRegistrar_Register_BadFnType_Panics verifies a non-func Register field

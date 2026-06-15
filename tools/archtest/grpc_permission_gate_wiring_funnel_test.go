@@ -52,6 +52,11 @@
 //   - A caller obtaining the option func through a variable/parameter typed as
 //     AuthOption (not a direct reference) escapes the ident scan — the same alias
 //     blind spot CALLER-01 / the public-method funnel document.
+//   - A composition root could pass an AuthOption via Deps.AuthOptions whose CLOSURE
+//     BODY calls WithPermissionResolver/WithPDPAuthorizer (a wrap-and-call escaping
+//     the direct-ident scan). The field-write dimension (Dimension 2) backstops this
+//     for the state slots, but the API-ref dimension alone would miss it — same
+//     wrap-and-call blind spot the public-method funnel carries.
 //   - The scan is production-only (Production excludes _test.go); tests freely use
 //     the options to exercise the gate.
 //

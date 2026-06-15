@@ -974,8 +974,9 @@ const fieldEndpointsGRPCMethods = "endpoints.grpc.methods"
 //
 // AI-robust: Medium (governance YAML-metadata validate layer, same tier as
 // FMT-37). The Hard referential gate is the contractgen pre-pass + cellgen golden;
-// the contractgen completeness pre-pass (every non-public proto method carries a
-// permission) is the #2008 sibling that FMT-41 cannot do (it cannot read the .proto).
+// the cellgen completeness pre-pass (EnrichGrpcServicesWithProtoInfo: every non-public
+// proto method carries a permission) is the #2008 sibling that FMT-41 cannot do (it
+// cannot read the .proto).
 func (v *Validator) validateFMT41() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {

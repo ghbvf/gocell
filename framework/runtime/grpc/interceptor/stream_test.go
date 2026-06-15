@@ -16,6 +16,7 @@ import (
 	kernelctxkeys "github.com/ghbvf/gocell/framework/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	pkgctxkeys "github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
@@ -172,6 +173,31 @@ func TestStreamAuth_PermissionGate(t *testing.T) {
 		{"deny denies", []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("no")})}, codes.PermissionDenied},
 		{"no mapping denies", []AuthOption{WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})}, codes.PermissionDenied},
 		{"obligation denies", []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: allowWithObligation()})}, codes.PermissionDenied},
+		// Parity cases matching TestUnaryAuth_PermissionGate:
+		{
+			"no authorizer wired -> PermissionDenied",
+			[]AuthOption{resolver}, // WithPDPAuthorizer intentionally omitted
+			codes.PermissionDenied,
+		},
+		{
+			"PDP unavailable -> Unavailable",
+			[]AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{
+				err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "policy store down"),
+			})},
+			codes.Unavailable,
+		},
+		{
+			"PDP other error -> PermissionDenied",
+			[]AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{
+				err: errcode.New(errcode.KindInternal, errcode.ErrInternal, "boom"),
+			})},
+			codes.PermissionDenied,
+		},
+		{
+			"PDP panic -> Internal",
+			[]AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{panicVal: "pdp exploded"})},
+			codes.Internal,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

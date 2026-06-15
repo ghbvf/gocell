@@ -40,6 +40,13 @@ type Deps struct {
 	// listener so gRPC method authorization is the identical decision. nil is
 	// permitted (a server with no permission-gated methods still boots); the gate
 	// then fail-closes (deny) at request time for any non-public method.
+	//
+	// WARNING: unlike the HTTP path — where bootstrap.ResolveAuthorizer fails fast at
+	// router build if a provider is nil — gRPC has no startup guard yet. A cell that
+	// declares permission-gated methods (endpoints.grpc.methods[].permission) but
+	// leaves this nil will DENY every such RPC at request time (fail-closed, but
+	// surfaced at first call rather than boot). A startup parity guard is a tracked
+	// follow-up; until then wire dc.Authorizer() whenever any gRPC method is gated.
 	Authorizer auth.Authorizer
 	// AuthOptions configures the auth interceptor (public-method and
 	// password-reset-exempt predicates).

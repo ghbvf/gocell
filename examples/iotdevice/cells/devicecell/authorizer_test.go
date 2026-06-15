@@ -177,6 +177,38 @@ func TestDeviceAuthorizer(t *testing.T) {
 			action:    "unknown:action",
 			wantAllow: false,
 		},
+
+		// ── gRPC gate regression (#2008): resource = full method name ─────────
+		// The gRPC PDP gate passes the full gRPC method name as the resource arg
+		// (coarse gate, no message-field ownership yet). These cases pin that
+		// deviceAuthorizer's device:command branch is purely role-based and
+		// ignores the resource value — so a future policy edit that accidentally
+		// adds a `subject == resource` ownership branch for device:command would
+		// turn these allow cases into denies and break here immediately.
+		{
+			name:      "command: operator, resource=grpc full method → allow (resource ignored)",
+			ctx:       auth.TestContext(operID, []string{dto.RoleOperator}),
+			subject:   operID,
+			resource:  "/device.command.v1.DeviceCommandService/IssueCommand",
+			action:    authz.PermDeviceCommand().String(),
+			wantAllow: true,
+		},
+		{
+			name:      "command: admin, resource=grpc full method → allow (resource ignored)",
+			ctx:       auth.TestContext(adminID, []string{dto.RoleAdmin}),
+			subject:   adminID,
+			resource:  "/device.command.v1.DeviceCommandService/IssueCommand",
+			action:    authz.PermDeviceCommand().String(),
+			wantAllow: true,
+		},
+		{
+			name:      "command: device-only role, resource=grpc full method → deny (resource ignored)",
+			ctx:       auth.TestContext(deviceA, []string{dto.RoleDevice}),
+			subject:   deviceA,
+			resource:  "/device.command.v1.DeviceCommandService/IssueCommand",
+			action:    authz.PermDeviceCommand().String(),
+			wantAllow: false,
+		},
 	}
 
 	az := deviceAuthorizer{}

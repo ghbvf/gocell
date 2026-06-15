@@ -113,7 +113,7 @@ type GRPCServiceSpec struct {
 	//
 	// Strict fail-closed (#2008): a non-public method MUST appear here or it is
 	// DENIED at the gate. This field is cellgen-OWNED for the same reason as
-	// PublicMethods — the contractgen completeness pre-pass guarantees every authed
+	// PublicMethods — the cellgen completeness pre-pass guarantees every authed
 	// proto method has a permission entry, which hand-writing would bypass.
 	MethodPermissions map[string]string
 }

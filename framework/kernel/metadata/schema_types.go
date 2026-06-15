@@ -187,9 +187,10 @@ type GRPCTransportMeta struct {
 // either JWT-exempt (Public) or its required ABAC permission (Permission). Under
 // the #2008 strict-fail-closed model the overlay is COMPLETE for non-public
 // methods: every authed RPC carries a Permission, and a method absent from the
-// overlay is DENIED at the interceptor gate (not merely authed). The contractgen
-// completeness pre-pass enforces that every non-public proto method has a
-// Permission entry, so "absent ⇒ dead 403" cannot ship silently.
+// overlay is DENIED at the interceptor gate (not merely authed). The cellgen
+// completeness pre-pass (EnrichGrpcServicesWithProtoInfo, gocell generate cell)
+// enforces that every non-public proto method has a Permission entry, so
+// "absent ⇒ dead 403" cannot ship silently.
 //
 // ref: grpc-ecosystem/go-grpc-middleware interceptors/auth — per-method
 // AuthFuncOverride (declarative public-method exemption)

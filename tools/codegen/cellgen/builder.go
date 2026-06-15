@@ -1084,6 +1084,14 @@ func grpcLastSegment(fqn string) string {
 // The .proto is the single source of truth for the method set (#1655);
 // cellgen only needs the import path and alias for the cell_gen.go registration.
 //
+// It ALSO enforces the proto-referential + #2008 completeness invariants (every
+// public/permission overlay entry ∈ proto method set; every non-public proto RPC
+// carries a permission) via validateGrpcMethodOverlayAgainstProto. Because this
+// runs in the enrich step (which the full `gocell generate cell` pipeline always
+// invokes), a caller that uses BuildCellSpec WITHOUT then calling Enrich skips the
+// completeness check — that path exists only in unit tests, never in production
+// generation.
+//
 // PbAlias is set to "grpc<index>" (0-indexed) to guarantee uniqueness even
 // when multiple services share the same last path segment.
 func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
