@@ -1,6 +1,6 @@
 ---
 name: pr-monitor
-description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（ship/fix 收尾自动启动 auto 模式；每 tick 无状态，只读 label + 机器块；每次启动后轮巡上限 2 轮）；human-in-loop 可随时中断。pr-status/ready 或 PR 关闭或达轮巡上限时报告终止。"
+description: "PR 状态单 tick 检查器：观察一个 PR 的 review/check 进展并按 label 路由。默认 report 模式（#1657，仅观察+窗口提示）；auto 模式（#1663）在机器可判定的 Cx1/Cx2 + needs-fix + 未熔断 时 dispatch /fix，文件级/禁止域安全裁决交由 /fix 自己的 [AUTO-FIX] 门把关。由 `/loop <interval> /pr-monitor <PR#>` 简单 loop 驱动（ship/fix 收尾自动启动 auto 模式，手动单次默认 report；每 tick 无状态，只读 label + 机器块；每次启动后连续 2 轮无进展即终止）；human-in-loop 可随时中断。pr-status/ready、PR 关闭、熔断或连续 2 轮无进展时报告终止。"
 argument-hint: "<PR#> [--mode report|auto] [--role fix|review]"
 allowed-tools: [Bash, Read, Skill, Agent]
 ---
@@ -12,9 +12,11 @@ allowed-tools: [Bash, Read, Skill, Agent]
 > **loop 模型（简单）**：本技能是**无状态单 tick**——每次调用只做一次检查就返回。循环交给内建 `/loop` 原语：
 > `/loop 20m /pr-monitor <PR#>` 每 20min 重放同一行命令再调用一次（flag 随命令行原样保留，无需跨 tick 携带状态）。
 > **不自己调 ScheduleWakeup、不携带 tick payload、不写文件**——每 tick 的状态全部从 PR 实时读取（label + 最新机器块）。
-> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`；**每次启动后最多巡检 2 轮（轮巡上限）**——模型据本次启动以来的会话顺序 tick 计数（会话本地软信号，不持久化、不跨会话、非 PR 读取），第 2 轮仍无进展即终止转人工。
+> human-in-loop 全程在场，可随时 Ctrl-C 停 `/loop`；**每次启动后连续 2 轮无进展即终止转人工**（轮巡上限）。「无进展」= 本 tick 未 dispatch `/fix` 且 PR label 较上一 tick 未变；有进展（dispatch 或 label 变）则重置计数。计数取本次启动会话顺序 tick（来自会话上下文、非 PR API，不持久化、不跨会话）。
 >
 > **如何启动**：ship/fix 收尾**自动启动** `/loop 20m /pr-monitor <PR#> --mode=auto`（交互会话内常驻；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管）。手动单次 `/pr-monitor <PR#>` 也合法（默认 report 模式）——只做一次检查就返回。
+>
+> **轮巡上限作用域**：连续 2 轮无进展终止是**交互 /loop 会话**内的软约束（模型据会话顺序 tick 计数）；headless 一次性会话每次独立、无法跨会话计数，不受此软上限约束，由 daemon 调度 + 3 轮熔断（Hard 机器读）兜底。
 
 ---
 
@@ -73,9 +75,9 @@ esac; shift; done
 | `pr-status/ready` ∈ labels | label 含 | "✅ PR #N 已 ready，监控可结束——请停止 /loop" |
 | PR state != OPEN | `state != "OPEN"` | "PR #N 已关闭（state=$STATE），请停止 /loop" |
 | §3.3 熔断触发 | block `cycle.exhausted` / round≥3 | 见 §3.3 |
-| 本次启动已巡检 2 轮无进展 | 模型据本次启动会话顺序 tick 判定（会话本地软计数，非 label/非持久） | "PR #N 本次启动已达 2 轮轮巡上限，转人工（停 /loop）" |
+| 本次启动连续 2 轮无进展 | 模型据会话顺序 tick 判定（无进展 = 未 dispatch 且 label 未变；会话本地软计数，非 label/非持久，交互会话内生效） | "PR #N 连续 2 轮无进展，转人工（停 /loop）" |
 
-> 无持久 tickCount、不跨会话——ready/closed/熔断是机器读出口；另加**每次启动 2 轮轮巡上限**（模型据本次启动会话顺序 tick 软计数，第 2 轮无进展即终止转人工），嫌久也可直接停 `/loop`。轮巡上限（软，每次启动重置）与 §3.3 的 3 轮 review↔fix 熔断（Hard 机器读）正交、互不替代。
+> 无持久 tickCount、不跨会话——ready/closed/熔断是机器读出口；另加**连续 2 轮无进展轮巡上限**（模型据会话顺序 tick 软计数，有进展即重置；仅交互会话内生效，headless 见顶部「轮巡上限作用域」），嫌久也可直接停 `/loop`。轮巡上限（软，每次启动重置）与 §3.3 的 3 轮 review↔fix 熔断（Hard 机器读）正交、互不替代。
 
 ### §3.2 report 模式（默认）
 
@@ -126,7 +128,7 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 Skill("fix", args="<N>")
 ```
 
-> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级 instruction-level 自限双重收窄 + 3 轮 review↔fix 熔断（Hard 机器读）+ 每次启动 2 轮轮巡上限（软，会话计数）转人工。
+> auto 模式的 `Skill("fix")` 是 **loop 内**的自动操作（`--mode=auto`）；经 dispatch 门（needs-fix / 未熔断 / Cx1/Cx2 window）+ fix 侧文件级 instruction-level 自限双重收窄 + 3 轮 review↔fix 熔断（Hard 机器读）+ 连续 2 轮无进展轮巡上限（软，会话计数）转人工。
 
 fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；下个 `/loop` tick 继续等 `/pr-review --check` 结论（非终止）。
 
