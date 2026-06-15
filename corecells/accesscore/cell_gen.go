@@ -13,6 +13,7 @@ import (
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 	sub2 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
 	sub3 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
+	proj0 "github.com/ghbvf/gocell/generated/contracts/event/session/created/v1"
 )
 
 var _ cell.Cell = (*AccessCore)(nil)
@@ -71,6 +72,7 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
 				captureErr(c.loginHandler.RegisterRoutes(s))
 				captureErr(c.refreshHandler.RegisterRoutes(s))
 				captureErr(c.logoutHandler.RegisterRoutes(s))
+				captureErr(c.sessionSummaryHandler.RegisterRoutes(s))
 			})
 			mux.Route("/setup", func(s cell.RouteMux) {
 				captureErr(c.setupHandler.RegisterRoutes(s))
@@ -113,6 +115,12 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
 
 	if err := sub3.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "accesscore", "sessionlogout").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.role.revoked.v1: %w", err)
+	}
+
+	if err := reg.RegisterProjection(proj0.NewProjectionRequest(
+		c.sessionprojectionSvc.HandleSessionCreated, "session_registry", "accesscore", "sessionprojection", c.sessionprojectionSvc.ResetSessionRegistry,
+	)); err != nil {
+		return fmt.Errorf("accesscore: projection session_registry: %w", err)
 	}
 
 	return nil

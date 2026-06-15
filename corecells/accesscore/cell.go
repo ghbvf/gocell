@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogout"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionprojection"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
@@ -38,6 +39,7 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
+	registrysummary "github.com/ghbvf/gocell/generated/contracts/http/session/registry-summary/v1"
 )
 
 // PasswordVersionField is the DB column name used as the CAS version field
@@ -434,6 +436,16 @@ type AccessCore struct {
 	configReceiveSvc *configreceive.Service
 
 	rbacSessionConsumer *sessionlogout.Consumer
+
+	// sessionprojection: L3 CQRS session registry-summary.
+	// sessionprojectionSvc is the projection service that maintains the
+	// tenant-partitioned session count read model (session_registry projection).
+	// cell_gen.go references c.sessionprojectionSvc.HandleSessionCreated and
+	// c.sessionprojectionSvc.ResetSessionRegistry via reg.RegisterProjection.
+	sessionprojectionSvc *sessionprojection.Service
+
+	// +slice:route:slice=sessionprojection,subPath=/sessions
+	sessionSummaryHandler *registrysummary.Handler
 }
 
 // NewAccessCore creates a new AccessCore Cell.

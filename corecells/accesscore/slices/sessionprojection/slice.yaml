@@ -1,0 +1,25 @@
+id: sessionprojection
+belongsToCell: accesscore
+consistencyLevel: L3
+lifecycle: experimental
+contractUsages:
+  - contract: event.session.created.v1
+    role: subscribe
+    handler: HandleSessionCreated
+    projection: session_registry
+    projectionSource: outbox
+    onReset: ResetSessionRegistry
+  - contract: projection.session.registry-summary.v1
+    role: provide
+  - contract: http.session.registry-summary.v1
+    role: serve
+verify:
+  unit:
+    - unit.sessionprojection.service
+  contract:
+    - contract.event.session.created.v1.subscribe
+    - contract.projection.session.registry-summary.v1.provide
+    - contract.http.session.registry-summary.v1.serve
+allowedFiles:
+  - corecells/accesscore/slices/sessionprojection/**
+  - corecells/accesscore/internal/sessionprojection/**

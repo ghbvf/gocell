@@ -1,0 +1,233 @@
+package sessionprojection_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionprojection"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	registrysummary "github.com/ghbvf/gocell/generated/contracts/http/session/registry-summary/v1"
+)
+
+// testTenantIDStr is the canonical test tenant UUID.
+const testTenantIDStr = "00000000-0000-0000-0000-000000000001"
+
+// testAdminAuthorizer is a minimal auth.Authorizer that always allows.
+type testAdminAuthorizer struct{}
+
+func (a *testAdminAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	dec, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic("testAdminAuthorizer: authz.Allow: " + err.Error())
+	}
+	return dec, nil
+}
+
+// withAllowAuthorizer wraps ctx with an allow-all authorizer.
+func withAllowAuthorizer(ctx context.Context) context.Context {
+	return auth.WithAuthorizer(ctx, &testAdminAuthorizer{})
+}
+
+// adminCtx returns a context with an admin principal carrying testTenantID.
+// Uses auth.WithPrincipal directly so that p.TenantID is populated (auth.TestContext
+// leaves TenantID empty, which our tenant-isolation guard correctly rejects).
+func adminCtx() context.Context {
+	p := &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "admin-user-1",
+		Roles:      []string{"admin"},
+		TenantID:   testTenantIDStr,
+		AuthMethod: "test",
+	}
+	return withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
+}
+
+// noTenantCtx returns a context with an authenticated principal but NO TenantID —
+// this is the fail-open vector that our 403 gate must catch.
+func noTenantCtx() context.Context {
+	// auth.TestContext does not set TenantID, so p.TenantID == "" — exactly the
+	// empty-tenant vector that must be rejected with 403.
+	return withAllowAuthorizer(auth.TestContext("user-1", []string{"admin"}))
+}
+
+// testEntry implements cellvocab.ProjectionEvent for seeding the service in tests.
+type testEntry struct {
+	eventID   string
+	sessionID string
+	tenantStr string
+}
+
+func (e testEntry) EventID() string       { return e.eventID }
+func (e testEntry) Stream() string        { return "event.session.created.v1" }
+func (e testEntry) OccurredAt() time.Time { return time.Time{} }
+func (e testEntry) RestoreContext(ctx context.Context) context.Context {
+	return ctxkeys.WithTenantID(ctx, e.tenantStr)
+}
+
+func (e testEntry) Payload() []byte {
+	b, _ := json.Marshal(map[string]string{"sessionId": e.sessionID, "userId": "test-user"})
+	return b
+}
+
+// ensure testEntry implements the interface at compile time.
+var _ cellvocab.ProjectionEvent = testEntry{}
+
+// seedSession applies a session.created event to svc for tenantStr.
+func seedSession(t *testing.T, svc *sessionprojection.Service, tenantStr, sessionID, eventID string) {
+	t.Helper()
+	ctx := ctxkeys.WithTenantID(context.Background(), tenantStr)
+	err := svc.HandleSessionCreated(ctx, testEntry{
+		eventID:   eventID,
+		sessionID: sessionID,
+		tenantStr: tenantStr,
+	})
+	require.NoError(t, err, "seed session %s", sessionID)
+}
+
+// newHandlerMux builds an http.Handler that serves the registry-summary endpoint.
+func newHandlerMux(t *testing.T, svc *sessionprojection.Service) http.Handler {
+	t.Helper()
+	policy := auth.RequirePermission(authz.PermSessionRead())
+	h := registrysummary.NewHandler(sessionprojection.NewSummaryAdapter(svc), policy)
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/access/sessions/registry-summary", h)
+	return mux
+}
+
+// doRequest performs a GET to /api/v1/access/sessions/registry-summary with ctx.
+func doRequest(t *testing.T, handler http.Handler, ctx context.Context) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/sessions/registry-summary", nil)
+	req = req.WithContext(ctx)
+	handler.ServeHTTP(w, req)
+	return w
+}
+
+// TestHandler_NoPrincipal_Returns401 verifies that a request with no auth
+// principal returns HTTP 401.
+func TestHandler_NoPrincipal_Returns401(t *testing.T) {
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	// No principal in context — use only the allow authorizer so PDP passes.
+	ctx := withAllowAuthorizer(context.Background())
+	w := doRequest(t, mux, ctx)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assertErrCode(t, w, "ERR_AUTH_UNAUTHORIZED")
+}
+
+// TestHandler_NoTenant_Returns403 verifies that an authenticated principal with
+// no tenant scope is fail-closed with HTTP 403 (tenant isolation, epic #1337 PR-2a F1).
+func TestHandler_NoTenant_Returns403(t *testing.T) {
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	w := doRequest(t, mux, noTenantCtx())
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assertErrCode(t, w, "ERR_AUTH_FORBIDDEN")
+}
+
+// TestHandler_Admin_Returns200_EmptyCount verifies the normal path: admin with
+// a valid tenant gets HTTP 200 with TotalSessions = 0 (no sessions yet).
+func TestHandler_Admin_Returns200_EmptyCount(t *testing.T) {
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+	mux := newHandlerMux(t, svc)
+
+	w := doRequest(t, mux, adminCtx())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp registrysummary.Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data)
+	assert.Equal(t, int64(0), resp.Data.TotalSessions)
+}
+
+// TestHandler_Returns200_WithCount verifies that sessions added to the read
+// model are reflected in the count response for the caller's tenant.
+func TestHandler_Returns200_WithCount(t *testing.T) {
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+
+	seedSession(t, svc, testTenantIDStr, "sess-A", "e1")
+	seedSession(t, svc, testTenantIDStr, "sess-B", "e2")
+
+	mux := newHandlerMux(t, svc)
+	w := doRequest(t, mux, adminCtx())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp registrysummary.Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data)
+	assert.Equal(t, int64(2), resp.Data.TotalSessions)
+}
+
+// TestHandler_NoSessionIDsInResponse verifies that raw session IDs are never
+// returned on the wire (privacy boundary: only the count is exposed).
+func TestHandler_NoSessionIDsInResponse(t *testing.T) {
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+
+	seedSession(t, svc, testTenantIDStr, "secret-session-id-XYZ", "e-priv")
+
+	mux := newHandlerMux(t, svc)
+	w := doRequest(t, mux, adminCtx())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.NotContains(t, body, "secret-session-id-XYZ",
+		"raw session IDs must never appear in the response body")
+	assert.NotContains(t, body, "sessionId",
+		"sessionId field must not appear in the response")
+}
+
+// TestHandler_TenantIsolation verifies that one tenant's session count is not
+// visible to another tenant's principal (cross-tenant isolation).
+func TestHandler_TenantIsolation(t *testing.T) {
+	otherTenantStr := "eeeeeeee-0000-0000-0000-000000000099"
+	svc, err := sessionprojection.NewService()
+	require.NoError(t, err)
+
+	// Seed 1 session for the caller's tenant and 2 for another tenant.
+	seedSession(t, svc, testTenantIDStr, "sess-mine", "e-own")
+	seedSession(t, svc, otherTenantStr, "sess-other-1", "e-oth1")
+	seedSession(t, svc, otherTenantStr, "sess-other-2", "e-oth2")
+
+	mux := newHandlerMux(t, svc)
+	// adminCtx() carries testTenantIDStr — should see only 1, not 3.
+	w := doRequest(t, mux, adminCtx())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp registrysummary.Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data)
+	assert.Equal(t, int64(1), resp.Data.TotalSessions,
+		"caller should only see sessions for their own tenant (isolation)")
+}
+
+// assertErrCode checks that the response body contains an error with the expected code.
+func assertErrCode(t *testing.T, w *httptest.ResponseRecorder, wantCode string) {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body: %s", w.Body.String())
+	assert.Equal(t, wantCode, body.Error.Code)
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/rbaccheck"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogout"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionprojection"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
@@ -26,10 +27,13 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/healthz"
 	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/auth/refresh"
+	registrysummary "github.com/ghbvf/gocell/generated/contracts/http/session/registry-summary/v1"
 )
 
 // resolveEmitter delegates to outbox.ResolveCellEmitter (mutual exclusion +
@@ -358,6 +362,13 @@ func (c *AccessCore) initSlices() error {
 	)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configreceive.SliceMetadata()))
 
+	// sessionprojection: L3 CQRS projection — tenant-partitioned session registry.
+	// Subscribes to event.session.created.v1 and exposes a read-only count endpoint
+	// (GET /api/v1/access/sessions/registry-summary) gated by authz.PermSessionRead().
+	if err := c.initSessionProjection(); err != nil {
+		return err
+	}
+
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
 	// casProtocol / bootstrapAuth / setupLock required-dep checks are
@@ -433,6 +444,32 @@ func (c *AccessCore) initAccountLockout() (*accountlockout.Service, error) {
 		return nil, fmt.Errorf("accesscore: build accountlockout service: %w", err)
 	}
 	return lockoutSvc, nil
+}
+
+// initSessionProjection constructs the sessionprojection L3 CQRS slice.
+//
+// The sessionprojection service maintains a tenant-partitioned in-memory set of
+// session IDs populated by event.session.created.v1. The read endpoint returns
+// only the count of sessions per tenant — no session ID or user ID is exposed
+// on the wire (privacy boundary). The route is gated by PermSessionRead (admin /
+// super-admin baseline rule).
+//
+// The projection handler and projection service fields are consumed by cell_gen.go
+// (generated): c.sessionprojectionSvc.HandleSessionCreated / ResetSessionRegistry
+// are emitted into reg.RegisterProjection; c.sessionSummaryHandler.RegisterRoutes
+// is emitted into the PrimaryListener RouteGroup /sessions sub-path.
+func (c *AccessCore) initSessionProjection() error {
+	svc, err := sessionprojection.NewService(sessionprojection.WithLogger(c.logger))
+	if err != nil {
+		return fmt.Errorf("accesscore: build sessionprojection service: %w", err)
+	}
+	c.sessionprojectionSvc = svc
+	c.sessionSummaryHandler = registrysummary.NewHandler(
+		sessionprojection.NewSummaryAdapter(svc),
+		auth.RequirePermission(authz.PermSessionRead()),
+	)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionprojection.SliceMetadata()))
+	return nil
 }
 
 // initPolicyManageSlice constructs the policymanage slice. policymanage is L2
