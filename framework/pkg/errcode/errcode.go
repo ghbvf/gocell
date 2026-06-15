@@ -74,7 +74,23 @@ const (
 	ErrOrderNotFound           Code = "ERR_ORDER_NOT_FOUND"
 	ErrDeviceNotFound          Code = "ERR_DEVICE_NOT_FOUND"
 	ErrCommandNotFound         Code = "ERR_COMMAND_NOT_FOUND"
-	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
+	// ERR_CERT_ namespace (Epic #1895 PR-5, runtime/certsigning). PR-5 mints only
+	// the construction-validation codes below; signing / revocation runtime codes
+	// (cross-scope denial, sign failure) land with their producing implementation
+	// (softca / PG, PR-6).
+	//
+	// ErrCertScopeInvalid signals an invalid CertScope / IssuerID / DeviceID /
+	// Serial construction (empty dimension, non-hex serial, non-canonical tenant).
+	// Constructed with KindInvalid → HTTP 400.
+	ErrCertScopeInvalid Code = "ERR_CERT_SCOPE_INVALID"
+	// ErrCertRequestInvalid signals an invalid CertRequest / DeviceSubject /
+	// SubjectAltNames / KeyUsages / SignConstraints (unparseable CSR, blank SAN,
+	// empty usage, non-positive TTL). Constructed with KindInvalid → HTTP 400.
+	ErrCertRequestInvalid Code = "ERR_CERT_REQUEST_INVALID"
+	// ErrCertIssuedInvalid signals an invalid IssuedCert reconstruction (empty or
+	// unparseable certificate DER). Constructed with KindInvalid → HTTP 400.
+	ErrCertIssuedInvalid Code = "ERR_CERT_ISSUED_INVALID"
+	ErrAdapterPGNoTx     Code = "ERR_ADAPTER_PG_NO_TX"
 	// ErrPGSchemaShape signals that a value read from a PostgreSQL column does
 	// not conform to the expected schema shape — e.g., an enum column returned a
 	// value not in the application's known set. Usable from both adapters/postgres

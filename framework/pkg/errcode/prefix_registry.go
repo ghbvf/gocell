@@ -271,6 +271,7 @@ var gocellPlatformPrefixes = []string{
 	"ERR_ZERO_TEST_MATCH",
 
 	// ── Namespace entries for single-code subsystem segments (subsystem nouns) ──
+	"ERR_CERT_",
 	"ERR_COMMAND_",
 	"ERR_DEVICE_",
 	"ERR_ORDER_",

@@ -7,6 +7,7 @@ ERR_BODY_TOO_LARGE	github.com/ghbvf/gocell
 ERR_BOOTSTRAP_	github.com/ghbvf/gocell
 ERR_BUS_	github.com/ghbvf/gocell
 ERR_CELL_	github.com/ghbvf/gocell
+ERR_CERT_	github.com/ghbvf/gocell
 ERR_CHECKREF_	github.com/ghbvf/gocell
 ERR_CIRCUIT_	github.com/ghbvf/gocell
 ERR_CLIENT_	github.com/ghbvf/gocell
