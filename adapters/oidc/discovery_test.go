@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/nettest"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
@@ -66,7 +67,7 @@ func mockOIDCServerTogglable(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		}
 	})
 
-	srv := httptest.NewServer(mux)
+	srv := nettest.NewServer(t, mux)
 	issuer = srv.URL
 	return srv, &failDiscovery
 }
@@ -204,7 +205,7 @@ func TestProvider_ConcurrentReadDuringSlowRefresh(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
 	})
-	srv := httptest.NewServer(mux)
+	srv := nettest.NewServer(t, mux)
 	defer srv.Close()
 	issuer = srv.URL
 

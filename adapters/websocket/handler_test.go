@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/nettest"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	authpkg "github.com/ghbvf/gocell/framework/runtime/auth"
@@ -55,16 +55,6 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 
 	hub := rtws.NewHub(clock.Real(), cfg, handler)
 
-	// Check TCP availability before starting anything.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
-		return nil, nil
-	}
-	if err := ln.Close(); err != nil {
-		t.Logf("ln.Close: %v", err)
-	}
-
 	// Start hub in background (Register requires running state).
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -81,7 +71,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 		Authenticator:  testAuth(),
 	}))
 
-	server := httptest.NewServer(mux)
+	server := nettest.NewServer(t, mux)
 
 	t.Cleanup(func() {
 		server.Close()
@@ -577,7 +567,7 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 		AllowedOrigins: []string{"http://*.allowed.test"},
 		Authenticator:  testAuth(),
 	}))
-	server := httptest.NewServer(mux)
+	server := nettest.NewServer(t, mux)
 	defer server.Close()
 
 	_, resp, err := dialWithOrigin(t, server.URL, "http://evil.example.com")
