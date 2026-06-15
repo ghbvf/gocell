@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
 
 // TestValidProject_WithFrameworkContracts_ZeroErrors is the integration safety
@@ -73,7 +74,7 @@ func frameworkOwnedProject(contracts ...*metadata.ContractMeta) *metadata.Projec
 	}
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {ID: "accesscore", Dir: "accesscore", File: "corecells/accesscore/cell.yaml"},
+			metadatatest.CellIDAccessCore: {ID: metadatatest.CellIDAccessCore, Dir: "accesscore", File: "corecells/accesscore/cell.yaml"},
 		},
 		Contracts: cm,
 		Slices:    map[string]*metadata.SliceMeta{},
@@ -124,17 +125,17 @@ func TestFrameworkOwnedContract_ExcludedFromCellOwnerRules(t *testing.T) {
 	cellContract := &metadata.ContractMeta{
 		ID:               cellContractID,
 		Kind:             "http",
-		OwnerCell:        "accesscore",
+		OwnerCell:        metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+		Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 		File:             "contracts/http/accesscore/login/v1/contract.yaml",
 		Dir:              "contracts/http/accesscore/login/v1",
 	}
 	// Serving slice for the cell-owned contract.
 	serveSlice := &metadata.SliceMeta{
 		ID:            "login",
-		BelongsToCell: "accesscore",
+		BelongsToCell: metadatatest.CellIDAccessCore,
 		ContractUsages: []metadata.ContractUsage{
 			{Contract: cellContractID, Role: "serve"},
 		},
@@ -243,7 +244,7 @@ func TestFrameworkOwnedContractScoped_ProviderMustBeFramework(t *testing.T) {
 				OwnerCell:        metadata.FrameworkOwnerSentinel,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "draft",
-				Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+				Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 				File:             "contracts/http/deviceidentity/enroll/v1/contract.yaml",
 				Dir:              "contracts/http/deviceidentity/enroll/v1",
 			},
@@ -257,7 +258,7 @@ func TestFrameworkOwnedContractScoped_ProviderMustBeFramework(t *testing.T) {
 				OwnerCell:        metadata.FrameworkOwnerSentinel,
 				ConsistencyLevel: "L2",
 				Lifecycle:        "draft",
-				Endpoints:        metadata.EndpointsMeta{Publisher: "ghostactor"},
+				Endpoints:        metadata.EndpointsMeta{Publisher: metadatatest.NewCellID("ghostactor")},
 				File:             "contracts/event/deviceidentity/cert-issued/v1/contract.yaml",
 				Dir:              "contracts/event/deviceidentity/cert-issued/v1",
 			},
@@ -289,7 +290,7 @@ func TestREF03_CellOwnerAntiVacuity(t *testing.T) {
 	pm := frameworkOwnedProject(&metadata.ContractMeta{
 		ID:        "http.auth.login.v1",
 		Kind:      "http",
-		OwnerCell: "accescore", // typo of accesscore — not a known cell
+		OwnerCell: metadatatest.NewCellID("accescore"), // typo of accesscore — not a known cell
 		Lifecycle: "draft",
 		File:      "contracts/http/auth/login/v1/contract.yaml",
 	})
@@ -308,11 +309,11 @@ func TestCCE01_CellOwnerAntiVacuity(t *testing.T) {
 	pm := frameworkOwnedProject(&metadata.ContractMeta{
 		ID:               "http.auth.login.v1",
 		Kind:             "http",
-		OwnerCell:        "accesscore",
+		OwnerCell:        metadatatest.CellIDAccessCore,
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
 		Triggers:         nil,
-		Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
+		Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
 		File:             "contracts/http/auth/login/v1/contract.yaml",
 		Dir:              "contracts/http/auth/login/v1",
 	})

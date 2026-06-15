@@ -23,12 +23,23 @@ Introduce a typed-builder funnel mirrored across three loci:
 1. **Builder package**: `kernel/metadata/metadatatest.NewCellID(s string) string` panics via `panicregister.Approved("metadatatest-cell-id-invalid", errcode.Assertion(...))` when `s` violates `metadata.MatchCellID`. A closed enumeration of pre-validated package-level vars (`CellIDAccessCore`, `CellIDAuditCore`, …) covers the cell-ids used across multiple fixtures; one-off ids in individual tests use `NewCellID(literal)` directly.
 2. **Fixture migration**: all bare cell-id literals in cell-id field positions across `kernel/` `*_test.go` files migrate to `metadatatest.NewCellID(literal)` or `metadatatest.<CellIDVar>`.
 3. **Static enforcement (archtest `FIXTURE-CELLID-TYPED-BUILDER-01`)**:
-   - **A1** (Hard downstream): typed-info funnel rejecting bare literals, Ident→BasicLit chains, dynamic NewCellID arguments, and non-CellID-prefixed metadatatest var refs at any of the 15 cell-id field positions enumerated in §1 below.
+   - **A1** (Hard downstream): typed-info funnel rejecting bare literals, Ident→BasicLit chains, dynamic NewCellID arguments, and non-CellID-prefixed metadatatest var refs at any of the 15 cell-id field positions enumerated in §1 below. Accepts three sanctioned forms: (a) `NewCellID(literal)`, (b) `metadatatest.<CellIDVar>`, (c) `metadata.FrameworkOwnerSentinel` const (see §1a below).
    - **A2** (Hard upstream): form-uniqueness lock on the `NewCellID` body — including TypesInfo-resolved callee identity for `metadata.MatchCellID`, `panicregister.Approved`, and `errcode.Assertion`. Any structural drift or package substitution breaks the test.
-   - **A3** (meta self-test): `archtest_fixture` sub-package containing deliberate bad/good usages; asserts A1 fires on bad and stays silent on good.
+   - **A3** (meta self-test): `archtest_fixture` sub-package containing deliberate bad/good usages; asserts A1 fires on bad and stays silent on good. Includes `good_framework_sentinel.go` asserting sentinel does not produce false positives.
    - **A4** (consistency lock): asserts the carveout map in archtest matches §2 below character-by-character.
    - **A5** (Hard upstream — var initializer): every CellID-prefixed package-level var in `kernel/metadata/metadatatest` must have initializer = `NewCellID(BasicLit STRING)` with `NewCellID` TypesInfo-resolved to the metadatatest package. Closes the upstream half of the CellID* var funnel: without A5, `var CellIDBypass = "raw-evil"` would slip through A1's prefix check.
 4. **Import scope guard** (`METADATATEST-IMPORT-SCOPE-01`, Medium): production code may not import `metadatatest`.
+
+### §1a — FrameworkOwnerSentinel as third sanctioned source (#1939)
+
+`metadata.FrameworkOwnerSentinel` (const `"_framework"`) was introduced in #1939 as the reserved `ownerCell` value for framework-owned contracts. It is a first-class legal value at owner/provider cell-id positions (`ContractMeta.OwnerCell`, `EndpointsMeta.Server`, `EndpointsMeta.Publisher`, `EndpointsMeta.Handler`, `EndpointsMeta.Provider`) but cannot go through the normal typed-builder path:
+
+- `metadatatest.NewCellID("_framework")` **panics** at fixture load time — leading underscore is not a legal cell id per `metadata.MatchCellID`.
+- A `CellIDFramework` package-level var cannot be added to metadatatest — A5 would require it to be initialized via `NewCellID(literal)`, which panics (same reason).
+
+Therefore A1 accepts `metadata.FrameworkOwnerSentinel` as a third sanctioned source, identity-locked via TypesInfo: the resolved object must be `*types.Const` with `Pkg().Path() == metadataPkgPath` and `Name() == "FrameworkOwnerSentinel"`. A homonymous const from another package resolves to a different package path and is rejected. Accepting the sentinel at all cell-id positions (not just OwnerCell/Server/Publisher) is harmless: `"_framework"` is not a legal cell id, so if it inadvertently appears at e.g. `CellMeta.ID`, the existing `FMT-C1` rule will catch it independently.
+
+Cross-reference: ADR `docs/architecture/202606130635-1939-adr-framework-owned-contract.md`.
 
 ## §1 — Cell-id field positions (15-field enumeration, schema-derived)
 
@@ -69,7 +80,7 @@ Carveouts apply at **function-level** only (per `.claude/rules/gocell/ai-robust.
 
 | Carved-out function | Reason |
 |---------------------|--------|
-| kernel/governance.TestValidator_FMTC1_CellIDPattern | FMT-C1 RED case: intentionally constructs invalid cell ids ("foo-bar", "FooBar", "1foo", "foo_bar", "a") as fixture content to verify FMT-C1 detection. metadatatest.NewCellID would panic at those literals; the test cannot use the builder. |
+| framework/kernel/governance.TestValidator_FMTC1_CellIDPattern | FMT-C1 RED case: intentionally constructs invalid cell ids ("foo-bar", "FooBar", "1foo", "foo_bar", "a") as fixture content to verify FMT-C1 detection. metadatatest.NewCellID would panic at those literals; the test cannot use the builder. |
 
 ## §3 — 升级路径
 

@@ -382,7 +382,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	}
 
 	// Good files must NOT produce any violations.
-	goodFiles := []string{"good_const_ref.go", "good_call_literal.go"}
+	goodFiles := []string{"good_const_ref.go", "good_call_literal.go", "good_framework_sentinel.go"}
 	for _, d := range violations {
 		for _, gf := range goodFiles {
 			if d.Rel == negFixturePrefix+gf {
@@ -411,6 +411,7 @@ func TestFixtureCellIDTypedBuilder_NegativeFixture(t *testing.T) {
 	wantVisited := []string{
 		"good_const_ref.go",
 		"good_call_literal.go",
+		"good_framework_sentinel.go",
 		"blind_spot_ident_slice.go",
 		"blind_spot_assign.go",
 		"bad_dynamic_arg.go",

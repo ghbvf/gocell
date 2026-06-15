@@ -22,9 +22,18 @@
 //
 // Every cell-id field position in a kernel/metadata.* struct or map composite
 // literal — anywhere in the module's hand-written code (production + tests, all
-// tag combinations) — must be sourced from
-// kernel/metadata/metadatatest.NewCellID(literal) or one of metadatatest's
-// pre-validated package-level cell-id vars (CellID*). Bare string literals at
+// tag combinations) — must be sourced from one of three sanctioned forms:
+//
+//  1. kernel/metadata/metadatatest.NewCellID(literal) — typed-builder call.
+//  2. One of metadatatest's pre-validated package-level cell-id vars (CellID*).
+//  3. metadata.FrameworkOwnerSentinel const (#1939) — the reserved "_framework"
+//     owner/provider value. It cannot go through NewCellID (leading underscore is
+//     not a legal cell id, so NewCellID would panic) and cannot be a CellID* var
+//     (A5 forbids non-NewCellID initialisers). It is therefore accepted directly via
+//     TypesInfo identity lock (metadataPkgPath + const name). Accepting it at all
+//     cell-id positions is harmless: "_framework" is not a legal cell id per
+//     MatchCellID, so inadvertent use at CellMeta.ID is caught by FMT-C1. Bare string literals at
+//
 // those positions are rejected.
 //
 // Scope: currently kernel/ only. Test fixtures in runtime/, cells/, cmd/,
@@ -86,6 +95,13 @@ const (
 	// (ARCHTEST-MODULE-PATH-FUNNEL-01).
 	metadataPkgPath     = PlatformFrameworkModulePath + "/kernel/metadata"
 	metadatatestPkgPath = PlatformFrameworkModulePath + "/kernel/metadata/metadatatest"
+
+	// frameworkOwnerSentinelName is the exact exported const name in
+	// kernel/metadata whose package-path is metadataPkgPath. Used by
+	// isSanctionedCellIDExpr to recognize FrameworkOwnerSentinel as a
+	// sanctioned cell-id source without relying on name-only matching
+	// (which would accept a homonymous const from another package).
+	frameworkOwnerSentinelName = "FrameworkOwnerSentinel"
 )
 
 // cellIDFieldPosition identifies a struct field (or slice-field element
@@ -144,7 +160,7 @@ var cellIDMapKeyValueStructs = map[string]struct{}{
 // (ARCHTEST-MODULE-PATH-FUNNEL-01 + codex #1708 F5). carvedOutFunctions strips
 // the platform prefix from each resolved package path before matching.
 var fixtureCellIDCarveOuts = map[string]struct{}{
-	"kernel/governance.TestValidator_FMTC1_CellIDPattern": {},
+	"framework/kernel/governance.TestValidator_FMTC1_CellIDPattern": {},
 }
 
 // CheckFixtureCellIDTypedBuilder enforces FIXTURE-CELLID-TYPED-BUILDER-01
@@ -443,11 +459,33 @@ func lookupCellIDFieldPosition(structName, fieldName string) (cellIDFieldPositio
 }
 
 // isSanctionedCellIDExpr reports whether expr is a sanctioned cell-id
-// source: a metadatatest.NewCellID(BasicLit) CallExpr or a SelectorExpr
-// resolving to a metadatatest package-level Var. Any other shape — bare
-// BasicLit, Ident→BasicLit chain, dynamic NewCellID arg, third-party
-// const ref — is rejected.
-func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var expr forms (selector/ident/call); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's sanctioned-form enumeration
+// source. Three forms are accepted:
+//
+//  1. metadatatest.NewCellID(BasicLit STRING) CallExpr — the primary typed-builder
+//     path; callee identity is locked via TypesInfo to metadatatestPkgPath.
+//
+//  2. SelectorExpr resolving to a metadatatest package-level Var whose name has
+//     the "CellID" prefix — the closed enumeration path (CellIDAccessCore, etc.).
+//     A5 guarantees that every such var was built via NewCellID(literal).
+//
+//  3. metadata.FrameworkOwnerSentinel const (#1939) — the reserved "_framework"
+//     sentinel is a first-class legal value at owner/provider cell-id positions.
+//     NewCellID("_framework") panics (leading underscore is not a legal cell id),
+//     and metadatatest cannot add a CellID* alias for it (A5 would reject the
+//     non-NewCellID initializer). The sentinel is therefore recognized directly via
+//     TypesInfo identity lock: package path == metadataPkgPath AND object kind ==
+//     *types.Const AND name == "FrameworkOwnerSentinel". This is precise — a
+//     homonymous const in another package resolves to a different package path and
+//     is rejected. Accepting sentinel at all cell-id positions (not just OwnerCell)
+//     is harmless: "_framework" is not a legal cell id per MatchCellID, so if it
+//     inadvertently appears at e.g. CellMeta.ID the existing FMT-C1 rule will
+//     catch it; A1's job is to reject bare string literals, not to enforce
+//     field-position semantics beyond what field-position enumeration already
+//     expresses. Cross-reference: ADR 202606130635-1939-adr-framework-owned-contract.md.
+//
+// Any other shape — bare BasicLit, Ident→BasicLit chain, dynamic NewCellID arg,
+// third-party const ref — is rejected.
+func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyclop,lll // archtest AST scanner: enumerates sanctioned NewCellID/typed-var/sentinel expr forms (selector/ident/call/const); complexity inherent to FIXTURE-CELLID-TYPED-BUILDER-01's sanctioned-form enumeration
 	switch e := expr.(type) {
 	case *ast.CallExpr:
 		sel, ok := e.Fun.(*ast.SelectorExpr)
@@ -484,10 +522,17 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyc
 		}
 		return true
 	case *ast.SelectorExpr:
-		// metadatatest.<CellIDVar> — the var name must have a "CellID" prefix so that
-		// future non-CellID vars added to the metadatatest package are not silently
-		// accepted as sanctioned cell-id sources.
 		obj := p.TypesInfo.Uses[e.Sel]
+		// Form 3: metadata.FrameworkOwnerSentinel const — identity-locked via
+		// TypesInfo to metadataPkgPath + exact name; package-path lock is Hard.
+		if c, isConst := obj.(*types.Const); isConst {
+			return c.Pkg() != nil &&
+				c.Pkg().Path() == metadataPkgPath &&
+				c.Name() == frameworkOwnerSentinelName
+		}
+		// Form 2: metadatatest.<CellIDVar> — the var name must have a "CellID"
+		// prefix so that future non-CellID vars added to the metadatatest package
+		// are not silently accepted as sanctioned cell-id sources.
 		v, ok := obj.(*types.Var)
 		if !ok || v.Pkg() == nil {
 			return false
@@ -496,6 +541,15 @@ func isSanctionedCellIDExpr(p *Pass, expr ast.Expr) bool { //nolint:gocognit,cyc
 			return false
 		}
 		return strings.HasPrefix(v.Name(), "CellID")
+	case *ast.Ident:
+		// Form 3 (in-package usage): bare FrameworkOwnerSentinel inside package
+		// metadata itself — same identity lock as the SelectorExpr branch.
+		obj := p.TypesInfo.Uses[e]
+		c, isConst := obj.(*types.Const)
+		if !isConst || c.Pkg() == nil {
+			return false
+		}
+		return c.Pkg().Path() == metadataPkgPath && c.Name() == frameworkOwnerSentinelName
 	}
 	return false
 }

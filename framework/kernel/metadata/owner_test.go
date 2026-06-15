@@ -44,7 +44,8 @@ func TestContractOwner_Resolution(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &ContractMeta{OwnerCell: tt.ownerCell}
+			c := &ContractMeta{}
+			c.OwnerCell = tt.ownerCell
 			owner := c.Owner()
 
 			if got := owner.IsFramework(); got != tt.wantIsFrwrk {
@@ -65,7 +66,8 @@ func TestContractOwner_Resolution(t *testing.T) {
 // framework owner has no code path that produces a cell id, so it can never be
 // indexed into project.Cells as if it were a cell.
 func TestContractOwner_FrameworkYieldsNoCell(t *testing.T) {
-	c := &ContractMeta{OwnerCell: FrameworkOwnerSentinel}
+	c := &ContractMeta{}
+	c.OwnerCell = FrameworkOwnerSentinel
 	if _, ok := c.Owner().Cell(); ok {
 		t.Fatal("framework owner must not yield a cell id (Cell() ok must be false)")
 	}

@@ -11,7 +11,9 @@ import (
 
 // slice builds a SliceMeta with the given cell + contractUsages for the collector tests.
 func projSlice(cellID, sliceID string, cus ...metadata.ContractUsage) *metadata.SliceMeta {
-	return &metadata.SliceMeta{ID: sliceID, BelongsToCell: cellID, ContractUsages: cus}
+	s := &metadata.SliceMeta{ID: sliceID, ContractUsages: cus}
+	s.BelongsToCell = cellID
+	return s
 }
 
 func subscribeCU(contract, projection, source string) metadata.ContractUsage {
@@ -28,7 +30,7 @@ func subscribeCU(contract, projection, source string) metadata.ContractUsage {
 // non-projection CUs, and out-of-assembly cells. An empty source on a projection CU
 // fails closed (it is a parser-invariant violation, never defaulted to outbox).
 func TestCollectOutboxProjectionTopics(t *testing.T) {
-	cellA, cellB, cellOut := "acell", "bcell", "outcell"
+	const cellA, cellB, cellOut = "acell", "bcell", "outcell"
 	tests := []struct {
 		name    string
 		slices  map[string]*metadata.SliceMeta
@@ -39,7 +41,7 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 		{
 			name:   "no projections yields empty set (corebundle today)",
 			slices: map[string]*metadata.SliceMeta{cellA + "/s": projSlice(cellA, "s", subscribeCU("event.x.v1", "", ""))},
-			cells:  []metadata.AssemblyCellRef{{ID: cellA}},
+			cells:  metadata.CellRefs(cellA),
 			want:   nil,
 		},
 		{
@@ -56,7 +58,7 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 					subscribeCU("event.gamma.v1", "p_gamma", "outbox"),
 				),
 			},
-			cells: []metadata.AssemblyCellRef{{ID: cellA}, {ID: cellB}},
+			cells: metadata.CellRefs(cellA, cellB),
 			want:  []string{"event.alpha.v1", "event.beta.v1", "event.gamma.v1"},
 		},
 		{
@@ -72,7 +74,7 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 					subscribeCU("event.future.v1", "p_future", "kinesis"),
 				),
 			},
-			cells: []metadata.AssemblyCellRef{{ID: cellA}},
+			cells: metadata.CellRefs(cellA),
 			want:  []string{"event.out.v1"},
 		},
 		{
@@ -81,7 +83,7 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 				cellA + "/s":   projSlice(cellA, "s", subscribeCU("event.in.v1", "p_in", "outbox")),
 				cellOut + "/s": projSlice(cellOut, "s", subscribeCU("event.skip.v1", "p_skip", "outbox")),
 			},
-			cells: []metadata.AssemblyCellRef{{ID: cellA}}, // cellOut not in assembly
+			cells: metadata.CellRefs(cellA), // cellOut not in assembly
 			want:  []string{"event.in.v1"},
 		},
 		{
@@ -97,7 +99,7 @@ func TestCollectOutboxProjectionTopics(t *testing.T) {
 					subscribeCU("event.alpha.v1", "p_alpha", ""), // projection set, source empty
 				),
 			},
-			cells:   []metadata.AssemblyCellRef{{ID: cellA}},
+			cells:   metadata.CellRefs(cellA),
 			wantErr: true,
 		},
 	}

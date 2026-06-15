@@ -15,8 +15,7 @@ import (
 
 // topoTestCell builds a minimal CellMeta with L1 consistency for topology tests.
 func topoTestCell(id string) *metadata.CellMeta {
-	return &metadata.CellMeta{
-		ID:               id,
+	c := &metadata.CellMeta{
 		Type:             "core",
 		ConsistencyLevel: "L1",
 		Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
@@ -25,6 +24,8 @@ func topoTestCell(id string) *metadata.CellMeta {
 		Dir:              id,
 		File:             "cells/" + id + "/cell.yaml",
 	}
+	c.ID = id
+	return c
 }
 
 // topoTestAssembly builds a minimal AssemblyMeta with id "testasm".
@@ -51,9 +52,9 @@ func topoTestContract(id, kind, ownerCell string) *metadata.ContractMeta {
 		Kind:             kind,
 		Lifecycle:        "active",
 		ConsistencyLevel: "L1",
-		OwnerCell:        ownerCell,
 		File:             "contracts/" + kind + "/" + id + "/contract.yaml",
 	}
+	c.OwnerCell = ownerCell
 	// Set the kind-appropriate provider endpoint so contractProvider(c) returns ownerCell.
 	switch kind {
 	case "http", "grpc", "saga":
@@ -72,9 +73,8 @@ func topoTestContract(id, kind, ownerCell string) *metadata.ContractMeta {
 
 // topoTestSlice builds a minimal SliceMeta for topology tests.
 func topoTestSlice(id, belongsToCell string, usages []metadata.ContractUsage) *metadata.SliceMeta {
-	return &metadata.SliceMeta{
+	s := &metadata.SliceMeta{
 		ID:             id,
-		BelongsToCell:  belongsToCell,
 		ContractUsages: usages,
 		Verify: metadata.SliceVerifyMeta{
 			Unit:     []string{"unit." + id + ".service"},
@@ -85,6 +85,8 @@ func topoTestSlice(id, belongsToCell string, usages []metadata.ContractUsage) *m
 		CellDir:      belongsToCell,
 		File:         "cells/" + belongsToCell + "/slices/" + id + "/slice.yaml",
 	}
+	s.BelongsToCell = belongsToCell
+	return s
 }
 
 // =============================================================================
@@ -93,9 +95,9 @@ func topoTestSlice(id, belongsToCell string, usages []metadata.ContractUsage) *m
 
 // TestTOPO10_EmptyTopology: empty topology is always valid → 0 findings.
 func TestTOPO10_EmptyTopology(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
+	cellA := metadatatest.CellIDCellA
 	pm := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -110,12 +112,12 @@ func TestTOPO10_EmptyTopology(t *testing.T) {
 
 // TestTOPO10_ValidExhaustiveTopology: valid exhaustive topology → 0 findings.
 func TestTOPO10_ValidExhaustiveTopology(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
-	cellB := metadatatest.NewCellID("cellb")
+	cellA := metadatatest.CellIDCellA
+	cellB := metadatatest.CellIDCellB
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -136,9 +138,9 @@ func TestTOPO10_ValidExhaustiveTopology(t *testing.T) {
 
 // TestTOPO10_MutualExclusionViolation: cell in both colocated and remote → TOPO-10 fires.
 func TestTOPO10_MutualExclusionViolation(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
+	cellA := metadatatest.CellIDCellA
 	pm := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -159,12 +161,12 @@ func TestTOPO10_MutualExclusionViolation(t *testing.T) {
 
 // TestTOPO10_NonExhaustiveTopology: topology that doesn't cover all cells → TOPO-10 fires.
 func TestTOPO10_NonExhaustiveTopology(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
-	cellB := metadatatest.NewCellID("cellb")
+	cellA := metadatatest.CellIDCellA
+	cellB := metadatatest.CellIDCellB
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -186,12 +188,12 @@ func TestTOPO10_NonExhaustiveTopology(t *testing.T) {
 
 // TestTOPO10_MalformedEndpoint: remote entry with invalid endpoint → TOPO-10 fires.
 func TestTOPO10_MalformedEndpoint(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
-	cellB := metadatatest.NewCellID("cellb")
+	cellA := metadatatest.CellIDCellA
+	cellB := metadatatest.CellIDCellB
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -226,9 +228,8 @@ func buildTOPO11Project(
 	asmCellIDs []string,
 	topo metadata.TopologyMeta,
 ) *metadata.ProjectMeta {
-	cells := map[string]*metadata.CellMeta{
-		consumerCellID: topoTestCell(consumerCellID),
-	}
+	cells := map[string]*metadata.CellMeta{}
+	cells[consumerCellID] = topoTestCell(consumerCellID)
 	if providerCellID != "" && providerCellID != consumerCellID {
 		cells[providerCellID] = topoTestCell(providerCellID)
 	}
@@ -260,8 +261,8 @@ func buildTOPO11Project(
 // contract whose provider cell is NOT in the assembly (empty topology → Missing)
 // → TOPO-11 fires.
 func TestTOPO11_ProviderMissing_EmptyTopology(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 
 	// assembly only has consumer; provider is NOT in assembly
 	pm := buildTOPO11Project(consumer, provider, []string{consumer}, metadata.TopologyMeta{})
@@ -277,14 +278,14 @@ func TestTOPO11_ProviderMissing_EmptyTopology(t *testing.T) {
 // colocated and a bystander in remote, but provider is not in the assembly →
 // ClassifyCell returns Missing → TOPO-11 fires.
 func TestTOPO11_ProviderMissing_SplitTopology(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 	bystander := metadatatest.NewCellID("bystandercell")
 
 	cells := map[string]*metadata.CellMeta{
-		consumer:  topoTestCell(consumer),
-		provider:  topoTestCell(provider),
-		bystander: topoTestCell(bystander),
+		metadatatest.CellIDConsumerCell:         topoTestCell(consumer),
+		metadatatest.CellIDProviderCell:         topoTestCell(provider),
+		metadatatest.NewCellID("bystandercell"): topoTestCell(bystander),
 	}
 	sliceKey := consumer + "/consumeslice"
 	slices := map[string]*metadata.SliceMeta{
@@ -322,8 +323,8 @@ func TestTOPO11_ProviderMissing_SplitTopology(t *testing.T) {
 // TestTOPO11_ProviderColocated: provider cell is in the assembly (empty topology
 // → Local) → no TOPO-11 error.
 func TestTOPO11_ProviderColocated(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 
 	// both in assembly, empty topology → both are Local
 	pm := buildTOPO11Project(consumer, provider, []string{consumer, provider}, metadata.TopologyMeta{})
@@ -334,8 +335,8 @@ func TestTOPO11_ProviderColocated(t *testing.T) {
 
 // TestTOPO11_ProviderRemote: provider cell is declared in remote topology → no TOPO-11 error.
 func TestTOPO11_ProviderRemote(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 
 	pm := buildTOPO11Project(consumer, provider, []string{consumer, provider},
 		metadata.TopologyMeta{
@@ -350,10 +351,10 @@ func TestTOPO11_ProviderRemote(t *testing.T) {
 // TestTOPO11_FrameworkOwnedProvider: framework-owned contract (ownerCell == _framework)
 // → skipped (c.Owner().Cell() returns ok=false).
 func TestTOPO11_FrameworkOwnedProvider(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
+	consumer := metadatatest.CellIDConsumerCell
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			consumer: topoTestCell(consumer),
+			metadatatest.CellIDConsumerCell: topoTestCell(consumer),
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			consumer + "/consumeslice": topoTestSlice("consumeslice", consumer,
@@ -381,24 +382,27 @@ func TestTOPO11_FrameworkOwnedProvider(t *testing.T) {
 
 // TestTOPO11_ExternalActorProvider: provider is an external actor (not a cell) → skipped.
 func TestTOPO11_ExternalActorProvider(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
+	consumer := metadatatest.CellIDConsumerCell
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			consumer: topoTestCell(consumer),
+			metadatatest.CellIDConsumerCell: topoTestCell(consumer),
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			consumer + "/consumeslice": topoTestSlice("consumeslice", consumer,
 				[]metadata.ContractUsage{{Contract: "event.external.v1", Role: "subscribe"}}),
 		},
 		Contracts: map[string]*metadata.ContractMeta{
-			"event.external.v1": {
-				ID:               "event.external.v1",
-				Kind:             "event",
-				Lifecycle:        "active",
-				ConsistencyLevel: "L1",
-				OwnerCell:        "externalactor", // actor ID, not a cell
-				File:             "contracts/event/external/v1/contract.yaml",
-			},
+			"event.external.v1": func() *metadata.ContractMeta {
+				c := &metadata.ContractMeta{
+					ID:               "event.external.v1",
+					Kind:             "event",
+					Lifecycle:        "active",
+					ConsistencyLevel: "L1",
+					File:             "contracts/event/external/v1/contract.yaml",
+				}
+				c.OwnerCell = metadatatest.NewCellID("externalactor") // actor ID, not a cell
+				return c
+			}(),
 		},
 		Journeys: map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
@@ -416,10 +420,10 @@ func TestTOPO11_ExternalActorProvider(t *testing.T) {
 // TestTOPO11_MissingContract: contractUsage references a non-existent contract
 // → skipped (REF-02 owns it).
 func TestTOPO11_MissingContract(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
+	consumer := metadatatest.CellIDConsumerCell
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			consumer: topoTestCell(consumer),
+			metadatatest.CellIDConsumerCell: topoTestCell(consumer),
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			consumer + "/consumeslice": topoTestSlice("consumeslice", consumer,
@@ -439,10 +443,10 @@ func TestTOPO11_MissingContract(t *testing.T) {
 // TestTOPO11_ProviderRole_NotConsumer: slice with provider role is skipped
 // (only consumer roles trigger TOPO-11).
 func TestTOPO11_ProviderRole_NotConsumer(t *testing.T) {
-	providerCell := metadatatest.NewCellID("providercell")
+	providerCell := metadatatest.CellIDProviderCell
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			providerCell: topoTestCell(providerCell),
+			metadatatest.CellIDProviderCell: topoTestCell(providerCell),
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			providerCell + "/provideslice": topoTestSlice("provideslice", providerCell,
@@ -466,11 +470,11 @@ func TestTOPO11_ProviderRole_NotConsumer(t *testing.T) {
 // findings; the same project with the violation removed (valid exhaustive)
 // must produce 0 TOPO-10 findings.
 func TestTOPO10_AntiVacuity(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
+	cellA := metadatatest.CellIDCellA
 
 	// Red: mutual-exclusion violation → TOPO-10 must fire.
 	pmRed := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -487,7 +491,7 @@ func TestTOPO10_AntiVacuity(t *testing.T) {
 
 	// Green: valid exhaustive topology → TOPO-10 must NOT fire.
 	pmGreen := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -506,13 +510,13 @@ func TestTOPO10_AntiVacuity(t *testing.T) {
 // contracts consumed via role "call" (not just event/subscribe), verifying
 // consumer-role detection is not event-only (F11).
 func TestTOPO11_HTTPKindCallConsumer(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			consumer: topoTestCell(consumer),
-			provider: topoTestCell(provider),
+			metadatatest.CellIDConsumerCell: topoTestCell(consumer),
+			metadatatest.CellIDProviderCell: topoTestCell(provider),
 		},
 		Slices: map[string]*metadata.SliceMeta{
 			consumer + "/callslice": topoTestSlice("callslice", consumer, []metadata.ContractUsage{
@@ -543,12 +547,12 @@ func TestTOPO11_HTTPKindCallConsumer(t *testing.T) {
 // TestTOPO12_RemotePresent_Fires: assembly with non-empty topology.remote →
 // TOPO-12 must fire (fail-closed until US4 #1963).
 func TestTOPO12_RemotePresent_Fires(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
-	cellB := metadatatest.NewCellID("cellb")
+	cellA := metadatatest.CellIDCellA
+	cellB := metadatatest.CellIDCellB
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -573,9 +577,9 @@ func TestTOPO12_RemotePresent_Fires(t *testing.T) {
 
 // TestTOPO12_ColocatedOnly_NoFire: colocated-only topology → TOPO-12 must NOT fire.
 func TestTOPO12_ColocatedOnly_NoFire(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
+	cellA := metadatatest.CellIDCellA
 	pm := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -592,9 +596,9 @@ func TestTOPO12_ColocatedOnly_NoFire(t *testing.T) {
 
 // TestTOPO12_EmptyTopology_NoFire: empty topology → TOPO-12 must NOT fire.
 func TestTOPO12_EmptyTopology_NoFire(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
+	cellA := metadatatest.CellIDCellA
 	pm := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{cellA: topoTestCell(cellA)},
+		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
@@ -610,14 +614,14 @@ func TestTOPO12_EmptyTopology_NoFire(t *testing.T) {
 // TestTOPO12_AntiVacuity: the same assembly WITH remote → TOPO-12 fires;
 // WITHOUT remote → does not. Confirms the rule is not vacuously passing.
 func TestTOPO12_AntiVacuity(t *testing.T) {
-	cellA := metadatatest.NewCellID("cella")
-	cellB := metadatatest.NewCellID("cellb")
+	cellA := metadatatest.CellIDCellA
+	cellB := metadatatest.CellIDCellB
 
 	// Red: has topology.remote → must fire.
 	pmRed := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -636,8 +640,8 @@ func TestTOPO12_AntiVacuity(t *testing.T) {
 	// Green: colocated-only → must NOT fire.
 	pmGreen := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			cellA: topoTestCell(cellA),
-			cellB: topoTestCell(cellB),
+			metadatatest.CellIDCellA: topoTestCell(cellA),
+			metadatatest.CellIDCellB: topoTestCell(cellB),
 		},
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
@@ -663,15 +667,15 @@ func TestTOPO12_AntiVacuity(t *testing.T) {
 // is NOT in the assembly (→ Missing); the owner cell IS in the assembly (→ Local).
 // If TOPO-11 used owner, it would skip this — only checking provider catches it.
 func TestTOPO11_OwnerDiffersFromProvider(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
+	consumer := metadatatest.CellIDConsumerCell
 	owner := metadatatest.NewCellID("ownercell")      // contract's ownerCell — in assembly
 	provider := metadatatest.NewCellID("svcprovider") // contract's endpoints.server — NOT in assembly
 
-	cells := map[string]*metadata.CellMeta{
-		consumer: topoTestCell(consumer),
-		owner:    topoTestCell(owner),
-		provider: topoTestCell(provider),
-	}
+	cells := map[string]*metadata.CellMeta{}
+	cells[metadatatest.CellIDConsumerCell] = topoTestCell(consumer)
+	cells[metadatatest.NewCellID("ownercell")] = topoTestCell(owner)
+	cells[metadatatest.NewCellID("svcprovider")] = topoTestCell(provider)
+
 	slices := map[string]*metadata.SliceMeta{
 		consumer + "/consumeslice": topoTestSlice("consumeslice", consumer, []metadata.ContractUsage{
 			{Contract: "http.svc.v1", Role: "call"},
@@ -682,17 +686,19 @@ func TestTOPO11_OwnerDiffersFromProvider(t *testing.T) {
 	// it finds "provider" which is NOT in the assembly → Missing → error.
 	// If it used c.Owner().Cell(), it would find "owner" which IS in the assembly
 	// → Local → no error (the bug F3 fixes).
+	svcContract := &metadata.ContractMeta{
+		ID:               "http.svc.v1",
+		Kind:             "http",
+		Lifecycle:        "active",
+		ConsistencyLevel: "L1",
+		// endpoints.server is the provider endpoint — distinct from ownerCell.
+		Endpoints: metadata.EndpointsMeta{},
+		File:      "contracts/http/svc/v1/contract.yaml",
+	}
+	svcContract.OwnerCell = owner
+	svcContract.Endpoints.Server = provider
 	contracts := map[string]*metadata.ContractMeta{
-		"http.svc.v1": {
-			ID:               "http.svc.v1",
-			Kind:             "http",
-			Lifecycle:        "active",
-			ConsistencyLevel: "L1",
-			OwnerCell:        owner,
-			// endpoints.server is the provider endpoint — distinct from ownerCell.
-			Endpoints: metadata.EndpointsMeta{Server: provider},
-			File:      "contracts/http/svc/v1/contract.yaml",
-		},
+		"http.svc.v1": svcContract,
 	}
 	// Assembly contains consumer and owner, but NOT provider.
 	pm := &metadata.ProjectMeta{
@@ -721,8 +727,8 @@ func TestTOPO11_OwnerDiffersFromProvider(t *testing.T) {
 // WITHOUT it produces ≥ 1. This fixture confirms the happy path is
 // structurally distinguishable from the red path.
 func TestTOPO11_AntiVacuity(t *testing.T) {
-	consumer := metadatatest.NewCellID("consumercell")
-	provider := metadatatest.NewCellID("providercell")
+	consumer := metadatatest.CellIDConsumerCell
+	provider := metadatatest.CellIDProviderCell
 
 	// Red: provider not in assembly → must fire.
 	pmRed := buildTOPO11Project(
