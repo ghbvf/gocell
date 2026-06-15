@@ -22,6 +22,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -34,6 +35,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 10s
 
   rabbitmq:
     image: rabbitmq:3-alpine
@@ -53,6 +55,7 @@ services:
       interval: 3s
       timeout: 5s
       retries: 40
+      start_period: 15s
 
   migrate:
     build:

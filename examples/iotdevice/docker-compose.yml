@@ -14,6 +14,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
   # MQTT broker for the optional MQTT publish channel (GOCELL_IOTDEVICE_MQTT_BROKERS).
   # Reuses the image's built-in /mosquitto-no-auth.conf (listener 1883 + allow_anonymous true)
@@ -30,6 +31,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:
