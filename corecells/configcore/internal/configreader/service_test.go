@@ -193,9 +193,12 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "sort scope mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	// Reason must still surface in internal Error() string.
+	assert.Contains(t, ecErr.Error(), "sort scope mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 func TestService_List_ContextMismatch(t *testing.T) {
@@ -214,9 +217,12 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	// Reason must still surface in internal Error() string.
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 func TestService_List_LastPage(t *testing.T) {

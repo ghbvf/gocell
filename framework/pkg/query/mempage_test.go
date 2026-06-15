@@ -78,7 +78,9 @@ func cmpFloat(a, b float64) int {
 }
 
 // requireCursorInvalidMsg asserts the error is a standardized cursor error
-// with unified message and the expected reason in details.
+// with the stable client-facing message and the expected reason text on the
+// internal surface. Regression guard for #1103: reason must NOT appear in
+// the public wire Details (FindAttr searches only e.Details, public surface).
 func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
 	t.Helper()
 	var ecErr *errcode.Error
@@ -86,11 +88,14 @@ func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	assert.Equal(t, query.TestCursorInvalidMsg, ecErr.Message,
 		"client-facing message must be stable across all cursor errors")
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	s, ok := reasonAttr.Value().(string)
-	require.True(t, ok, "reason must be a string value")
-	assert.Equal(t, wantReason, s)
+
+	// Regression guard (#1103): reason must NOT be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+
+	// Reason must still surface in internal Error() string.
+	assert.Contains(t, ecErr.Error(), wantReason,
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 // --- Sort tests ---

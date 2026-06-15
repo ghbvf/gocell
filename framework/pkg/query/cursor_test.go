@@ -262,19 +262,26 @@ func TestSortScope_DifferentColumnsProduceDifferentScope(t *testing.T) {
 // --- ValidateCursorScope tests ---
 
 // requireCursorInvalid asserts err is *errcode.Error with ErrCursorInvalid code
-// and the expected reason in Details. This catches regressions where the error
-// type or code drifts while the message text still matches.
+// and the stable client-facing message. It also acts as a regression guard for
+// #1103: reason must NOT appear in the public/wire Details surface.
+//
+// FindAttr searches only e.Details (public), so ok==false proves reason is not
+// leaking via the 4xx wire response. The reason text is still expected on the
+// internal surface (Error() surfaces InternalDetails under the "_" sentinel).
 func requireCursorInvalid(t *testing.T, err error, wantReason string) {
 	t.Helper()
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	assert.Equal(t, cursorInvalidMsg, ecErr.Message)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	s, ok := reasonAttr.Value().(string)
-	require.True(t, ok, "reason must be a string value")
-	assert.Equal(t, wantReason, s)
+
+	// Regression guard (#1103): reason must NOT be on public wire surface.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+
+	// Reason must still be on the internal surface (server-log only).
+	assert.Contains(t, ecErr.Error(), wantReason,
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 func TestValidateCursorScope_Mismatch(t *testing.T) {
@@ -285,19 +292,17 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 	err := ValidateCursorScope(cur, sortB, qctx)
 	requireCursorInvalid(t, err, "sort scope mismatch")
 
-	// Assert got/want diagnostics from cursorInvalidExtra.
+	// Regression guard (#1103): got/want must NOT be in public Details either.
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
-	gotAttr, ok := ecErr.FindAttr("got")
-	require.True(t, ok)
-	gotStr, ok := gotAttr.Value().(string)
-	require.True(t, ok, "got must be a string value")
-	assert.Equal(t, SortScope(sortA), gotStr)
-	wantAttr, ok := ecErr.FindAttr("want")
-	require.True(t, ok)
-	wantStr, ok := wantAttr.Value().(string)
-	require.True(t, ok, "want must be a string value")
-	assert.Equal(t, SortScope(sortB), wantStr)
+	_, gotOK := ecErr.FindAttr("got")
+	assert.False(t, gotOK, "got must not appear in public Details (wire-leaking regression #1103)")
+	_, wantOK := ecErr.FindAttr("want")
+	assert.False(t, wantOK, "want must not appear in public Details (wire-leaking regression #1103)")
+
+	// got/want values must appear in internal Error() string (folded into reason).
+	assert.Contains(t, ecErr.Error(), SortScope(sortA), "got value must be in Error() for diagnostics")
+	assert.Contains(t, ecErr.Error(), SortScope(sortB), "want value must be in Error() for diagnostics")
 }
 
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
@@ -347,19 +352,17 @@ func TestValidateCursorScope_ContextMismatch(t *testing.T) {
 	err := ValidateCursorScope(cur, sort, ctxB)
 	requireCursorInvalid(t, err, "query context mismatch")
 
-	// Assert got/want diagnostics from cursorInvalidExtra.
+	// Regression guard (#1103): got/want must NOT be in public Details either.
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
-	gotAttr, ok := ecErr.FindAttr("got")
-	require.True(t, ok)
-	gotStr, ok := gotAttr.Value().(string)
-	require.True(t, ok, "got must be a string value")
-	assert.Equal(t, ctxA, gotStr)
-	wantAttr, ok := ecErr.FindAttr("want")
-	require.True(t, ok)
-	wantStr, ok := wantAttr.Value().(string)
-	require.True(t, ok, "want must be a string value")
-	assert.Equal(t, ctxB, wantStr)
+	_, gotOK := ecErr.FindAttr("got")
+	assert.False(t, gotOK, "got must not appear in public Details (wire-leaking regression #1103)")
+	_, wantOK := ecErr.FindAttr("want")
+	assert.False(t, wantOK, "want must not appear in public Details (wire-leaking regression #1103)")
+
+	// got/want values must appear in internal Error() string (folded into reason).
+	assert.Contains(t, ecErr.Error(), ctxA, "got value must be in Error() for diagnostics")
+	assert.Contains(t, ecErr.Error(), ctxB, "want value must be in Error() for diagnostics")
 }
 
 func TestValidateCursorScope_ContextMatch(t *testing.T) {
@@ -563,11 +566,12 @@ func TestCursorCodec_Decode_TooLong(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	s, ok := reasonAttr.Value().(string)
-	require.True(t, ok, "reason must be a string value")
-	assert.Equal(t, "cursor token exceeds maximum length", s)
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	// Reason must still surface in internal Error() string.
+	assert.Contains(t, ecErr.Error(), "cursor token exceeds maximum length",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 // TestCursorCodec_Decode_MaxLengthBoundary confirms the exact-limit cursor
