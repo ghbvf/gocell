@@ -364,13 +364,17 @@ mirrors HTTP `RequirePermission` forwarding `r.URL.Path`).
   `RequirePermissionForResource`): not feasible generically in an interceptor (`req`
   is `any`; a stream has no message at open). `device:command` is a coarse role-based
   baseline that ignores `resource`, so the coarse gate is correct for the current
-  consumer; per-message resource extraction is a documented boundary.
+  consumer; per-message resource extraction is a documented boundary (related to #2207).
 - **gRPC PDP-decision metrics parity** (HTTP wraps `NewObservableAuthorizer`):
-  framework-level gRPC wiring needs a collector/clock in the chain — separate scope,
-  follow-up issue.
+  framework-level gRPC wiring needs a collector/clock in the chain — **#2206**.
 - **transport-neutral `authz.MethodPolicyResolver`** (the issue's "重构"): would
   require migrating HTTP's per-route hand-written gates to contract-derived metadata —
-  out of scope, follow-up issue.
+  **#2205**.
+- **gRPC `WatchCommands` device:consume** (allow device-self to watch own queue;
+  the gRPC analog of the HTTP dequeue `device:consume` ownership gate) — **#2207**.
+- **gRPC startup fail-fast for a nil Authorizer with permission-gated methods**
+  (HTTP has `ResolveAuthorizer` at router build; gRPC fail-closes at request time
+  instead) — a tracked DX parity follow-up.
 - **`internalOnly`**: PR-11 internal cell-to-cell gRPC boundary.
 
 ### 威胁矩阵 re-eval (#2008)
