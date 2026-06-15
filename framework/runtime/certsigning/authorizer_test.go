@@ -9,6 +9,10 @@ import (
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
 
+// testGrantTTL is a site-specific granted max TTL. Per TEST-TIME-LITERAL-01, a
+// time.Duration expression containing a literal must be a package-level const.
+const testGrantTTL = 2 * time.Hour
+
 func TestNewEnrollmentClaim(t *testing.T) {
 	t.Parallel()
 	scope := mustScope(t)
@@ -55,11 +59,11 @@ func TestSignConstraintsFailClosed(t *testing.T) {
 	t.Run("granted constraints", func(t *testing.T) {
 		t.Parallel()
 		sans, _ := cs.NewSubjectAltNames([]string{"device-1.example"}, nil, nil)
-		c, err := cs.NewSignConstraints(2*time.Hour, sans)
+		c, err := cs.NewSignConstraints(testGrantTTL, sans)
 		if err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
-		if !c.Granted() || c.MaxTTL() != 2*time.Hour {
+		if !c.Granted() || c.MaxTTL() != testGrantTTL {
 			t.Error("granted constraints accessors mismatch")
 		}
 		if c.AllowedSANs().IsEmpty() {
