@@ -2429,6 +2429,12 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 // TestOmitEmptyCheck pins the type-dispatch logic of omitEmptyCheck, which is
 // the funcMap function that generates the zero-value guard in the ToMap method.
 // The receiver variable is always "i", matching the template.
+//
+// The bool branch is a defensive fallback: optional bools in EmitToMap DTOs
+// are always *bool (the builder converts them in collectDTOs), so "bool" is
+// not reachable from the production builder pipeline. The test still exercises
+// the branch directly so a future change to the plain-bool path produces a
+// compilable expression (not `i.X != nil` which would be a type error on bool).
 func TestOmitEmptyCheck(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -2439,10 +2445,16 @@ func TestOmitEmptyCheck(t *testing.T) {
 		{"string", "string", `i.X != ""`},
 		{"int64", "int64", `i.X != 0`},
 		{"float64", "float64", `i.X != 0`},
+		// bool: plain bool omitempty → `if i.X {` equivalent; false is omitted.
+		// In practice optional bools are *bool, but the branch must be compilable.
+		{"bool", "bool", `i.X`},
 		{"slice of string", "[]string", `len(i.X) > 0`},
 		{"slice of pointer", "[]*ResponseItem", `len(i.X) > 0`},
 		{"pointer to struct", "*ResponseMeta", `i.X != nil`},
 		{"any", "any", `i.X != nil`},
+		// []T and *T coverage for other numeric-like types via default branch.
+		{"pointer to bool", "*bool", `i.X != nil`},
+		{"any interface", "interface{}", `i.X != nil`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

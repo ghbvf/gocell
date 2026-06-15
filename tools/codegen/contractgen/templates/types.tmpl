@@ -88,11 +88,13 @@ const (
 // DTO's field set. Optional fields (omitempty) are only included when non-zero,
 // matching the struct json.Marshal serialization path.
 func (i {{.Name}}) ToMap() map[string]any {
+	{{- /* required fields: always present in the initial map literal, matching json.Marshal required-field behaviour */}}
 	m := map[string]any{
 {{- range .Fields}}{{if not .OmitEmpty}}
 		"{{.BareJSONTag}}": i.{{.Name}},
 {{- end}}{{end}}
 	}
+	{{- /* optional fields: conditionally added to mirror json.Marshal omitempty */}}
 {{- range .Fields}}{{if .OmitEmpty}}
 	if {{omitEmptyCheck .}} {
 		m["{{.BareJSONTag}}"] = i.{{.Name}}

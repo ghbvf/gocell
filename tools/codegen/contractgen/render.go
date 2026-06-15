@@ -160,19 +160,27 @@ func needsGuardedMinLengthCheck(p *int) bool {
 // Type dispatch follows json encoding/omitempty semantics:
 //   - string             → i.FieldName != ""
 //   - int64 / float64   → i.FieldName != 0
+//   - bool               → i.FieldName (truthy, mirrors json omitempty: false is omitted)
 //   - []T (slice)        → len(i.FieldName) > 0
 //   - *T (pointer)       → i.FieldName != nil
 //   - any               → i.FieldName != nil
 //
 // Note: optional bool fields in generated DTOs are always *bool (the builder
 // converts them in collectDTOs), so the plain "bool" case does not arise for
-// OmitEmpty fields; pointer dispatch covers it.
+// OmitEmpty fields in practice; pointer dispatch covers it. The bool branch
+// is present as a defensive fallback only.
 func omitEmptyCheck(f DTOField) string {
 	switch {
 	case f.GoType == "string":
 		return `i.` + f.Name + ` != ""`
 	case f.GoType == "int64" || f.GoType == "float64":
 		return `i.` + f.Name + ` != 0`
+	case f.GoType == "bool":
+		// plain bool omitempty: false is omitted, true is included.
+		// In EmitToMap DTOs, optional bools are always *bool (builder converts
+		// them in collectDTOs), so this branch is not reachable in production
+		// generated code; it exists as a defensive fallback.
+		return `i.` + f.Name
 	case strings.HasPrefix(f.GoType, "[]"):
 		return `len(i.` + f.Name + `) > 0`
 	default:

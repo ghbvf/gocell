@@ -25,8 +25,10 @@ type Response struct {
 
 // ResponseData is a generated DTO for contract http.sample.responseprojection.v1.
 type ResponseData struct {
-	ID    string `json:"id"`
-	Label string `json:"label,omitempty"`
+	ID    string   `json:"id"`
+	Label string   `json:"label,omitempty"`
+	Score int64    `json:"score,omitempty"`
+	Tags  []string `json:"tags,omitempty"`
 }
 
 // ToMap projects ResponseData into the column map the masking funnel
@@ -44,6 +46,12 @@ func (i ResponseData) ToMap() map[string]any {
 	}
 	if i.Label != "" {
 		m["label"] = i.Label
+	}
+	if i.Score != 0 {
+		m["score"] = i.Score
+	}
+	if len(i.Tags) > 0 {
+		m["tags"] = i.Tags
 	}
 	return m
 }
