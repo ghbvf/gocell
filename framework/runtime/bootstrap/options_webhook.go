@@ -83,3 +83,30 @@ func WithWebhookSSRFPolicy(policy *kwh.SafePolicy) Option {
 		b.webhookSSRFPolicy = policy
 	}
 }
+
+// WithWebhookCircuitBreaker overrides the per-endpoint circuit-breaker
+// thresholds applied to every outbound webhook dispatcher in this deployment.
+// All three fields (TripThreshold, OpenTimeout, HalfOpenProbes) must be in
+// range; invalid settings are rejected at phase6 [drainWebhookDispatchers]
+// via [kwh.CircuitBreakerSettings.Validate], which causes bootstrap to fail
+// fast at startup before any delivery is attempted.
+//
+// Omitting this option uses the defaults that match the original hardcoded
+// values (TripThreshold=5, OpenTimeout=60s, HalfOpenProbes=1).
+//
+// There is intentionally no Enabled/Disabled variant: disabling the circuit
+// breaker is not a supported configuration (no-disable invariant).
+//
+// Design note — fail-fast timing: validation happens at phase6
+// (drainWebhookDispatchers) rather than at option-apply time, consistent with
+// the cumulative-builder convention used by other webhook options in this file.
+// A deployment with zero dispatchers needs no circuit-breaker settings; the
+// dependency only becomes mandatory when a cell has actually declared a
+// dispatcher — exactly when phase6 can see both the snapshot and the wired
+// options.
+func WithWebhookCircuitBreaker(settings kwh.CircuitBreakerSettings) Option {
+	return func(b *Bootstrap) {
+		b.webhookCBSettings = settings
+		b.webhookCBSettingsSet = true
+	}
+}

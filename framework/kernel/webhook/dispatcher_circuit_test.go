@@ -21,6 +21,10 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
+// defaultCB is a test-local shorthand for the default circuit breaker settings,
+// replacing the former package-level const references deleted in #2106.
+var defaultCB = DefaultCircuitBreakerSettings()
+
 // tenantEntry builds an outbox entry whose principal carries tenantID, so the
 // dispatcher's circuit key includes the tenant dimension.
 func tenantEntry(t *testing.T, tenantID string, payload []byte) outbox.Entry {
@@ -43,7 +47,7 @@ func TestDispatcher_Handle_CircuitPerTenantIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trip tenant A's breaker for the shared URL.
-	for range circuitTripThreshold + 1 {
+	for range defaultCB.TripThreshold + 1 {
 		d.Handle(context.Background(), tenantEntry(t, "tenanta", []byte(`{}`)))
 	}
 	requireCircuitOpen(t, d.Handle(context.Background(), tenantEntry(t, "tenanta", []byte(`{}`))))
@@ -112,8 +116,8 @@ func TestDispatcher_Handle_CircuitOpensAndFastFails(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trip: every 5xx counts as an endpoint-health failure. After
-	// circuitTripThreshold+1 consecutive failures the breaker opens.
-	tripCount := circuitTripThreshold + 1
+	// TripThreshold+1 consecutive failures the breaker opens.
+	tripCount := defaultCB.TripThreshold + 1
 	deliverN(t, d, tripCount)
 	require.Equal(t, tripCount, int(hits.Load()), "all trip deliveries reach the endpoint while closed")
 
@@ -152,13 +156,13 @@ func TestDispatcher_Handle_CircuitHalfOpenRecoversOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trip the circuit.
-	deliverN(t, d, circuitTripThreshold+1)
+	deliverN(t, d, defaultCB.TripThreshold+1)
 	requireCircuitOpen(t, d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`))))
 	hitsAfterTrip := hits.Load()
 
 	// Endpoint recovers; advance past the open timeout → half-open probe admitted.
 	status.Store(http.StatusOK)
-	fc.Advance(circuitOpenTimeout + time.Second)
+	fc.Advance(defaultCB.OpenTimeout + time.Second)
 
 	probe := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 	assert.Equal(t, outbox.DispositionAck, probe.Disposition, "successful half-open probe acks")
@@ -180,11 +184,11 @@ func TestDispatcher_Handle_CircuitHalfOpenReopensOnFailure(t *testing.T) {
 		NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
 	require.NoError(t, err)
 
-	deliverN(t, d, circuitTripThreshold+1)
+	deliverN(t, d, defaultCB.TripThreshold+1)
 	requireCircuitOpen(t, d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`))))
 
 	// Advance to half-open; probe still fails (server stays 5xx) → reopen.
-	fc.Advance(circuitOpenTimeout + time.Second)
+	fc.Advance(defaultCB.OpenTimeout + time.Second)
 	probe := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 	assert.Equal(t, outbox.DispositionRequeue, probe.Disposition, "failed probe still Requeues the delivery")
 	hitsAfterProbe := hits.Load()
@@ -258,7 +262,7 @@ func TestDispatcher_Handle_CircuitPerEndpointIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trip endpoint A.
-	for range circuitTripThreshold + 1 {
+	for range defaultCB.TripThreshold + 1 {
 		d.Handle(context.Background(), newTestEntry(t, []byte("a")))
 	}
 	requireCircuitOpen(t, d.Handle(context.Background(), newTestEntry(t, []byte("a"))))
@@ -280,9 +284,8 @@ func TestDispatcher_Handle_Circuit429Trips(t *testing.T) {
 		dispatchTestSigner(t), NewSafePolicy(WithAllowLoopback()), staticSelector(srv.URL))
 	require.NoError(t, err)
 
-	// Trip: 429 counts as an endpoint-health failure. Use a named const rather
-	// than deliverN to avoid an unparam lint hit on deliverN's n parameter.
-	const tripCount = circuitTripThreshold + 1
+	// Trip: 429 counts as an endpoint-health failure.
+	tripCount := defaultCB.TripThreshold + 1
 	for range tripCount {
 		d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 	}
@@ -300,7 +303,7 @@ func TestDispatcher_Handle_Circuit429Trips(t *testing.T) {
 // breaker construction never fails on an empty Name. allowed=true and the done
 // callback does not panic.
 func TestCircuitGate_EmptyKeyStillBreaks(t *testing.T) {
-	g := newCircuitGate(clockmock.New(time.Unix(0, 0)))
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), DefaultCircuitBreakerSettings())
 	allow, done := g.Allow(newCircuitEndpointKey("", ""))
 	assert.True(t, allow, "fresh breaker starts closed (allow=true)")
 	require.NotNil(t, done, "a working breaker returns a non-nil done callback")
@@ -344,7 +347,7 @@ func TestDispatcher_Handle_CircuitTransportFaultTrips(t *testing.T) {
 	require.NoError(t, err)
 
 	// Each delivery fails with a transport fault (connection refused) → Requeue.
-	tripCount := circuitTripThreshold + 1
+	tripCount := defaultCB.TripThreshold + 1
 	for range tripCount {
 		res := d.Handle(context.Background(), newTestEntry(t, []byte(`{"k":"v"}`)))
 		assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
@@ -360,7 +363,7 @@ func TestDispatcher_Handle_CircuitTransportFaultTrips(t *testing.T) {
 // bounded (DoS guard) — registering far more than the cap never grows the map
 // past circuitGateMaxEndpoints.
 func TestCircuitGate_BoundedEviction(t *testing.T) {
-	g := newCircuitGate(clockmock.New(time.Unix(0, 0)))
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), DefaultCircuitBreakerSettings())
 	for i := range circuitGateMaxEndpoints + 100 {
 		allow, done := g.Allow(newCircuitEndpointKey("", fmt.Sprintf("http://e%d.example.test/", i)))
 		require.True(t, allow, "fresh endpoint breaker starts closed")

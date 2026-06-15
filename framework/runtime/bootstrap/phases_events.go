@@ -185,7 +185,19 @@ func (b *Bootstrap) drainWebhookDispatchers(s *phaseState, evtRouter *eventroute
 	if err != nil {
 		return err
 	}
-	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy, rec)
+	cbSettings := b.webhookCBSettings
+	if !b.webhookCBSettingsSet {
+		cbSettings = kwh.DefaultCircuitBreakerSettings()
+	}
+	if err := cbSettings.Validate(); err != nil {
+		return fmt.Errorf("bootstrap: webhook circuit breaker settings invalid: %w", err)
+	}
+	slog.Info("bootstrap: webhook circuit breaker settings",
+		slog.Int("trip_threshold", cbSettings.TripThreshold),
+		slog.Duration("open_timeout", cbSettings.OpenTimeout),
+		slog.Int("half_open_probes", cbSettings.HalfOpenProbes),
+		slog.Bool("custom", b.webhookCBSettingsSet))
+	consumers, err := webhookdispatch.BuildConsumers(b.clock, reqs, b.webhookSourceStore, policy, rec, cbSettings)
 	if err != nil {
 		return fmt.Errorf("bootstrap: build webhook dispatch consumers: %w", err)
 	}

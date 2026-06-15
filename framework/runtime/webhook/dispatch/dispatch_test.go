@@ -52,7 +52,7 @@ func TestBuildConsumers_HappyPath(t *testing.T) {
 	reqs := []cell.WebhookDispatchRequest{
 		dispatchReq("webhook.shopify.orders.v1", "shopify", "ordercore"),
 	}
-	consumers, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{})
+	consumers, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{}, kwh.DefaultCircuitBreakerSettings())
 	require.NoError(t, err)
 	require.Len(t, consumers, 1)
 
@@ -75,20 +75,22 @@ func TestBuildConsumers_HappyPath(t *testing.T) {
 
 func TestBuildConsumers_Empty(t *testing.T) {
 	t.Parallel()
-	consumers, err := BuildConsumers(testClock(), nil, testStore(t, "s"), kwh.NewSafePolicy(), kwh.Metrics{})
+	consumers, err := BuildConsumers(
+		testClock(), nil, testStore(t, "s"), kwh.NewSafePolicy(), kwh.Metrics{},
+		kwh.DefaultCircuitBreakerSettings())
 	require.NoError(t, err)
 	assert.Empty(t, consumers)
 }
 
 func TestBuildConsumers_NilStore(t *testing.T) {
 	t.Parallel()
-	_, err := BuildConsumers(testClock(), nil, nil, kwh.NewSafePolicy(), kwh.Metrics{})
+	_, err := BuildConsumers(testClock(), nil, nil, kwh.NewSafePolicy(), kwh.Metrics{}, kwh.DefaultCircuitBreakerSettings())
 	requireWebhookConfigErr(t, err)
 }
 
 func TestBuildConsumers_NilPolicy(t *testing.T) {
 	t.Parallel()
-	_, err := BuildConsumers(testClock(), nil, testStore(t, "s"), nil, kwh.Metrics{})
+	_, err := BuildConsumers(testClock(), nil, testStore(t, "s"), nil, kwh.Metrics{}, kwh.DefaultCircuitBreakerSettings())
 	requireWebhookConfigErr(t, err)
 }
 
@@ -96,7 +98,9 @@ func TestBuildConsumers_UnregisteredSource(t *testing.T) {
 	t.Parallel()
 	store := testStore(t, "shopify")
 	reqs := []cell.WebhookDispatchRequest{dispatchReq("webhook.x.v1", "stripe", "c")} // "stripe" not registered
-	_, err := BuildConsumers(testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{})
+	_, err := BuildConsumers(
+		testClock(), reqs, store, kwh.NewSafePolicy(), kwh.Metrics{},
+		kwh.DefaultCircuitBreakerSettings())
 	requireWebhookConfigErr(t, err)
 }
 
@@ -107,7 +111,9 @@ func TestBuildConsumers_NilSelector(t *testing.T) {
 		Spec:     kwh.DispatchSpec{ContractID: "webhook.x.v1", SourceID: "shopify", CellID: "c"},
 		Selector: nil,
 	}
-	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{})
+	_, err := BuildConsumers(
+		testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{},
+		kwh.DefaultCircuitBreakerSettings())
 	requireWebhookConfigErr(t, err)
 }
 
@@ -115,7 +121,24 @@ func TestBuildConsumers_InvalidSpec(t *testing.T) {
 	t.Parallel()
 	store := testStore(t, "shopify")
 	req := dispatchReq("", "shopify", "c") // empty ContractID → spec invalid
-	_, err := BuildConsumers(testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{})
+	_, err := BuildConsumers(
+		testClock(), []cell.WebhookDispatchRequest{req}, store, kwh.NewSafePolicy(), kwh.Metrics{},
+		kwh.DefaultCircuitBreakerSettings())
+	requireWebhookConfigErr(t, err)
+}
+
+// TestBuildConsumers_InvalidCBSettings verifies that an invalid
+// CircuitBreakerSettings fails eagerly at BuildConsumers time and that the
+// returned error is the well-formed errcode produced by
+// CircuitBreakerSettings.Validate() — i.e. BuildConsumers does NOT re-mint a
+// new errcode with a dynamic message string (MESSAGE-CONST-LITERAL-01).
+func TestBuildConsumers_InvalidCBSettings(t *testing.T) {
+	t.Parallel()
+	store := testStore(t, "s")
+	// TripThreshold == 0 is explicitly rejected by Validate().
+	bad := kwh.CircuitBreakerSettings{TripThreshold: 0}
+	_, err := BuildConsumers(
+		testClock(), nil, store, kwh.NewSafePolicy(), kwh.Metrics{}, bad)
 	requireWebhookConfigErr(t, err)
 }
 

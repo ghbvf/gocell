@@ -20,6 +20,7 @@ package bootstrap
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	kwh "github.com/ghbvf/gocell/framework/kernel/webhook"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
 	"github.com/ghbvf/gocell/framework/runtime/eventrouter"
 )
@@ -263,6 +265,72 @@ func TestDrainWebhookDispatchers_HappyPath_RegistersHandler(t *testing.T) {
 	require.NoError(t, err, "happy path must not error")
 	assert.Equal(t, 1, evtRouter.HandlerCount(),
 		"one dispatcher must register exactly one handler on the event router")
+}
+
+// TestWithWebhookCircuitBreaker_StoresSettingsWithoutValidation verifies that
+// WithWebhookCircuitBreaker stores the settings on the Bootstrap struct without
+// performing validation at option-apply time (cumulative-builder semantics, consistent
+// with other webhook options in options_webhook.go). Validation happens later at
+// phase6 drainWebhookDispatchers.
+func TestWithWebhookCircuitBreaker_StoresSettingsWithoutValidation(t *testing.T) {
+	t.Parallel()
+	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: testtime.D30s, HalfOpenProbes: 2}
+
+	// Apply option — must NOT panic even though we haven't called phase6 yet.
+	b := New(clockmock.New(whFixedNow), WithWebhookCircuitBreaker(custom))
+
+	assert.True(t, b.webhookCBSettingsSet, "WithWebhookCircuitBreaker must set webhookCBSettingsSet")
+	assert.Equal(t, custom, b.webhookCBSettings, "WithWebhookCircuitBreaker must store the settings")
+}
+
+// TestDrainWebhookDispatchers_CustomCBSettings_Propagated verifies that custom
+// circuit-breaker settings provided via WithWebhookCircuitBreaker reach
+// drainWebhookDispatchers and are used by BuildConsumers without error.
+func TestDrainWebhookDispatchers_CustomCBSettings_Propagated(t *testing.T) {
+	t.Parallel()
+	dc := newWebhookDispatchCell()
+	s := buildPhaseStateWithWebhookCells(t, dc)
+
+	custom := kwh.CircuitBreakerSettings{TripThreshold: 10, OpenTimeout: testtime.D30s, HalfOpenProbes: 2}
+	clk := clockmock.New(whFixedNow)
+	b := New(clk,
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithWebhookCircuitBreaker(custom),
+	)
+	b.webhookSourceStore = whTestStore(t)
+
+	evtRouter := newDispatchEvtRouter(t, b)
+	err := b.drainWebhookDispatchers(s, evtRouter)
+
+	require.NoError(t, err, "custom CB settings within valid range must not error")
+	assert.Equal(t, 1, evtRouter.HandlerCount(), "dispatcher must still be registered with custom CB settings")
+}
+
+// TestDrainWebhookDispatchers_InvalidCBSettings_FailsFast verifies that invalid
+// circuit-breaker settings (non-positive TripThreshold) cause drainWebhookDispatchers
+// to return a non-nil error at startup (phase-level fail-fast, not a panic).
+func TestDrainWebhookDispatchers_InvalidCBSettings_FailsFast(t *testing.T) {
+	t.Parallel()
+	dc := newWebhookDispatchCell()
+	s := buildPhaseStateWithWebhookCells(t, dc)
+
+	invalid := kwh.CircuitBreakerSettings{TripThreshold: 0, OpenTimeout: time.Second, HalfOpenProbes: 1}
+	clk := clockmock.New(whFixedNow)
+	b := New(clk,
+		WithConsumerBase(newTestConsumerBase(t)),
+		WithWebhookCircuitBreaker(invalid),
+	)
+	b.webhookSourceStore = whTestStore(t)
+
+	evtRouter := newDispatchEvtRouter(t, b)
+
+	// Must NOT panic; must return an error.
+	require.NotPanics(t, func() {
+		err := b.drainWebhookDispatchers(s, evtRouter)
+		require.Error(t, err, "invalid CB settings must cause drainWebhookDispatchers to fail fast")
+		assert.Contains(t, err.Error(), "TripThreshold",
+			"error must identify the invalid field")
+	}, "invalid CB settings must not panic — only return an error")
 }
 
 // TestDrainWebhookDispatchers_HappyPath_LocksSvixSchedule verifies the full

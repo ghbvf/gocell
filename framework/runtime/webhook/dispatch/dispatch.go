@@ -103,6 +103,10 @@ func (c Consumer) Validate() error {
 // Construction is eager so a missing source or bad config fails at startup
 // rather than at first delivery.
 //
+// cbSettings controls the per-endpoint circuit-breaker thresholds for every
+// dispatcher built by this call. The zero value is invalid; pass
+// [kwh.DefaultCircuitBreakerSettings] when no override is configured.
+//
 // DLX: the composition root must configure the broker subscriber's DLX exchange
 // for dispatch subscription topics; permanently-failed deliveries (Reject) are
 // Nack(requeue=false)→DLX and are otherwise silently discarded.
@@ -115,6 +119,7 @@ func BuildConsumers(
 	store kwh.SourceStore,
 	policy *kwh.SafePolicy,
 	rec kwh.Metrics,
+	cbSettings kwh.CircuitBreakerSettings,
 ) ([]Consumer, error) {
 	clock.MustHaveClock(clk, "webhook/dispatch.BuildConsumers")
 	if validation.IsNilInterface(store) {
@@ -125,9 +130,17 @@ func BuildConsumers(
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrWebhookConfigInvalid,
 			"webhook dispatch: SSRF policy must not be nil")
 	}
+	// Validate settings here so a bad value from the caller fails eagerly at
+	// BuildConsumers time (startup) rather than per-dispatcher construction.
+	// cbSettings.Validate() already returns a well-formed errcode (KindInvalid +
+	// ErrWebhookConfigInvalid + typed WithDetails), so propagate it directly
+	// rather than re-minting a new errcode with a dynamic message string.
+	if err := cbSettings.Validate(); err != nil {
+		return nil, err
+	}
 	out := make([]Consumer, 0, len(reqs))
 	for _, req := range reqs {
-		c, err := buildConsumer(clk, req, store, policy, rec)
+		c, err := buildConsumer(clk, req, store, policy, rec, cbSettings)
 		if err != nil {
 			return nil, fmt.Errorf("webhook dispatch: contract %q: %w", req.Spec.ContractID, err)
 		}
@@ -148,6 +161,7 @@ func buildConsumer(
 	store kwh.SourceStore,
 	policy *kwh.SafePolicy,
 	rec kwh.Metrics,
+	cbSettings kwh.CircuitBreakerSettings,
 ) (Consumer, error) {
 	spec := req.Spec
 	if err := spec.Validate(); err != nil {
@@ -173,7 +187,8 @@ func buildConsumer(
 		return Consumer{}, err
 	}
 	dispatcher, err := kwh.NewDispatcher(clk, signer, policy, req.Selector,
-		kwh.WithMetrics(rec, spec.SourceID))
+		kwh.WithMetrics(rec, spec.SourceID),
+		kwh.WithCircuitBreakerSettings(cbSettings))
 	if err != nil {
 		return Consumer{}, err
 	}
