@@ -26,7 +26,9 @@ import (
 //     single member and is pruned by HasNestedModuleRoot from THIS base scan — it is
 //     re-emitted ONLY by SatelliteParentPatterns, which callers compose in when they
 //     want satellite coverage (the shared loader expands it to the members).
-//     cellmodules/corecells are module roots → pruned by IsModuleRoot.
+//     cellmodules/corecells are TOP-LEVEL single-module roots → pruned from the base by
+//     IsModuleRoot, and re-emitted by ModuleRootMemberPatterns (the sibling increment)
+//     for callers that opt into module-root coverage (OBS-01, the duration gates).
 //   - Single-module fixture: framework/<layer> doesn't exist (pruned); the bare
 //     cmd/pkg/kernel/runtime the fixture writes ARE part of the one module, so their
 //     "./<dir>/…" pattern matches under ModeModule and is actually scanned.
@@ -41,6 +43,7 @@ var topLevelDirs = []string{
 	"adapters",
 	"cells",
 	"cellmodules",
+	"corecells",
 	"examples",
 }
 
@@ -51,8 +54,9 @@ var topLevelDirs = []string{
 // Two kinds of top-level dir are pruned from this satellite-FREE base scan:
 //
 //   - A go.work satellite MODULE ROOT (carries its own go.mod — e.g. cellmodules/
-//     after #1559, corecells/): a single module addressed by its own member
+//     after #1559, corecells/ after #1560): a single module addressed by its own member
 //     pattern, unaddressable by a root-relative ModeModule "./<dir>/..." (IsModuleRoot).
+//     Re-emitted by ModuleRootMemberPatterns for callers opting into module-root scope.
 //   - A MULTI-MEMBER PARENT (cmd/, adapters/, examples/): not a module root itself,
 //     but holding several go.work member modules one level deeper (cmd/gocell +
 //     cmd/corebundle; adapters/postgres …; examples/<id> …). "./cmd/..." is owned by
@@ -146,25 +150,74 @@ func SatelliteParentPatterns(root string) []string {
 	return patterns
 }
 
+// ModuleRootMemberPatterns returns the TOP-LEVEL single-module-root prefixes
+// ("./corecells/...", "./cellmodules/...") that Patterns prunes — the SIBLING of
+// SatelliteParentPatterns and the second class of satellite increment (#2164). It is
+// DERIVED from the same predicates Patterns prunes on (not a hand-maintained list): it
+// re-includes ONLY dirs that ARE module roots themselves but hold NO nested member
+// (IsModuleRoot && !HasNestedModuleRoot), the complement of SatelliteParentPatterns'
+// multi-member parents (!IsModuleRoot && HasNestedModuleRoot). A future fifth top-level
+// single-module root listed in topLevelDirs is picked up automatically.
+//
+// The two increments cover the two distinct go.work shapes a top-level dir can take:
+//
+//   - SatelliteParentPatterns: a MULTI-MEMBER PARENT (cmd/, adapters/, examples/) —
+//     "./<dir>/..." owned by no single member, expanded to its members by the loader.
+//   - ModuleRootMemberPatterns: a TOP-LEVEL SINGLE-MODULE ROOT (corecells/, cellmodules/)
+//     — "./<dir>/..." owned by exactly that member; the satellite-aware loader resolves
+//     it as a normal workspace member (expandParentPrefix bails on an exact-member dir,
+//     so matchWorkspaceMember handles it). The platform core lives in the framework
+//     module but is scanned via its framework/{kernel,runtime,pkg} sub-layers in the
+//     base Patterns, so bare "framework" is not in topLevelDirs and is never re-emitted here.
+//
+// Like SatelliteParentPatterns the prefixes are loadable ONLY through the shared
+// satellite-aware loader packagesload.LoadWorkspace; a single-module fixture has no
+// module-root subdir (those dirs are part of the ONE module, no own go.mod), so the
+// increment is EMPTY there. Two Medium tests in tools/metricschema keep this honest,
+// the module-root analog of SatelliteParentPatterns' SATELLITE-PARENT-PREFIX-SCAN-01:
+//
+//   - TestModuleRootMembersCoverGoWorkProductionRoots (anti-drift): fails when a
+//     top-level single-module root in go.work is missing from topLevelDirs (#2164's
+//     recurrence guard — coverage completeness).
+//   - TestOBS01CoverageRequiresModuleRootMembers (load-witness) +
+//     TestCheckOBS01DetectsModuleRootMemberLeak (scan-witness): fail if "./corecells/..."
+//     / "./cellmodules/..." stop resolving to non-empty packages through LoadWorkspace —
+//     the "must go through LoadWorkspace" property, machine-checked, not Soft. (Both gates
+//     that compose this increment, OBS-01 and the duration gates, use the SAME prefixes
+//     through the SAME loader, so the OBS-01 witness covers the duration-gate path too.)
+func ModuleRootMemberPatterns(root string) []string {
+	var patterns []string
+	for _, dir := range topLevelDirs {
+		full := filepath.Join(root, dir)
+		if dirExists(full) && IsModuleRoot(full) && !HasNestedModuleRoot(full) {
+			patterns = append(patterns, "./"+dir+"/...")
+		}
+	}
+	return patterns
+}
+
 // PatternsWithSatellites widens PatternsExtended(root) — Patterns plus tests/ and
-// tools/ — with the multi-member satellite parent prefixes (SatelliteParentPatterns).
-// It is the production-scan source-of-record for the typeseval-backed duration gates
-// (TEST-TIME-LITERAL-01, PROD-DURATION-CONST-01), whose broad invariant covers
-// production + test/tool support packages + satellites.
+// tools/ — with BOTH satellite increments: the multi-member satellite parent prefixes
+// (SatelliteParentPatterns) and the top-level single-module roots
+// (ModuleRootMemberPatterns, #2164). It is the production-scan source-of-record for the
+// typeseval-backed duration gates (TEST-TIME-LITERAL-01, PROD-DURATION-CONST-01), whose
+// broad invariant covers production + test/tool support packages + satellites.
 //
 // Two satellite-bearing scopes exist, split by BASE (not loader capability — since
 // #2147 both load through the same packagesload.LoadWorkspace expander):
 //
-//   - PatternsWithSatellites = PatternsExtended + satellites — the broad duration
-//     gates (production + tests/ + tools/ + satellites).
-//   - OBS-01 = Patterns + satellites — production + satellites, WITHOUT tests/+tools/
-//     (composed in tools/metricschema; OBS-01 never scanned tests/ or tools/).
+//   - PatternsWithSatellites = PatternsExtended + both increments — the broad duration
+//     gates (production + tests/ + tools/ + satellites + module roots).
+//   - OBS-01 = Patterns + both increments — production + satellites + module roots,
+//     WITHOUT tests/+tools/ (composed in tools/metricschema; OBS-01 never scanned
+//     tests/ or tools/).
 //
 // Do NOT fold the satellite prefixes into PatternsExtended itself: its other
 // consumers (e.g. errcode_invariants) would then silently gain unreviewed satellite
 // scope. Widening to satellites is a per-gate opt-in by name, not a global default.
 func PatternsWithSatellites(root string) []string {
-	return append(PatternsExtended(root), SatelliteParentPatterns(root)...)
+	out := append(PatternsExtended(root), SatelliteParentPatterns(root)...)
+	return append(out, ModuleRootMemberPatterns(root)...)
 }
 
 func dirExists(path string) bool {

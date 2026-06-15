@@ -698,6 +698,22 @@ func TestObserverCall_Timeout_LogsCorrelation(t *testing.T) {
 	// advance past its deadline to fire the timeout branch.
 	testwait.Deterministic(t, obs.hbEntered, "observer-call-entered")
 	fc.Advance(testtime.D50ms)
+	// errCh is the tightest available sync point: it fires exactly when
+	// RunWithHeartbeat returns, just after the bounded-observer timer logged the
+	// WARN asserted below. The window between fc.Advance and this send is real
+	// goroutine scheduling — the run goroutine must wake on the fired timer's
+	// channel inside callObserverBounded's select, log, then return — that the
+	// fake clock cannot collapse; there is no closer signal to wait on. Under
+	// pathological local load (`go test -race -count=5 ./runtime/saga/...`, where
+	// the saga package and this executor package stress-run concurrently and
+	// saturate the CPU) that real progress can occasionally exceed testwait's 30s
+	// safety-net and trip a false Fatalf. CI (`-count=1`) is unaffected and stays
+	// green. This is a test-infra artifact under CPU starvation, not an executor
+	// bug (#1527): the 30s constant is intentionally fixed (see signalSafetyNet
+	// godoc) and testwait.Deterministic forbids a per-call timeout
+	// (TEST-DETERMINISTIC-NO-TIMEOUT-PARAM-01). To stress-test saga locally
+	// without self-starvation, serialize the packages with `-p 1`
+	// (`go test -race -count=5 -p 1 ./runtime/saga/...`).
 	_ = testwait.Deterministic(t, errCh, "RunWithHeartbeat must return")
 
 	entry := sloghelper.FindLogEntry(buf.String(), "observer call exceeded deadline")
