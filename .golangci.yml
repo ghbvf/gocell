@@ -949,7 +949,10 @@ linters:
       # false positive across this whole directory (test carve-out maps AND
       # non-test scanner sources). Same justification as the errcode.go G101
       # waiver below: the matched strings are documentation/identifiers, not
-      # secrets. Path-scoped to tools/archtest/ (not a global G101 disable).
+      # secrets. Path-scoped to tools/archtest/ (not a global G101 disable). This
+      # rests on archtest's zero-secrets contract: a real credential literal in
+      # this tree would itself be a bug to fix at the source, not something to
+      # hide behind this waiver.
       - path: ^tools/archtest/
         linters:
           - gosec
