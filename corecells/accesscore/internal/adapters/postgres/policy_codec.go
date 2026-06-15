@@ -79,6 +79,11 @@ var (
 	// rowScopeToCode maps only the NON-zero RowScope values. The zero value is a
 	// valid obligation meaning "no row-scope constraint" (authz.Obligations); it
 	// encodes to "" and is handled explicitly in encode/decodeRowScope, not here.
+	// RowScopeAll IS listed (it is a valid tenant code) but encode/decodeRowScope
+	// reject it at the policy layer (#2028) — a policy rule never authorizes the
+	// audited cross-tenant scope. The entry stays so the codec golden test can
+	// assert the full tenant rowScope code table; the runtime rejection is a
+	// separate, independent guard (not a hole in this map).
 	rowScopeToCode = map[tenant.RowScope]string{
 		tenant.RowScopeSelf:   "self",
 		tenant.RowScopeDevice: "device",
@@ -189,7 +194,7 @@ func encodeRowScope(rs tenant.RowScope) (string, error) {
 	}
 	if rs == tenant.RowScopeAll {
 		return "", fmt.Errorf(
-			"policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only (#2028)",
+			"policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only",
 			rs.String())
 	}
 	if _, ok := rowScopeToCode[rs]; !ok {
@@ -208,7 +213,7 @@ func decodeRowScope(c string) (tenant.RowScope, error) {
 		return 0, fmt.Errorf("policy_codec: unknown rowScope code %q", c)
 	}
 	if rs == tenant.RowScopeAll {
-		return 0, fmt.Errorf("policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only (#2028)", c)
+		return 0, fmt.Errorf("policy_codec: rowScope %q is not a valid policy obligation; cross-tenant 'all' is audited-only", c)
 	}
 	return rs, nil
 }

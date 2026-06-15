@@ -384,8 +384,9 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 // observability, principal) into scan, applying the per-column oversize guards.
 // It is the single source of the scan-side decode/cap logic shared by the relay
 // claim path (scanClaimedEntry) and the projection journal replay path
-// (projection_event_source.go) — both reconstruct a kout.Entry from
-// outbox_entries rows and must defend identically against unbounded allocation
+// (projection_event_source.go) — both reconstruct a kout.Entry from DB rows
+// (the claim query from outbox_entries, the replay path from projection_events)
+// and must defend identically against unbounded allocation
 // from a corrupted or maliciously-crafted row (the three columns face the same
 // DoS vector). Each caller owns its own rows.Scan (the column sets differ: the
 // claim query interleaves relay state, the replay query carries the seq

@@ -14,6 +14,7 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -228,6 +229,10 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 func containingModuleDir(projectRoot, dir string) string {
 	mods, err := workspace.Modules(projectRoot)
 	if err != nil {
+		// Degrade to root ownership (ModeModule). Surface the cause so a malformed
+		// go.work isn't diagnosed only via a downstream "package not found" (#2167 review).
+		slog.Warn("metricschema: workspace.Modules failed; treating entrypoint as root-module-owned",
+			slog.String("project_root", projectRoot), slog.Any("error", err))
 		return ""
 	}
 	target := filepath.ToSlash(filepath.Clean(dir))

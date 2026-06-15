@@ -280,6 +280,17 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	require.True(t, ok, "claimTTL must be a typed pgtype.Interval")
 	assert.Equal(t, pgtype.Interval{Microseconds: testtime.D60s.Microseconds(), Valid: true}, ttlArg,
 		"claimTTL must encode the duration as microseconds")
+
+	// baseDelay ($5) / maxDelay ($7) stay int64 microseconds — the SQL multiplies
+	// them by interval '1 microsecond' (NOT the pgtype.Interval path). Assert the
+	// type so accidentally typing the backoff args as pgtype.Interval (which would
+	// make `$5 * power(...)` an invalid interval*interval expression) is caught.
+	baseDelayArg, ok := ec.args[4].(int64)
+	require.True(t, ok, "baseDelay must be int64 microseconds, not pgtype.Interval")
+	assert.Equal(t, testtime.D5s.Microseconds(), baseDelayArg, "baseDelay microseconds")
+	maxDelayArg, ok := ec.args[6].(int64)
+	require.True(t, ok, "maxDelay must be int64 microseconds, not pgtype.Interval")
+	assert.Equal(t, testtime.D5min.Microseconds(), maxDelayArg, "maxDelay microseconds")
 }
 
 func TestPGOutboxStore_ReclaimStale_ExecError(t *testing.T) {
