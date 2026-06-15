@@ -236,10 +236,7 @@ func TestSandboxHTTPTestTCPFunnel01_Fixture(t *testing.T) {
 	const ruleID = "SANDBOX-HTTPTEST-TCP-FUNNEL-01"
 	const fixturePkg = "./tools/archtest/internal/sandboxhttptestfixture"
 
-	diags := Run(t, Fixture(FixtureOpts{Tests: true}, []string{fixturePkg}),
-		func(p *Pass) []Diagnostic {
-			return scanBareHTTPTest(p)
-		})
+	diags := Run(t, Fixture(FixtureOpts{Tests: true}, []string{fixturePkg}), scanBareHTTPTest)
 
 	// RED: exactly one violation must be found (badBareServer's httptest.NewServer).
 	require.Len(t, diags, 1,
