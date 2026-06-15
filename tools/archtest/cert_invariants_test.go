@@ -86,6 +86,7 @@ var certSealedTypes = []struct {
 	{"DeviceSubject", reflect.TypeOf(cs.DeviceSubject{})},
 	{"CertRequest", reflect.TypeOf(cs.CertRequest{})},
 	{"IssuedCert", reflect.TypeOf(cs.IssuedCert{})},
+	{"AuthorizedCertRequest", reflect.TypeOf(cs.AuthorizedCertRequest{})},
 	{"EnrollmentClaim", reflect.TypeOf(cs.EnrollmentClaim{})},
 	{"SignConstraints", reflect.TypeOf(cs.SignConstraints{})},
 	{"RevocationReason", reflect.TypeOf(cs.RevocationReason{})},
@@ -95,17 +96,18 @@ var certSealedTypes = []struct {
 // package-level funcs that may return it. A drift (new constructor, or a removed
 // one) fails the SoleConstructionSurface check.
 var certConstructorSurface = map[string]map[string]struct{}{
-	"IssuerID":        {"NewIssuerID": {}},
-	"DeviceID":        {"NewDeviceID": {}},
-	"Serial":          {"NewSerial": {}},
-	"CertScope":       {"NewCertScope": {}},
-	"SubjectAltNames": {"NewSubjectAltNames": {}},
-	"KeyUsages":       {"NewKeyUsages": {}},
-	"DeviceSubject":   {"NewDeviceSubject": {}},
-	"CertRequest":     {"NewCertRequest": {}},
-	"IssuedCert":      {"NewIssuedCert": {}},
-	"EnrollmentClaim": {"NewEnrollmentClaim": {}},
-	"SignConstraints": {"NewSignConstraints": {}},
+	"IssuerID":              {"NewIssuerID": {}},
+	"DeviceID":              {"NewDeviceID": {}},
+	"Serial":                {"NewSerial": {}},
+	"CertScope":             {"NewCertScope": {}},
+	"SubjectAltNames":       {"NewSubjectAltNames": {}},
+	"KeyUsages":             {"NewKeyUsages": {}},
+	"DeviceSubject":         {"NewDeviceSubject": {}},
+	"CertRequest":           {"NewCertRequest": {}},
+	"IssuedCert":            {"NewIssuedCert": {}},
+	"AuthorizedCertRequest": {"NewAuthorizedCertRequest": {}},
+	"EnrollmentClaim":       {"NewEnrollmentClaim": {}},
+	"SignConstraints":       {"NewSignConstraints": {}},
 	"RevocationReason": {
 		"ReasonUnspecified": {}, "ReasonKeyCompromise": {}, "ReasonCACompromise": {},
 		"ReasonAffiliationChanged": {}, "ReasonSuperseded": {}, "ReasonCessationOfOperation": {},
@@ -262,6 +264,71 @@ func TestCertSignFunnel01_RedFixture(t *testing.T) {
 	if hits == 0 {
 		t.Error("CERT-SIGN-FUNNEL-01 RED fixture: scanner found 0 hits; expected ≥ 1 from " +
 			"forbidden_mint_caller.go — the detector scanCertMintCallers may be broken")
+	}
+}
+
+// TestCertSignFunnel01_SignTakesAuthorizedRequest is the reverse self-check that
+// Signer.Sign accepts a sealed AuthorizedCertRequest (NOT a bare CertRequest).
+// Taking AuthorizedCertRequest is the compile-time guarantee that authorization
+// + constraint enforcement (NewAuthorizedCertRequest: Granted / TTL / SAN) has
+// happened before signing; relaxing the param back to CertRequest would re-open
+// unauthorized signing (FR-005) and is caught here.
+func TestCertSignFunnel01_SignTakesAuthorizedRequest(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+	pkgPath := certSigningPkgPath()
+	var visited bool
+	diags := Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, []string{certSigningPattern}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.Pkg.Path() != pkgPath {
+				return nil
+			}
+			visited = true
+			scope := p.Pkg.Scope()
+			signerObj := scope.Lookup("Signer")
+			if signerObj == nil {
+				return []Diagnostic{{Message: "CERT-SIGN-FUNNEL-01: Signer interface not found"}}
+			}
+			iface, ok := signerObj.Type().Underlying().(*types.Interface)
+			if !ok {
+				return []Diagnostic{{Message: "CERT-SIGN-FUNNEL-01: Signer is not an interface"}}
+			}
+			authType := lookupType(scope, "AuthorizedCertRequest")
+			certReqType := lookupType(scope, "CertRequest")
+			if authType == nil {
+				return []Diagnostic{{Message: "CERT-SIGN-FUNNEL-01: AuthorizedCertRequest type not found"}}
+			}
+			var out []Diagnostic
+			found := false
+			for i := 0; i < iface.NumMethods(); i++ {
+				m := iface.Method(i)
+				if m.Name() != "Sign" {
+					continue
+				}
+				found = true
+				sig, ok := m.Type().(*types.Signature)
+				if !ok {
+					continue
+				}
+				if !sigHasParamType(sig, authType) {
+					out = append(out, Diagnostic{Message: "CERT-SIGN-FUNNEL-01: Signer.Sign must take an " +
+						"AuthorizedCertRequest parameter — authorization must precede signing (FR-005)"})
+				}
+				if certReqType != nil && sigHasParamType(sig, certReqType) {
+					out = append(out, Diagnostic{Message: "CERT-SIGN-FUNNEL-01: Signer.Sign must NOT take a bare " +
+						"CertRequest — use AuthorizedCertRequest so the authorization gate cannot be skipped"})
+				}
+			}
+			if !found {
+				out = append(out, Diagnostic{Message: "CERT-SIGN-FUNNEL-01: Signer.Sign method not found — the guard is vacuous"})
+			}
+			return out
+		})
+	Report(t, "CERT-SIGN-FUNNEL-01/SignTakesAuthorizedRequest", diags)
+	if !visited {
+		t.Fatal("CERT-SIGN-FUNNEL-01/SignTakesAuthorizedRequest: certsigning package was never scanned — vacuous")
 	}
 }
 

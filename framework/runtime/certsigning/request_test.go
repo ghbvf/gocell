@@ -33,11 +33,13 @@ func testKey(t *testing.T) *ecdsa.PrivateKey {
 	return key
 }
 
-// testCSRDER fabricates a valid PKCS#10 CSR DER for the given common name.
-func testCSRDER(t *testing.T, cn string) []byte {
+// testCSRDER fabricates a valid PKCS#10 CSR DER (properly self-signed, so
+// CheckSignature passes). The subject is policy-decided from the request, not
+// the CSR, so the CSR common name is fixed.
+func testCSRDER(t *testing.T) []byte {
 	t.Helper()
 	der, err := x509.CreateCertificateRequest(rand.Reader,
-		&x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}, testKey(t))
+		&x509.CertificateRequest{Subject: pkix.Name{CommonName: "device-1"}}, testKey(t))
 	if err != nil {
 		t.Fatalf("create csr: %v", err)
 	}
@@ -122,6 +124,7 @@ func TestNewIssuerID(t *testing.T) {
 	}{
 		{name: "valid", in: "ca-root"},
 		{name: "empty", in: "", wantErr: true},
+		{name: "whitespace", in: "   ", wantErr: true},
 		{name: "too long", in: string(make([]byte, 300)), wantErr: true},
 	}
 	for _, tc := range tests {
@@ -154,6 +157,7 @@ func TestNewDeviceID(t *testing.T) {
 	}{
 		{name: "valid", in: "dev-1"},
 		{name: "empty", in: "", wantErr: true},
+		{name: "whitespace", in: "   ", wantErr: true},
 		{name: "too long", in: string(make([]byte, 300)), wantErr: true},
 	}
 	for _, tc := range tests {
@@ -366,6 +370,11 @@ func TestNewDeviceSubject(t *testing.T) {
 		_, err := cs.NewDeviceSubject(mustTenant(t, testTenant), dev, string(make([]byte, 300)))
 		assertCode(t, err, errcode.ErrCertRequestInvalid)
 	})
+	t.Run("whitespace cn", func(t *testing.T) {
+		t.Parallel()
+		_, err := cs.NewDeviceSubject(mustTenant(t, testTenant), dev, "   ")
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
 	t.Run("blank cn", func(t *testing.T) {
 		t.Parallel()
 		_, err := cs.NewDeviceSubject(mustTenant(t, testTenant), dev, "")
@@ -390,7 +399,7 @@ func TestNewCertRequest(t *testing.T) {
 	subject, _ := cs.NewDeviceSubject(mustTenant(t, testTenant), dev, "device-1")
 	usages, _ := cs.NewKeyUsages(x509.KeyUsageDigitalSignature)
 	sans, _ := cs.NewSubjectAltNames([]string{"device-1.example"}, nil, nil)
-	csr := testCSRDER(t, "device-1")
+	csr := testCSRDER(t)
 
 	t.Run("valid", func(t *testing.T) {
 		t.Parallel()
@@ -444,6 +453,29 @@ func TestNewCertRequest(t *testing.T) {
 	t.Run("zero key usages", func(t *testing.T) {
 		t.Parallel()
 		_, err := cs.NewCertRequest(scope, subject, csr, sans, cs.KeyUsages{}, time.Hour)
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
+
+	t.Run("cross-device subject rejected", func(t *testing.T) {
+		t.Parallel()
+		devB, _ := cs.NewDeviceID("device-2")
+		subjB, _ := cs.NewDeviceSubject(mustTenant(t, testTenant), devB, "device-2")
+		_, err := cs.NewCertRequest(scope, subjB, csr, sans, usages, time.Hour) // scope device-1 vs subject device-2
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
+
+	t.Run("cross-tenant subject rejected", func(t *testing.T) {
+		t.Parallel()
+		subjB, _ := cs.NewDeviceSubject(mustTenant(t, testTenantB), dev, "device-1")
+		_, err := cs.NewCertRequest(scope, subjB, csr, sans, usages, time.Hour)
+		assertCode(t, err, errcode.ErrCertRequestInvalid)
+	})
+
+	t.Run("csr proof-of-possession rejected (bad signature)", func(t *testing.T) {
+		t.Parallel()
+		bad := append([]byte(nil), csr...)
+		bad[len(bad)-1] ^= 0xff // corrupt the signature; structure stays parseable
+		_, err := cs.NewCertRequest(scope, subject, bad, sans, usages, time.Hour)
 		assertCode(t, err, errcode.ErrCertRequestInvalid)
 	})
 }

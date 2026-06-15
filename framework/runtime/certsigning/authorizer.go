@@ -25,6 +25,9 @@ func NewEnrollmentClaim(scope CertScope, subject DeviceSubject) (EnrollmentClaim
 	if subject.IsZero() {
 		return EnrollmentClaim{}, errCertRequestInvalid("enrollment subject must not be empty")
 	}
+	if err := requireSameOrigin(scope, subject); err != nil {
+		return EnrollmentClaim{}, err
+	}
 	return EnrollmentClaim{scope: scope, subject: subject}, nil
 }
 
@@ -87,3 +90,46 @@ type Authorizer interface {
 	// (or an error) — never an unconstrained permit.
 	AuthorizeEnroll(ctx context.Context, claim EnrollmentClaim) (SignConstraints, error)
 }
+
+// AuthorizedCertRequest is a sealed signing request that has PASSED authorization:
+// it can only be minted by [NewAuthorizedCertRequest] from a [CertRequest] plus a
+// granted [SignConstraints], so a [Signer] can never be handed an un-authorized
+// request. This carries the Authorizer's grant INTO the signing funnel as a
+// type-level fact — the cert-manager/step-ca pattern (authorize produces
+// constraints, sign enforces them), strengthened by Go's type system: there is
+// no way to construct this value without satisfying the grant. The single field
+// is unexported; the grant's obligations are enforced at construction, so an
+// AuthorizedCertRequest is provably within its authorization.
+type AuthorizedCertRequest struct {
+	req CertRequest
+}
+
+// NewAuthorizedCertRequest combines a validated CertRequest with a granted
+// SignConstraints, enforcing the authorization obligations fail-closed:
+//   - the grant MUST be Granted (a zero / denied SignConstraints is rejected);
+//   - the request TTL MUST NOT exceed the granted MaxTTL;
+//   - every requested SAN MUST be within the granted AllowedSANs (deny-by-default:
+//     an empty AllowedSANs permits no SAN).
+//
+// The result is the only value [Signer.Sign] accepts, so these checks cannot be
+// skipped on the path to issuance (FR-005: SignConstraints enforced by the Signer
+// boundary).
+func NewAuthorizedCertRequest(req CertRequest, grant SignConstraints) (AuthorizedCertRequest, error) {
+	if req.Scope().IsZero() {
+		return AuthorizedCertRequest{}, errCertRequestInvalid("authorized request requires a valid request")
+	}
+	if !grant.Granted() {
+		return AuthorizedCertRequest{}, errCertAuthorizeDenied("authorization not granted")
+	}
+	if req.TTL() > grant.MaxTTL() {
+		return AuthorizedCertRequest{}, errCertConstraintViolation("requested ttl exceeds granted max ttl")
+	}
+	if !req.SubjectAltNames().subsetOf(grant.AllowedSANs()) {
+		return AuthorizedCertRequest{}, errCertConstraintViolation("requested SAN outside granted allowance")
+	}
+	return AuthorizedCertRequest{req: req}, nil
+}
+
+// Request returns the authorized underlying request for the Signer to sign. Its
+// TTL and SANs are provably within the grant that minted this value.
+func (a AuthorizedCertRequest) Request() CertRequest { return a.req }

@@ -90,7 +90,15 @@ const (
 	// ErrCertIssuedInvalid signals an invalid IssuedCert reconstruction (empty or
 	// unparseable certificate DER). Constructed with KindInvalid → HTTP 400.
 	ErrCertIssuedInvalid Code = "ERR_CERT_ISSUED_INVALID"
-	ErrAdapterPGNoTx     Code = "ERR_ADAPTER_PG_NO_TX"
+	// ErrCertAuthorizeDenied signals that an AuthorizedCertRequest was built from a
+	// non-granted SignConstraints (authorization was not granted). Constructed with
+	// KindPermissionDenied → HTTP 403.
+	ErrCertAuthorizeDenied Code = "ERR_CERT_AUTHORIZE_DENIED"
+	// ErrCertConstraintViolation signals that a request exceeds its granted signing
+	// constraints (TTL above the granted max, or a SAN outside the granted
+	// allowance). Constructed with KindPermissionDenied → HTTP 403.
+	ErrCertConstraintViolation Code = "ERR_CERT_CONSTRAINT_VIOLATION"
+	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
 	// ErrPGSchemaShape signals that a value read from a PostgreSQL column does
 	// not conform to the expected schema shape — e.g., an enum column returned a
 	// value not in the application's known set. Usable from both adapters/postgres

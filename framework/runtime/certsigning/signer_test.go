@@ -20,9 +20,9 @@ type fakeSigner struct {
 	notAfter time.Time
 }
 
-func (f fakeSigner) Sign(_ context.Context, req cs.CertRequest) (cs.IssuedCert, error) {
+func (f fakeSigner) Sign(_ context.Context, req cs.AuthorizedCertRequest) (cs.IssuedCert, error) {
 	der := testCertDER(f.t, big.NewInt(0x42), f.notAfter)
-	return cs.NewIssuedCert(req.Scope(), der, nil, 0)
+	return cs.NewIssuedCert(req.Request().Scope(), der, nil, 0)
 }
 
 func (fakeSigner) TrustBundle(context.Context) ([][]byte, error) {
@@ -39,12 +39,21 @@ func TestSignerContract(t *testing.T) {
 	subject, _ := cs.NewDeviceSubject(mustTenant(t, testTenant), dev, "device-1")
 	usages, _ := cs.NewKeyUsages(x509.KeyUsageDigitalSignature, x509.ExtKeyUsageClientAuth)
 	sans, _ := cs.NewSubjectAltNames([]string{"device-1.example"}, nil, nil)
-	req, err := cs.NewCertRequest(scope, subject, testCSRDER(t, "device-1"), sans, usages, time.Hour)
+	req, err := cs.NewCertRequest(scope, subject, testCSRDER(t), sans, usages, time.Hour)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
+	// Sign only accepts an AuthorizedCertRequest — authorization must precede it.
+	grant, err := cs.NewSignConstraints(testGrantTTL, sans)
+	if err != nil {
+		t.Fatalf("grant: %v", err)
+	}
+	authReq, err := cs.NewAuthorizedCertRequest(req, grant)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
 
-	issued, err := signer.Sign(context.Background(), req)
+	issued, err := signer.Sign(context.Background(), authReq)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}

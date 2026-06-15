@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,8 +33,8 @@ type IssuerID struct{ v string }
 // IssuerID. Empty / over-long input is rejected fail-closed — an issuer cannot be
 // absent at the point a CertScope is required.
 func NewIssuerID(s string) (IssuerID, error) {
-	if s == "" {
-		return IssuerID{}, errCertScopeInvalid("issuer must not be empty")
+	if strings.TrimSpace(s) == "" {
+		return IssuerID{}, errCertScopeInvalid("issuer must not be blank")
 	}
 	if len(s) > maxIssuerLen {
 		return IssuerID{}, errCertScopeInvalid("issuer too long")
@@ -55,8 +56,8 @@ type DeviceID struct{ v string }
 // NewDeviceID validates s (non-blank, within maxDeviceLen) and returns a sealed
 // DeviceID. Empty / over-long input is rejected fail-closed.
 func NewDeviceID(s string) (DeviceID, error) {
-	if s == "" {
-		return DeviceID{}, errCertScopeInvalid("device must not be empty")
+	if strings.TrimSpace(s) == "" {
+		return DeviceID{}, errCertScopeInvalid("device must not be blank")
 	}
 	if len(s) > maxDeviceLen {
 		return DeviceID{}, errCertScopeInvalid("device too long")
@@ -162,6 +163,22 @@ func (s CertScope) Equal(other CertScope) bool {
 	return s.tenant == other.tenant && s.issuer == other.issuer && s.device == other.device
 }
 
+// requireSameOrigin fail-closes when a scope and a subject name different
+// tenants or devices. A request / claim carries two identity sources (the
+// isolation [CertScope] and the certificate [DeviceSubject]); they MUST agree on
+// tenant and device, else a caller could mint a request scoped to tenant-A while
+// naming tenant-B's device subject (cross-subject issuance). The issuer is a
+// scope-only dimension (the CA) and is not part of the subject.
+func requireSameOrigin(scope CertScope, subject DeviceSubject) error {
+	if scope.tenant != subject.tenant {
+		return errCertRequestInvalid("scope and subject tenant must match")
+	}
+	if scope.device != subject.device {
+		return errCertRequestInvalid("scope and subject device must match")
+	}
+	return nil
+}
+
 // SubjectAltNames is the sealed set of certificate Subject Alternative Names
 // (DNS / IP / URI). SAN forgery is a real escalation surface, so SANs are an
 // explicit sealed request input — the Signer takes them from the (constrained)
@@ -242,6 +259,29 @@ func (s SubjectAltNames) IsEmpty() bool {
 	return len(s.dnsNames) == 0 && len(s.ipAddrs) == 0 && len(s.uris) == 0
 }
 
+// subsetOf reports whether every SAN entry in s is also present in allowed
+// (deny-by-default: an empty allowed admits only an empty s). It backs the
+// SAN-allowance enforcement in [NewAuthorizedCertRequest].
+func (s SubjectAltNames) subsetOf(allowed SubjectAltNames) bool {
+	for _, d := range s.dnsNames {
+		if !slices.Contains(allowed.dnsNames, d) {
+			return false
+		}
+	}
+	for _, ip := range s.ipAddrs {
+		if !slices.ContainsFunc(allowed.ipAddrs, ip.Equal) {
+			return false
+		}
+	}
+	for _, u := range s.uris {
+		us := u.String()
+		if !slices.ContainsFunc(allowed.uris, func(a *url.URL) bool { return a.String() == us }) {
+			return false
+		}
+	}
+	return true
+}
+
 // KeyUsages is the sealed set of X.509 key usages requested for a certificate.
 // The fields are unexported; [NewKeyUsages] is the sole minter. A zero usage
 // (no key-usage bits) is rejected — a certificate with no usage is unusable.
@@ -293,8 +333,8 @@ func NewDeviceSubject(t tenant.TenantID, device DeviceID, commonName string) (De
 	if device.IsZero() {
 		return DeviceSubject{}, errCertRequestInvalid("subject device must not be empty")
 	}
-	if commonName == "" {
-		return DeviceSubject{}, errCertRequestInvalid("subject common name must not be empty")
+	if strings.TrimSpace(commonName) == "" {
+		return DeviceSubject{}, errCertRequestInvalid("subject common name must not be blank")
 	}
 	if len(commonName) > maxCommonNameLen {
 		return DeviceSubject{}, errCertRequestInvalid("subject common name too long")
@@ -349,12 +389,23 @@ func NewCertRequest(
 	if subject.IsZero() {
 		return CertRequest{}, errCertRequestInvalid("subject must not be empty")
 	}
+	if err := requireSameOrigin(scope, subject); err != nil {
+		return CertRequest{}, err
+	}
 	if len(csrDER) == 0 {
 		return CertRequest{}, errCertRequestInvalid("csr must not be empty")
 	}
-	if _, err := x509.ParseCertificateRequest(csrDER); err != nil {
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
 		return CertRequest{}, errcode.Wrap(errcode.KindInvalid, errCertRequestInvalidCode,
 			msgCSRUnparseable, err)
+	}
+	// Proof-of-possession: a parseable CSR is not proof the requester holds the
+	// private key. CheckSignature verifies the CSR self-signature (the POP). A
+	// parse-OK but signature-invalid CSR is rejected fail-closed.
+	if err := csr.CheckSignature(); err != nil {
+		return CertRequest{}, errcode.Wrap(errcode.KindInvalid, errCertRequestInvalidCode,
+			msgCSRSignatureInvalid, err)
 	}
 	if usages.IsZero() {
 		return CertRequest{}, errCertRequestInvalid("key usage must not be empty")

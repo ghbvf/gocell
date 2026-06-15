@@ -16,11 +16,14 @@ import "context"
 // is a SEPARATE concern handled by [Authorizer] — an authorization defect must
 // not widen into unauthorized signing.
 type Signer interface {
-	// Sign mints a certificate for req and returns the sealed result. The
-	// implementation reads the public key + proof-of-possession from the
-	// request CSR but takes the subject / SANs / usages from the (constrained)
-	// request itself, never blindly from the CSR.
-	Sign(ctx context.Context, req CertRequest) (IssuedCert, error)
+	// Sign mints a certificate for an AUTHORIZED request and returns the sealed
+	// result. Taking [AuthorizedCertRequest] (not a bare [CertRequest]) is the
+	// type-level guarantee that authorization happened and its constraints (TTL,
+	// SAN allowance) were enforced before signing — a Signer cannot be handed an
+	// un-authorized request. The implementation reads the public key + verified
+	// proof-of-possession from the request CSR and takes subject / SANs / usages
+	// from the (constrained) request, never blindly from the CSR.
+	Sign(ctx context.Context, req AuthorizedCertRequest) (IssuedCert, error)
 
 	// TrustBundle returns the CA trust anchors as DER-encoded certificates,
 	// ordered leaf-issuer first to root last (the order an EST /cacerts response

@@ -53,9 +53,10 @@
 //
 // CERT-VALUE-SEALED-CONSTRUCTION-01 (Hard). Every cross-trust-boundary input and
 // minted-credential value type — [CertScope], [CertRequest], [IssuedCert],
-// [DeviceSubject], [SubjectAltNames], [KeyUsages], [SignConstraints],
-// [EnrollmentClaim], and the [IssuerID] / [DeviceID] / [Serial] newtypes — has
-// only unexported fields, so a populated composite literal of any of them
+// [AuthorizedCertRequest], [DeviceSubject], [SubjectAltNames], [KeyUsages],
+// [SignConstraints], [EnrollmentClaim], and the [IssuerID] / [DeviceID] /
+// [Serial] newtypes — has only unexported fields, so a populated composite
+// literal of any of them
 // outside this package is a Go compile error. Forging certificate material or
 // signing inputs is structurally unrepresentable; the sole minters are the
 // New* constructors, which validate fail-closed. (Read-only OUTPUT types —
@@ -83,6 +84,18 @@
 // caller-allowlist, NOT Hard — there is no low-cost Hard path while the adapter
 // is necessarily external. This is documented rather than packaged as a false
 // Hard.
+//
+// Authorization-into-the-funnel (Hard). [Signer.Sign] takes a sealed
+// [AuthorizedCertRequest], not a bare [CertRequest]. That value can only be
+// minted by [NewAuthorizedCertRequest], which fail-closed enforces the
+// Authorizer's grant (Granted, TTL ≤ MaxTTL, SAN ⊆ AllowedSANs) — so the
+// authorization obligation (FR-005) is carried into the signing funnel as a
+// compile-time fact: a Signer cannot be handed an un-authorized request. This is
+// the GoCell type-system strengthening of the open-source consensus (step-ca's
+// AuthorizeSign→SignOptions→Sign, SPIRE's authorized params→Sign) — the two
+// interfaces stay separate while the grant becomes unforgeable. An archtest
+// reverse self-check pins Signer.Sign's parameter to AuthorizedCertRequest (a
+// relaxation back to CertRequest fails CI).
 //
 // CERT-REVOKE-SCOPED-01 (Hard). [RevocationStore].Revoke / RevocationList / Tidy
 // take [CertScope] (and Revoke additionally [Serial]) as mandatory typed
