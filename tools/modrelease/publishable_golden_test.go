@@ -44,7 +44,8 @@ const publishableModuleSetRule = "PUBLISHABLE-MODULE-SET-01"
 // updateGolden regenerates testdata/publishable.golden (via `make
 // update-modrelease-golden`). Test-scope only; modrelease is not imported as a
 // dependency, so this flag cannot collide with a consumer's own -update.
-var updateGolden = flag.Bool("update", false, "regenerate testdata/publishable.golden")
+var updateGolden = flag.Bool("update", false,
+	"regenerate the modrelease testdata goldens (publishable.golden, installable.golden, stable_tags.golden)")
 
 // goldenTagPathRE matches a well-formed synchronized tag: a bare version for the
 // root, or "<reldir>/vX.Y.Z" for a satellite. Rejects "..", absolute paths.

@@ -283,6 +283,10 @@ jobs:
           # golden-locked by STABLE-RELEASE-TAG-SET-01 (testdata/stable_tags.golden);
           # this consumed shape is guarded by RELEASE-STABLE-MARKER-TAG-01.
           mapfile -t tags < <(go run ./tools/modrelease/cmd --version "$TAG" --print-stable-tags)
+          # NOTE: `<(...)` is a process substitution, NOT a pipe — its exit code is
+          # NOT propagated by `set -euo pipefail`. So a failed `go run` (build error,
+          # etc.) leaves `tags` an empty array WITHOUT aborting here; the sanity floor
+          # below is the SOLE fail-closed guard for that case. Do not remove it.
           # Sanity floor only (the EXACT set is the golden above): >=3 = marker +
           # >=2 library tags, and the marker MUST be first — catches modrelease
           # returning empty/garbage or a marker-less set at release time.
@@ -290,9 +294,11 @@ jobs:
             echo "::error::modrelease --print-stable-tags must emit the bare marker '$TAG' first + the full publishable set; got ${#tags[@]} tag(s), first='${tags[0]:-}'."
             exit 1
           fi
-          # Operator-visible preview of the exact set about to be pushed.
+          # Operator-visible preview of the exact set about to be pushed. The
+          # non-marker tags are the publishable module set (libraries + tools/generated),
+          # not external "library" modules only — hence "publishable module tags".
           {
-            echo "### Release $TAG — ${#tags[@]} synchronized tags (bare marker + $(( ${#tags[@]} - 1 )) library module tags)"
+            echo "### Release $TAG — ${#tags[@]} synchronized tags (bare marker + $(( ${#tags[@]} - 1 )) publishable module tags)"
             printf -- '- %s\n' "${tags[@]}"
           } >>"$GITHUB_STEP_SUMMARY"
           # Push the now-verified pin commit to develop (only if one was created).

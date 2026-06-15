@@ -335,7 +335,10 @@ func TagPaths(root, version string) ([]string, error) {
 // This is the single source the release workflow's "Tag modules" step consumes
 // (modrelease/cmd --print-stable-tags); it replaces the pre-#2141 shell-minted
 // `tags=("$TAG" "${module_tags[@]}")` construction, and testdata/stable_tags.golden
-// byte-locks the resulting set (STABLE-RELEASE-TAG-SET-01, Hard).
+// byte-locks the resulting set (STABLE-RELEASE-TAG-SET-01, Hard) — including the
+// marker's bare-version shape, which is frozen by that whole-set golden, not by an
+// independent guard on tagPathFor. TestStableReleaseTagSet01_MarkerFirst additionally
+// proves StableTags == [marker] ++ [TagPaths].
 //
 // Contrast [TagPaths] (--print-tag-paths): library tags ONLY, no marker — still
 // used by the release workflow's stable-resume verification path, which proves

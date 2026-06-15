@@ -61,6 +61,20 @@ func parseFlags() (flags, error) {
 	if *version == "" {
 		return flags{}, fmt.Errorf("--version is required (e.g. --version v1.2.3)")
 	}
+	// The mode flags are mutually exclusive — run()'s switch silently honors the
+	// first set case, so passing two (e.g. --print-stable-tags --print-tag-paths)
+	// would quietly emit the wrong tag set into release.yml's `mapfile`. Reject
+	// rather than pick one arbitrarily. (No flag set = the default bump mode.)
+	modes := 0
+	for _, set := range []bool{*printTags, *printStableTags, *printInstallableTags, *installable, *dryRun} {
+		if set {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return flags{}, fmt.Errorf("--print-tag-paths / --print-stable-tags / --print-installable-tags / " +
+			"--installable / --dry-run are mutually exclusive; pass at most one")
+	}
 	return flags{
 		version:              *version,
 		printTags:            *printTags,
@@ -189,7 +203,10 @@ func preview(root, version string) error {
 	if err != nil {
 		return err
 	}
-	tags, err := modrelease.TagPaths(root, version)
+	// The fresh stable push set is StableTags (bare marker first + library tags),
+	// matching what release.yml's "Tag modules" step consumes via --print-stable-tags
+	// — so dry-run previews the marker, not just the library tags.
+	stable, err := modrelease.StableTags(root, version)
 	if err != nil {
 		return err
 	}
@@ -206,8 +223,8 @@ func preview(root, version string) error {
 	for _, m := range mods {
 		p("  %s (%s)\n", m.Dir, m.ImportPath)
 	}
-	p("would create %d library tags:\n", len(tags))
-	for _, t := range tags {
+	p("fresh stable release would push %d tags (bare marker first + %d library):\n", len(stable), len(stable)-1)
+	for _, t := range stable {
 		p("  %s\n", t)
 	}
 	p("%d installable binaries would have replace stripped and internal requires pinned to %s:\n",
