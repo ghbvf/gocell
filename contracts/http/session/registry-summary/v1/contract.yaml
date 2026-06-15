@@ -1,7 +1,7 @@
 id: http.session.registry-summary.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L3
+consistencyLevel: L1
 lifecycle: active
 endpoints:
   server: accesscore

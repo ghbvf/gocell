@@ -3,6 +3,11 @@
   risk: low
   blocker: ""
   updatedAt: 2026-05-16
+- journeyId: J-sessionregistry
+  state: doing
+  risk: low
+  blocker: ""
+  updatedAt: 2026-06-15
 - journeyId: J-sessionrefresh
   state: todo
   risk: low

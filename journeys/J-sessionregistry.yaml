@@ -1,0 +1,19 @@
+id: J-sessionregistry
+goal: 会话注册表 CQRS 投影从 durable journal 重建，并按租户隔离地服务会话计数
+lifecycle: experimental
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - accesscore
+contracts:
+  - event.session.created.v1
+  - projection.session.registry-summary.v1
+  - http.session.registry-summary.v1
+passCriteria:
+  - text: session.created 经 emit 期同事务双写进 projection_events durable journal（topic-filtered）
+    mode: manual
+  - text: session_registry 投影 rebuild 后计数与 live 一致；outbox 清理不破坏 rebuild（T-06-2，由 adapters/postgres testcontainers 白盒证明）
+    mode: manual
+  - text: registry-summary 读端点经 session:read 门禁 + principal 派生 tenant 隔离，跨租户不可见，缺 tenant fail-closed（403）
+    mode: manual
