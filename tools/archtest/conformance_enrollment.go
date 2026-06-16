@@ -36,7 +36,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"sort"
 	"strings"
 	"testing"
 
@@ -112,7 +111,8 @@ func isCandidateImplType(obj *types.TypeName, exportedOnly bool) bool {
 
 // canonicalPkgPath strips the "_test" or ".test" suffix from a test-variant
 // package path to obtain the canonical production package path. Shared with the
-// outbox subscriber/publisher enrollment rules.
+// repo-family enrollment credit in this file and the outbox subscriber/publisher
+// enrollment rules.
 func canonicalPkgPath(path string) string {
 	path = strings.TrimSuffix(path, "_test")
 	path = strings.TrimSuffix(path, ".test")
@@ -129,10 +129,15 @@ func isTestDeclaredObj(fset *token.FileSet, obj types.Object) bool {
 }
 
 // collectImplsFromScope adds to implSet/implPkgSet every concrete named type in pkg
-// that implements iface. exportedOnly restricts to exported types. It is the
-// REDFixture-facing collector (operating on a Tests=false load's *types.Package, so
-// no test-file filtering is required); the folded production path collects via
-// [loadConformanceEnrollmentImpls] with a non-_test.go filter instead.
+// that implements iface. exportedOnly restricts to exported types.
+//
+// WARNING: this collector does NOT filter _test.go-declared types, so it is valid
+// ONLY on a Tests=false load's *types.Package (no test variants present). It is the
+// REDFixture-facing collector (the RED fixtures keep their lighter Tests=false load).
+// The folded PRODUCTION path must instead use [loadConformanceEnrollmentImpls], whose
+// [productionImplCandidates] applies the non-_test.go filter; production-path
+// non-vacuity is additionally guarded by the len(implSet)==0 checks in
+// checkRepoConformanceEnrollment / checkSagaConformanceEnrollment.
 func collectImplsFromScope(
 	pkg *types.Package, iface *types.Interface, exportedOnly bool, implSet, implPkgSet map[string]bool,
 ) {
@@ -279,7 +284,9 @@ func flagUnenrolledByPkg(
 }
 
 // flagUnenrolledByImplKey returns a diagnostic for every impl not in enrolledImpls
-// (the saga family's impl-level enrollment), sorted by Rel for stable output.
+// (the saga family's impl-level enrollment). Order is unspecified — [Report] /
+// [Canonical] sort + dedup before emitting, so neither flag helper sorts here
+// (symmetric with [flagUnenrolledByPkg]).
 func flagUnenrolledByImplKey(
 	implSet, enrolledImpls map[string]bool, msg func(implKey, pkgPath string) string,
 ) []Diagnostic {
@@ -295,7 +302,6 @@ func flagUnenrolledByImplKey(
 		pkgPath := implKey[:dotIdx]
 		diags = append(diags, Diagnostic{Rel: implKey, Line: 0, Message: msg(implKey, pkgPath)})
 	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
 	return diags
 }
 
@@ -313,25 +319,34 @@ type repoConformanceSpec struct {
 
 func policyRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
-		ruleID: rulePolicyRepoConformanceEnrollment01, ifaceName: policyRepoIfaceName,
-		conformanceFunc: policyConformanceFunc, humanIface: "ports.PolicyRepository",
-		emptyImplHint: "Expect at least mem.PolicyRepository.", callSuffix: "(t, factory)",
+		ruleID:          rulePolicyRepoConformanceEnrollment01,
+		ifaceName:       policyRepoIfaceName,
+		conformanceFunc: policyConformanceFunc,
+		humanIface:      "ports.PolicyRepository",
+		emptyImplHint:   "Expect at least mem.PolicyRepository.",
+		callSuffix:      "(t, factory)",
 	}
 }
 
 func roleRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
-		ruleID: ruleRoleRepoConformanceEnrollment01, ifaceName: roleRepoIfaceName,
-		conformanceFunc: roleConformanceFunc, humanIface: "ports.RoleRepository",
-		emptyImplHint: "Expect at least mem.RoleRepository and postgres.PGRoleRepo.", callSuffix: "(t, factory)",
+		ruleID:          ruleRoleRepoConformanceEnrollment01,
+		ifaceName:       roleRepoIfaceName,
+		conformanceFunc: roleConformanceFunc,
+		humanIface:      "ports.RoleRepository",
+		emptyImplHint:   "Expect at least mem.RoleRepository and postgres.PGRoleRepo.",
+		callSuffix:      "(t, factory)",
 	}
 }
 
 func userRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
-		ruleID: ruleUserRepoConformanceEnrollment01, ifaceName: userRepoIfaceName,
-		conformanceFunc: userConformanceFunc, humanIface: "ports.UserRepository",
-		emptyImplHint: "Expect at least mem.UserRepository and postgres.PGUserRepo.", callSuffix: "(t, factory, features)",
+		ruleID:          ruleUserRepoConformanceEnrollment01,
+		ifaceName:       userRepoIfaceName,
+		conformanceFunc: userConformanceFunc,
+		humanIface:      "ports.UserRepository",
+		emptyImplHint:   "Expect at least mem.UserRepository and postgres.PGUserRepo.",
+		callSuffix:      "(t, factory, features)",
 	}
 }
 
@@ -389,13 +404,18 @@ func checkRepoConformanceEnrollment(t *testing.T, spec repoConformanceSpec, cfg 
 // one test file and marks the impls it enrolls (factory-closure form for journal /
 // globalreader, direct-arg form for owner-checkpoint).
 type sagaConformanceSpec struct {
-	ruleID       string
-	ifacePkg     string // interface package import path
-	ifaceName    string
-	humanIface   string // e.g. "kernel/saga/journal.Journal" for messages
-	loadPatterns func(root string) []string
-	credit       func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolledImpls map[string]bool)
-	remediation  func(implKey, pkgPath string) string
+	ruleID        string
+	ifacePkg      string // interface package import path
+	ifaceName     string
+	humanIface    string // e.g. "kernel/saga/journal.Journal" for messages
+	emptyImplHint string // e.g. "Expect at least kernel/saga/journal.MemJournal."
+	loadPatterns  func(root string) []string
+	// credit scans one test file and marks the impls it enrolls. The files
+	// slice (all files of the pass) is used only by the factory-closure form
+	// (Journal / GlobalReader, to resolve a named-func / local-var factory);
+	// the direct-arg form (OwnerCheckpoint) ignores it (`_ []*ast.File`).
+	credit      func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolledImpls map[string]bool)
+	remediation func(implKey, pkgPath string) string
 }
 
 // checkSagaConformanceEnrollment is the shared body for the three saga enrollment
@@ -413,6 +433,16 @@ func checkSagaConformanceEnrollment(t *testing.T, spec sagaConformanceSpec) []Di
 			"%s: failed to resolve %s interface; check import path %s",
 			spec.ruleID, spec.humanIface, spec.ifacePkg)}}
 	}
+	// Zero-impl guard, symmetric with checkRepoConformanceEnrollment: an empty
+	// implSet after a successful iface resolve signals a type-universe regression
+	// (folded load broke pointer-identity) or a loadPatterns gap — fail loud rather
+	// than report zero violations (a silent vacuous-green for this saga rule).
+	if len(implSet) == 0 {
+		return []Diagnostic{{Rel: spec.ifacePkg, Message: fmt.Sprintf(
+			"%s: zero %s implementations collected — likely a type-universe regression "+
+				"(iface and impls must share one packages.Load) or a loadPatterns gap. %s",
+			spec.ruleID, spec.ifaceName, spec.emptyImplHint)}}
+	}
 
 	enrolledImpls := map[string]bool{}
 	for _, pd := range passes {
@@ -428,7 +458,8 @@ func sagaJournalConformanceSpec() sagaConformanceSpec {
 	return sagaConformanceSpec{
 		ruleID: "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01", ifacePkg: sagaJournalPkg,
 		ifaceName: sagaJournalIfaceName, humanIface: "kernel/saga/journal.Journal",
-		loadPatterns: sagaJournalLoadPatterns,
+		emptyImplHint: "Expect at least kernel/saga/journal.MemJournal.",
+		loadPatterns:  sagaJournalLoadPatterns,
 		credit: func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditEnrollmentsFromFactory(info, files, file, sagaConformanceFuncName, implSet, enrolled)
 		},
@@ -446,7 +477,8 @@ func sagaGlobalReaderConformanceSpec() sagaConformanceSpec {
 	return sagaConformanceSpec{
 		ruleID: "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01", ifacePkg: sagaJournalPkg,
 		ifaceName: sagaGlobalReaderIfaceName, humanIface: "kernel/saga/journal.GlobalReader",
-		loadPatterns: sagaJournalLoadPatterns,
+		emptyImplHint: "Expect at least kernel/saga/journal.MemJournal.",
+		loadPatterns:  sagaJournalLoadPatterns,
 		credit: func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditEnrollmentsFromFactory(info, files, file, sagaGlobalReaderConformanceFunc, implSet, enrolled)
 		},
@@ -464,7 +496,8 @@ func sagaOwnerCheckpointConformanceSpec() sagaConformanceSpec {
 	return sagaConformanceSpec{
 		ruleID: "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", ifacePkg: sagaKernelProjectionPkg,
 		ifaceName: sagaOwnerCheckpointIfaceName, humanIface: "kernel/projection.OwnerCheckpointStore",
-		loadPatterns: sagaOwnerCheckpointLoadPatterns,
+		emptyImplHint: "Expect at least kernel/projection.MemOwnerCheckpointStore.",
+		loadPatterns:  sagaOwnerCheckpointLoadPatterns,
 		credit: func(info *types.Info, _ []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditOwnerCheckpointEnrollments(info, file, sagaKernelProjectionTestPkg,
 				sagaOwnerCheckpointConformanceFunc, implSet, enrolled)
