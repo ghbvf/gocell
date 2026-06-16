@@ -14,10 +14,10 @@ import (
 
 type queueRegistrarCell struct {
 	*cell.BaseCell
-	got kcommand.Queue
+	got kcommand.QueueWithScanner
 }
 
-func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.Queue) {
+func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.QueueWithScanner) {
 	c.got = q
 }
 
@@ -34,6 +34,26 @@ func TestDiscoverQueueRegistrars(t *testing.T) {
 
 func TestDiscoverQueueRegistrars_NilQueue(t *testing.T) {
 	count, err := DiscoverQueueRegistrars(nil, nil)
+	require.Error(t, err)
+	assert.Zero(t, count)
+}
+
+func TestDiscoverQueueRegistrarsInAssembly_NilAssembly(t *testing.T) {
+	// A nil assembly is a wiring error, not an empty-cell no-op: fail fast with a
+	// non-nil queue so the guard (not the queue==nil path) is what trips.
+	count, err := DiscoverQueueRegistrarsInAssembly(nil, commandtest.NewInMemQueue())
+	require.Error(t, err)
+	assert.Zero(t, count)
+}
+
+func TestDiscoverQueueRegistrars_TypedNilQueue(t *testing.T) {
+	// A typed-nil queue (a nil *InMemQueue boxed into the QueueWithScanner
+	// interface) is != nil but is an invalid dependency: it must be rejected at
+	// the construction boundary, not counted as a successful injection. A bare
+	// `q == nil` guard misses this; validation.IsNilInterface catches it.
+	var typedNil *commandtest.InMemQueue
+	var q kcommand.QueueWithScanner = typedNil
+	count, err := DiscoverQueueRegistrars(nil, q)
 	require.Error(t, err)
 	assert.Zero(t, count)
 }

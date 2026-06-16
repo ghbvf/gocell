@@ -48,20 +48,13 @@ const MaxLeaseExtension = time.Hour
 // Dequeue, and ScanActive (CLAUDE.md: 同义字符串 ≥ 3 次抽常量).
 const errLookupDeviceFmt = "device-command: lookup device: %w"
 
-// commandQueueStore combines the Queue facade with the ActiveScanner lookup
-// needed for ownership checks, sweeper scans, and internal ops views.
-// commandtest.InMemQueue satisfies this interface; a postgres adapter would
-// implement it too.
-type commandQueueStore interface {
-	command.Queue
-	command.ActiveScanner
-}
-
 // Service handles device command business logic.
 //
-// NewService accepts any commandQueueStore; in demo/example mode this is
-// commandtest.InMemQueue. A production postgres adapter would provide the same
-// combined interface.
+// NewService accepts a kernel/command.QueueWithScanner (Queue + ActiveScanner)
+// — the same composite the cell receives via QueueRegistrar — needed for
+// ownership checks, sweeper scans, and internal ops views. In demo/example mode
+// this is commandtest.InMemQueue; a production postgres adapter provides the
+// same combined interface.
 //
 // Service deliberately does NOT implement any generated contract Service
 // interface. Each slice (devicecommand / devicecommandinternal) owns its own
@@ -74,9 +67,9 @@ type commandQueueStore interface {
 // The authoritative rationale (and the boundary for when it WOULD need redaction)
 // lives on domain.Device.ID; see that field's doc (#1695 F10).
 type Service struct {
-	queue      commandQueueStore       `gocell:"required"`
-	deviceRepo domain.DeviceRepository `gocell:"required"`
-	codec      *query.CursorCodec      `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"device-command: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	queue      command.QueueWithScanner `gocell:"required"`
+	deviceRepo domain.DeviceRepository  `gocell:"required"`
+	codec      *query.CursorCodec       `gocell:"required" gocellCode:"ErrCellMissingCodec" gocellErr:"device-command: cursor codec is required"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
 	logger     *slog.Logger
 	runMode    query.RunMode
 	clock      clock.Clock
@@ -139,7 +132,7 @@ func WithOnCommandResolved(hook func(context.Context, command.Entry, command.Ack
 // NewService returns errcode.ErrCellMissingCodec so the cell Init() can
 // propagate a structured error instead of a runtime panic.
 func NewService(
-	clk clock.Clock, q commandQueueStore, deviceRepo domain.DeviceRepository,
+	clk clock.Clock, q command.QueueWithScanner, deviceRepo domain.DeviceRepository,
 	codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode,
 	opts ...Option,
 ) (*Service, error) {

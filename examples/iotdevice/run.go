@@ -377,14 +377,6 @@ func commandRelayClaimer(clk clock.Clock, durable bool) (idempotency.Claimer, er
 	return idempotency.NewInMemClaimer(clk), nil
 }
 
-// deviceCommandQueue is the runtime contract devicecell expects — a single
-// store implements both kernel/command.Queue (consumer path) and
-// command.ActiveScanner (sweeper / ops view).
-type deviceCommandQueue interface {
-	kcommand.Queue
-	kcommand.ActiveScanner
-}
-
 // buildDevicePersistence resolves the device repository + command queue based
 // on GOCELL_IOTDEVICE_DSN. When the DSN env var is set, durable mode wires PG
 // implementations + applies migrations; otherwise demo mode wires the
@@ -396,7 +388,7 @@ type deviceCommandQueue interface {
 // deferred `pool.Close()` would be skipped when `os.Exit(1)` runs after
 // `app.Run` returns an error.
 func buildDevicePersistence(ctx context.Context, clk clock.Clock, logger *slog.Logger) (
-	devicepg.DeviceRepository, deviceCommandQueue, outbox.DurabilityMode, *adapterpg.Pool, error,
+	devicepg.DeviceRepository, kcommand.QueueWithScanner, outbox.DurabilityMode, *adapterpg.Pool, error,
 ) {
 	dsn := os.Getenv("GOCELL_IOTDEVICE_DSN")
 	if dsn == "" {

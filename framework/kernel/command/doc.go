@@ -45,7 +45,10 @@
 // distinct from Queue.Dequeue (the claim-with-lease primary consumer path).
 //
 // [QueueRegistrar] is an optional Cell-side interface; the runtime consumer
-// lives in runtime/command (queue discovery + dispatch registry).
+// lives in runtime/command (queue discovery + dispatch registry). It receives a
+// [QueueWithScanner] — the composite of Queue + ActiveScanner — so a queue that
+// is not also a scanner is rejected at compile time, not at Init
+// (QUEUE-REGISTRAR-SCANNER-REQUIRED-01).
 //
 // # Testing
 //
