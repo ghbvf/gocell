@@ -254,8 +254,8 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | 缺口 / 威胁 | split 下风险 | 当前补偿 / 约束 | 归属 |
 |---|---|---|---|
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
-| **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（评估 + 登记；实现在 #2153）|
-| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964 不实现 mTLS**，追踪在 **#2153** | US6 #1964（登记；实现在 #2153）|
+| **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
+| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS** | US6 → **defer 至 #2263**（与 token 层 per-cell 身份正交，见 §#2153 Amendment §残留）|
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -331,6 +331,51 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
   `GenerateServiceToken`（须走 `SignInternalRequest` funnel）」arm + red fixture——把 godoc 已宣称但未 enforce
   的禁令落为机器可判定（Medium）；`CELLTRANSPORT-SELECT-FUNNEL-01` 扫描根加 `corecells` + red fixture，封死
   core cell 直构 `transport.NewRemoteHTTP` 绕 topology gate 的未来路径。
+
+### #2153 Amendment — per-cell service-token 身份隔离落地（2026-06-16）
+
+US6（#2153）落地 token 层 per-cell 密钥隔离，**使 split 部署可安全发生**（破除「无 split 故不建 / 不建故不敢 split」
+的死锁）。按 AI-robust 章程逐项重评威胁矩阵：
+
+- **「共享 HMAC keyring」行 → split 下 CLOSED**。机制：service-token 的 HMAC keying 从「单一 master 直接签」改为
+  **per-cell HKDF 子密钥**——签发用 `HKDF(parent, info=cellID)`（`deriveCellSecret`，RFC 5869，HMAC-SHA256，
+  `crypto/hkdf` stdlib，wire 格式不变：仍 `ts:nonce:callerCell:mac`、MAC 仍 32B，故无版本目录），验签按 token 自报
+  `callerCell` 取对应子密钥。kernel `auth.ServiceKeyring`（`SigningSecrets(ownCell)`/`VerifySecrets(callerCell)`/
+  `Validate()`，取代旧 `HMACKeyring{Current/Secrets}`）有两个实现：① `HMACKeyRing`（monolith，持 master，按需派生）；
+  ② `ProvisionedKeyring`（split，**master 缺席**，只持自身签名子密钥 + 其声明 caller 的验签子密钥）。
+- **关键修正（对上文威胁矩阵「per-cell HKDF」措辞）**：上文与 #1966 review amendment 把「per-cell HKDF」当作该威胁的
+  修复方向，**措辞有缺陷** —— HKDF over **仍共享的 master** 不修复它：持 master 者可 `HKDF(master, 任意 cellID)`
+  派生任意 cell 子密钥、照样伪造。**Hard 属性的唯一判据是 master 在 cell 进程缺席**（`ProvisionedKeyring`）。故：
+  - **split（`ProvisionedKeyring`）→ Hard**：被攻陷 cell 既无 master、也无他 cell 子密钥（验签集按声明 caller
+    least-privilege 收窄），跨 cell `callerCell` 伪造在密码学上 fail-closed（签发侧：cell 只能签自身；验签侧：未声明
+    caller 无子密钥 → 拒）。
+  - **monolith（`HMACKeyRing`，master 在进程内）→ 明确非 per-cell-Hard，可接受**：monolith 是单一信任域，
+    进程内派生无隔离收益；行为等价旧栈（只是 MAC key 变成派生子密钥）。**这正是「仅最小 HKDF over 共享 master」
+    方案被否的原因**（详见实施计划 `2153-*.md` 自审）。
+- **密钥分发（library-form，无 key service）**：`gocell derive-service-keys --cell <id>` 从 master 派生该 cell 的
+  签名子密钥 + 其声明 caller 的验签子密钥，输出部署 env 块（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` /
+  `GOCELL_SERVICE_VERIFY_KEYS` [+ `_PREVIOUS`]）。operator 在每个 split cell 部署时跑一次，进程只拿子密钥、不拿 master。
+  派生单源（`auth.DeriveProvisionedKeys` 复用 `deriveCellSecret`），故 CLI 产物与 monolith 运行时派生字节一致、跨模式可互验。
+- **env 层互斥 fail-closed 守卫（Medium）**：composition root `buildInternalServiceKeyring` 二选一——master
+  （`GOCELL_SERVICE_SECRET`）**XOR** provisioned（`GOCELL_SERVICE_SIGNING_KEY`...）；两者皆设（provisioned cell 又持
+  master）或皆缺 → 启动 fail-closed。
+- **轮换**：复用既有 current/previous 双密钥（验签 try current 后 previous）；master rotation → 重跑 CLI 重新分发 →
+  重叠窗口平滑切换，**零 wire 改动**。
+
+**残留（显式 backlog，不 silent）**：
+- **mTLS / SPIFFE-SVID 对等认证** → **#2263**。与 token 层 per-cell 身份**正交**且**不构成死锁**：token 层
+  落地后 split 已密码学 fail-closed 可上（私网部署补偿明文），mTLS 是叠加的传输层防御（端点对等认证 + wire 机密性），
+  自带独立大工作流（证书/SVID 签发/分发/轮换）—— 真正可排下一环，非循环借口。
+- **「remote placement 强制 provisioned」enforcement** → **#2265**（blocked-by US7 真实 process-splitting）。今
+  `Topology` 无 remote/split 字段、`topology.remote` 仍单进程 loopback，无真实分进程信号；该 PR 将用本单的
+  `ProvisionedKeyring` 能力 + 加该 enforcement。非本单 Hard 属性所必需（Hard 来自 cell 跑 `ProvisionedKeyring`、
+  master 缺席本身）。
+- **per-cell 独立轮换**（不动 master、靠 token 版本段区分）→ **#2264**；需 wire 加版本段，非本单 Hard 所必需。
+
+**新增 enforcement**：per-cell 伪造防护 = 密码学 fail-closed（split，Hard）；env 层 master XOR provisioned 互斥 =
+bootstrap guard（Medium）；CLI↔运行时派生一致 = 单测锁定（同源 `deriveCellSecret`）。**不新增 archtest 扫描**——派生
+收口于既有 `SVCTOKEN-CALLER-CELL-REQUIRED-01` funnel 内的 sign/verify，以行为测试（跨 cell 伪造拒绝 + least-privilege
+验签 + 轮换 + 跨模式互验）作机器守卫。
 
 ### #1964 Amendment — per-cell 基础设施 seam 落地记录
 

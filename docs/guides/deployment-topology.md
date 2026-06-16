@@ -117,15 +117,22 @@ When cells are split across processes, the following infrastructure is required:
   for synchronous cross-cell HTTP calls. The TOPO-12 fail-close gate was removed
   by US5. Composition roots wire the transport via `celltransport.Resolve`
   (CELLTRANSPORT-SELECT-FUNNEL-01 enforces this at PR-time).
-- **共享 service secret**（必须，所有节点一致）：跨进程的 service token 验证要求
-  所有 cell 进程共享**同一个** `GOCELL_SERVICE_SECRET`（HMAC-SHA256 密钥，≥ 32 字节）。
-  各进程独立配置该环境变量时，值必须相同——任意一侧密钥不一致会导致 `/internal/v1/*`
-  请求 MAC 验证失败（401）。密钥轮换使用 `GOCELL_SERVICE_SECRET_PREVIOUS`：在所有
-  进程完成新密钥切换前，旧密钥应保留在 `GOCELL_SERVICE_SECRET_PREVIOUS` 中（旧→新
-  overlap 窗口），避免滚动重启期间验证失败。完整语义见
-  [`docs/ops/env-vars.md` §"Service Token / Controlplane Guard"](../ops/env-vars.md)。
-  验证步骤：在每个 cell 进程上确认 `GOCELL_SERVICE_SECRET` 哈希一致（不要打印明文）；
-  启动日志中若出现 `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` 或频繁 401 则为不一致信号。
+- **Per-cell service-token 密钥分发**（#2153，split 推荐 / Hard）：split cell 进程
+  **不应共享 master**（`GOCELL_SERVICE_SECRET`）—— 持 master 的任一进程被攻陷即可派生**任意** cell
+  子密钥、伪造任意 `callerCell`。推荐：每个 split cell 进程**只持自身子密钥**，由 operator 在部署时用
+  `gocell derive-service-keys --cell <id>` 从 master 派生该 cell 的签名子密钥 + 其声明 caller 的验签
+  子密钥，注入为 env（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` / `GOCELL_SERVICE_VERIFY_KEYS`
+  [+ `_PREVIOUS`]）。此模式下 master **不出现在** cell 进程中——被攻陷 cell 只暴露自身子密钥 + 其声明
+  caller 的验签子密钥，**无法伪造第三 cell**（密码学 fail-closed）。composition root 经 env 层互斥守卫
+  强制：master 与 provisioned env **二选一**（皆设或皆缺 → 启动 fail-closed）。
+  - 轮换：`master rotation` → 重跑 `derive-service-keys` 重新分发 → 验签 try current 后 previous，
+    重叠窗口平滑切换（`GOCELL_SERVICE_*_PREVIOUS`）；wire 格式不变。
+  - **monolith / 同址 fallback**：所有 cell 同进程时用 master（`GOCELL_SERVICE_SECRET` [+ `_PREVIOUS`]），
+    per-cell 子密钥在进程内派生 —— 单一信任域，**不提供** per-cell 隔离（进程一破即得 master），可接受；
+    **不要**把它用于跨信任边界的真实分进程部署。
+  - 完整语义见 [`docs/ops/env-vars.md` §"Service Token / Controlplane Guard"](../ops/env-vars.md) 与 ADR
+    `202606131142-1423` §#2153 Amendment。验证：split cell 进程**不**应设 `GOCELL_SERVICE_SECRET`；
+    频繁 401 多为子密钥分发不一致（重跑 `derive-service-keys` 用同一 master）。
 - **Internal listener 绑定与可达性**（split topology 时须绑定到可达地址）：默认
   internal listener 绑定 `127.0.0.1:9090`（环回地址），这在 split topology 中会导致
   远端 caller cell 的 HTTP 请求无法到达（连接被拒绝）。分拆部署时须将
@@ -138,14 +145,18 @@ When cells are split across processes, the following infrastructure is required:
   详见 [`docs/ops/listener-topology.md` §"Deployment Recommendations"](../ops/listener-topology.md)。
   验证步骤：从 caller cell 进程（或同等网络位置）向 `<被调用cell地址>:9090/internal/v1/...`
   发起探测请求，确认可达（401 是预期鉴权响应，connection refused 或 timeout 表示绑定错误）。
-- **TLS/mTLS enforcement** (US6 #1964): production transport security for
-  remote endpoints. Bare `host:port` endpoints currently default to plaintext
-  HTTP; bearer/principal headers are integrity-protected by MAC but not
-  confidential. Non-loopback TLS enforcement is wired by US6.
+- **TLS/mTLS enforcement** (deferred → 独立 backlog issue): production transport
+  security for remote endpoints. Bare `host:port` endpoints currently default to
+  plaintext HTTP; bearer/principal headers are integrity-protected by MAC but not
+  confidential. mTLS / SPIFFE-SVID peer authentication is **orthogonal** to the
+  token-layer per-cell identity that #2153 landed and is tracked as **#2263** —
+  until then, run `topology.remote` only on a trusted/private network (the
+  plaintext-wire compensation). See ADR §#2153 Amendment §残留.
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
 split topology in production. `topology.remote` is production-reachable as of
-US5 #1966, pending US6 #1964 for TLS enforcement.
+US5 #1966; token-layer per-cell identity isolation landed in #2153 (run remote
+on a trusted network until the separate mTLS backlog item lands).
 
 **Diagnosing broker status via `/readyz?verbose`**: the framework-level
 `Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres
