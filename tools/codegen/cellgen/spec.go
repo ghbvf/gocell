@@ -110,6 +110,25 @@ type GrpcServiceGenSpec struct {
 	// Empty → no public methods (the fail-closed default). Referential integrity
 	// (each name ∈ proto method set) is enforced by the contractgen pre-pass.
 	PublicMethods []string
+	// MethodPermissions lists the (FULL method name → ABAC action) pairs derived
+	// from the contract's endpoints.grpc.methods[] permission entries (#2008),
+	// sorted by full method name for deterministic golden output. Rendered into the
+	// generated GRPCServiceSpec literal as a map[string]string the runtime registrar
+	// resolves to sealed authz.Permissions for the PDP gate. Empty → no permission
+	// gates; the completeness pre-pass rejects a non-public proto method with no
+	// permission, so empty means the service is all-public or has no authed RPCs.
+	MethodPermissions []MethodPermission
+}
+
+// MethodPermission pairs a full gRPC method name with its required ABAC action
+// string (#2008). The slice form (vs a map) keeps the rendered golden
+// deterministic — buildGrpcServiceSpecFromCU sorts by FullMethod.
+type MethodPermission struct {
+	// FullMethod is the /{Service}/{Method} name, e.g.
+	// "/device.command.v1.DeviceCommandService/IssueCommand".
+	FullMethod string
+	// Permission is the ABAC action string, e.g. "device:command".
+	Permission string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.

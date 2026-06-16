@@ -98,6 +98,23 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   allowlist `permissionBasedAuthzHasRoleAllowlist`，每条带理由 + no-stale 反查。残留盲区：手写
   `range p.Roles` 成员判定（identitymanage 字段级 admin guard）不在 `HasRole` 方法范围内、不被捕获。
   Hard 化路径与完整盲区见对应 archtest godoc 与 PR-10a ADR。
+- **gRPC 方法授权与 HTTP 同构**（#2008）：非 public gRPC RPC 进 runtime 后由 auth interceptor 的
+  PDP gate 调同一 `auth.Authorizer`（composition root 经 `interceptor.Deps.Authorizer` 注入，
+  与 HTTP `WithPrimaryAuthorizer` 同源），按方法所需 permission 决策——不在 handler 手写谓词。
+  method→permission 由契约 `endpoints.grpc.methods[].permission` overlay 经 cellgen 派生入
+  `GRPCServiceSpec.MethodPermissions`，registrar 解析成 sealed `authz.Permission`（未知即启动 fail-fast）。
+  严格 fail-closed：非 public 方法缺 permission overlay = gate deny，且 codegen completeness 预检在构建期
+  拒绝（dead 403 不可静默上线）。resource = full method name（coarse，owner-scoped 取 message 字段延后）。
+  **启动期 fail-fast 与 HTTP 同构**（#2204）：spec 含 permission-gated 方法但未 wire Authorizer，注册期
+  （phase7b drain，Init 后 / serve 前）fail-fast，不再 boot+请求期才 403——对齐 HTTP `ResolveAuthorizer`；
+  overlay method-key 在注册期对本 spec 已注册方法集做闭集校验（stale/typo key fail-fast，非请求期 dead 403）。
+  **错误模型机器可读**：每个 deny 携 sealed `google.rpc.ErrorInfo`（`Reason` 闭值集 + `Domain=gocell.authz.grpc`
+  + 非 PII metadata：method/permission，无 subject/token），客户端无需解析英文文本区分 no-mapping/not-wired/
+  denied/obligation/unavailable。**PDP 决策指标同构**：gRPC PDP 决策经 `NewObservableAuthorizer` 包装（真实
+  provider 时，`kernelmetrics.IsReal` 单源与 HTTP `hasRealMetricsProvider` 共用），落同一 `auth_pdp_decision_*`
+  series（无 transport 标签，registerOrReuse 共享 family）。机制/评级/威胁矩阵见 grpc-transport-adapter ADR
+  §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + archtest
+  `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` + 治理 `FMT-41`。
 
 相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
 （`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。

@@ -34,6 +34,21 @@ func (NopProvider) GaugeVec(opts GaugeOpts) (GaugeVec, error) {
 // Returns nil (idempotent, as per the Unregister contract).
 func (NopProvider) Unregister(_ Collector) error { return nil }
 
+// IsReal reports whether p actually records metrics — i.e. non-nil and not the
+// NopProvider sentinel. It is the single source for the "wire instrumentation
+// only when a real metrics backend is configured" decision, shared by the HTTP
+// bootstrap path (Bootstrap.hasRealMetricsProvider) and the gRPC interceptor
+// chain (interceptor.NewServerInterceptors PDP-metrics wrap, #2008 F8): both
+// gate metric autowiring identically so a Nop provider never builds a no-op
+// decorator that bypasses the metric-autowire funnel.
+func IsReal(p Provider) bool {
+	if p == nil {
+		return false
+	}
+	_, isNop := p.(NopProvider)
+	return !isNop
+}
+
 type nopCounterVec struct{ labels []string }
 
 func (v nopCounterVec) Registered() bool { return true }

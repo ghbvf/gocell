@@ -15,6 +15,7 @@ import (
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
@@ -218,7 +219,7 @@ func TestNewStreamChain_RegistrarPublicMethodExempts(t *testing.T) {
 }
 
 // TestNewUnaryChain_AuthOptionsPassthrough asserts that AuthOptions from Deps are
-// forwarded to UnaryAuth by newUnaryChain (via authOptionsWithPublicMethods). It
+// forwarded to UnaryAuth by newUnaryChain (via authChainOptions). It
 // drives WithPasswordResetExempt — NOT WithPublicMethod — because #1675 made the
 // registrar the single source of the public-method set: a deps.AuthOptions
 // WithPublicMethod is deliberately overridden by reg.IsPublicMethod (appended
@@ -228,10 +229,17 @@ func TestNewStreamChain_RegistrarPublicMethodExempts(t *testing.T) {
 // PermissionDenied instead of reaching the handler.
 func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	handlerReached := false
+	// Registers a permission-gated spec, so declare a wired gate (#2008 F1).
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(true))
 	deps := Deps{
 		Collector: metrics.NewInMemoryGRPCCollector(),
 		Clock:     clock.Real(),
 		Verifier:  stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}},
+		// #2008: the non-public method also passes the PDP gate, so wire an allowing
+		// authorizer (the chain installs WithPermissionResolver(reg.PermissionForMethod)
+		// + WithPDPAuthorizer(deps.Authorizer)); the permission mapping is registered
+		// on reg below.
+		Authorizer: stubAuthorizer{dec: mustAllow()},
 		AuthOptions: []AuthOption{
 			// Exempt /svc/Public from the password-reset gate.
 			WithPasswordResetExempt(func(m string) bool { return m == "/svc/Public" }),
@@ -239,8 +247,19 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 		CellIDClosedSet: []string{"svc-cell"},
 	}
 
-	srv := grpc.NewServer(newUnaryChain(deps, runtimegrpc.NewServiceRegistrar()))
-	srv.RegisterService(&testSvcDesc, &testSvc{handlerReached: &handlerReached})
+	srv := grpc.NewServer(newUnaryChain(deps, reg))
+	reg.BindServer(srv)
+	if err := reg.Register(cell.GRPCServiceSpec{
+		ContractID:        "grpc.svc.v1",
+		CellID:            "svc-cell",
+		Listener:          cell.PrimaryListener,
+		MethodPermissions: map[string]string{"/svc/Public": authz.PermDeviceCommand().String()},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&testSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -267,6 +286,159 @@ func TestNewUnaryChain_AuthOptionsPassthrough(t *testing.T) {
 	}
 	if !handlerReached {
 		t.Fatalf("handler was not reached — WithPasswordResetExempt option did not propagate through newUnaryChain")
+	}
+}
+
+// TestNewServerInterceptors_PermissionGate_EndToEnd is the production-path capstone
+// for #2008: it wires the gRPC server through NewServerInterceptors (the SOLE
+// production entry, which builds both chains and installs
+// WithPermissionResolver(reg.PermissionForMethod) + WithPDPAuthorizer(deps.Authorizer)),
+// registers a service whose method carries a permission overlay (exactly as cellgen
+// emits MethodPermissions into cell_gen.go), and dials it over a real bufconn. A
+// caller whose token grants the role passes the PDP gate and reaches the handler; a
+// caller without it is denied PermissionDenied — proving the
+// contract→registrar→interceptor→PDP funnel end-to-end through the real production
+// wiring (not the package-private newUnaryChain).
+func TestNewServerInterceptors_PermissionGate_EndToEnd(t *testing.T) {
+	const requiredRole = "operator"
+	handlerReached := false
+
+	bundle := NewServerInterceptors(Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        rolesFromTokenVerifier{},
+		Authorizer:      roleGateAuthorizer{role: requiredRole},
+		CellIDClosedSet: []string{"svc-cell"},
+	})
+	reg := bundle.Registrar()
+	srv := grpc.NewServer(bundle.ServerOptions()...)
+	reg.BindServer(srv)
+	if err := reg.Register(cell.GRPCServiceSpec{
+		ContractID:        "grpc.svc.v1",
+		CellID:            "svc-cell",
+		Listener:          cell.PrimaryListener,
+		MethodPermissions: map[string]string{"/svc/Public": authz.PermDeviceCommand().String()},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&testSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	// Allow: the token grants the required role → the PDP gate permits → handler runs.
+	allowCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+requiredRole)
+	if err := conn.Invoke(allowCtx, "/svc/Public", &emptypb.Empty{}, &emptypb.Empty{}); err != nil {
+		t.Fatalf("authorized caller (role=%s) must reach handler, got %v (code=%v)",
+			requiredRole, err, status.Code(err))
+	}
+	if !handlerReached {
+		t.Fatalf("handler was not reached for the authorized caller")
+	}
+
+	// Deny: a token granting a different role → PDP gate denies → PermissionDenied,
+	// handler not reached again.
+	handlerReached = false
+	denyCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer guest")
+	err = conn.Invoke(denyCtx, "/svc/Public", &emptypb.Empty{}, &emptypb.Empty{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("unauthorized caller must be PermissionDenied, got %v (code=%v)", err, status.Code(err))
+	}
+	if handlerReached {
+		t.Fatalf("handler must not run for the unauthorized caller")
+	}
+}
+
+// TestNewServerInterceptors_StreamPermissionGate_EndToEnd is the stream sibling of
+// TestNewServerInterceptors_PermissionGate_EndToEnd (#2008): it wires the gRPC server
+// through NewServerInterceptors and exercises a server-streaming method declared with a
+// permission overlay. A caller whose token grants the required role opens the stream and
+// reaches the handler; a caller without the role is denied PermissionDenied at stream-open.
+func TestNewServerInterceptors_StreamPermissionGate_EndToEnd(t *testing.T) {
+	const requiredRole = "operator"
+	handlerReached := false
+
+	bundle := NewServerInterceptors(Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        rolesFromTokenVerifier{},
+		Authorizer:      roleGateAuthorizer{role: requiredRole},
+		CellIDClosedSet: []string{"svc-cell"},
+	})
+	reg := bundle.Registrar()
+	srv := grpc.NewServer(bundle.ServerOptions()...)
+	reg.BindServer(srv)
+	spec := cell.GRPCServiceSpec{
+		ContractID: "grpc.svc.stream.v1",
+		CellID:     "svc-cell",
+		Listener:   cell.PrimaryListener,
+		// PrivateStream requires the operator permission — mirrors the cellgen-emitted overlay.
+		MethodPermissions: map[string]string{"/svc/PrivateStream": authz.PermDeviceCommand().String()},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&streamTestSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}
+	if err := reg.Register(spec); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	openStream := func(bearer string) error {
+		ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+bearer)
+		st, serr := conn.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/svc/PrivateStream")
+		if serr != nil {
+			return serr
+		}
+		return st.RecvMsg(&emptypb.Empty{}) // EOF when handler completes; status error on gate denial
+	}
+
+	// Allow: token grants the required role → PDP permits → handler reached.
+	// RecvMsg returns io.EOF (codes.Unknown) on clean server-side stream close, which is
+	// the success path — the gate did not deny. Assert the code is NOT PermissionDenied.
+	allowErr := openStream(requiredRole)
+	if status.Code(allowErr) == codes.PermissionDenied {
+		t.Fatalf("authorized stream caller (role=%s) must not be PermissionDenied, got %v",
+			requiredRole, allowErr)
+	}
+	if !handlerReached {
+		t.Fatalf("handler was not reached for the authorized stream caller")
+	}
+
+	// Deny: token grants a different role → PDP denies → PermissionDenied at stream-open.
+	handlerReached = false
+	recvErr := openStream("guest")
+	if status.Code(recvErr) != codes.PermissionDenied {
+		t.Fatalf("unauthorized stream caller must be PermissionDenied, got %v (code=%v)",
+			recvErr, status.Code(recvErr))
+	}
+	if handlerReached {
+		t.Fatalf("handler must not run for the unauthorized stream caller")
 	}
 }
 

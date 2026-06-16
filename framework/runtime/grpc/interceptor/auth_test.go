@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -119,12 +120,133 @@ func TestUnaryAuth_WithPublicMethodComposes(t *testing.T) {
 	}
 }
 
+// TestUnaryAuth_PermissionGate exercises the #2008 per-method PDP gate that runs
+// after authentication on the non-public path. It is the gRPC analog of the HTTP
+// RequirePermission decision table, asserting fail-closed at every step. All cases
+// use a valid bearer token (authentication succeeds) so the gate is what decides.
+func TestUnaryAuth_PermissionGate(t *testing.T) {
+	const method = "/pkg.Svc/Do"
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+	validVerifier := stubVerifier{claims: kauth.Claims{Subject: "user-1"}}
+	resolver := WithPermissionResolver(permResolverFor(method))
+
+	cases := []struct {
+		name       string
+		opts       []AuthOption
+		wantCode   codes.Code // codes.OK means "permit, handler reached"
+		wantCalled bool
+	}{
+		{
+			name:       "allow with zero obligations permits",
+			opts:       []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})},
+			wantCode:   codes.OK,
+			wantCalled: true,
+		},
+		{
+			name:     "deny -> PermissionDenied",
+			opts:     []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("test-deny")})},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "no permission mapping for method -> PermissionDenied (strict fail-closed)",
+			opts:     []AuthOption{WithPermissionResolver(permResolverFor("/pkg.Svc/Other")), WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "nil resolver -> PermissionDenied (no mapping)",
+			opts:     []AuthOption{WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "authorizer not wired -> PermissionDenied",
+			opts:     []AuthOption{resolver},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "allow with non-zero obligation -> PermissionDenied (F5 parity)",
+			opts:     []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{dec: allowWithObligation()})},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name: "PDP unavailable error -> Unavailable",
+			opts: []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{
+				err: errcode.New(errcode.KindUnavailable, errcode.ErrAuthServiceUnavailable, "policy store down"),
+			})},
+			wantCode: codes.Unavailable,
+		},
+		{
+			name:     "PDP other error -> PermissionDenied",
+			opts:     []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{err: errcode.New(errcode.KindInternal, errcode.ErrInternal, "boom")})},
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "PDP panic -> Internal (collapsed by the auth stage guard)",
+			opts:     []AuthOption{resolver, WithPDPAuthorizer(stubAuthorizer{panicVal: "pdp exploded"})},
+			wantCode: codes.Internal,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			_, err := UnaryAuth(validVerifier, tc.opts...)(bearerCtx(), nil, info, okHandler(&called))
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("want permit, got err=%v (code=%v)", err, status.Code(err))
+				}
+			} else if status.Code(err) != tc.wantCode {
+				t.Fatalf("code = %v, want %v (err=%v)", status.Code(err), tc.wantCode, err)
+			}
+			if called != tc.wantCalled {
+				t.Fatalf("handler called = %v, want %v", called, tc.wantCalled)
+			}
+		})
+	}
+}
+
+// TestUnaryAuth_PermissionGate_LogsDeny asserts the PDP gate emits a structured
+// log on deny (the observability parity with HTTP enforcePermission): an operator
+// triaging a denial can recover subject / method / permission / reason from the log
+// without reconstructing it from the access log (which carries only the status code).
+func TestUnaryAuth_PermissionGate_LogsDeny(t *testing.T) {
+	const method = "/pkg.Svc/Do"
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+
+	var buf bytes.Buffer
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
+
+	_, err := UnaryAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
+		WithPermissionResolver(permResolverFor(method)),
+		WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("test-deny-reason")}),
+	)(bearerCtx(), nil, info, okHandler(new(bool)))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
+	}
+	got := buf.String()
+	wantFields := []string{
+		"permission denied by PDP",
+		`"method":"/pkg.Svc/Do"`,
+		`"subject":"user-1"`,
+		`"permission":"device:command"`,
+		`"reason":"test-deny-reason"`,
+	}
+	for _, want := range wantFields {
+		if !strings.Contains(got, want) {
+			t.Errorf("deny log missing %q; got: %s", want, got)
+		}
+	}
+}
+
 func assertUnaryAuthForwardsPrincipal(t *testing.T, info *grpc.UnaryServerInfo) {
 	t.Helper()
 
 	v := stubVerifier{claims: kauth.Claims{Subject: "user-1"}}
 	var gotPrincipal *auth.Principal
-	_, err := UnaryAuth(v)(bearerCtx(), nil, info,
+	// #2008: a non-public authed method now also passes the PDP gate before the
+	// handler runs, so wire a permitting resolver + authorizer to reach it.
+	_, err := UnaryAuth(v,
+		WithPermissionResolver(permResolverFor(info.FullMethod)),
+		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
+	)(bearerCtx(), nil, info,
 		func(ctx context.Context, _ any) (any, error) {
 			p, _ := auth.FromContext(ctx)
 			gotPrincipal = p
@@ -225,7 +347,11 @@ func assertUnaryAuthPasswordResetExempt(t *testing.T, info *grpc.UnaryServerInfo
 	v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
 	called := false
 	exempt := WithPasswordResetExempt(func(m string) bool { return m == info.FullMethod })
-	_, err := UnaryAuth(v, exempt)(bearerCtx(), nil, info, okHandler(&called))
+	// #2008: past the reset gate, the non-public method still passes the PDP gate.
+	_, err := UnaryAuth(v, exempt,
+		WithPermissionResolver(permResolverFor(info.FullMethod)),
+		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
+	)(bearerCtx(), nil, info, okHandler(&called))
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}

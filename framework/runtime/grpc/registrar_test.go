@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 )
 
@@ -40,7 +41,10 @@ const registrarBufSize = 1 << 20 // 1 MiB
 // Option 3 #1152) and the delegation target is bound before any Register call.
 func newRegistrar() (*runtimegrpc.ServiceRegistrar, *grpc.Server) {
 	inner := grpc.NewServer()
-	reg := runtimegrpc.NewServiceRegistrar()
+	// WithPermissionGate(true): the shared helper declares a wired PDP gate so tests
+	// registering permission-gated specs pass the #2008 F1 startup guard. The
+	// unwired-gate fail-fast has its own dedicated test minting a bare registrar.
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(true))
 	reg.BindServer(inner)
 	return reg, inner
 }
@@ -227,6 +231,118 @@ func TestServiceRegistrar_IsPublicMethod_MultiSpecAggregation(t *testing.T) {
 	assert.False(t, reg.IsPublicMethod("/spy.v1.Spy/Other"), "an undeclared method stays authed (fail-closed)")
 }
 
+// --- #2008: per-method permission overlay ------------------------------------
+
+// TestServiceRegistrar_PermissionForMethod verifies a method declared in
+// spec.MethodPermissions resolves to its sealed authz.Permission, and an
+// undeclared method reports ok=false (the fail-closed default the PDP gate denies).
+func TestServiceRegistrar_PermissionForMethod(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	require.NoError(t, reg.Register(spec))
+
+	perm, ok := reg.PermissionForMethod("/grpc.health.v1.Health/Watch")
+	require.True(t, ok, "a method declared in spec.MethodPermissions must resolve")
+	assert.Equal(t, authz.PermDeviceCommand(), perm,
+		"the resolved value must be the sealed registry singleton")
+
+	_, ok = reg.PermissionForMethod("/grpc.health.v1.Health/Check")
+	assert.False(t, ok, "an undeclared method has no permission mapping (fail-closed → gate denies)")
+	_, ok = reg.PermissionForMethod("/nonexistent.Svc/Method")
+	assert.False(t, ok, "an unknown method has no permission mapping (fail-closed)")
+}
+
+// TestServiceRegistrar_PermissionForMethod_EmptyDefault verifies a registrar whose
+// specs declare no MethodPermissions reports ok=false for every method (the PDP
+// gate then denies — strict fail-closed).
+func TestServiceRegistrar_PermissionForMethod_EmptyDefault(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	require.NoError(t, reg.Register(synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})))
+
+	_, ok := reg.PermissionForMethod("/grpc.health.v1.Health/Check")
+	assert.False(t, ok, "no MethodPermissions declared → no mapping (fail-closed)")
+}
+
+// TestServiceRegistrar_Register_UnknownPermission_Panics verifies a
+// MethodPermissions value that is NOT a member of the closed authz registry fails
+// fast at registration (grpc-registrar-unknown-permission). A string surviving to
+// runtime is a wiring bug (hand-written, bypassing the contractgen + FMT-41
+// build-time guards); deny startup rather than gate on a forged action.
+func TestServiceRegistrar_Register_UnknownPermission_Panics(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Watch": "not:a-registered-permission",
+	}
+	assert.Panics(t, func() {
+		_ = reg.Register(spec)
+	}, "an unknown permission action string must fail fast at registration")
+}
+
+// TestServiceRegistrar_PermissionForMethod_MultiSpecAggregation verifies
+// MethodPermissions are aggregated ACROSS multiple registered specs (each cell
+// contributes its own permission map to the one shared registrar the auth interceptor
+// consults), and that registering two specs with distinct ServiceNames does not cause
+// one spec's permissions to overwrite the other's.
+func TestServiceRegistrar_PermissionForMethod_MultiSpecAggregation(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	specA := synthSpec("grpc.health.a.v1", "cell-a", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	specA.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	require.NoError(t, reg.Register(specA))
+
+	// A second spec with a DIFFERENT ServiceName contributes its own permission map;
+	// service-name dedup forbids re-registering grpc.health.v1.Health.
+	specB := cell.GRPCServiceSpec{
+		ContractID: "grpc.spy.b.v1",
+		CellID:     "cell-b",
+		Listener:   cell.PrimaryListener,
+		MethodPermissions: map[string]string{
+			"/spy.v1.Spy/Ping": authz.PermDeviceCommand().String(),
+		},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&grpc.ServiceDesc{
+				ServiceName: "spy.v1.Spy",
+				HandlerType: (*any)(nil),
+				Methods:     []grpc.MethodDesc{{MethodName: "Ping"}},
+			}, struct{}{})
+		},
+	}
+	require.NoError(t, reg.Register(specB))
+
+	permA, okA := reg.PermissionForMethod("/grpc.health.v1.Health/Watch")
+	assert.True(t, okA, "specA's method permission must be present after aggregation")
+	assert.Equal(t, authz.PermDeviceCommand(), permA, "specA permission must equal PermDeviceCommand")
+
+	permB, okB := reg.PermissionForMethod("/spy.v1.Spy/Ping")
+	assert.True(t, okB, "specB's method permission must be present after aggregation")
+	assert.Equal(t, authz.PermDeviceCommand(), permB, "specB permission must equal PermDeviceCommand")
+
+	_, okUnknown := reg.PermissionForMethod("/spy.v1.Spy/Other")
+	assert.False(t, okUnknown, "undeclared method has no permission mapping (fail-closed)")
+}
+
 // --- Case 5: bad Register fn type panics -------------------------------------
 
 // TestServiceRegistrar_Register_BadFnType_Panics verifies a non-func Register field
@@ -381,4 +497,109 @@ func TestServiceRegistrar_Register_EscapedScope_Panics(t *testing.T) {
 	assert.Panics(t, func() {
 		captured.RegisterService(&grpc.ServiceDesc{ServiceName: "test.EscapedService"}, struct{}{})
 	}, "escaped registrar use after callback must panic")
+}
+
+// --- #2008 F1: startup parity guard (permission-gated spec needs a PDP gate) --
+
+// boundRegistrar mints a registrar with the given permission-gate state, bound to a
+// fresh server. The F1 tests vary the gate that newRegistrar fixes to true.
+func boundRegistrar(t *testing.T, gateWired bool) *runtimegrpc.ServiceRegistrar {
+	t.Helper()
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(gateWired))
+	reg.BindServer(grpc.NewServer())
+	return reg
+}
+
+// gatedHealthSpec registers the canonical health service and gates its Watch RPC on
+// PermDeviceCommand — a permission-gated spec.
+func gatedHealthSpec(contractID, cellID string) cell.GRPCServiceSpec {
+	spec := synthSpec(contractID, cellID, func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	return spec
+}
+
+// TestServiceRegistrar_Register_PermissionGateUnwired_Panics verifies the #2008 F1
+// startup guard: registering a spec with permission-gated methods on a registrar
+// minted WITHOUT a wired PDP Authorizer fails fast (the gRPC analog of HTTP's
+// ResolveAuthorizer pre-serve guard) rather than booting and 403-ing every RPC.
+func TestServiceRegistrar_Register_PermissionGateUnwired_Panics(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, false)
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "permission-gated spec with no Authorizer must panic at registration")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "no PDP Authorizer is wired", "panic must explain the missing Authorizer")
+		assert.Contains(t, msg, "grpc.health.gated.v1", "panic must name the offending contractID")
+	}()
+	_ = reg.Register(gatedHealthSpec("grpc.health.gated.v1", "cell-gated"))
+}
+
+// TestServiceRegistrar_Register_PermissionGateWired_OK verifies a permission-gated
+// spec registers cleanly when the gate declares a wired Authorizer.
+func TestServiceRegistrar_Register_PermissionGateWired_OK(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	require.NoError(t, reg.Register(gatedHealthSpec("grpc.health.gated.v1", "cell-gated")))
+	perm, ok := reg.PermissionForMethod("/grpc.health.v1.Health/Watch")
+	require.True(t, ok)
+	assert.Equal(t, authz.PermDeviceCommand(), perm)
+}
+
+// TestServiceRegistrar_Register_NoGatedMethods_BareGateOK verifies the F1 guard is
+// scoped to permission-gated specs: a spec with NO MethodPermissions registers fine
+// even with no wired Authorizer (a server of only public/ungated methods must boot).
+func TestServiceRegistrar_Register_NoGatedMethods_BareGateOK(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, false)
+	require.NoError(t, reg.Register(synthSpec("grpc.health.pub.v1", "cell-pub", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})))
+}
+
+// --- #2008 F2: method-key referential integrity ------------------------------
+
+// TestServiceRegistrar_Register_UnknownPermissionMethodKey_Panics verifies that a
+// MethodPermissions key naming a method this spec did NOT register fails fast at
+// registration — a stale/typo'd overlay key would otherwise DENY a non-existent RPC
+// (a dead 403) only discovered at request time.
+func TestServiceRegistrar_Register_UnknownPermissionMethodKey_Panics(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	spec := synthSpec("grpc.health.stale.v1", "cell-stale", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Nonexistent": authz.PermDeviceCommand().String(),
+	}
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "unknown MethodPermissions key must panic")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "does not name a method registered", "panic must explain the dangling key")
+		assert.Contains(t, msg, "Nonexistent")
+	}()
+	_ = reg.Register(spec)
+}
+
+// TestServiceRegistrar_Register_UnknownPublicMethodKey_Panics verifies the same
+// referential check for the PublicMethods overlay.
+func TestServiceRegistrar_Register_UnknownPublicMethodKey_Panics(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	spec := synthSpec("grpc.health.stalepub.v1", "cell-stalepub", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.PublicMethods = []string{"/grpc.health.v1.Health/Nonexistent"}
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "unknown PublicMethods key must panic")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "does not name a method registered")
+	}()
+	_ = reg.Register(spec)
 }

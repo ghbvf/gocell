@@ -163,13 +163,10 @@ func (b *Bootstrap) sagaJournalSourceOnce() (*sagaprojection.SagaJournalSource, 
 // hasRealMetricsProvider reports whether a non-nil, non-Nop metrics provider is
 // configured. When false the saga tailer skips its metric Observer entirely
 // (leaving the Tailer's default NopObserver), mirroring the outbox path's nil/Nop
-// guard in autoWireCachedCollector.
+// guard in autoWireCachedCollector. Delegates to kernelmetrics.IsReal, the single
+// source shared with the gRPC interceptor PDP-metrics wrap (#2008 F8).
 func (b *Bootstrap) hasRealMetricsProvider() bool {
-	if b.metricsProvider == nil {
-		return false
-	}
-	_, isNop := b.metricsProvider.(kernelmetrics.NopProvider)
-	return !isNop
+	return kernelmetrics.IsReal(b.metricsProvider)
 }
 
 // sagaTailerObserverFor returns the per-cell Tailer metric Observer, or a

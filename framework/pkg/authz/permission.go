@@ -295,3 +295,37 @@ func Permissions() []Permission {
 	copy(out, allPermissions)
 	return out
 }
+
+// permissionByString indexes the closed registry by action spelling for O(1)
+// resolution. It is built from allPermissions, so it cannot drift from the
+// closed set (a new perm* var that enrolls in allPermissions is automatically
+// resolvable; one that forgets is invisible here too — the same single source).
+var permissionByString = func() map[string]Permission {
+	m := make(map[string]Permission, len(allPermissions))
+	for _, p := range allPermissions {
+		m[p.s] = p
+	}
+	return m
+}()
+
+// PermissionByName resolves an action string (e.g. "device:command") back to its
+// sealed Permission singleton from the closed registry. It RESOLVES, it does not
+// MINT: the returned value is one of the pre-constructed allPermissions entries,
+// so the seal is preserved — there is still no way to construct a Permission
+// outside this file's registry. An unknown or empty string yields the zero
+// Permission + ok=false, so a consumer that receives a Permission from an untyped
+// path (e.g. the gRPC method permission overlay, #2008) fails closed: the
+// registrar rejects ok=false at registration rather than gating on a forged action.
+func PermissionByName(s string) (Permission, bool) {
+	p, ok := permissionByString[s]
+	return p, ok
+}
+
+// IsKnownPermissionString reports whether s is the action spelling of a registered
+// Permission. It is the static closed-set predicate the gRPC per-method overlay
+// governance check (FMT-41) uses to reject a typo'd permission at validate time,
+// before it can reach the runtime gate.
+func IsKnownPermissionString(s string) bool {
+	_, ok := permissionByString[s]
+	return ok
+}

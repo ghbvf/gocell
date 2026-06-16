@@ -960,14 +960,15 @@ func buildGrpcServiceSpecFromCU(
 	// but the proto lives at "<moduleBase>/contracts/grpc/…" (#1151).
 	contract := p.Contracts[cu.Contract] // non-nil: validateGrpcContractEndpoint succeeded above
 	return GrpcServiceGenSpec{
-		ContractID:    cu.Contract,
-		SliceID:       sliceID,
-		HandlerField:  fieldName,
-		RegisterFunc:  "Register" + simpleName + "Server",
-		ListenerConst: "cell.PrimaryListener",
-		ProtoRel:      metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
-		Service:       g.Service,
-		PublicMethods: grpcPublicMethods(g),
+		ContractID:        cu.Contract,
+		SliceID:           sliceID,
+		HandlerField:      fieldName,
+		RegisterFunc:      "Register" + simpleName + "Server",
+		ListenerConst:     "cell.PrimaryListener",
+		ProtoRel:          metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
+		Service:           g.Service,
+		PublicMethods:     grpcPublicMethods(g),
+		MethodPermissions: grpcMethodPermissions(g),
 	}, nil
 }
 
@@ -985,6 +986,27 @@ func grpcPublicMethods(g *metadata.GRPCTransportMeta) []string {
 			out = append(out, "/"+g.Service+"/"+m.Name)
 		}
 	}
+	return out
+}
+
+// grpcMethodPermissions composes the per-method permission overlay (#2008) into
+// (FULL method name → action) pairs for the permission entries, keyed identically
+// to the runtime registrar's attribution map. Sorted by full method name so the
+// rendered map literal is deterministic (golden-stable). Referential integrity and
+// completeness (every non-public method carries a permission) are validated against
+// the proto in validateGrpcMethodOverlayAgainstProto; here we only compose. Returns
+// nil when no method carries a permission, so the template omits the field.
+func grpcMethodPermissions(g *metadata.GRPCTransportMeta) []MethodPermission {
+	var out []MethodPermission
+	for _, m := range g.Methods {
+		if m.Permission != "" {
+			out = append(out, MethodPermission{
+				FullMethod: "/" + g.Service + "/" + m.Name,
+				Permission: m.Permission,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FullMethod < out[j].FullMethod })
 	return out
 }
 
@@ -1062,6 +1084,14 @@ func grpcLastSegment(fqn string) string {
 // The .proto is the single source of truth for the method set (#1655);
 // cellgen only needs the import path and alias for the cell_gen.go registration.
 //
+// It ALSO enforces the proto-referential + #2008 completeness invariants (every
+// public/permission overlay entry ∈ proto method set; every non-public proto RPC
+// carries a permission) via validateGrpcMethodOverlayAgainstProto. Because this
+// runs in the enrich step (which the full `gocell generate cell` pipeline always
+// invokes), a caller that uses BuildCellSpec WITHOUT then calling Enrich skips the
+// completeness check — that path exists only in unit tests, never in production
+// generation.
+//
 // PbAlias is set to "grpc<index>" (0-indexed) to guarantee uniqueness even
 // when multiple services share the same last path segment.
 func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
@@ -1087,27 +1117,43 @@ func EnrichGrpcServicesWithProtoInfo(spec *CellGenSpec, root string) error {
 		// contract`; this mirrors it for `gocell generate cell`, which reads the same
 		// proto here. Without it, generate-cell alone could render a PublicMethods
 		// entry that matches no RPC (silently inert at runtime).
-		if err := validateGrpcPublicMethodsAgainstProto(gs, info); err != nil {
+		if err := validateGrpcMethodOverlayAgainstProto(gs, info); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validateGrpcPublicMethodsAgainstProto fails closed when a GrpcServiceGenSpec's
-// PublicMethods (composed /{service}/{method}) names an RPC absent from the proto
-// service's method set. The cellgen-path sibling of
-// contractgen.validateGRPCMethodOverlay (#1675 review F3).
-func validateGrpcPublicMethodsAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
-	if len(gs.PublicMethods) == 0 {
-		return nil
-	}
+// grpcMethodSimpleName extracts the simple RPC name from a composed full method
+// name (/{service}/{method}).
+func grpcMethodSimpleName(full string) string {
+	return full[strings.LastIndex(full, "/")+1:]
+}
+
+// validateGrpcMethodOverlayAgainstProto fails closed on three proto-referential
+// conditions for a GrpcServiceGenSpec (the cellgen-path sibling of
+// contractgen.validateGRPCMethodOverlay):
+//
+//   - referential (#1675/#2008): every public-method AND every permission-method
+//     overlay entry must name an RPC that exists in the proto service. A stale
+//     entry would be silently inert at runtime.
+//   - completeness (#2008 strict fail-closed): every proto RPC must be covered by
+//     the overlay — either public:true (JWT-exempt) or carrying a permission. A
+//     non-public RPC with no permission would be DENIED at the interceptor gate
+//     (no mapping → deny), i.e. a silently-dead 403 method. Rejecting it at codegen
+//     turns "forgot the overlay" into a build failure rather than a runtime
+//     surprise — this is the build-time enforcement of decision B.
+func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
 	protoMethods := make(map[string]struct{}, len(info.Methods))
 	for _, pm := range info.Methods {
 		protoMethods[pm.Name] = struct{}{}
 	}
+
+	// Referential + coverage accumulation. covered tracks which proto RPCs the
+	// overlay accounts for (public or permissioned).
+	covered := make(map[string]struct{}, len(info.Methods))
 	for _, full := range gs.PublicMethods {
-		name := full[strings.LastIndex(full, "/")+1:]
+		name := grpcMethodSimpleName(full)
 		if _, ok := protoMethods[name]; !ok {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"cellgen enrich grpc-serve: endpoints.grpc.methods public entry is not an RPC of the proto service",
@@ -1115,6 +1161,33 @@ func validateGrpcPublicMethodsAgainstProto(gs *GrpcServiceGenSpec, info contract
 					errcode.PublicString("contract", gs.ContractID),
 					errcode.PublicString("service", gs.Service),
 					errcode.PublicString("method", name)))
+		}
+		covered[name] = struct{}{}
+	}
+	for _, mp := range gs.MethodPermissions {
+		name := grpcMethodSimpleName(mp.FullMethod)
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods permission entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
+		covered[name] = struct{}{}
+	}
+
+	// Completeness (#2008): every proto RPC must be public or permissioned.
+	for _, pm := range info.Methods {
+		if _, ok := covered[pm.Name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: proto RPC has no endpoints.grpc.methods entry; "+
+					"every non-public RPC must declare a permission (#2008 strict fail-closed) "+
+					"or it is denied at the gate (dead 403)",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", pm.Name)))
 		}
 	}
 	return nil
