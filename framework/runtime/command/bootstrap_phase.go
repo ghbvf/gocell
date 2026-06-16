@@ -6,6 +6,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	kcommand "github.com/ghbvf/gocell/framework/kernel/command"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // DiscoverQueueRegistrars injects q into every cell that implements
@@ -17,7 +18,11 @@ import (
 // contract requires the composite, so callers must supply a queue that is also
 // an ActiveScanner — enforced at compile time (QUEUE-REGISTRAR-SCANNER-REQUIRED-01).
 func DiscoverQueueRegistrars(cells []cell.Cell, q kcommand.QueueWithScanner) (int, error) {
-	if q == nil {
+	// q is an interface dependency: a bare `q == nil` misses a typed-nil
+	// (e.g. a nil *PGCommandQueue boxed into QueueWithScanner), which would be
+	// injected as a "successful" but unusable queue. IsNilInterface is the
+	// repo's construction-boundary guard (same as validateRequired's codegen).
+	if validation.IsNilInterface(q) {
 		return 0, fmt.Errorf("runtime/command: queue must not be nil")
 	}
 

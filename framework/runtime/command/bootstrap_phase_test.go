@@ -45,3 +45,15 @@ func TestDiscoverQueueRegistrarsInAssembly_NilAssembly(t *testing.T) {
 	require.Error(t, err)
 	assert.Zero(t, count)
 }
+
+func TestDiscoverQueueRegistrars_TypedNilQueue(t *testing.T) {
+	// A typed-nil queue (a nil *InMemQueue boxed into the QueueWithScanner
+	// interface) is != nil but is an invalid dependency: it must be rejected at
+	// the construction boundary, not counted as a successful injection. A bare
+	// `q == nil` guard misses this; validation.IsNilInterface catches it.
+	var typedNil *commandtest.InMemQueue
+	var q kcommand.QueueWithScanner = typedNil
+	count, err := DiscoverQueueRegistrars(nil, q)
+	require.Error(t, err)
+	assert.Zero(t, count)
+}
