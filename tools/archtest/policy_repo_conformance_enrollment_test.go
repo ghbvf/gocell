@@ -61,7 +61,7 @@ func TestPolicyRepoConformanceEnrollment(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	Report(t, rulePolicyRepoConformanceEnrollment01,
-		CheckPolicyRepoConformanceEnrollment01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+		checkRepoConformanceEnrollment(t, policyRepoConformanceSpec(), ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestPolicyRepoConformanceEnrollment_REDFixture verifies that the enrollment
@@ -96,7 +96,7 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-			if p.Pkg.Path() == policyRepoIfacePkg {
+			if p.Pkg.Path() == repoPortsPkg {
 				if obj := p.Pkg.Scope().Lookup(policyRepoIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
 						if iface, ok := named.Underlying().(*types.Interface); ok {
@@ -116,7 +116,7 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectPolicyRepoImpls(pkg, policyRepoIface, implSet, implPkgSet)
+			collectImplsFromScope(pkg, policyRepoIface, true, implSet, implPkgSet)
 		}
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty (need at least one impl)")
@@ -140,7 +140,8 @@ func TestPolicyRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	}
 
 	// Run the real flagging logic with the simulated enrolled set.
-	diags := flagUnenrolledPolicyImpls(implSet, enrolledPkgs)
+	diags := flagUnenrolledByPkg(implSet, enrolledPkgs,
+		func(implKey, _ string) string { return implKey + " not enrolled" })
 
 	assert.GreaterOrEqual(t, len(diags), 1,
 		"REDFixture: removing pkg %q from enrolledPkgs must produce at least 1 violation, got 0", targetPkg)

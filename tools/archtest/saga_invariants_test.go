@@ -813,7 +813,7 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 // variant).
 func TestSagaJournalConformanceEnrollment(t *testing.T) {
 	t.Parallel()
-	diags := CheckSagaJournalConformanceEnrollment(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
+	diags := checkSagaConformanceEnrollment(t, sagaJournalConformanceSpec())
 	Report(t, "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01", diags)
 }
 
@@ -858,7 +858,7 @@ func TestSagaJournalConformanceEnrollment_REDFixture(t *testing.T) {
 	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
+			collectImplsFromScope(pkg, iface, false, implSet, implPkgSet)
 		}
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
@@ -1010,7 +1010,7 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 // package that also constructs the impl.
 func TestSagaGlobalReaderConformanceEnrollment(t *testing.T) {
 	t.Parallel()
-	diags := CheckSagaGlobalReaderConformanceEnrollment(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()})
+	diags := checkSagaConformanceEnrollment(t, sagaGlobalReaderConformanceSpec())
 	Report(t, "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01", diags)
 }
 
@@ -1053,7 +1053,7 @@ func TestSagaGlobalReaderConformanceEnrollment_REDFixture(t *testing.T) {
 	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
+			collectImplsFromScope(pkg, iface, false, implSet, implPkgSet)
 		}
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty")
@@ -1330,7 +1330,7 @@ func TestSagaTailerCheckpointAdvancerCaller_GREENFixture(t *testing.T) {
 // that passes a concretely-typed instance of the impl.
 func TestSagaOwnerCheckpointConformanceEnrollment(t *testing.T) {
 	t.Parallel()
-	diags := CheckSagaOwnerCheckpointConformanceEnrollment(t, ConfigForExternalCell{})
+	diags := checkSagaConformanceEnrollment(t, sagaOwnerCheckpointConformanceSpec())
 	Report(t, "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", diags)
 }
 
@@ -1380,7 +1380,7 @@ func TestSagaOwnerCheckpointConformanceEnrollment_REDFixture(t *testing.T) {
 	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectSagaJournalImpls(pkg, ownerIface, implSet, implPkgSet)
+			collectImplsFromScope(pkg, ownerIface, false, implSet, implPkgSet)
 		}
 	}
 

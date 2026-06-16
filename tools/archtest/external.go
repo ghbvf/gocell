@@ -255,12 +255,11 @@ type ConfigForExternalCell struct {
 //   - SAGA-EXECUTOR-RAND-INJECTED-01 (CheckSagaExecutorRandInjected): reasons about
 //     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
 //     false-red in an external module.
-//   - SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 (CheckSagaJournalConformanceEnrollment):
-//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
-//     → vacuous/false-red in an external module.
-//   - SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 (CheckSagaGlobalReaderConformanceEnrollment):
-//     reasons about GoCell-internal runtime/saga layout (or conformance enrollment)
-//     → vacuous/false-red in an external module.
+//   - SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 / SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01 /
+//     SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01 (checkSagaConformanceEnrollment in
+//     conformance_enrollment.go, #2249): reason about GoCell-internal saga/projection
+//     layout → vacuous/false-red in an external module; GoCell-internal, never registered,
+//     driven only by the Test* functions (no importable Check*).
 //   - SAGA-JOURNAL-HOLDER-SEAL-01 (CheckSagaJournalHolderSeal): reasons about
 //     GoCell-internal runtime/saga layout (or conformance enrollment) → vacuous/
 //     false-red in an external module.
