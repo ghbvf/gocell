@@ -171,12 +171,12 @@ graph TD
 
 **Goal**：标准库实现 `Signer`+`RevocationStore`，私钥经 `crypto.Signer` 托管**永不出 adapter**。
 
-- [ ] T6.1 [TDD] 集成测试（testcontainers/纯内存）：签发链可验证、续期 epoch+1、吊销入 CRL、TTL clamp。
-- [ ] T6.2 `adapters/softca/go.mod`（per-adapter module，对齐 #1558 拆分）。
-- [ ] T6.3 `ca.go`：CA 层级（root + intermediate）+ key 托管接口（dev mem/file；KMS/HSM 留后续 adapter，明确 no-op 业务理由）。
-- [ ] T6.4 `signer.go`：实现 `certsigning.Signer`（`x509.CreateCertificate` + SignConstraints 强制）。
-- [ ] T6.5 `revocation.go`：实现 `RevocationStore`（`x509.CreateRevocationList` + tidy）。
-- [ ] T6.6 enforcement：`CERT-PRIVATE-KEY-CUSTODY-01`（custody：上游 Hard = `Signer` 接口不暴露 key getter；下游 Medium = archtest 扫 certsigning 边界外无 PrivateKey 字段）+ 反向自检。
+- [x] T6.1 [TDD] 集成测试（纯内存，无外部依赖）：签发链可验证、续期 epoch+1、吊销入 CRL、TTL clamp（PR #1902）。
+- [x] T6.2 `adapters/softca/go.mod`（per-adapter module，对齐 #1558 拆分）。
+- [x] T6.3 `ca.go`：CA 层级（root + intermediate，dev mem `NewDevCA` / file `NewFileCA`）；key 字段未导出、无导出 getter（custody）；KMS/HSM 文档化缺位（非 no-op 桩，不预建扩展点）。
+- [x] T6.4 `signer.go`：实现 `certsigning.Signer`（`x509.CreateCertificate` + notAfter clamp 到签发 CA 寿命；SignConstraints 已由 `NewAuthorizedCertRequest` 编译期强制）。续期 epoch 经可插拔 `Ledger`（issuance-record store，内存默认）。
+- [x] T6.5 `revocation.go`：实现 `RevocationStore`（委托共享 `Ledger`，跨 scope fail-closed）+ `GenerateCRL`（`x509.CreateRevocationList`）+ tidy。
+- [x] T6.6 enforcement：`CERT-PRIVATE-KEY-CUSTODY-01`（上游 Hard = `Signer` 接口无 key getter + softca 无导出 key getter；下游 Medium = archtest 扫 certsigning importer + seam 自身无私钥字段，allowlist=softca）+ RED fixture 反向自检 + allowlist load-bearing 自检；并把 softca 收入 `CERT-SIGN-FUNNEL-01` mint allowlist。
 
 ### PR-7 `runtime/certlifecycle` 生命周期 reconciler ~1900 行 ⚠
 

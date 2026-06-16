@@ -12,6 +12,7 @@ adapters/rabbitmq/v1.2.3
 adapters/ratelimit/v1.2.3
 adapters/redis/v1.2.3
 adapters/s3/v1.2.3
+adapters/softca/v1.2.3
 adapters/vault/v1.2.3
 adapters/websocket/v1.2.3
 cellmodules/v1.2.3

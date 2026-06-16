@@ -8,10 +8,10 @@ import (
 
 // stubQueueRegistrar implements QueueRegistrar for compile-time verification.
 type stubQueueRegistrar struct {
-	queue command.Queue
+	queue command.QueueWithScanner
 }
 
-func (s *stubQueueRegistrar) RegisterCommandQueue(q command.Queue) {
+func (s *stubQueueRegistrar) RegisterCommandQueue(q command.QueueWithScanner) {
 	s.queue = q
 }
 
