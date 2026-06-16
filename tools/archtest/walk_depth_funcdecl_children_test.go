@@ -23,9 +23,15 @@
 // github.com/ghbvf/gocell/tools/archtest) and the scanner-qualified form
 // (scanner.EachInSubtree) are caught: the callee is resolved via
 // info.Uses[ident] → *types.Func → Pkg().Path() ∈ {archtest, scanner} &&
-// Name() ∈ banned-set, and the type argument via info.Uses[sel] →
-// *types.TypeName → Pkg().Path()=="go/ast" && Name()=="FuncDecl". A same-name
-// local func, an import alias, or a go/ast alias cannot disguise either side.
+// Name() ∈ banned-set, and the element type argument by RESOLVED TYPE IDENTITY
+// via info.Types[typeArg].Type → types.Unalias → *types.Named whose
+// Obj().Pkg().Path()=="go/ast" && Name()=="FuncDecl". Identity-based (not
+// syntactic) type-arg resolution is what makes BOTH sides genuinely alias-proof:
+// a same-name local func, an import alias on the callee, an import-aliased
+// selector type arg (myast.FuncDecl), AND a local type alias bound to a bare
+// ident (`type FD = ast.FuncDecl; EachInSubtree[FD]`) all collapse to the same
+// go/ast.FuncDecl object and cannot disguise either side (#2216 review F1: a
+// prior `sTypeArg.(*ast.SelectorExpr)` gate missed the local-alias ident form).
 //
 // AI-robust: Medium (CI-time type-aware AST scan). It is NOT Hard, and the
 // ceiling is a genuine Go language limit, not a missing-effort gap: Hard would
@@ -43,6 +49,9 @@
 // Blind-spot inventory (each has a fixture or an honest scope declaration —
 // ai-robust.md §"工具选定后强制盲区自检"):
 //   - EachInSubtree[ast.FuncDecl] — red_eachinsubtree_funcdecl fixture.
+//   - EachInSubtree[FD] where `type FD = ast.FuncDecl` (local type alias, bare
+//     ident type arg) — red_eachinsubtree_funcdecl_alias fixture. Proves the
+//     identity-based (not syntactic) type-arg resolution; #2216 review F1.
 //   - EachInSubtreeStopAt[ast.FuncDecl] — red_eachinsubtreestopat_funcdecl
 //     fixture (0 production sites today; banned as anti-bypass).
 //   - GREEN depth-1 EachInChildren[ast.FuncDecl] — green_eachinchildren_funcdecl.
@@ -193,19 +202,28 @@ func walkDepthIsBannedSubtreeFunc(fn *types.Func) bool {
 }
 
 // walkDepthTypeArgIsASTFuncDecl reports whether the element type argument
-// resolves to go/ast.FuncDecl (type-resolved, alias-proof). Takes a single
-// expr (not a slice) so it never for-ranges over []ast.Expr — see
-// SCANNER-FRAMEWORK-USAGE-01.
+// resolves to go/ast.FuncDecl by RESOLVED TYPE IDENTITY (alias-proof), not by
+// syntactic form. It reads the type the type-arg expression denotes via
+// info.Types[sTypeArg] — populated by go/types for every type-argument
+// expression, in any syntactic form: a qualified selector (ast.FuncDecl), an
+// import-aliased selector (myast.FuncDecl), OR a bare ident bound to a local
+// type alias (`type FD = ast.FuncDecl; EachInSubtree[FD]`) — then collapses the
+// alias chain with types.Unalias and checks the *types.Named object's package
+// path and name. A syntactic `sTypeArg.(*ast.SelectorExpr)` gate would miss the
+// local-alias ident form (#2216 review F1). Takes a single expr (not a slice)
+// so it never for-ranges over []ast.Expr — see SCANNER-FRAMEWORK-USAGE-01.
 func walkDepthTypeArgIsASTFuncDecl(info *types.Info, sTypeArg ast.Expr) bool {
-	sel, ok := sTypeArg.(*ast.SelectorExpr)
+	tv, ok := info.Types[sTypeArg]
 	if !ok {
 		return false
 	}
-	tn, ok := info.Uses[sel.Sel].(*types.TypeName)
-	if !ok || tn.Pkg() == nil {
+	named, ok := types.Unalias(tv.Type).(*types.Named)
+	if !ok {
 		return false
 	}
-	return tn.Pkg().Path() == walkDepthGoAstPkgPath && tn.Name() == walkDepthFuncDeclTypeName
+	obj := named.Obj()
+	return obj != nil && obj.Pkg() != nil &&
+		obj.Pkg().Path() == walkDepthGoAstPkgPath && obj.Name() == walkDepthFuncDeclTypeName
 }
 
 // TestWalkDepthFuncDeclChildren01 is the production dogfood: it scans every
@@ -296,6 +314,7 @@ func TestWalkDepthFuncDeclChildren01_Fixtures(t *testing.T) {
 		{"red_eachinsubtree_funcdecl", 1},
 		{"red_eachinsubtreestopat_funcdecl", 1},
 		{"red_archtest_facade_eachinsubtree_funcdecl", 1},
+		{"red_eachinsubtree_funcdecl_alias", 1},
 		{"green_eachinchildren_funcdecl", 0},
 		{"green_eachinsubtree_callexpr", 0},
 	}
