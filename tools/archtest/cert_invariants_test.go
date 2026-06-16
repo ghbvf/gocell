@@ -3,10 +3,12 @@
 // INVARIANT: CERT-VALUE-SEALED-CONSTRUCTION-01
 // INVARIANT: CERT-SIGN-FUNNEL-01
 // INVARIANT: CERT-REVOKE-SCOPED-01
+// INVARIANT: CERT-PRIVATE-KEY-CUSTODY-01
 //
 // Consolidated certificate-signing archtest invariants for
-// framework/runtime/certsigning (Epic #1895 PR-5 #1901). Authoritative godoc:
-// framework/runtime/certsigning/doc.go §Enforced invariants.
+// framework/runtime/certsigning (Epic #1895 PR-5 #1901, PR-6 #1902).
+// Authoritative godoc: framework/runtime/certsigning/doc.go §Enforced invariants
+// and adapters/softca/doc.go §Enforced invariants.
 //
 // # CERT-VALUE-SEALED-CONSTRUCTION-01 (Hard)
 //
@@ -31,10 +33,12 @@
 // Upstream Hard: IssuedCert / CertRequest field sealing (above) makes forged
 // signing material uncompilable. Downstream Medium: a caller-allowlist scan
 // restricts who may invoke NewIssuedCert (the mint funnel) to the sanctioned
-// signer adapter. The allowlist (certIssuedMintAllowlist) is EMPTY in PR-5 — no
-// signer implementation exists yet; adapters/softca joins it in PR-6. GREEN =
-// zero callers outside certsigning today; the RED fixture proves the detector
-// fires.
+// signer adapter. The allowlist (certIssuedMintAllowlist) holds adapters/softca
+// as of PR-6 (#1902) — the first and only sanctioned Signer. GREEN = zero
+// callers outside certsigning and the allowlist; the RED fixture proves the
+// detector fires. softca's own GREEN membership is load-bearing: softca calls
+// NewIssuedCert in production, so removing it from the allowlist turns the green
+// scan red.
 //
 // Blind spot (per AI-robust §强制盲区自检): NewIssuedCert MUST be exported
 // because the signing adapter lives in a different module, so "only the
@@ -51,6 +55,35 @@
 // (type). The type system is the Hard guarantee; this is the reverse
 // self-check / anti-vacuity that fails if a refactor relaxes a signature back to
 // a bare string or serial, or drops a required method.
+//
+// # CERT-PRIVATE-KEY-CUSTODY-01 (upstream Hard, downstream Medium)
+//
+// The CA signing private key must stay in the signer adapter (adapters/softca)
+// and never cross the certsigning seam into kernel/runtime.
+//
+// Upstream Hard (not tested here — it is a compile-time property of the seam):
+// the Signer interface exposes Sign / TrustBundle and NO key getter, so
+// kernel/runtime cannot obtain a key THROUGH the seam.
+//
+// Downstream Medium (this scan): a private-key-typed struct field
+// (crypto.Signer / crypto.PrivateKey / crypto.Decrypter, or a concrete
+// crypto/{rsa,ecdsa,ed25519,ecdh}.PrivateKey, optionally behind one pointer) is
+// forbidden in any package that imports certsigning (the cert subsystem) UNLESS
+// the package is in certPrivateKeyCustodyAllowlist (only adapters/softca), and
+// is forbidden in the certsigning seam package itself (which must never carry a
+// key). Two anti-vacuity guards back the GREEN baseline:
+//   - the allowlist is load-bearing — softca is scanned WITHOUT the allowlist in
+//     a dedicated test and must yield ≥ 1 hit (it genuinely holds the key);
+//   - the RED fixture (a non-allowlisted importer with a crypto.Signer field)
+//     must fire the detector.
+//
+// Blind spots (per AI-robust §强制盲区自检): (1) a private key smuggled as raw
+// []byte / string (PEM) is NOT a typed-field match — the standing ceiling of a
+// field-type scan; (2) "only softca holds the key" is a caller/holder allowlist
+// (Medium), not type-expressible, because any package can syntactically declare
+// a crypto.Signer field. crypto.PrivateKey is matched safely: it is a DEFINED
+// named type (type PrivateKey any), so a field typed crypto.PrivateKey resolves
+// to that Named type — a bare `any` / `interface{}` field does NOT match.
 package archtest
 
 import (
@@ -194,12 +227,20 @@ func TestCertValueSealedConstruction01_SoleConstructionSurface(t *testing.T) {
 
 // ── CERT-SIGN-FUNNEL-01 ────────────────────────────────────────────────────
 
+// softCAAdapterPkgPath is the import path of the built-in soft CA adapter — the
+// sanctioned Signer / RevocationStore implementation (PR-6 #1902). It is the
+// sole member of both the mint allowlist (CERT-SIGN-FUNNEL-01) and the private
+// key custody allowlist (CERT-PRIVATE-KEY-CUSTODY-01).
+const softCAAdapterPkgPath = "github.com/ghbvf/gocell/adapters/softca"
+
 // certIssuedMintAllowlist is the set of package import paths permitted to call
-// certsigning.NewIssuedCert (the certificate mint funnel). EMPTY in PR-5: no
-// signer implementation exists yet. adapters/softca (PR-6 #1902) is the first
-// member. The certsigning package itself is exempt separately (it is the home of
-// the constructor).
-var certIssuedMintAllowlist = map[string]struct{}{}
+// certsigning.NewIssuedCert (the certificate mint funnel). adapters/softca
+// (PR-6 #1902) is the first and only member — the sanctioned signer adapter. The
+// certsigning package itself is exempt separately (it is the home of the
+// constructor).
+var certIssuedMintAllowlist = map[string]struct{}{
+	softCAAdapterPkgPath: {},
+}
 
 const certMintCallerMsg = "forbidden call certsigning.NewIssuedCert — minting an IssuedCert is restricted to the " +
 	"sanctioned signer adapter (certIssuedMintAllowlist); business code obtains certificates via Signer.Sign"
@@ -402,6 +443,177 @@ func TestCertRevokeScoped01_StoreMethodsCarryScope(t *testing.T) {
 	if !visited {
 		t.Fatal("CERT-REVOKE-SCOPED-01/StoreMethodsCarryScope: certsigning package was never scanned " +
 			"(Typed load returned no matching package) — the check is vacuous; fix the load pattern")
+	}
+}
+
+// ── CERT-PRIVATE-KEY-CUSTODY-01 ────────────────────────────────────────────
+
+// certPrivateKeyCustodyAllowlist is the set of package import paths permitted to
+// declare a private-key-typed struct field within the cert subsystem. Only the
+// sanctioned signer adapter (adapters/softca) holds the CA signing key.
+var certPrivateKeyCustodyAllowlist = map[string]struct{}{
+	softCAAdapterPkgPath: {},
+}
+
+const certKeyCustodyMsg = "forbidden private-key-typed field in the cert subsystem outside the custody " +
+	"allowlist — the CA signing key must stay in adapters/softca and never cross the certsigning seam " +
+	"into kernel/runtime (CERT-PRIVATE-KEY-CUSTODY-01)"
+
+// isPrivateKeyFieldType reports whether t (optionally behind one pointer) is a
+// crypto private-key bearing named type. crypto.PrivateKey is a DEFINED named
+// type (type PrivateKey any), so an explicit crypto.PrivateKey field matches but
+// a bare any / interface{} field does NOT.
+func isPrivateKeyFieldType(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	switch obj.Pkg().Path() {
+	case "crypto":
+		switch obj.Name() {
+		case "Signer", "PrivateKey", "Decrypter":
+			return true
+		}
+	case "crypto/rsa", "crypto/ecdsa", "crypto/ed25519", "crypto/ecdh":
+		return obj.Name() == "PrivateKey"
+	}
+	return false
+}
+
+// pkgImports reports whether pkg directly imports the package at path.
+func pkgImports(pkg *types.Package, path string) bool {
+	for _, imp := range pkg.Imports() {
+		if imp.Path() == path {
+			return true
+		}
+	}
+	return false
+}
+
+// scanStructFieldsForKeys flags every package-scope struct field whose type is a
+// private-key type. label identifies the package in diagnostics.
+func scanStructFieldsForKeys(p *Pass, label string) []Diagnostic {
+	var diags []Diagnostic
+	scope := p.Pkg.Scope()
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		st, ok := tn.Type().Underlying().(*types.Struct)
+		if !ok {
+			continue
+		}
+		for i := 0; i < st.NumFields(); i++ {
+			f := st.Field(i)
+			if !isPrivateKeyFieldType(f.Type()) {
+				continue
+			}
+			pos := p.Fset.Position(f.Pos())
+			diags = append(diags, Diagnostic{
+				Line:    pos.Line,
+				Message: certKeyCustodyMsg + " (" + label + "." + name + "." + f.Name() + ")",
+			})
+		}
+	}
+	return diags
+}
+
+// scanPrivateKeyCustody applies the field scan to a package in the cert
+// subsystem (the certsigning seam itself, or any direct importer) that is not in
+// the custody allowlist.
+func scanPrivateKeyCustody(p *Pass, certSigningPath string) []Diagnostic {
+	if p.Pkg == nil {
+		return nil
+	}
+	path := p.Pkg.Path()
+	if _, ok := certPrivateKeyCustodyAllowlist[path]; ok {
+		return nil
+	}
+	if path != certSigningPath && !pkgImports(p.Pkg, certSigningPath) {
+		return nil
+	}
+	return scanStructFieldsForKeys(p, path)
+}
+
+// TestCertPrivateKeyCustody01_GreenProduction asserts no production package in
+// the cert subsystem holds a private-key field outside adapters/softca, and
+// proves the scan actually reached softca + the seam (anti-vacuity).
+func TestCertPrivateKeyCustody01_GreenProduction(t *testing.T) {
+	t.Parallel()
+	pkgPath := certSigningPkgPath()
+	var visitedSoftCA, visitedSeam bool
+	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		if p.Pkg != nil {
+			switch p.Pkg.Path() {
+			case softCAAdapterPkgPath:
+				visitedSoftCA = true
+			case pkgPath:
+				visitedSeam = true
+			}
+		}
+		return scanPrivateKeyCustody(p, pkgPath)
+	})
+	if len(diags) > 0 {
+		t.Errorf("CERT-PRIVATE-KEY-CUSTODY-01 production GREEN: expected 0 violations, got %d:\n%v", len(diags), diags)
+	}
+	if !visitedSoftCA {
+		t.Error("CERT-PRIVATE-KEY-CUSTODY-01: adapters/softca was never scanned — the allowlist is vacuous " +
+			"(Production must span the workspace)")
+	}
+	if !visitedSeam {
+		t.Error("CERT-PRIVATE-KEY-CUSTODY-01: certsigning seam package was never scanned — the seam self-check is vacuous")
+	}
+}
+
+// TestCertPrivateKeyCustody01_AllowlistIsLoadBearing scans adapters/softca
+// WITHOUT the allowlist and requires ≥ 1 private-key field — proving softca
+// genuinely holds the key the allowlist exempts (the allowlist is not dead weight).
+func TestCertPrivateKeyCustody01_AllowlistIsLoadBearing(t *testing.T) {
+	t.Parallel()
+	var hits int
+	var visited bool
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != softCAAdapterPkgPath {
+			return nil
+		}
+		visited = true
+		hits += len(scanStructFieldsForKeys(p, softCAAdapterPkgPath))
+		return nil
+	})
+	if !visited {
+		t.Fatal("CERT-PRIVATE-KEY-CUSTODY-01: adapters/softca not loaded — cannot prove the allowlist is load-bearing")
+	}
+	if hits == 0 {
+		t.Error("CERT-PRIVATE-KEY-CUSTODY-01: adapters/softca holds NO private-key field — the custody allowlist " +
+			"is dead weight (or key custody regressed)")
+	}
+}
+
+// TestCertPrivateKeyCustody01_RedFixture loads the archtest_fixture-tagged
+// fixture (a non-allowlisted certsigning importer with private-key fields) and
+// asserts the detector fires — the reverse self-check.
+func TestCertPrivateKeyCustody01_RedFixture(t *testing.T) {
+	t.Parallel()
+	pkgPath := certSigningPkgPath()
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/certcustodyfixture/..."}),
+		func(p *Pass) []Diagnostic {
+			return scanPrivateKeyCustody(p, pkgPath)
+		})
+	for _, d := range diags {
+		t.Logf("RED fixture hit: line %d %s", d.Line, d.Message)
+	}
+	if len(diags) == 0 {
+		t.Error("CERT-PRIVATE-KEY-CUSTODY-01 RED fixture: scanner found 0 hits; expected ≥ 1 from " +
+			"forbidden_key_holder.go — the detector scanPrivateKeyCustody may be broken")
 	}
 }
 
