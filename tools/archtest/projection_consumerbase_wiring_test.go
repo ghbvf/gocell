@@ -17,7 +17,9 @@
 // This rule lifts that phase6 runtime invariant to a CI-static guard, exactly as
 // the issue requested ("断言 projection wiring 完整（含 ConsumerBase），无需真实
 // env/listener"): any composition-root package (examples/* or cmd/*) that calls
-// any bootstrap.WithProjection* option MUST also call bootstrap.WithConsumerBase
+// any outbox-coordinator projection option (the projectionWiringOptions set —
+// WithProjectionCheckpointStore/ReplaySource/Cursor/RebuildEndpoint, NOT the
+// saga-shared WithProjectionTxRunner) MUST also call bootstrap.WithConsumerBase
 // somewhere in the SAME package. It auto-covers todoorder + cmd/corebundle today
 // and every future composition root, with no boot, ports, or env. The
 // defense-in-depth runtime counterpart is the todoorder startup smoke
@@ -30,7 +32,8 @@
 //     via go/types, so alias imports and dot-imports cannot bypass it (the form
 //     is type-resolved, not string/AST-matched).
 //   - Upstream: Medium — this is a co-location presence check. Go cannot make
-//     "wire WithProjection* without WithConsumerBase" unrepresentable; the
+//     "wire an outbox-coordinator projection option without WithConsumerBase"
+//     unrepresentable; the
 //     archtest is the strongest achievable form. The only Hard upstream path is
 //     a kernel redesign threading a ConsumerBase typed token into projection
 //     registration so phase6 is unreachable without one — a high-cost change far
@@ -46,8 +49,9 @@
 //     called) escapes detection (fail-open). Covered by
 //     TestProjectionConsumerBaseWiring_ReverseBlindSpot_NoFuncValue, which
 //     asserts no composition-root production file holds such a function value.
-//   - B2. Cross-package split: WithProjection* in package A and WithConsumerBase
-//     in package B would false-positive A. The granularity is package-level by
+//   - B2. Cross-package split: an outbox-coordinator projection option in package
+//     A and WithConsumerBase in package B would false-positive A. The granularity
+//     is package-level by
 //     design; today both options always co-locate in the single composition-root
 //     package (examples/todoorder = package main; cmd/corebundle = one package).
 //     A composition root spanning multiple packages is out of scope and would
@@ -120,8 +124,9 @@ var projectionWiringOptions = map[string]bool{
 //
 // cmd/* is included conservatively (covers cmd/corebundle, which DOES wire
 // projections). It also matches the cmd/gocell governance CLI, which never wires
-// bootstrap today and is therefore a vacuous pass; if it ever wires
-// WithProjection* it will (correctly) be required to co-locate WithConsumerBase.
+// bootstrap today and is therefore a vacuous pass; if it ever wires an
+// outbox-coordinator projection option it will (correctly) be required to
+// co-locate WithConsumerBase.
 func isProjectionCompositionRootPkg(pkgPath string) bool {
 	return strings.HasPrefix(pkgPath, PlatformModulePath+"/examples/") ||
 		strings.HasPrefix(pkgPath, PlatformModulePath+"/cmd/")
@@ -162,8 +167,9 @@ func scanPkgProjectionWiring(p *Pass) (hasProjection, hasConsumerBase bool, proj
 }
 
 // TestProjectionConsumerBaseWiring enforces PROJECTION-CONSUMERBASE-WIRING-01:
-// every composition-root package (examples/* or cmd/*) that wires any
-// bootstrap.WithProjection* option must also wire bootstrap.WithConsumerBase.
+// every composition-root package (examples/* or cmd/*) that wires an
+// outbox-coordinator projection option (the projectionWiringOptions set) must
+// also wire bootstrap.WithConsumerBase.
 func TestProjectionConsumerBaseWiring(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -184,8 +190,8 @@ func TestProjectionConsumerBaseWiring(t *testing.T) {
 				Line: projLine,
 				Message: fmt.Sprintf(
 					"PROJECTION-CONSUMERBASE-WIRING-01: composition-root package %q wires "+
-						"bootstrap.WithProjection* but not bootstrap.WithConsumerBase. Projections "+
-						"consume via the ConsumerBase path and bootstrap phase6 fails fast at startup "+
+						"an outbox-coordinator projection option but not bootstrap.WithConsumerBase. "+
+						"Projections consume via the ConsumerBase path and bootstrap phase6 fails fast at startup "+
 						"without it (PR #1483 regression). Add bootstrap.WithConsumerBase(...) to this "+
 						"package's bootstrap options.",
 					p.Pkg.Path(),
@@ -205,7 +211,7 @@ func TestProjectionConsumerBaseWiring(t *testing.T) {
 }
 
 // TestProjectionConsumerBaseWiring_ReverseFixture loads the synthetic violation
-// fixture (a package that wires bootstrap.WithProjection* without
+// fixture (a package that wires an outbox-coordinator projection option without
 // WithConsumerBase) and asserts the rule fires — proving it is not fail-open.
 func TestProjectionConsumerBaseWiring_ReverseFixture(t *testing.T) {
 	t.Parallel()
@@ -230,7 +236,7 @@ func TestProjectionConsumerBaseWiring_ReverseFixture(t *testing.T) {
 		})
 
 	assert.True(t, fired,
-		"fixture wiring bootstrap.WithProjection* without WithConsumerBase MUST fire "+
+		"fixture wiring an outbox-coordinator projection option without WithConsumerBase MUST fire "+
 			"PROJECTION-CONSUMERBASE-WIRING-01 (rule must not be fail-open)")
 }
 
