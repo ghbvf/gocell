@@ -14,6 +14,10 @@
 # in _build-lint.yml) was removed and CI resolves the binary via
 # gocell::golangci_lint::ensure. Patch-pinning of this constant is archtest-
 # guarded by CI-PINNING-WORKFLOW-DIGEST-01 (tools/archtest/ci_pinning_test.go).
+# Version upgrades are MANUAL — dependabot does not cover this pin (no go.mod
+# tool dep, no renovate); bump both this constant and the gofumpt sync below
+# together. This is the accepted strategy per #2160; DEPENDABOT-NO-GHOST-
+# GOLANGCI-01 prevents re-adding a ghost dependabot group for the removed action.
 #
 # Sync requirement (manual, not statically enforced):
 #

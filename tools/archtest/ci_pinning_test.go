@@ -1,24 +1,23 @@
 //go:build archtest
 
 // INVARIANT: CI-PINNING-WORKFLOW-DIGEST-01
-//   - INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01
+//   - INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01
 //
 // CI-PINNING-WORKFLOW-DIGEST-01: golangci-lint pinned to patch version; all external workflow uses pinned to SHA
-// DEPENDABOT-COVERAGE-GOLANGCI-01: dependabot root github-actions block covers
+// DEPENDABOT-NO-GHOST-GOLANGCI-01: dependabot must NOT contain any group whose patterns include
 //
-//	golangci/golangci-lint-action and a root gomod block is present; the decode is
-//	tolerant of unmodeled orchestration fields (a typo in an asserted field
-//	collapses to its zero value and still reds the guard)
+//	"golangci/golangci-lint-action" — that action was removed in #1565/#2125 and its
+//	dependabot group is a ghost that implies false auto-update coverage of the real lint
+//	pin. The real pin lives in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (a
+//	`go install @version` shell literal, absent from any go.mod); version upgrades are
+//	manual per the accepted strategy in #2160; patch-pinning of the constant is
+//	archtest-guarded by CI-PINNING-WORKFLOW-DIGEST-01. This guard prevents an AI
+//	collaborator from "helpfully" re-adding the ghost group. Additionally, dependabot
+//	must still contain a root github-actions block and a root gomod block.
 //
-// Known limitation (#2160): since #1565/#2125 no workflow `uses:`
-// golangci/golangci-lint-action anymore — the real lint pin moved to
-// hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (a `go install @version`
-// shell literal, absent from any go.mod). So the dependabot golangci-lint group
-// this guard requires currently covers a ghost action and does NOT make the real
-// pin auto-updatable. The guard is kept as-is pending the supply-chain
-// auto-upgrade decision (redirect to the real pin source vs. go.mod tool dep vs.
-// accept manual bump) tracked in #2160; this note keeps the guard honest rather
-// than implying live dependabot coverage of the real golangci-lint pin.
+// AI-robust grade: Medium — content-scan（CI 期机器可判定；Hard 不可达：dependabot.yml 是
+// YAML，字段存在/通配语义无编译期 schema 强制）。Known blind spots: 见 anyGroupCoversGhost
+// （通配残留 / 大小写）。
 package archtest
 
 import (
@@ -217,112 +216,87 @@ func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
 	require.NoError(t, validateLocalUsesResolve(root, "fixture.yml", body))
 }
 
-func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
+// TestDependabotNoGhostGolangCILint reads the real .github/dependabot.yml and
+// verifies the new DEPENDABOT-NO-GHOST-GOLANGCI-01 invariant: no group must
+// cover golangci/golangci-lint-action (removed in #1565/#2125), and both a
+// root github-actions block and a root gomod block must be present.
+//
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01.
+func TestDependabotNoGhostGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "dependabot.yml")))
 	require.NoError(t, err, ".github/dependabot.yml must exist")
 
-	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
+	require.NoError(t, validateDependabotNoGhostGolangCILint(body))
 }
 
-func TestDependabotCoversCIAndGolangCILintRejectsGroupNameOnly(t *testing.T) {
-	body := []byte(`version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      golangci-lint:
-        patterns:
-          - "actions/*"
-  - package-ecosystem: "gomod"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-`)
-	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
-		"group names must not satisfy the guard unless a pattern covers the action")
-}
-
-func TestDependabotCoversCIAndGolangCILintRejectsNonRootPatternOnly(t *testing.T) {
-	body := []byte(`version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      github-actions:
-        patterns:
-          - "*"
-  - package-ecosystem: "github-actions"
-    directory: "/tools"
-    schedule:
-      interval: "weekly"
-    groups:
-      golangci:
-        patterns:
-          - "golangci/golangci-lint-action"
-  - package-ecosystem: "gomod"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-`)
-	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
-		"golangci-lint action pattern must be attached to the root github-actions update")
-}
-
-func TestDependabotCoversCIAndGolangCILintAllowsGroupExclusions(t *testing.T) {
-	body := []byte(`version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      golangci-lint:
-        patterns:
-          - "golangci/golangci-lint-action"
-      github-actions:
-        patterns:
-          - "*"
-  - package-ecosystem: "gomod"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      go-special:
-        patterns:
-          - "example.com/special/*"
-      go-other:
-        patterns:
-          - "*"
-        exclude-patterns:
-          - "example.com/special/*"
-`)
-	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
-}
-
-// TestDependabotCoversCIAndGolangCILintToleratesUnmodeledFields locks the
-// guard's tolerant-evolution contract: dependabot.yml legitimately carries
-// orchestration fields the guard does not assert on — ignore (with full
-// dependency-name/versions/update-types), open-pull-requests-limit, labels.
-// The validator must check only the coverage invariant (root github-actions
-// covers golangci + root gomod) and stay tolerant of schema growth. A strict
-// KnownFields(true) decode here would
-// red on every new dependabot field while adding nothing to the assertion —
-// that fragility caused #925 (trigger: #911 added `ignore:`). This test
-// prevents a "helpful" reintroduction of strict decode: with strict decode
-// re-added, the unmodeled fields below (open-pull-requests-limit / labels /
-// ignore + sub-fields) make the decode error and this NoError assertion red.
+// TestDependabotNoGhostGolangCILintRejectsGhostGroup is the anti-vacuity red
+// case for the ghost-action ban. Any group whose patterns match
+// golangci/golangci-lint-action — whether by exact name, trailing-wildcard
+// glob ("golangci/*", "golangci/golangci-lint*"), or "@version" suffix
+// ("golangci/golangci-lint-action@v6") — must be rejected, regardless of
+// which ecosystem or directory the update belongs to.
 //
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — ghost group ban anti-vacuity.
+func TestDependabotNoGhostGolangCILintRejectsGhostGroup(t *testing.T) {
+	gomodBlock := `
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+`
+	actionsBlockWithPattern := func(pattern string) []byte {
+		return []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+      golangci-lint:
+        patterns:
+          - "` + pattern + `"
+` + gomodBlock)
+	}
+
+	cases := []struct {
+		name    string
+		pattern string
+	}{
+		{"exact", "golangci/golangci-lint-action"},
+		{"org-wildcard", "golangci/*"},
+		{"name-prefix-wildcard", "golangci/golangci-lint*"},
+		{"version-suffix", "golangci/golangci-lint-action@v6"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateDependabotNoGhostGolangCILint(actionsBlockWithPattern(tc.pattern)),
+				"pattern %q must be rejected as ghost coverage of golangci/golangci-lint-action", tc.pattern)
+		})
+	}
+}
+
+// TestDependabotNoGhostGolangCILintToleratesUnmodeledFields locks the guard's
+// tolerant-evolution contract: dependabot.yml legitimately carries orchestration
+// fields the guard does not assert on — ignore (with full dependency-name /
+// versions / update-types), open-pull-requests-limit, labels. The validator must
+// check only the ghost-ban + root-coverage invariant and stay tolerant of schema
+// growth. A strict KnownFields(true) decode here would red on every new dependabot
+// field while adding nothing to the assertion — that fragility caused #925
+// (trigger: #911 added `ignore:`). This test prevents a "helpful" reintroduction
+// of strict decode: with strict decode re-added, the unmodeled fields below
+// (open-pull-requests-limit / labels / ignore + sub-fields) make the decode error
+// and this NoError assertion red.
+//
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — tolerant decode contract.
 //
 // The fixture MUST retain those unmodeled fields — they are the regression
-// trip-wire; shrinking the fixture to only modeled fields would silently
-// turn this test into a tautology that no longer catches strict-decode reentry.
-func TestDependabotCoversCIAndGolangCILintToleratesUnmodeledFields(t *testing.T) {
+// trip-wire; shrinking the fixture to only modeled fields would silently turn
+// this test into a tautology that no longer catches strict-decode reentry.
+func TestDependabotNoGhostGolangCILintToleratesUnmodeledFields(t *testing.T) {
 	body := []byte(`version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -333,9 +307,6 @@ updates:
     labels:
       - "dependencies"
     groups:
-      golangci-lint:
-        patterns:
-          - "golangci/golangci-lint-action"
       github-actions:
         patterns:
           - "*"
@@ -354,45 +325,16 @@ updates:
         patterns:
           - "*"
 `)
-	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
+	require.NoError(t, validateDependabotNoGhostGolangCILint(body))
 }
 
-// TestDependabotCoversCIAndGolangCILintRejectsGroupsFieldTypo is the
-// blind-spot self-check for dropping strict decode (#925): a typo in an
-// *asserted* field must still red the guard. Here `groops:` (typo of
-// `groups:`) is tolerantly ignored, leaving Groups empty, so the root
-// github-actions block can no longer cover golangci/golangci-lint-action and
-// the guard reds. This proves tolerant decode stays fail-closed on the fields
-// the guard reads — the safety claim that justified removing KnownFields(true).
+// TestDependabotNoGhostGolangCILintRejectsDirectoriesListWithoutRoot is the
+// anti-vacuity red case for the plural directories form: a `directories:` list
+// that omits "/" must NOT satisfy the root gomod coverage check, proving the
+// plural-path check tests membership of "/" rather than mere presence of the field.
 //
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — groups-field typo test.
-func TestDependabotCoversCIAndGolangCILintRejectsGroupsFieldTypo(t *testing.T) {
-	body := []byte(`version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    groops:
-      golangci-lint:
-        patterns:
-          - "golangci/golangci-lint-action"
-  - package-ecosystem: "gomod"
-    directory: "/"
-`)
-	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
-		"a typo in the asserted `groups` field must red the guard, not pass silently")
-}
-
-// TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList locks the guard's
-// support for dependabot's plural `directories:` list form. dependabot natively
-// supports both singular `directory:` (one dir) and plural `directories:` (a
-// list / glob); the real .github/dependabot.yml uses the plural form for its
-// gomod block to cover the workspace's many sub-modules. The guard must detect
-// root ("/") coverage in EITHER form — modeling only `directory:` made the
-// gomod root check silently fail (#2113). Anti-vacuity companion below proves
-// the plural path is not a tautology.
-//
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories list form.
-func TestDependabotCoversCIAndGolangCILintAcceptsDirectoriesList(t *testing.T) {
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — plural directories without root.
+func TestDependabotNoGhostGolangCILintRejectsDirectoriesListWithoutRoot(t *testing.T) {
 	body := []byte(`version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -400,37 +342,9 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      golangci-lint:
+      github-actions:
         patterns:
-          - "golangci/golangci-lint-action"
-  - package-ecosystem: "gomod"
-    directories:
-      - "/"
-      - "/tools"
-    schedule:
-      interval: "weekly"
-`)
-	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body),
-		"plural `directories:` list containing / must satisfy the root gomod coverage check")
-}
-
-// TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot is the
-// anti-vacuity red case for the plural form: a `directories:` list that omits
-// "/" must NOT satisfy the root gomod coverage check, proving the plural-path
-// check tests membership of "/" rather than mere presence of the field.
-//
-// INVARIANT: DEPENDABOT-COVERAGE-GOLANGCI-01 — plural directories without root.
-func TestDependabotCoversCIAndGolangCILintRejectsDirectoriesListWithoutRoot(t *testing.T) {
-	body := []byte(`version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      golangci-lint:
-        patterns:
-          - "golangci/golangci-lint-action"
+          - "*"
   - package-ecosystem: "gomod"
     directories:
       - "/tools"
@@ -438,19 +352,87 @@ updates:
     schedule:
       interval: "weekly"
 `)
-	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+	require.Error(t, validateDependabotNoGhostGolangCILint(body),
 		"a plural `directories:` list without / must not satisfy the root gomod coverage check")
 }
 
-// dependabotConfig models only the fields validateDependabotCoversCIAndGolangCILint
+// TestDependabotNoGhostGolangCILintAcceptsDirectoriesListWithRoot is the GREEN
+// companion to TestDependabotNoGhostGolangCILintRejectsDirectoriesListWithoutRoot.
+// It locks the plural-accept path: a `directories:` list that INCLUDES "/" must
+// satisfy the root gomod coverage check and must not be incorrectly rejected.
+//
+// Fixture: github-actions root (patterns: ["*"], no ghost) + gomod with
+// directories: ["/", "/tools"] — "/" is present so coversRoot() is true.
+//
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — plural directories with root (GREEN).
+func TestDependabotNoGhostGolangCILintAcceptsDirectoriesListWithRoot(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "gomod"
+    directories:
+      - "/"
+      - "/tools"
+    schedule:
+      interval: "weekly"
+`)
+	require.NoError(t, validateDependabotNoGhostGolangCILint(body),
+		"a plural `directories:` list containing / must satisfy the root gomod coverage check")
+}
+
+// TestDependabotNoGhostGolangCILintRejectsGoModRootFieldTypo verifies that a typo
+// in the gomod root-assertion field (directory/directories) makes coversRoot()
+// collapse to false, causing hasGoMod=false and the guard to red. This is the
+// blind-spot self-check for tolerant decode (#925): the guard only asserts on a
+// small set of fields (ghost patterns + root coverage); a typo in a field the
+// guard *does* read must still fail-closed rather than pass silently.
+//
+// Specifically: `directori:` (typo of `directory:`) is tolerantly decoded to the
+// zero value (empty string), so coversRoot() returns false → hasGoMod=false → guard
+// reds. This is distinct from the ghost-ban itself: the fixture has no ghost
+// patterns; it exercises the gomod root-assertion path only.
+//
+// Note: `groops:` (a typo of `groups:`) on the github-actions block is also present
+// in the fixture — it is tolerantly ignored and leaves Groups nil; since there are
+// no ghost patterns the ghost-ban itself does not trigger here.
+//
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — gomod root field typo (fail-closed).
+func TestDependabotNoGhostGolangCILintRejectsGoModRootFieldTypo(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groops:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "gomod"
+    directori: "/"
+    schedule:
+      interval: "weekly"
+`)
+	require.Error(t, validateDependabotNoGhostGolangCILint(body),
+		"a typo in the asserted `directory` field must red the guard (hasGoMod=false), not pass silently")
+}
+
+// dependabotConfig models only the fields validateDependabotNoGhostGolangCILint
 // asserts on. The decode is intentionally tolerant (no KnownFields(true)):
 // dependabot.yml legitimately grows orchestration fields (ignore /
 // open-pull-requests-limit / labels / reviewers / …) that the coverage guard
 // does not care about, and strict decode would red on each one while adding
 // nothing to the assertion (a typo in a field the guard *does* read collapses
-// it to its zero value, so the pattern match fails and the guard reds anyway).
+// it to its zero value, so the check fails and the guard reds anyway).
 // The tolerant-decode contract is locked by the fixtures above
-// (ToleratesUnmodeledFields + RejectsGroupsFieldTypo). See #925.
+// (ToleratesUnmodeledFields + RejectsAssertedFieldTypo). See #925.
 type dependabotConfig struct {
 	Updates []dependabotUpdate `yaml:"updates"`
 }
@@ -475,61 +457,112 @@ func (u dependabotUpdate) coversRoot() bool {
 }
 
 // dependabotGroup deliberately models only Patterns. The guard asks whether a
-// group's Patterns contains the required action, never what is excluded, so
-// exclude-patterns is left unmodeled and tolerantly ignored (see the
-// AllowsGroupExclusions fixture).
+// group's Patterns contains the ghost action, never what is excluded, so
+// exclude-patterns is left unmodeled and tolerantly ignored.
 type dependabotGroup struct {
 	Patterns []string `yaml:"patterns"`
 }
 
-func validateDependabotCoversCIAndGolangCILint(body []byte) error {
-	var cfg dependabotConfig
-	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		return fmt.Errorf("parse dependabot.yml: %w", err)
+// patternCoversGhost reports whether a single dependabot pattern p would match
+// the removed golangci/golangci-lint-action. dependabot patterns support a
+// trailing "*" glob and an optional "@version" suffix (stripped before
+// matching); exact matches and non-empty-prefix trailing-wildcard matches are
+// detected.
+//
+// A bare "*" (all-packages wildcard with empty non-star prefix) is intentionally
+// excluded: it is a legitimate catch-all used for the github-actions group and
+// does not single out golangci specifically. Only patterns with a non-empty
+// golangci-scoped prefix (e.g. "golangci/*", "golangci/golangci-lint*") are
+// considered ghost coverage.
+//
+// Known blind spots (documented per DEPENDABOT-NO-GHOST-GOLANGCI-01):
+//   - Case sensitivity: dependabot patterns are case-sensitive; uppercase variants
+//     (e.g. "Golangci/*") are not a real bypass and are intentionally not handled.
+//   - Complex globs: mid-pattern "?" or character-class "[…]" are not parsed;
+//     such patterns are not standard dependabot practice and are not handled.
+func patternCoversGhost(p string) bool {
+	const ghost = "golangci/golangci-lint-action"
+	// Strip optional @version suffix (e.g. "golangci/golangci-lint-action@v6").
+	p = strings.SplitN(p, "@", 2)[0]
+	// Exact match.
+	if p == ghost {
+		return true
 	}
-
-	var hasGitHubActions bool
-	var hasGoMod bool
-	for _, update := range cfg.Updates {
-		switch update.PackageEcosystem {
-		case "github-actions":
-			if update.coversRoot() {
-				hasGitHubActions = true
-				if rootGitHubActionsUpdateCoversGolangCI(update) {
-					return validateDependabotHasGoModRoot(cfg)
-				}
-			}
-		case "gomod":
-			if update.coversRoot() {
-				hasGoMod = true
-			}
-		}
-	}
-	if !hasGitHubActions {
-		return fmt.Errorf("dependabot must update GitHub Actions pins from directory /")
-	}
-	if !hasGoMod {
-		return fmt.Errorf("dependabot must update Go module pins from directory /")
-	}
-	return fmt.Errorf("dependabot root github-actions groups must explicitly pattern-match golangci/golangci-lint-action")
-}
-
-func rootGitHubActionsUpdateCoversGolangCI(update dependabotUpdate) bool {
-	for _, group := range update.Groups {
-		if slices.Contains(group.Patterns, "golangci/golangci-lint-action") {
+	// Trailing-wildcard prefix match: covers "golangci/*", "golangci/golangci-lint*", etc.
+	// Require a non-empty prefix so that the bare "*" catch-all is not treated as ghost
+	// coverage (it does not single out the golangci organization).
+	if strings.HasSuffix(p, "*") {
+		prefix := strings.TrimSuffix(p, "*")
+		if prefix != "" && strings.HasPrefix(ghost, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-func validateDependabotHasGoModRoot(cfg dependabotConfig) error {
-	for _, update := range cfg.Updates {
-		if update.PackageEcosystem == "gomod" && update.coversRoot() {
-			return nil
+// anyGroupCoversGhost reports whether any group in the given update has a
+// pattern that would match the removed golangci/golangci-lint-action. This is
+// used to detect ghost coverage — the action was removed in #1565/#2125 so any
+// dependabot group covering it (including via trailing-wildcard globs such as
+// "golangci/*") creates a misleading impression that the real lint pin
+// (hack/lib/golangci-lint.sh) is auto-updated. See patternCoversGhost for the
+// matching rules and residual blind spots.
+func anyGroupCoversGhost(update dependabotUpdate) bool {
+	for _, group := range update.Groups {
+		for _, p := range group.Patterns {
+			if patternCoversGhost(p) {
+				return true
+			}
 		}
 	}
-	return fmt.Errorf("dependabot must update Go module pins from directory /")
+	return false
+}
+
+// validateDependabotNoGhostGolangCILint enforces DEPENDABOT-NO-GHOST-GOLANGCI-01:
+//  1. No update group (in any ecosystem or directory) must pattern-match
+//     "golangci/golangci-lint-action" — that action is a ghost since #1565/#2125.
+//     The real lint pin is hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (manual
+//     bump per #2160; patch-pin guarded by CI-PINNING-WORKFLOW-DIGEST-01).
+//  2. A root github-actions update (directory "/") must exist.
+//  3. A root gomod update (directory "/" or directories list containing "/") must exist.
+func validateDependabotNoGhostGolangCILint(body []byte) error {
+	var cfg dependabotConfig
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
+		return fmt.Errorf("parse dependabot.yml: %w", err)
+	}
+
+	var hasGitHubActionsRoot bool
+	var hasGoModRoot bool
+
+	for _, update := range cfg.Updates {
+		// Ghost ban: reject any group covering the removed action, regardless of ecosystem.
+		if anyGroupCoversGhost(update) {
+			return fmt.Errorf("dependabot.yml must not contain a group with pattern " +
+				"\"golangci/golangci-lint-action\": that action was removed in " +
+				"#1565/#2125; the real lint pin is hack/lib/golangci-lint.sh " +
+				"(manual bump per #2160, patch-pin by CI-PINNING-WORKFLOW-DIGEST-01); " +
+				"remove the ghost group to prevent false auto-update coverage")
+		}
+
+		switch update.PackageEcosystem {
+		case "github-actions":
+			if update.coversRoot() {
+				hasGitHubActionsRoot = true
+			}
+		case "gomod":
+			if update.coversRoot() {
+				hasGoModRoot = true
+			}
+		}
+	}
+
+	if !hasGitHubActionsRoot {
+		return fmt.Errorf("dependabot must have a github-actions update covering directory /")
+	}
+	if !hasGoModRoot {
+		return fmt.Errorf("dependabot must have a gomod update covering directory /")
+	}
+	return nil
 }
 
 func validateWorkflowUsesPinned(path string, body []byte) error {
