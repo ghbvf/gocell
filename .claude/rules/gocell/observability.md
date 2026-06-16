@@ -60,6 +60,22 @@ dial→503，见 P2.8）。`error.type` 超出该有界 kind 的细节留在 tra
 不进 metric label，保持低基数（success + 5 个有界失败 kind × 二值 mode = ≤12 series）。新增 outcome
 须同步 `allTransportOutcomes` 注册表（anti-vacuity，`TestTransportOutcome_FrozenRegistry`）+ 本节。
 
+**span tracer 单源（#2251 P1.3，D4 span 半闭合）**：remote 调用的 span 与 metrics 同源——
+metrics + tracer 由 sealed `transport.CrossCellObs`（unexported 字段，唯一 minter =
+`composition.Builder`）捆绑承载，`celltransport.Resolve` 收**一个**预建捆绑参（非分离的 metrics +
+tracer），故「接 metrics 忘 tracer」在 Resolve 边界类型级不可表达（Hard）。tracer 单源 = `SharedDeps.Tracer`：
+Builder 同时 append `bootstrap.WithTracer`（router + in-proc + event-router）并注入捆绑（remote），
+保证 remote 与 in-proc span 用同一 tracer。`SharedDeps.Tracer` 可为 nil（无 tracing，降级 NoopTracer）；
+今生产 seam-only（未接真 otel）。
+
+**remote peer readiness（#2251 P2.7）**：split topology 下 `celltransport.Resolve` 的 remote 分支
+经 `ModuleResult.Resources` 注册一个 `<cell>_remote_ready` readiness probe（typed
+`healthz.RemoteCellReadyProbeName`，`_ready` 依赖可用性约定）。probe 只对 resolved endpoint 做
+**TCP dial**（`transport.EndpointDialTarget` 解析，与 rewriteToAbsolute 同源），**不**打远端
+`/readyz`——cascade-safe：避免 A↔B 互探 readiness 死锁。peer 不可达 → 本 cell `/readyz` 降级（运维
+据此摘流量），但只进 readiness aggregator、**不** kill liveness。更丰富的 peer health（HTTP /readyz
+深度探测、多副本、依赖环检测）归 EPIC「类 k8s cell 运行时管理」。
+
 ## Redis namespace
 
 Redis key namespace 使用 owner 维度表达：cell、role、resource。禁止把 service token、
