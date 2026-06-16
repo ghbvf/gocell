@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile/reconciletest"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	cl "github.com/ghbvf/gocell/framework/runtime/certlifecycle"
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
@@ -22,18 +23,26 @@ const (
 	// multi-replica test pre-acquires the same key to simulate a handoff. Must
 	// satisfy validateReconcilerID (lowercase [a-z0-9_], leading [a-z_]).
 	testReconcilerID = "certlifecycle_test"
+
+	// Validity-window offsets (TEST-TIME-LITERAL-01: no inline test-time literals).
+	dueElapsed      = 95 * time.Hour // age of a cert past its 70–90% jitter instant
+	dueRemaining    = 5 * time.Hour  // remaining validity of a due (not-yet-expired) cert
+	notDueElapsed   = 1 * time.Hour  // age of a freshly-issued cert
+	notDueRemaining = 99 * time.Hour // remaining validity before the jitter instant
+	expiredElapsed  = 100 * time.Hour
+	expiredAgo      = 1 * time.Hour // how long ago an expired cert's notAfter passed
 )
 
 // dueWindow returns a validity window for which now is past the 70–90% jitter
 // instant (so the cert is due) regardless of the jitter fraction.
 func dueWindow(now time.Time) (notBefore, notAfter time.Time) {
-	return now.Add(-95 * time.Hour), now.Add(5 * time.Hour)
+	return now.Add(-dueElapsed), now.Add(dueRemaining)
 }
 
 // notDueWindow returns a window whose 70–90% instant is comfortably in the
 // future (so the cert is not yet due) even within the scan cutoff.
 func notDueWindow(now time.Time) (notBefore, notAfter time.Time) {
-	return now.Add(-1 * time.Hour), now.Add(99 * time.Hour)
+	return now.Add(-notDueElapsed), now.Add(notDueRemaining)
 }
 
 // newReconciler builds a Reconciler with the given fakes and default policy.
@@ -91,19 +100,6 @@ func driveLoopWithLeader(t *testing.T, rec *cl.Reconciler, repo reconcile.Fenced
 	}
 }
 
-// waitUntil polls cond until true or fails after pollTimeout.
-func waitUntil(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(pollTimeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(pollTick)
-	}
-	t.Fatalf("timed out waiting for: %s", what)
-}
-
 func TestReconcileHappyPathRenews(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -115,7 +111,7 @@ func TestReconcileHappyPathRenews(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "one renewal mutation", func() bool { return len(repo.mutations()) == 1 })
+	testwait.External(t, "renewal-mutation-recorded", func() bool { return len(repo.mutations()) == 1 }, pollTimeout, pollTick)
 
 	mut := firstMutation(t, repo)
 	if mut.TargetEpoch != 2 {
@@ -156,7 +152,7 @@ func TestReconcileSigningFailureDoesNotDamageCert(t *testing.T) {
 	stop := driveLoop(t, rec, repo)
 	defer stop()
 	// Sign is attempted; assert no persisted effect ever (existing cert untouched).
-	waitUntil(t, "signer attempted", func() bool { return signer.callCount() >= 1 })
+	testwait.External(t, "signer-attempted", func() bool { return signer.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := len(repo.mutations()); got != 0 {
 		t.Errorf("recorded %d mutations after signing failure, want 0 (existing cert untouched)", got)
 	}
@@ -173,7 +169,7 @@ func TestReconcileFailClosedDenyDoesNotSign(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "authorizer consulted", func() bool { return authz.callCount() >= 1 })
+	testwait.External(t, "authorizer-consulted", func() bool { return authz.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times under fail-closed deny, want 0", got)
 	}
@@ -193,7 +189,7 @@ func TestReconcileAuthorizeErrorDoesNotSign(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "authorizer consulted", func() bool { return authz.callCount() >= 1 })
+	testwait.External(t, "authorizer-consulted", func() bool { return authz.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times after authorize error, want 0", got)
 	}
@@ -212,7 +208,7 @@ func TestReconcileConstraintViolationDoesNotSign(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "authorizer consulted", func() bool { return authz.callCount() >= 1 })
+	testwait.External(t, "authorizer-consulted", func() bool { return authz.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times on SAN constraint violation, want 0", got)
 	}
@@ -232,7 +228,7 @@ func TestReconcileTTLViolationDoesNotSign(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "authorizer consulted", func() bool { return authz.callCount() >= 1 })
+	testwait.External(t, "authorizer-consulted", func() bool { return authz.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times when SignTTL exceeds grant MaxTTL, want 0", got)
 	}
@@ -249,7 +245,7 @@ func TestReconcileNotDueSkips(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "sweep ran", func() bool { return repo.listCount() >= 1 })
+	testwait.External(t, "sweep-ran", func() bool { return repo.listCount() >= 1 }, pollTimeout, pollTick)
 	if got := authz.callCount(); got != 0 {
 		t.Errorf("authorizer called %d times for not-due cert, want 0", got)
 	}
@@ -271,7 +267,7 @@ func TestReconcileNonRenewableStateSkips(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "sweep ran", func() bool { return repo.listCount() >= 1 })
+	testwait.External(t, "sweep-ran", func() bool { return repo.listCount() >= 1 }, pollTimeout, pollTick)
 	if got := authz.callCount(); got != 0 {
 		t.Errorf("authorizer called %d times for revoked cert, want 0 (observe-and-skip)", got)
 	}
@@ -284,7 +280,7 @@ func TestReconcileExpiredCertReSignsToRecover(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	// Already past notAfter, but active with a valid stored CSR → re-sign to recover.
-	nb, na := now.Add(-100*time.Hour), now.Add(-1*time.Hour)
+	nb, na := now.Add(-expiredElapsed), now.Add(-expiredAgo)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
 	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
@@ -292,7 +288,7 @@ func TestReconcileExpiredCertReSignsToRecover(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "expired cert recovered", func() bool { return len(repo.mutations()) == 1 })
+	testwait.External(t, "expired-cert-recovered", func() bool { return len(repo.mutations()) == 1 }, pollTimeout, pollTick)
 	if got := firstMutation(t, repo).TargetEpoch; got != 2 {
 		t.Errorf("recovered cert TargetEpoch = %d, want 2", got)
 	}
@@ -314,7 +310,7 @@ func TestReconcileStaleFencedWriteSkipsNoDuplicate(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "signer attempted", func() bool { return signer.callCount() >= 1 })
+	testwait.External(t, "signer-attempted", func() bool { return signer.callCount() >= 1 }, pollTimeout, pollTick)
 	// The stale write is rejected → no IssuedMutation recorded (only the seed).
 	if got := len(repo.mutations()); got != 0 {
 		t.Errorf("recorded %d IssuedMutations after stale rejection, want 0", got)
@@ -334,7 +330,7 @@ func TestReconcileInvalidRowTenantSkips(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "sweep ran", func() bool { return repo.listCount() >= 1 })
+	testwait.External(t, "sweep-ran", func() bool { return repo.listCount() >= 1 }, pollTimeout, pollTick)
 	if got := authz.callCount(); got != 0 {
 		t.Errorf("authorizer called %d times for malformed-tenant row, want 0 (skip before authorize)", got)
 	}
@@ -359,7 +355,7 @@ func TestReconcileCorruptStoredCSRSkips(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "authorizer consulted", func() bool { return authz.callCount() >= 1 })
+	testwait.External(t, "authorizer-consulted", func() bool { return authz.callCount() >= 1 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times with corrupt stored CSR, want 0", got)
 	}
@@ -412,7 +408,7 @@ func TestReconcileScanErrorBubblesTransient(t *testing.T) {
 	defer stop()
 	// A scan error bubbles as transient → the Loop backs off and re-sweeps, so the
 	// scan is retried (listCount climbs past the first attempt). Nothing is signed.
-	waitUntil(t, "scan retried after transient error", func() bool { return repo.listCount() >= 2 })
+	testwait.External(t, "scan-retried", func() bool { return repo.listCount() >= 2 }, pollTimeout, pollTick)
 	if got := signer.callCount(); got != 0 {
 		t.Errorf("signer called %d times when scan failed, want 0", got)
 	}

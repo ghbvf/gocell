@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 )
 
 // TestReconcileLoopBoundedSweep drives the Reconciler through a real Loop with a
@@ -26,7 +27,7 @@ func TestReconcileLoopBoundedSweep(t *testing.T) {
 
 	stop := driveLoop(t, rec, repo)
 	defer stop()
-	waitUntil(t, "all three certs renewed", func() bool { return len(repo.mutations()) == 3 })
+	testwait.External(t, "all-certs-renewed", func() bool { return len(repo.mutations()) == 3 }, pollTimeout, pollTick)
 
 	seen := map[string]bool{}
 	for _, m := range repo.mutations() {
@@ -73,7 +74,7 @@ func TestReconcileLoopMultiReplicaFencing(t *testing.T) {
 	// New leader (epoch N+1) drives the Loop; its renewal lands at the higher epoch.
 	stop := driveLoopWithLeader(t, rec, repo, backend.Elector("holder-new"))
 	defer stop()
-	waitUntil(t, "new leader renewed", func() bool { return len(repo.mutations()) == 1 })
+	testwait.External(t, "new-leader-renewed", func() bool { return len(repo.mutations()) == 1 }, pollTimeout, pollTick)
 
 	if got := repo.LastEpoch("device-1"); got <= tokOld.Epoch {
 		t.Fatalf("live write epoch %d must exceed the old leader's epoch %d (handoff must bump)", got, tokOld.Epoch)

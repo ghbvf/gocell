@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// jitterTestLifetime is the cert validity span used by the renewal-instant tests
+// (TEST-TIME-LITERAL-01: no inline test-time literals).
+const jitterTestLifetime = 100 * time.Hour
+
 func TestRenewalFractionDeterministicAndBounded(t *testing.T) {
 	t.Parallel()
 	ids := []struct{ device, serial string }{
@@ -61,7 +65,7 @@ func TestRenewalFractionSpread(t *testing.T) {
 func TestRenewalInstantAndDue(t *testing.T) {
 	t.Parallel()
 	notBefore := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	notAfter := notBefore.Add(100 * time.Hour)
+	notAfter := notBefore.Add(jitterTestLifetime)
 	const dev, serial = "dev", "ser"
 
 	lifetime := notAfter.Sub(notBefore) // runtime value: avoids constant float→Duration conversion
