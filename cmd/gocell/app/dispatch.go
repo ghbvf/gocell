@@ -51,6 +51,14 @@ var commands = []subcommand[func(ctx context.Context, args []string) error]{
 		run:  runArchtestAlias,
 	},
 	{name: "version", help: []string{"Print gocell CLI / framework version + compatibility  [--format]"}, run: runVersion},
+	{
+		name: "derive-service-keys",
+		help: []string{
+			"Derive per-cell signing+verify subkeys from the HMAC master  [--cell, --callers]",
+			"Emits a shell eval-able env block; master secret stays absent from the cell process.",
+		},
+		run: runDeriveServiceKeys,
+	},
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go
