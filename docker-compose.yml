@@ -12,6 +12,12 @@
 # Production deployments MUST inject all secrets via a secret manager
 # (Vault, GitHub Secrets, or equivalent) — never from this file.
 #
+# Because these services carry FIXED, committed dev credentials, every host
+# port below is published to 127.0.0.1 (loopback) only — never 0.0.0.0 — so the
+# dev-only boundary is enforced by the port-publish semantics, not just this
+# comment. A developer workstation must not expose these backing services to its
+# LAN. This is machine-guarded by COMPOSE-DEV-LOOPBACK-BIND-01 (tools/archtest).
+#
 # For a fail-fast "bring-your-own-password" variant that uses ${VAR:?} and
 # refuses to start with a missing secret, see docker-compose.local.yml.
 
@@ -23,7 +29,7 @@ services:
       POSTGRES_PASSWORD: gocell_dev
       POSTGRES_DB: gocell_dev
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +42,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -50,8 +56,8 @@ services:
       RABBITMQ_DEFAULT_USER: gocell
       RABBITMQ_DEFAULT_PASS: gocell_dev
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -68,8 +74,8 @@ services:
       MINIO_ROOT_USER: gocell
       MINIO_ROOT_PASSWORD: gocell_dev_secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
