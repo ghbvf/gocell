@@ -17,7 +17,7 @@ const (
 	jwtAudienceEnv            = "GOCELL_JWT_AUDIENCE"
 )
 
-func newJWTVerifierFromEnv() (*auth.JWTVerifier, error) {
+func newJWTVerifierFromEnv(clk clock.Clock) (*auth.JWTVerifier, error) {
 	issuer := strings.TrimSpace(os.Getenv(jwtIssuerEnv))
 	if issuer == "" {
 		return nil, fmt.Errorf("%s must be set", jwtIssuerEnv)
@@ -27,11 +27,11 @@ func newJWTVerifierFromEnv() (*auth.JWTVerifier, error) {
 		return nil, fmt.Errorf("%s must be set", jwtAudienceEnv)
 	}
 
-	keySet, err := auth.LoadKeySetFromEnv(clock.Real())
+	keySet, err := auth.LoadKeySetFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("load JWT key set from environment: %w", err)
 	}
-	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(),
+	verifier, err := auth.NewJWTVerifier(keySet, clk,
 		auth.WithExpectedAudiences(audience),
 		auth.WithExpectedIssuer(issuer))
 	if err != nil {
@@ -40,7 +40,7 @@ func newJWTVerifierFromEnv() (*auth.JWTVerifier, error) {
 	return verifier, nil
 }
 
-func newInternalAuthChainFromEnv() ([]kauth.ListenerAuth, error) {
+func newInternalAuthChainFromEnv(clk clock.Clock) ([]kauth.ListenerAuth, error) {
 	secret := os.Getenv(iotdeviceServiceSecretEnv)
 	if secret == "" {
 		return nil, fmt.Errorf("%s must be set for the internal listener", iotdeviceServiceSecretEnv)
@@ -50,7 +50,7 @@ func newInternalAuthChainFromEnv() ([]kauth.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", iotdeviceServiceSecretEnv, err)
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
 	if err != nil {
 		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
 	}

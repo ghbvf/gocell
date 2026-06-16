@@ -869,7 +869,7 @@ func TestErrcodePrefixOwnership01(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
+	patterns := prodscan.PatternsWithSatellites(root)
 
 	visited := map[string]bool{}
 	canaryObserved := map[string]bool{}
@@ -920,7 +920,7 @@ func TestErrcodePrefixOwnership01(t *testing.T) {
 		t.Errorf("ERRCODE-PREFIX-OWNERSHIP-01: canary anchor failed — "+
 			"production scan did not observe codes %q (seen=%v) and %q (seen=%v). "+
 			"This means the scan loaded nothing or the scope regressed; "+
-			"check prodscan.PatternsExtended and fileroles.IsProductionCode.",
+			"check prodscan.PatternsWithSatellites and fileroles.IsProductionCode.",
 			canaryA, canaryObserved[canaryA], canaryB, canaryObserved[canaryB])
 	}
 
@@ -1079,11 +1079,76 @@ func TestErrcodePrefixOwnership01_SentinelConstEval(t *testing.T) {
 	}
 }
 
+// TestErrcodeProductionScansUseSatelliteScope locks #2148: the two errcode
+// production scans — runErrcodeTypedScan (shared by MESSAGE-CONST-LITERAL-01,
+// EXPORTED-ERROR-NEW-01, …) and TestErrcodePrefixOwnership01
+// (ERRCODE-PREFIX-OWNERSHIP-01) — must resolve their scan patterns via
+// prodscan.PatternsWithSatellites, the satellite-inclusive scope, never
+// prodscan.PatternsExtended, which drops the go.work satellite parents (cmd/,
+// adapters/, examples/) and the top-level module roots (corecells/,
+// cellmodules/). errcode intentionally stays on prodscan patterns (not
+// Production()) because it must also cover tools/ and tests/ production files,
+// which Production() excludes.
+//
+// AI-robust: Medium (type-aware AST scan of the two scan-entry functions; a
+// regression back to PatternsExtended re-vacates satellite coverage and fails
+// here). Mirrors TestClockChecksDoNotUseProdscanPatternsExtended. Satellite
+// inclusion is a per-gate opt-in by name (see prodscan.PatternsWithSatellites
+// godoc) — this guard is scoped to errcode's two functions, not a global ban.
+func TestErrcodeProductionScansUseSatelliteScope(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	targets := []struct{ file, fn string }{
+		{"errcode_invariants.go", "runErrcodeTypedScan"},
+		{"errcode_invariants_test.go", "TestErrcodePrefixOwnership01"},
+	}
+	for _, tg := range targets {
+		path := filepath.Join(root, "tools", "archtest", tg.file)
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", tg.file, err)
+		}
+		var found, sawSatellites bool
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			if fn.Name == nil || fn.Body == nil || fn.Name.Name != tg.fn {
+				return
+			}
+			found = true
+			EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				ident, ok := sel.X.(*ast.Ident)
+				if !ok || ident.Name != "prodscan" {
+					return
+				}
+				switch sel.Sel.Name {
+				case "PatternsWithSatellites":
+					sawSatellites = true
+				case "PatternsExtended":
+					t.Errorf("%s.%s must not call prodscan.PatternsExtended; it drops go.work "+
+						"satellite modules — use PatternsWithSatellites (#2148)", tg.file, tg.fn)
+				}
+			})
+		})
+		if !found {
+			t.Errorf("%s: function %s not found (renamed?); update "+
+				"TestErrcodeProductionScansUseSatelliteScope", tg.file, tg.fn)
+		}
+		if !sawSatellites {
+			t.Errorf("%s.%s must call prodscan.PatternsWithSatellites so errcode scans "+
+				"go.work satellite modules (#2148)", tg.file, tg.fn)
+		}
+	}
+}
+
 // ─── import anchors ───────────────────────────────────────────────────────────
 
 // These blank-identifier references keep frequently-used imports live so that
 // go tooling (goimports, vet) does not remove them between edits.
 var (
-	_ = prodscan.PatternsExtended
+	_ = prodscan.PatternsWithSatellites
 	_ = fileroles.IsProductionCode
 )

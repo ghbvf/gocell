@@ -94,6 +94,7 @@ func WithLogger(l *slog.Logger) Option {
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
+	clk        clock.Clock
 	repo       domain.OrderRepository
 	authorizer auth.Authorizer // todoorder example-owned PDP (orderAuthorizer); set in initInternal
 	txRunner   persistence.CellTxManager
@@ -125,10 +126,13 @@ type OrderCell struct {
 	projectionSvc *orderprojection.Service
 }
 
-// NewOrderCell creates a new OrderCell with the given options.
-func NewOrderCell(opts ...Option) *OrderCell {
+// NewOrderCell creates a new OrderCell with the given options. clk is a required
+// position parameter; pass clock.Real() from the composition root.
+func NewOrderCell(clk clock.Clock, opts ...Option) *OrderCell {
+	clock.MustHaveClock(clk, "ordercell.NewOrderCell")
 	c := &OrderCell{
 		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		clk:      clk,
 		logger:   slog.Default(),
 	}
 	for _, o := range opts {
@@ -172,7 +176,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	c.authorizer = newOrderAuthorizer(c.repo)
 
 	// order-create slice — unified outbox path, no publisher fork.
-	createSvc, err := ordercreate.NewService(clock.Real(), c.repo, c.logger,
+	createSvc, err := ordercreate.NewService(c.clk, c.repo, c.logger,
 		ordercreate.WithEmitter(c.emitter),
 		ordercreate.WithTxManager(c.txRunner),
 	)
@@ -216,7 +220,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	// order-confirm slice (L2 OutboxFact) — PATCH status to confirmed, publishes
 	// event.order-status-changed.v1 through the same emitter+txRunner sink as
 	// order-create.
-	confirmSvc, err := orderconfirm.NewService(clock.Real(), c.repo, c.logger,
+	confirmSvc, err := orderconfirm.NewService(c.clk, c.repo, c.logger,
 		orderconfirm.WithEmitter(c.emitter),
 		orderconfirm.WithTxManager(c.txRunner),
 	)
@@ -268,7 +272,7 @@ func (c *OrderCell) Authorizer() auth.Authorizer {
 // After this call, pendingOutboxWriter is cleared and c.emitter is the
 // composed sealed CellEmitter.
 func (c *OrderCell) resolveOutboxDeps(mode outbox.DurabilityMode) error {
-	resolved, err := outbox.ResolveCellEmitter(clock.Real(), outbox.CellEmitterInputs{
+	resolved, err := outbox.ResolveCellEmitter(c.clk, outbox.CellEmitterInputs{
 		EmitterConfig: outbox.EmitterConfig{
 			CellID:       "ordercell",
 			Mode:         mode,

@@ -168,6 +168,86 @@ func TestPanicRegistered(t *testing.T) {
 		CheckPanicRegistered(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
+// TestPanicRegisteredUsesProductionScope locks #2148's vacuity fix:
+// CheckPanicRegistered must scan via Production(...) — the workspace-aware scope
+// that expands to one ./<dir>/... per go.work member (see
+// typeseval.LoadProductionPackages) — never Typed(./...), which at GoCell's
+// module-less workspace root resolves to ZERO packages, leaving the entire
+// production tree silently unscanned. Its sibling TestPanicLogRedact already
+// uses Production(); this converges both panic gates onto one scope.
+//
+// AI-robust: Medium (type-aware AST scan; a regression to Typed(./...) re-vacates
+// the dogfood scan and fails here). Mirrors
+// TestClockChecksDoNotUseProdscanPatternsExtended. Production() subsumes the
+// external single-module cell via workspace.Modules' single-module fallback, so
+// no transport-specific dual-path is needed.
+func TestPanicRegisteredUsesProductionScope(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "tools", "archtest", "panic_invariants.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse panic_invariants.go: %v", err)
+	}
+	var found, sawProduction bool
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Name == nil || fn.Body == nil || fn.Name.Name != "CheckPanicRegistered" {
+			return
+		}
+		found = true
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return
+			}
+			switch ident.Name {
+			case "Production":
+				sawProduction = true
+			case "Typed":
+				t.Errorf("CheckPanicRegistered must use Production(...) scope, not Typed(./...); " +
+					"Typed drops go.work satellites and is vacuous at the module-less workspace root (#2148)")
+			}
+		})
+	})
+	if !found {
+		t.Errorf("CheckPanicRegistered not found in panic_invariants.go (renamed?); " +
+			"update TestPanicRegisteredUsesProductionScope")
+	}
+	if !sawProduction {
+		t.Errorf("CheckPanicRegistered must call Production(...) so PANIC-REGISTERED-01 scans " +
+			"the whole workspace including satellites (#2148)")
+	}
+}
+
+// TestPanicRegisteredScopeIncludesSatellites is the self-contained anti-vacuity
+// companion: it proves the Production() scope that CheckPanicRegistered now uses
+// actually visits satellite-module production files, so PANIC-REGISTERED-01
+// coverage is non-vacuous after #2148. Mirrors
+// TestClockWorkspaceScopeIncludesSatellites.
+func TestPanicRegisteredScopeIncludesSatellites(t *testing.T) {
+	t.Parallel()
+	required := map[string]bool{
+		"cmd/gocell/main.go":     false,
+		"cmd/corebundle/main.go": false,
+	}
+	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := filepath.ToSlash(p.Rel(f))
+			if _, ok := required[rel]; ok {
+				required[rel] = true
+			}
+		}
+		return nil
+	})
+	for rel, seen := range required {
+		if !seen {
+			t.Errorf("PANIC-REGISTERED-01 Production scope did not visit %s; "+
+				"satellite coverage would be vacuous", rel)
+		}
+	}
+}
+
 // TestScanPanicBuiltinShadows is the reverse self-check for the one declared
 // blind spot of the pure-AST panic detection (see scanPanicBuiltinShadows
 // godoc): the rule matches the `panic` builtin by name, so a declaration that

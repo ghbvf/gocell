@@ -95,6 +95,26 @@ const (
 // Required: NewSSOBFFApp fails fast when absent.
 const ssobffDatabaseURLEnv = "DATABASE_URL"
 
+// Duration constants for ssobff composition-root timeouts and token TTL.
+// Each name expresses the semantic rather than the bare value so callers
+// never need to look up what "5s" means in context.
+const (
+	// infraCleanupTimeout bounds the deferred close of managed infra
+	// resources (Redis/RabbitMQ) when NewSSOBFFApp fails before fully loading.
+	infraCleanupTimeout = 5 * time.Second
+	// poolCleanupTimeout bounds the deferred pool.Close call when
+	// NewSSOBFFApp fails after the PG pool is opened but before the app
+	// finishes loading.
+	poolCleanupTimeout = 5 * time.Second
+	// bootstrapAuditAppendTimeout is the detached context deadline given to
+	// the bootstrap auth-failure audit append (fire-and-forget relative to
+	// the request context).
+	bootstrapAuditAppendTimeout = 2 * time.Second
+	// ssobffJWTTokenTTL is the lifetime of tokens issued by the ssobff JWT
+	// issuer. 15 min matches the platform default in cmd/corebundle.
+	ssobffJWTTokenTTL = 15 * time.Minute
+)
+
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
 //
 // Topology-gated: demo topology uses in-memory event bus + in-memory idempotency
@@ -335,7 +355,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	loaded := false
 	defer func() {
 		if !loaded {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), infraCleanupTimeout)
 			defer cancel()
 			closeManagedResources(cleanupCtx, infra.rd.Resources)
 			closeManagedResources(cleanupCtx, infra.transport.Resources)
@@ -378,7 +398,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 	defer func() {
 		if !loaded {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), poolCleanupTimeout)
 			defer cancel()
 			_ = pool.Close(cleanupCtx)
 		}
@@ -579,7 +599,7 @@ func newSSOBFFAuthFailObserver(logger *slog.Logger, acPtr **accesscore.AccessCor
 				slog.String("client_ip_hash", ipHash.String()))
 			return
 		}
-		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, 2*time.Second)
+		appendCtx, cancel := ctxutil.WithDetachedTimeout(ctx, bootstrapAuditAppendTimeout)
 		defer cancel()
 		if err := (*acPtr).RecordBootstrapAuthFail(appendCtx, reason, ipHash); err != nil {
 			logger.ErrorContext(ctx, "bootstrap_audit_append_failed",
@@ -951,7 +971,7 @@ func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *a
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: load JWT key set: %w", err)
 	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, ssobffJWTIssuer, 15*time.Minute, clk,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, ssobffJWTIssuer, ssobffJWTTokenTTL, clk,
 		auth.WithIssuerAudiencesFromSlice([]string{ssobffJWTAudience}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT issuer: %w", err)

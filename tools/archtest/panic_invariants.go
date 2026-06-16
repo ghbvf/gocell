@@ -313,16 +313,24 @@ func shouldSkipForPanicRegistered(rel string) bool {
 	return false
 }
 
-// CheckPanicRegistered runs PANIC-REGISTERED-01 over the running module and
-// returns its diagnostics. It is the importable [CellRule] body wrapped by
-// [StandardCellRules]; GoCell's TestPanicRegistered calls it directly so the
-// gate has a single source. The scan SCOPE is the running module (resolved from
-// its go.mod by Run(t, Typed(...))); cfg.BuildTags supplies the build tags for
-// the second pass so panics behind the consumer's //go:build directives are
-// scanned too.
+// CheckPanicRegistered runs PANIC-REGISTERED-01 over the workspace production
+// package set and returns its diagnostics. It is the importable [CellRule] body
+// wrapped by [StandardCellRules]; GoCell's TestPanicRegistered calls it directly
+// so the gate has a single source. The scan SCOPE is Production(...) — the
+// workspace-aware scope that expands to one ./<dir>/... per go.work member
+// (typeseval.LoadProductionPackages), so satellite modules (cmd/, adapters/,
+// examples/, corecells/, cellmodules/) are scanned; for an external
+// single-module cell Production() reduces to that module via workspace.Modules'
+// single-module fallback. cfg.BuildTags supplies the build tags for the second
+// pass so panics behind the consumer's //go:build directives are scanned too.
+//
+// Before #2148 this used Typed(./...), which at GoCell's module-less workspace
+// root resolves to zero packages — leaving the entire production tree silently
+// unscanned (vacuous). Converged onto the same Production() scope its sibling
+// TestPanicLogRedact already uses.
 //
 // The default build config is always scanned; when cfg.BuildTags is non-empty a
-// second Run(t, Typed(...)) load covers files behind those tags, deduped by
+// second Production(...) load covers files behind those tags, deduped by
 // "rel:line:reason". GoCell's dogfood passes FlatNonDefaultTags(); an external
 // repo passes its own production tags. See the long note in the prior
 // TestPanicRegistered body / ADR 202605190000 §Alternatives for why a single
@@ -337,9 +345,9 @@ func CheckPanicRegistered(t *testing.T, cfg ConfigForExternalCell) []Diagnostic 
 		return nil
 	}
 
-	_ = Run(t, Typed(TypedOpts{}, []string{"./..."}), scan)
+	_ = Run(t, Production(TypedOpts{Tests: false}), scan)
 	if len(cfg.BuildTags) > 0 {
-		_ = Run(t, Typed(TypedOpts{Tags: cfg.BuildTags}, []string{"./..."}), scan)
+		_ = Run(t, Production(TypedOpts{Tests: false, Tags: cfg.BuildTags}), scan)
 	}
 
 	sort.Slice(violations, func(i, j int) bool {

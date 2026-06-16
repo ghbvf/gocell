@@ -106,11 +106,13 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		return nil, err
 	}
 
-	internalAuthChain, err := newInternalAuthChainFromEnv()
+	clk := clock.Real()
+
+	internalAuthChain, err := newInternalAuthChainFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure internal listener auth: %w", err)
 	}
-	jwtVerifier, err := newJWTVerifierFromEnv()
+	jwtVerifier, err := newJWTVerifierFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure JWT verifier: %w", err)
 	}
@@ -126,7 +128,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// Events are validated by NoopWriter then discarded. In production, inject
 	// a real outbox.Writer (e.g., postgres.OutboxWriter) + persistence.TxRunner
 	// (e.g., postgres.TxManager) for durable event delivery via relay.
-	oc := ordercell.NewOrderCell(
+	oc := ordercell.NewOrderCell(clk,
 		ordercell.WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		ordercell.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		ordercell.WithCursorCodec(cursorCodec),
@@ -160,7 +162,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// Operator control-plane (AdminListener) — configured only when operator
 	// credentials are present in the environment, so the demo still starts out
 	// of the box (the projection rebuild endpoint then stays programmatic-only).
-	operatorAuth, operatorEnabled, err := newOperatorAuthFromEnv()
+	operatorAuth, operatorEnabled, err := newOperatorAuthFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure admin listener auth: %w", err)
 	}
