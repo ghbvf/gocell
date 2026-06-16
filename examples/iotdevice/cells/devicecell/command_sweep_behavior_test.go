@@ -64,7 +64,7 @@ const (
 // an optional metrics provider. The publisher/eventbus use a real clock (they
 // play no part in sweep timing); only the cell clock (sweep + ticker cadence) is
 // the fake one.
-func newSweepTestCell(t *testing.T, fc clock.Clock, q kcommand.Queue, mp metrics.Provider) *DeviceCell {
+func newSweepTestCell(t *testing.T, fc clock.Clock, q kcommand.QueueWithScanner, mp metrics.Provider) *DeviceCell {
 	t.Helper()
 	opts := []Option{
 		WithDeviceRepository(mem.NewDeviceRepository()),

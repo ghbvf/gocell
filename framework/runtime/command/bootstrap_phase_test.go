@@ -14,10 +14,10 @@ import (
 
 type queueRegistrarCell struct {
 	*cell.BaseCell
-	got kcommand.Queue
+	got kcommand.QueueWithScanner
 }
 
-func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.Queue) {
+func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.QueueWithScanner) {
 	c.got = q
 }
 

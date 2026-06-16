@@ -51,11 +51,6 @@ const (
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
-type commandQueueStore interface {
-	kcommand.Queue
-	kcommand.ActiveScanner
-}
-
 // Option configures a DeviceCell.
 type Option func(*DeviceCell)
 
@@ -172,19 +167,13 @@ type DeviceCell struct {
 	cursorCodec        *query.CursorCodec
 	logger             *slog.Logger
 	metricsProvider    metrics.Provider
-	commandQueue       commandQueueStore
-	// commandQueueTypeMismatch records that RegisterCommandQueue was called with a
-	// queue that implements kcommand.Queue but NOT ActiveScanner. The QueueRegistrar
-	// interface fixes the wide kcommand.Queue parameter, so the ActiveScanner
-	// requirement cannot be a compile-time constraint here; this flag lets Init
-	// fail fast with a precise message instead of a misleading nil-queue error (#1694 F11).
-	commandQueueTypeMismatch bool
-	commandRegistry          *commandruntime.Registry // required; sync command-bus handler registry (#1580)
-	commandSweeper           *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
-	certRenewalSweeper       *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757); scans the device repo
-	reconcileMetrics         reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
-	reconcileMetricsOK       bool                     // true once reconcileMetrics is registered (provider was wired)
-	clk                      clock.Clock              // injected from reg.Config during initInternal
+	commandQueue       kcommand.QueueWithScanner
+	commandRegistry    *commandruntime.Registry // required; sync command-bus handler registry (#1580)
+	commandSweeper     *reconcile.Loop          // device-command expiry sweep, driven on a TickerTrigger cadence
+	certRenewalSweeper *reconcile.Loop          // cert-renewal producer (archetype ② reconcile→command, #1757); scans the device repo
+	reconcileMetrics   reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
+	reconcileMetricsOK bool                     // true once reconcileMetrics is registered (provider was wired)
+	clk                clock.Clock              // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
@@ -224,43 +213,27 @@ type DeviceCell struct {
 	commandRPCServer *devicecommandrpc.Server
 }
 
-// RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
-// queue must also implement ActiveScanner so the same runtime component can
-// serve the device dequeue path, sweeper, and internal ops view.
+// RegisterCommandQueue implements kernel/command.QueueRegistrar. The parameter
+// is the composite kcommand.QueueWithScanner (Queue + ActiveScanner), so the
+// "must also implement ActiveScanner" requirement — needed by the device
+// dequeue path, sweeper, and internal ops view — is enforced at compile time by
+// the type system (QUEUE-REGISTRAR-SCANNER-REQUIRED-01, #2011), not by a runtime
+// assertion here. Registering a non-scanner queue no longer compiles.
 //
-// A queue that is not an ActiveScanner is a wiring mistake, not a degraded
-// runtime mode: it is recorded here and rejected at Init with a precise message
-// (#1694 F11). The interface signature is fixed to the wide kcommand.Queue, so
-// this cannot be a compile-time constraint — Init fail-fast is the boundary's
-// limit. Earlier this only Warn-and-ignored, which then surfaced as a confusing
-// "requires a command queue" nil error even though a queue WAS registered.
-//
-// Last registration wins (not accumulative): a later call overwrites the queue
-// and clears any prior type-mismatch flag. The composition root calls this once;
-// the last-wins semantics just keep a corrected re-wire from being trumped by an
-// earlier bad one.
-func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
-	store, ok := q.(commandQueueStore)
-	if !ok {
-		c.commandQueueTypeMismatch = true
-		return
-	}
-	c.commandQueueTypeMismatch = false
-	c.commandQueue = store
+// Last registration wins (not accumulative): a later call overwrites the queue.
+// The composition root calls this once; the last-wins semantics just keep a
+// corrected re-wire from being trumped by an earlier one.
+func (c *DeviceCell) RegisterCommandQueue(q kcommand.QueueWithScanner) {
+	c.commandQueue = q
 }
 
-// requireCommandQueue validates the registered command queue. A queue that is
-// not an ActiveScanner is a precise wiring error (#1694 F11) — the device
-// dequeue path, sweeper, and internal ops view all need ScanActive — and a nil
-// queue (none registered) is the "no soft fallback" error. Extracted from
-// initSlices so that function stays within its cyclomatic-complexity budget.
+// requireCommandQueue validates the registered command queue. A nil queue (none
+// registered) is the "no soft fallback" error — the composite ActiveScanner
+// requirement is now a compile-time constraint on RegisterCommandQueue
+// (QUEUE-REGISTRAR-SCANNER-REQUIRED-01), so only the nil case remains a runtime
+// concern. Extracted from initSlices so that function stays within its
+// cyclomatic-complexity budget.
 func (c *DeviceCell) requireCommandQueue() error {
-	if c.commandQueueTypeMismatch {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"devicecell: the registered command queue does not implement ActiveScanner "+
-				"(required for the device dequeue path, sweeper, and internal ops view); "+
-				"use commandtest.NewInMemQueue() for demo mode or postgres.NewCommandQueue(...) for durable mode")
-	}
 	if c.commandQueue == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"devicecell requires a command queue; from the composition root, "+
@@ -607,7 +580,7 @@ const commandSweepInterval = 30 * time.Second
 // Sweep outcomes are observable via the reconcile_total{reconciler,result}
 // family (result=transient for scan/Ack failures) when a metrics provider is
 // wired; this supersedes the old single sweep-error counter.
-func (c *DeviceCell) buildCommandSweeper(cmdQueue commandQueueStore) error {
+func (c *DeviceCell) buildCommandSweeper(cmdQueue kcommand.QueueWithScanner) error {
 	sweeper, err := kcommand.NewSweeper(cmdQueue, cmdQueue, c.clk)
 	if err != nil {
 		return fmt.Errorf("device-command sweeper: %w", err)
