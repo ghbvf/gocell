@@ -81,12 +81,26 @@ const projectionWiringBootstrapPkgPath = PlatformFrameworkModulePath + "/runtime
 const projectionWiringConsumerBaseOption = "WithConsumerBase"
 
 // projectionWiringOptions is the set of bootstrap projection options whose
-// presence implies the projection coordinator runs at phase6 — which requires a
-// ConsumerBase. Any one of them in a composition-root package triggers the
-// WithConsumerBase requirement.
+// presence implies the OUTBOX projection coordinator runs at phase6 — which
+// consumes via ConsumerBase. Any one of them in a composition-root package
+// triggers the WithConsumerBase requirement.
+//
+// WithProjectionTxRunner is deliberately EXCLUDED: it is shared infra reused by
+// BOTH the outbox Coordinator AND the saga-journal Tailer path (options_saga_
+// projection.go: "The TxRunner is REUSED from WithProjectionTxRunner"). A
+// saga-journal-only composition root (e.g. examples/orderfulfillment) wires
+// WithProjectionTxRunner + WithSagaJournalReader/SagaProjection* but no outbox
+// coordinator and legitimately needs no ConsumerBase — phase6 drains its Tailer
+// independently (cellSnapshotsHaveProjections excludes ProjectionSourceSagaJournal)
+// and short-circuits the router/ConsumerBase check, so it boots fine. The
+// outbox-coordinator-exclusive options below are the true trigger: a real outbox
+// projection root always wires CheckpointStore + ReplaySource + Cursor (the
+// coordinator's required deps; TxRunner alone cannot reach it), so excluding
+// TxRunner keeps todoorder + cmd/corebundle + the reverse fixture covered while
+// dropping the saga-journal false positive. See TestProjectionConsumerBaseWiring_
+// SagaJournalOnly_NoFire for the regression lock.
 var projectionWiringOptions = map[string]bool{
 	"WithProjectionCheckpointStore": true,
-	"WithProjectionTxRunner":        true,
 	"WithProjectionReplaySource":    true,
 	"WithProjectionCursor":          true,
 	"WithProjectionRebuildEndpoint": true,
@@ -210,6 +224,42 @@ func TestProjectionConsumerBaseWiring_ReverseFixture(t *testing.T) {
 	assert.True(t, fired,
 		"fixture wiring bootstrap.WithProjection* without WithConsumerBase MUST fire "+
 			"PROJECTION-CONSUMERBASE-WIRING-01 (rule must not be fail-open)")
+}
+
+// TestProjectionConsumerBaseWiring_SagaJournalOnly_NoFire is the GREEN regression
+// lock for the WithProjectionTxRunner false positive: a saga-journal-only
+// composition root (the examples/orderfulfillment shape) wires the shared
+// bootstrap.WithProjectionTxRunner but no outbox-coordinator option and no
+// WithConsumerBase. Such a root boots fine — phase6 drains its saga-journal
+// Tailer independently of the ConsumerBase router — so the rule MUST NOT fire.
+// If a future edit re-adds WithProjectionTxRunner to projectionWiringOptions,
+// this turns red (locking the fix against silent regression).
+func TestProjectionConsumerBaseWiring_SagaJournalOnly_NoFire(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "projection_consumerbase_sagajournal_ok")
+
+	var fired bool
+	_ = Run(t, StandaloneModule(fixtureDir, TypedOpts{Tests: false}, []string{"./..."}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			hasProjection, hasConsumerBase, _, _ := scanPkgProjectionWiring(p)
+			if hasProjection && !hasConsumerBase {
+				fired = true
+			}
+			return nil
+		})
+
+	assert.False(t, fired,
+		"saga-journal-only root wiring bootstrap.WithProjectionTxRunner (shared infra) "+
+			"without WithConsumerBase MUST NOT fire PROJECTION-CONSUMERBASE-WIRING-01 "+
+			"(it boots fine; phase6 drains the Tailer independently)")
 }
 
 // TestProjectionConsumerBaseWiring_ReverseBlindSpot_NoFuncValue (blind spot B1)
