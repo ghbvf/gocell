@@ -5,17 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      # NOTE (#2160): since #1565/#2125 no workflow `uses:` golangci/golangci-lint-action
-      # — the real golangci-lint pin is now hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION
-      # (a `go install @version` shell literal, absent from any go.mod), so neither this
-      # github-actions group nor the gomod ecosystem auto-bumps it: golangci-lint version
-      # upgrades are MANUAL by accepted decision pending #2160. This group is retained as a
-      # placeholder (and to satisfy DEPENDABOT-COVERAGE-GOLANGCI-01) until #2160 decides
-      # whether to redirect coverage to the real pin source; it is NOT a merge condition of
-      # PR #2158 (the archtest-convergence PR), which deliberately leaves this state as-is.
-      golangci-lint:
-        patterns:
-          - "golangci/golangci-lint-action"
+      # golangci/golangci-lint-action is NOT listed here — it was removed from
+      # all workflows in #1565/#2125. The real golangci-lint pin lives in
+      # hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (a `go install @version`
+      # shell literal, absent from any go.mod); version upgrades are manual per
+      # the accepted strategy in #2160; patch-pinning of the constant is
+      # archtest-guarded by CI-PINNING-WORKFLOW-DIGEST-01.
+      # DEPENDABOT-NO-GHOST-GOLANGCI-01 prevents re-adding a ghost group here.
       github-actions:
         patterns:
           - "*"
