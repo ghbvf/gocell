@@ -163,7 +163,8 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 			"configclient: unexpected status from configcore",
 			errcode.WithInternal(
 				errcode.InternalAttr("status", resp.StatusCode),
-				errcode.InternalAttr("key", key)))
+				errcode.InternalAttr("key", key),
+			))
 	}
 
 	var env configEntryDataResponse

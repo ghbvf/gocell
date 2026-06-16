@@ -33,7 +33,8 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			reached = true
 			w.WriteHeader(http.StatusOK)
-		}))
+		}),
+	)
 
 	tr := NewInProcess(nil)
 	if err := tr.Bind(guarded, nil); err != nil {
@@ -94,7 +95,8 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 				}
 				authzReached = true
 				w.WriteHeader(http.StatusOK)
-			}))
+			}),
+		)
 		authzTr := NewInProcess(nil)
 		if err := authzTr.Bind(guarded, nil); err != nil {
 			t.Fatalf("bind: %v", err)

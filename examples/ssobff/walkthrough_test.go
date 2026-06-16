@@ -620,7 +620,8 @@ func TestWalkthrough(t *testing.T) {
 		testwait.External(t, "ssobff-bootstrap-audit-fail-entry-available", func() bool {
 			data, ok := fetchAuditEntries(
 				base+"/api/v1/audit/entries?eventType=bootstrap.auth.fail",
-				adminToken)
+				adminToken,
+			)
 			if ok {
 				entries = data
 			}

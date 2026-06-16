@@ -824,4 +824,3 @@ func isCrossProcessEventPair(pubLoc, subLoc metadata.CellLocation) bool {
 	}
 	return true // one local + one remote → cross-process
 }
-

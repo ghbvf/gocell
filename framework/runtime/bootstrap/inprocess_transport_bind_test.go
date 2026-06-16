@@ -51,7 +51,8 @@ func TestPhase5BindInProcessTransport_BindsFinalizedAuthChain(t *testing.T) {
 	b := New(clk)
 	b.inProcessTransport = holder
 	require.NoError(t, b.phase5BindInProcessTransport(
-		map[cell.ListenerRef]*router.Router{cell.InternalListener: rtr}),
+		map[cell.ListenerRef]*router.Router{cell.InternalListener: rtr},
+	),
 		"phase5 must bind the finalized internal-listener handler")
 
 	tid, err := tenant.ParseTenantID("f47ac10b-58cc-4372-a567-0e02b2c3d479")

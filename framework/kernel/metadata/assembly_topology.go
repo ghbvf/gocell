@@ -169,7 +169,8 @@ func buildColocatedSet(colocated []string, known map[string]struct{}) (map[strin
 				errMsgTopoDuplicateColoc,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", fieldPath)))
+					errcode.PublicString("field", fieldPath),
+				))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
@@ -177,7 +178,8 @@ func buildColocatedSet(colocated []string, known map[string]struct{}) (map[strin
 				errMsgTopoUnknownColoc,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", fieldPath)))
+					errcode.PublicString("field", fieldPath),
+				))
 		}
 	}
 	return seen, nil
@@ -196,7 +198,8 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 				errMsgTopoDuplicateRemote,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
@@ -204,14 +207,16 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 				errMsgTopoUnknownRemote,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		if _, inColoc := colocSet[id]; inColoc {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoMutualExclusion,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		if err := validateEndpoint(entry.Endpoint, id, epFieldPath); err != nil {
 			return nil, err
@@ -230,7 +235,8 @@ func validateEndpoint(ep, cellID, fieldPath string) error {
 			errMsgTopoEmptyEndpoint,
 			errcode.WithDetails(
 				errcode.PublicString("cellID", cellID),
-				errcode.PublicString("field", fieldPath)))
+				errcode.PublicString("field", fieldPath),
+			))
 	}
 	if netutil.IsValidNetworkAddress(ep) {
 		return nil
@@ -240,7 +246,8 @@ func validateEndpoint(ep, cellID, fieldPath string) error {
 		errcode.WithDetails(
 			errcode.PublicString("cellID", cellID),
 			errcode.PublicString("endpoint", ep),
-			errcode.PublicString("field", fieldPath)))
+			errcode.PublicString("field", fieldPath),
+		))
 }
 
 // checkExhaustive verifies that every cell in known appears in either colocSet
@@ -254,7 +261,8 @@ func checkExhaustive(known, colocSet, remoteSet map[string]struct{}) error {
 				errMsgTopoNonExhaustive,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", "topology")))
+					errcode.PublicString("field", "topology"),
+				))
 		}
 	}
 	return nil
