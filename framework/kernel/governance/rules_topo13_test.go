@@ -291,12 +291,12 @@ func TestTOPO13_PublisherRemote_SubscriberLocal(t *testing.T) {
 func topo13BothRemoteProject(pubEndpoint, subEndpoint string) *metadata.ProjectMeta {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB
-	bystander := "cellC"
+	bystander := metadatatest.CellIDCellC
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			pub:       topoTestCell(pub),
-			sub:       topoTestCell(sub),
-			bystander: topoTestCell(bystander),
+			metadatatest.CellIDCellA: topoTestCell(pub),
+			metadatatest.CellIDCellB: topoTestCell(sub),
+			metadatatest.CellIDCellC: topoTestCell(bystander),
 		},
 		Slices: map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -348,8 +348,8 @@ func TestTOPO13_DraftEvent_Skipped(t *testing.T) {
 	sub := metadatatest.CellIDCellB
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			pub: topoTestCell(pub),
-			sub: topoTestCell(sub),
+			metadatatest.CellIDCellA: topoTestCell(pub),
+			metadatatest.CellIDCellB: topoTestCell(sub),
 		},
 		Slices: map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{
