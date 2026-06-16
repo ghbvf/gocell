@@ -31,7 +31,7 @@ func collectFuncBodyRanges(file *ast.File, allowedNames ...string) []token.Pos {
 		allowed[n] = struct{}{}
 	}
 	var ranges []token.Pos
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || fn.Name == nil {
 			return
 		}
@@ -75,4 +75,16 @@ func isTimeDurationType(t types.Type) bool {
 	}
 	return named.Obj() != nil && named.Obj().Name() == "Duration" &&
 		named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "time"
+}
+
+// receiverTypeName returns the bare receiver type name of a method FuncDecl
+// (leading * pointer marker stripped), or "" for a nil / non-method decl. It
+// is the *ast.FuncDecl-shaped convenience over [ReceiverTypeName] (which takes
+// the bare receiver type expr), shared by the archtest rule test files
+// mem_tx_lock_ownership_test.go and cell_init_checknotnoop_test.go.
+func receiverTypeName(fn *ast.FuncDecl) string {
+	if fn == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	return ReceiverTypeName(fn.Recv.List[0].Type)
 }

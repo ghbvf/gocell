@@ -1967,7 +1967,7 @@ func enclosingFuncBody(file *ast.File, call *ast.CallExpr) ast.Node {
 			best, bestSpan = body, span
 		}
 	}
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) { consider(fd.Body) })
+	scanner.EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) { consider(fd.Body) })
 	scanner.EachInSubtree[ast.FuncLit](file, func(fl *ast.FuncLit) { consider(fl.Body) })
 	if best == nil {
 		return nil

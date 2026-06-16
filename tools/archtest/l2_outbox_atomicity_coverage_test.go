@@ -424,7 +424,7 @@ func l2CollectTestFuncs(t *testing.T, root string) map[string]l2TestFuncInfo {
 				continue
 			}
 			hasTag := l2FileHasIntegrationTag(p.Abs(f))
-			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Recv != nil {
 					return
 				}
@@ -622,7 +622,7 @@ func TestL2OutboxAtomicityCoverage_BodyAssertsRollback(t *testing.T) {
 			if !strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Recv != nil || fd.Name == nil {
 					return
 				}
@@ -722,7 +722,7 @@ func helperFoo(t *testing.T) {}
 	require.NoError(t, err)
 
 	var found []string
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Recv != nil || fd.Name == nil {
 			return
 		}

@@ -39,7 +39,7 @@ func TestPGConstructorMustFree01(t *testing.T) {
 	// DirsScope without IncludeTests() already excludes *_test.go files.
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				name := fd.Name.Name
 
 				if fd.Recv != nil {

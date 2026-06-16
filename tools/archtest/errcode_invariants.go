@@ -282,7 +282,7 @@ func scanErrcodeErrorLiteralsInAST(fset *token.FileSet, f *ast.File, rel string,
 func buildCarvedRangeChecker(f *ast.File, rel string, carveOuts map[carveOut]struct{}) func(token.Pos) bool {
 	type posRange struct{ lo, hi token.Pos }
 	var ranges []posRange
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Body == nil || fd.Recv != nil {
 			return
 		}
@@ -606,7 +606,7 @@ func CheckErrorFirstAPI01(t *testing.T, cfg ConfigForExternalCell) []Diagnostic 
 // any panic() call inside an error-less function.
 func scanFileForErrorFirstViolations(fset *token.FileSet, file *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}
@@ -872,7 +872,7 @@ func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
 // ERROR-FIRST-TYPED-NIL-01 in a single file.
 func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil || !isErrorFirstConstructor(fd) {
 			return
 		}

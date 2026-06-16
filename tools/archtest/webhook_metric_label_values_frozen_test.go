@@ -382,7 +382,7 @@ func scanWebhookMetricSoleWriter(p *Pass) []Diagnostic {
 			continue
 		}
 		rel := p.Rel(file)
-		EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 			if fn.Body == nil {
 				return
 			}

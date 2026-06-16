@@ -100,7 +100,7 @@ func waitAndClose() {
 	// recording test impl pattern: simpler to call the inspection directly
 	// and aggregate flagged function names locally.
 	flagged := map[string]bool{}
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}

@@ -86,7 +86,7 @@ const parserMatcherLocatorFile = "kernel/metadata/locator_conventional.go"
 func matcherAndCalleeBodies(file *ast.File, matcher *ast.FuncDecl) []*ast.BlockStmt {
 	// Build a local map of function name → FuncDecl for all functions in the file.
 	fileFuncs := make(map[string]*ast.FuncDecl)
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Name != nil {
 			fileFuncs[fn.Name.Name] = fn
 		}
@@ -159,7 +159,7 @@ func collectParserFuncs(p *Pass) map[string]*ast.FuncDecl {
 		if p.Rel(f) != parserMatcherLocatorFile {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 			if fn.Name != nil {
 				parserFuncs[fn.Name.Name] = fn
 			}
@@ -175,7 +175,7 @@ func scanMatcherSymmetry(p *Pass, parserFuncs map[string]*ast.FuncDecl, results 
 		if p.Rel(f) != parserMatcherLocatorFile {
 			continue
 		}
-		EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 			recordMatcherCoverage(p, fn, parserFuncs, results)
 		})
 	}
@@ -308,7 +308,7 @@ func runUpstreamCoverageCheck(t *testing.T) []Diagnostic {
 				continue
 			}
 			rel := p.Rel(f)
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				diags = append(diags, uncoveredMatcherDiag(rel, p.Fset.Position(fn.Pos()).Line, fn)...)
 			})
 		}

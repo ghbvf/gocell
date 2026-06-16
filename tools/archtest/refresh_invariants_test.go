@@ -152,7 +152,7 @@ func TestRefreshCrossStoreTX01_BlindSpot_ServiceRefreshReceiverIsS(t *testing.T)
 				if strings.HasSuffix(rel, "_test.go") {
 					continue
 				}
-				EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+				EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 					if !isServiceRefreshMethod(fn) {
 						return
 					}

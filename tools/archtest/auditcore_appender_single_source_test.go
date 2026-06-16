@@ -121,7 +121,7 @@ func scanAuditcoreAppenderSliceFile(rel string, fset *token.FileSet, file *ast.F
 	// NewService / With* / extractActorID re-fork behavior the appender
 	// package owns. EachInSubtree walks the whole file; slice packages have no
 	// nested function literals so every FuncDecl returned is top-level.
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		violations = append(violations, scanAppenderFuncDecl(rel, fset, fd)...)
 	})
 

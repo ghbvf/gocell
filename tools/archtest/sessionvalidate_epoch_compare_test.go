@@ -28,7 +28,7 @@ package archtest
 //     check and not a weaker operator like > (Finding #2 security fix).
 //
 // Blind-spot note (ai-robust.md §"工具选定后强制盲区自检"):
-// EachInSubtree[ast.FuncDecl] + EachInSubtree[ast.SelectorExpr] covers the
+// EachInChildren[ast.FuncDecl] + EachInSubtree[ast.SelectorExpr] covers the
 // literal `view.AuthzEpochAtIssue` selector. If the epoch check were refactored
 // into a helper function called from enforceSessionState, the body scan would
 // miss it (the SelectorExpr moves into the helper's body). This is an
@@ -173,7 +173,7 @@ func TestSessionvalidateEpochCompare_RedFixtureDetected(t *testing.T) {
 // funcName anywhere in the file (includes method declarations with any receiver).
 func findFuncBody(file *ast.File, funcName string) *ast.BlockStmt {
 	var body *ast.BlockStmt
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if body != nil {
 			return // already found
 		}

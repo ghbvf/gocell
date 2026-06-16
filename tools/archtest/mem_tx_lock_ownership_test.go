@@ -342,7 +342,7 @@ func scanMemTxLockWitness(p *Pass) []Diagnostic {
 		// the Acquire(&r.s.mu) calls in its direct body (excluding nested closures
 		// and foreign-arg calls) as sanctioned.
 		sanctioned := map[*ast.CallExpr]bool{}
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil || fd.Name.Name != memTxSiteRunLocked {
 				return
 			}
@@ -373,7 +373,7 @@ func scanMemTxLockWitness(p *Pass) []Diagnostic {
 		})
 
 		// W2: (*Store).inLiveTx return form.
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Body == nil || fd.Name.Name != "inLiveTx" {
 				return
 			}
@@ -457,7 +457,7 @@ func TestMemTxLockOwnership01_FindsSanctionedSites(t *testing.T) {
 				return ok && isTxlockAcquireCall(p.TypesInfo, sel)
 			}
 			for _, file := range p.Files {
-				EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 					if fd.Body == nil {
 						return
 					}

@@ -297,7 +297,7 @@ func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
 // secCollectAuthNoneFuncFacts populates funcs with names of functions whose
 // return statements yield a chain literal containing AuthNone.
 func secCollectAuthNoneFuncFacts(f *ast.File, funcs map[string]bool) {
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -927,7 +927,7 @@ func secCheckSEC09(t *testing.T, root string) []Diagnostic {
 		t.Fatalf("%s: parsing hub.go: %v", secFailClosed09, err)
 	}
 	var diags []Diagnostic
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil || allowedConnsMutationFuncs[fn.Name.Name] {
 			return
 		}

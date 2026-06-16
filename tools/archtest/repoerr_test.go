@@ -161,7 +161,7 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 			})
 		}
 	})
-	scanner.EachInSubtree[ast.FuncDecl](file, func(d *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(d *ast.FuncDecl) {
 		if isThinCtxCancelWrapper(d) {
 			out = append(out, repoErrViolation{
 				Rule:    ruleCtxCancelLocalImplBan,

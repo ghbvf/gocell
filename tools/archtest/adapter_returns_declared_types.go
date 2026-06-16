@@ -265,7 +265,7 @@ func extractAdapterReturnStatuses(filePath string) ([]adapterReturn, error) {
 	}
 
 	var results []adapterReturn
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if !isAdapterMethod(fn) {
 			return
 		}

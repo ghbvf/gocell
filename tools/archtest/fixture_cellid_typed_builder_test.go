@@ -474,6 +474,72 @@ func TestFixtureCellIDTypedBuilder_CarveOutADRConsistency(t *testing.T) {
 	}
 }
 
+// TestParseCarveOutTableFromADR_ErrorPaths is the reverse self-check for the A4
+// parser's anti-vacuity guard: A4 only ever runs parseCarveOutTableFromADR over
+// the real ADR (which always carries a populated `| Carved-out function |`
+// table), so the `len(out)==0 → error` branch is never exercised there. This
+// table drives every parse branch directly — empty / no-header / header-only /
+// header+divider-only / all-rows-skipped must error (and return a nil map);
+// well-formed tables must parse the exact FQN set and stop at the first
+// non-table line. Pure test addition; the parser/A4 production logic is
+// unchanged (the guard is already correct — #1718 / PR #1708 F9 residual).
+func TestParseCarveOutTableFromADR_ErrorPaths(t *testing.T) {
+	t.Parallel()
+	const header = "| Carved-out function | reason |"
+	const divider = "| --- | --- |"
+	cases := []struct {
+		name    string
+		content string
+		want    []string // expected sorted FQNs; nil ⇒ expect error + nil map
+	}{
+		{name: "empty", content: ""},
+		{name: "no_header", content: "prose\n| other column |\n| --- |\n| pkg.X | y |\n"},
+		{name: "header_only_then_blank", content: header + "\n\n"},
+		{name: "header_plus_divider_only", content: header + "\n" + divider + "\n\n"},
+		{name: "all_rows_leading_dash_skipped", content: header + "\n" + divider + "\n| -placeholder | n |\n"},
+		{
+			name:    "well_formed_two_rows",
+			content: header + "\n" + divider + "\n| pkg.Foo | a |\n| pkg.Bar | b |\n",
+			want:    []string{"pkg.Bar", "pkg.Foo"},
+		},
+		{
+			name:    "stops_at_first_non_table_line",
+			content: header + "\n" + divider + "\n| pkg.Only | a |\nprose after\n| pkg.NotCounted | b |\n",
+			want:    []string{"pkg.Only"},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseCarveOutTableFromADR(tc.content)
+			if tc.want == nil {
+				if err == nil {
+					t.Fatalf("want error for %q, got set=%v", tc.name, got)
+				}
+				if !strings.Contains(err.Error(), "no carveout rows found") {
+					t.Errorf("error for %q must be the parser's empty-table error, got: %v", tc.name, err)
+				}
+				if got != nil {
+					t.Errorf("error path must return a nil map, got %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			keys := make([]string, 0, len(got))
+			for k := range got {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			if strings.Join(keys, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("parsed FQNs = %v, want %v", keys, tc.want)
+			}
+		})
+	}
+}
+
 // TestMetadatatestImportScope_StructuredLocation verifies CheckMetadatatestImportScope
 // emits a clickable Rel + 1-based Line (codex #1708 F2; PR #1687 regression
 // guard). A synthetic production file importing metadatatest must yield a

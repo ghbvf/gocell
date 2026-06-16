@@ -372,7 +372,7 @@ func scanArchtestTopLevelTestNames(t *testing.T, repoRoot string) map[string]str
 			if !strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Recv != nil {
 					return
 				}

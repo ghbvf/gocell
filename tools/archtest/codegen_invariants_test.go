@@ -996,7 +996,7 @@ func checkInitInternalHook(t *testing.T, root, dirRel, structName string) []stri
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
 			path := p.Rel(file)
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				if fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
 					return
 				}

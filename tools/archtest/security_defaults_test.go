@@ -494,7 +494,7 @@ func (h *Hub) removeConnLocked(id string) {
 	require.NoError(t, err)
 
 	var found []string
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -549,7 +549,7 @@ func (h *Hub) shutdown() {
 	require.NoError(t, err)
 
 	var found []string
-	scanner.EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}

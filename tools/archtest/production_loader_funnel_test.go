@@ -69,7 +69,7 @@ func TestProductionLoaderFunnel01(t *testing.T) {
 			if !strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 				if fd.Body == nil || fd.Name == nil {
 					return
 				}

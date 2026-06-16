@@ -426,7 +426,7 @@ func bodyContainsReuseCallWithStaleMarker(body *ast.BlockStmt, reuseCallee, stal
 func staleEpochFileContainsBareIdent(file *ast.File, name string) bool {
 	// Collect all SelectorExpr.Sel positions within function bodies — "not bare".
 	selPos := map[gotoken.Pos]bool{}
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}
@@ -438,7 +438,7 @@ func staleEpochFileContainsBareIdent(file *ast.File, name string) bool {
 	})
 
 	found := false
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Body == nil {
 			return
 		}

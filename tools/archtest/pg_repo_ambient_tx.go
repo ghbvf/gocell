@@ -198,7 +198,7 @@ func scanR1PoolFields(fset *token.FileSet, file *ast.File, rel string, info *typ
 //nolint:gocognit // R2-approved: linear per-form type-resolution gates over one AST pass, additive not nesting.
 func scanR2PoolParams(fset *token.FileSet, file *ast.File, rel string, info *types.Info) []Diagnostic {
 	var diags []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Type == nil || fn.Type.Params == nil {
 			return
 		}
@@ -742,15 +742,4 @@ func embeddedStructHasPoolField(expr ast.Expr, info *types.Info) bool {
 		}
 	}
 	return false
-}
-
-// receiverTypeName is preserved as a shared helper for other archtest files
-// (referenced by mem_tx_lock_ownership_test.go and
-// sealed_marker_noop_transparency_test.go). It returns the bare type name
-// from a FuncDecl's receiver, stripping any leading * pointer marker.
-func receiverTypeName(fn *ast.FuncDecl) string {
-	if fn == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
-		return ""
-	}
-	return ReceiverTypeName(fn.Recv.List[0].Type)
 }

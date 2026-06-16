@@ -172,7 +172,7 @@ func scanReconcileRequeueEnqueueCallers(p *Pass) ([]Diagnostic, int) {
 func reconcileSendDiagsForFile(fset *token.FileSet, file *ast.File, rel string) ([]Diagnostic, int) {
 	var diags []Diagnostic
 	var totalFound int
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}
@@ -249,7 +249,7 @@ func TestReconcileRequeueEnqueueCaller01_NonVacuousProof(t *testing.T) {
 			if strings.HasSuffix(p.Rel(file), "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 				if fd.Body == nil {
 					return
 				}

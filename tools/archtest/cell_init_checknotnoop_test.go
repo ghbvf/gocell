@@ -481,7 +481,7 @@ func matchTarget(pkgPath string, targets []l2TargetCell) *l2TargetCell {
 // via archtest.EachInChildren[ast.FuncDecl] which iterates only direct
 // FuncDecl children of *ast.File (depth=1, structurally exact for top-level
 // function declarations). receiverTypeName is the shared archtest helper
-// defined in pg_repo_ambient_tx_test.go (handles both `(c *Foo)` and `(c Foo)`
+// defined in shared_helpers.go (handles both `(c *Foo)` and `(c Foo)`
 // forms).
 func initFuncDecl(p *Pass, goStructName string) *ast.FuncDecl {
 	var found *ast.FuncDecl

@@ -61,7 +61,7 @@ const ruleCellIDClosedSet = "CELL-ID-CLOSED-SET-01"
 // nil. Receiver-agnostic; callers that need a specific receiver filter further.
 func findFuncDeclNamed(file *ast.File, name string) *ast.FuncDecl {
 	var found *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if found == nil && fn.Name != nil && fn.Name.Name == name {
 			found = fn
 		}
@@ -291,7 +291,7 @@ func TestCellIDClosedSet01_StringSentinel(t *testing.T) {
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
 	var stringFn *ast.FuncDecl
-	scanner.EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+	scanner.EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Name.Name != "String" {
 			return
 		}

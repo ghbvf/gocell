@@ -102,7 +102,7 @@ func TestSlowgateAllowlist(t *testing.T) {
 			funcs[pkgPath] = map[string]bool{}
 		}
 		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Recv != nil {
 					return
 				}

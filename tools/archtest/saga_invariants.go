@@ -1553,7 +1553,7 @@ func callIsMethodNamed(call *ast.CallExpr, name string) bool {
 func checkLeaderGateA1(p *Pass, file *ast.File) []Diagnostic {
 	rel := filepath.ToSlash(p.Rel(file))
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil || fd.Body == nil {
 			return
 		}
@@ -1578,7 +1578,7 @@ func checkLeaderGateA1(p *Pass, file *ast.File) []Diagnostic {
 func checkLeaderGateA2(p *Pass, file *ast.File) []Diagnostic {
 	rel := filepath.ToSlash(p.Rel(file))
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil || fd.Body == nil || fd.Name.Name != tickOnceFuncName {
 			return
 		}
@@ -1597,7 +1597,7 @@ func checkLeaderGateA2(p *Pass, file *ast.File) []Diagnostic {
 func checkLeaderGateA3(p *Pass, file *ast.File) []Diagnostic {
 	rel := filepath.ToSlash(p.Rel(file))
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if fd.Name == nil || fd.Body == nil || fd.Name.Name != tickOnceFuncName {
 			return
 		}

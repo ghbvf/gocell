@@ -276,7 +276,7 @@ func goleakVerifyNoneViolations(file *ast.File, info *types.Info, rel string, fs
 // whose body calls go.uber.org/goleak.VerifyTestMain.
 func fileHasVerifyTestMain(file *ast.File, info *types.Info) bool {
 	found := false
-	EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 		if found || fd.Recv != nil || fd.Name == nil || fd.Name.Name != "TestMain" || fd.Body == nil {
 			return
 		}

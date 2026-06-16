@@ -173,7 +173,7 @@ func lookupInterfaceTypeFromPkg(t *testing.T, pkg *types.Package, name string) *
 // gocognit ≤15.
 func collectChannelDestructionDiags(p *Pass, chanIface *types.Interface, f *ast.File, rel string) []Diagnostic {
 	var out []Diagnostic
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Body == nil {
 			return
 		}
@@ -354,7 +354,7 @@ func isMaxChannelsLEQCondition(ifStmt *ast.IfStmt) bool {
 // constant.
 func checkChannelMaxSetDefaults(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
 	var setDefaults *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "setDefaults" && fd.Recv != nil {
 			setDefaults = fd
 		}
@@ -407,7 +407,7 @@ func buildSetDefaultsDiags(assigns, conditionIsLEQ bool, rel string, line int) [
 // AcquireChannel must reference the inUseChannels counter.
 func checkChannelMaxAcquireGuard(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
 	var acquire *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "AcquireChannel" && fd.Recv != nil {
 			acquire = fd
 		}
@@ -672,7 +672,7 @@ func blockContainsRecordPublishFailure(stmts []ast.Stmt) bool {
 // which has a non-nil receiver. Returns nil if not found.
 func findMethod(f *ast.File, name string) *ast.FuncDecl {
 	var result *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if result == nil && fd.Name.Name == name && fd.Recv != nil {
 			result = fd
 		}
@@ -824,7 +824,7 @@ func collectPublisherReleasesChannelDiags(root string) []Diagnostic {
 	}
 
 	var publishMethod *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if publishMethod == nil && fd.Recv != nil && fd.Name.Name == "Publish" {
 			publishMethod = fd
 		}
@@ -942,7 +942,7 @@ func isInflightWaitCall(call *ast.CallExpr) bool {
 // checkStopIntakeWaitsForInflight enforces RMQ-STOPINTAKE-INFLIGHT-WAIT-01-A.
 func checkStopIntakeWaitsForInflight(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
 	var stopIntake *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
 			stopIntake = fd
 		}
@@ -993,7 +993,7 @@ func isCtxDoneReceiveCase(comm *ast.CommClause) bool {
 // (no parent ctx.Done).
 func checkDrainNoParentCtxDone(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
 	var drain *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "drainRemaining" && fd.Recv != nil {
 			drain = fd
 		}
@@ -1064,7 +1064,7 @@ func checkDrainUsesDetachedContext(f *ast.File, fset *token.FileSet, rel string)
 // RMQ-STOPINTAKE-INFLIGHT-WAIT-01: StopIntake must NOT call localWg.Wait().
 func checkStopIntakeAvoidsLocalWgWait(f *ast.File, fset *token.FileSet, rel string) []Diagnostic {
 	var stopIntake *ast.FuncDecl
-	EachInSubtree[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
 		if fd.Name.Name == "StopIntake" && fd.Recv != nil {
 			stopIntake = fd
 		}

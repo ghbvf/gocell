@@ -19,6 +19,13 @@ import (
 // time API selection (different function names express different semantics)
 // rather than a runtime parameter.
 //
+// Do NOT instantiate this (or [EachInSubtreeStopAt]) with ast.FuncDecl: a
+// *ast.FuncDecl is always a direct *ast.File child (Go forbids nested func
+// declarations — nested funcs are *ast.FuncLit), so the recursive descent is
+// pure waste and the wrong depth semantic. Use [EachInChildren][ast.FuncDecl].
+// Enforced by WALK-DEPTH-API-EACHCHILDREN-01
+// (walk_depth_funcdecl_children_test.go).
+//
 // Wrapper around [scanner.EachInSubtree] — the only call path to scanner
 // for archtest authors. Pure delegation, no behavior change.
 func EachInSubtree[S any, N interface {

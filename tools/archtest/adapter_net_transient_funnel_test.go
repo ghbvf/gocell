@@ -465,7 +465,7 @@ func scanNetErrorDeclarations(p *Pass, allowlist map[string]map[string]struct{})
 func scanHelperFormViolations(p *Pass, funcName string) []Diagnostic {
 	var ds []Diagnostic
 	for _, file := range p.Files {
-		EachInSubtree[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
 			if fd.Name == nil || fd.Name.Name != funcName || fd.Body == nil {
 				return
 			}

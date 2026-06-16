@@ -103,7 +103,7 @@ func TestHTTPUtil5xxKindNormalize(t *testing.T) {
 	diags := runHTTPUtilResponseRule(t, "HTTPUTIL-5XX-KIND-NORMALIZE-01", func(p *Pass) []Diagnostic {
 		var ds []Diagnostic
 		for _, f := range p.Files {
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if !targetFuncs[fn.Name.Name] {
 					return
 				}
@@ -258,7 +258,7 @@ func httputilLogRedactViolations(p *Pass, f *ast.File) []Diagnostic {
 		return nil
 	}
 	var ds []Diagnostic
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		if fn.Name == nil || fn.Body == nil || !httputilLogRedactTargets[fn.Name.Name] {
 			return
 		}
@@ -370,7 +370,7 @@ func collectExportedFuncs(t *testing.T, root, dirRel string) map[string]bool {
 	result := make(map[string]bool)
 	Run(t, AST(scope), func(p *Pass) []Diagnostic {
 		for _, file := range p.Files {
-			EachInSubtree[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
 				if fn.Recv != nil {
 					return
 				}

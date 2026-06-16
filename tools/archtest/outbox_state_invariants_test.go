@@ -268,7 +268,7 @@ func TestOutboxStateTransitionGuard(t *testing.T) {
 			if strings.HasSuffix(rel, "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Body == nil {
 					return
 				}
@@ -371,7 +371,7 @@ func TestOutboxStateTransitionGuard_BlindSpot_CrossFuncTransition(t *testing.T) 
 			if strings.HasSuffix(p.Rel(f), "_test.go") {
 				continue
 			}
-			EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+			EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 				if fn.Body == nil {
 					return
 				}
@@ -628,7 +628,7 @@ func multiMarkFunc() {
 	require.NoError(t, err)
 
 	funcs := map[string]*ast.FuncDecl{}
-	EachInSubtree[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+	EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
 		funcs[fn.Name.Name] = fn
 	})
 	require.Contains(t, funcs, "bothFunc", "bothFunc must be parsed")
