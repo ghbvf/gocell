@@ -181,6 +181,12 @@ func TestPanicRegistered(t *testing.T) {
 // TestClockChecksDoNotUseProdscanPatternsExtended. Production() subsumes the
 // external single-module cell via workspace.Modules' single-module fallback, so
 // no transport-specific dual-path is needed.
+//
+// Residual (Soft, accepted): matches the bare-Ident call form `Production(...)`
+// (same-package direct call). A migration to a qualified form
+// (`archtest.Production(...)`, a SelectorExpr) would slip past this scan — update
+// the matcher then. The non-vacuous coverage itself is held by the companion
+// TestPanicRegisteredScopeIncludesSatellites.
 func TestPanicRegisteredUsesProductionScope(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)

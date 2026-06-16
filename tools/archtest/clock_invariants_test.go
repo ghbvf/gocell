@@ -20,7 +20,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -239,6 +241,51 @@ func TestClockChecksDoNotUseProdscanPatternsExtended(t *testing.T) {
 		if !sawProduction {
 			t.Errorf("%s must call Production(...) so clock invariants scan go.work satellite modules", name)
 		}
+	}
+}
+
+// TestClockAllowedRealCallerPathsNoStale is the no-stale reverse-guard for the
+// examples/* composition-root entries added to clockAllowedRealCallerPaths by
+// #2149. Those 9 hand-maintained file paths would otherwise rot into a
+// vacuous-green exemption if an example is renamed/moved/deleted (the carve-out
+// matches nothing, deep clock.Real() in that example silently re-exempted, but
+// nobody notices). This asserts every examples/* entry still resolves to an
+// existing file on disk — lifting them from Soft to Medium (#2149 review F2).
+//
+// Scope = examples/* only: the allowlist is matched against gate-relative paths
+// (clockIsAllowedRealCallerPath(p.Rel(f))), and for the framework module those
+// rels are framework-module-relative (e.g. "kernel/clock/clock.go", not the
+// workspace-relative "framework/kernel/clock/clock.go"), so a workspace-rooted
+// os.Stat does not resolve them. The examples/* rels ARE workspace-relative
+// (each example is its own go.work member loaded under the workspace root), so
+// they resolve directly. Pre-#2149 entries predate this guard and keep their
+// existing provenance.
+//
+// Residual (Soft): existence ≠ still-a-composition-root; an example whose root
+// file survives but stops being the composition root is not caught. The primary
+// defense remains the gate flagging deep clock.Real() outside the roots.
+func TestClockAllowedRealCallerPathsNoStale(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	checked := 0
+	for _, entry := range clockAllowedRealCallerPaths {
+		if !strings.HasPrefix(entry, "examples/") {
+			continue
+		}
+		checked++
+		abs := filepath.Join(root, filepath.FromSlash(entry))
+		info, err := os.Stat(abs)
+		if err != nil {
+			t.Errorf("clockAllowedRealCallerPaths entry %q does not resolve on disk (renamed/moved/deleted?): %v", entry, err)
+			continue
+		}
+		if info.IsDir() {
+			t.Errorf("clockAllowedRealCallerPaths examples entry %q must be a file (composition root), got a directory", entry)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no examples/* entries checked — anti-vacuity: #2149 added 9 examples composition roots; " +
+			"if they were all removed/renamed this guard would pass trivially")
 	}
 }
 

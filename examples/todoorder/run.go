@@ -106,6 +106,8 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		return nil, err
 	}
 
+	// Single root clock shared by assembly, bootstrap, eventbus, claimer, and cell.
+	// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 	clk := clock.Real()
 
 	internalAuthChain, err := newInternalAuthChainFromEnv(clk)
@@ -136,7 +138,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(clock.Real(), assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
+	asm := assembly.New(clk, assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
 		return nil, fmt.Errorf("register ordercell: %w", err)
 	}
@@ -182,8 +184,8 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// without it bootstrap fails fast at startup. Demo uses an in-memory
 	// idempotency claimer (single-process only); production would inject a
 	// distributed claimer (e.g. Redis).
-	claimer := idempotency.NewInMemClaimer(clock.Real())
-	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	claimer := idempotency.NewInMemClaimer(clk)
+	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clk)
 	if err != nil {
 		return nil, fmt.Errorf("consumer base: %w", err)
 	}
@@ -230,7 +232,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		)
 	}
 
-	return bootstrap.New(clock.Real(), opts...), nil
+	return bootstrap.New(clk, opts...), nil
 }
 
 // runTodoorderModules validates that assembly.yaml cells (assemblyCellIDs)
