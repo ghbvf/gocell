@@ -60,10 +60,15 @@ services:
 
   # RabbitMQ: postgres (durable) topology wires a real broker as the outbox
   # transport (#1940) — corebundle fail-closes at startup without GOCELL_AMQP_URL.
-  # Default guest:guest@127.0.0.1:5672 under host networking; e2e-only fixture.
+  # Credentials are injected via E2E_RABBITMQ_PASSWORD (no software fallback).
+  # CI workflow declares it in the e2e job env block; local devs use
+  # tests/e2e/.env.e2e.example as a starting point.
   rabbitmq:
     image: rabbitmq:3-alpine
     network_mode: host
+    environment:
+      RABBITMQ_DEFAULT_USER: gocell
+      RABBITMQ_DEFAULT_PASS: ${E2E_RABBITMQ_PASSWORD:?E2E_RABBITMQ_PASSWORD must be set}
     healthcheck:
       # check_port_connectivity (not -q ping): ping only confirms the Erlang node
       # is up, which happens BEFORE the AMQP 5672 listener binds — corebundle's
@@ -129,7 +134,7 @@ services:
       # outbox relay to a real broker (not the in-process bus). Required in
       # postgres+real mode — corebundle fail-closes without it. Loopback host
       # under host-network topology.
-      GOCELL_AMQP_URL: amqp://guest:guest@127.0.0.1:5672/
+      GOCELL_AMQP_URL: amqp://gocell:${E2E_RABBITMQ_PASSWORD:?E2E_RABBITMQ_PASSWORD must be set}@127.0.0.1:5672/
 
       # Production control-plane tokens (e2e-only values; not secret material).
       GOCELL_SERVICE_SECRET: e2e-service-secret-32-bytes-xxxxx!

@@ -1,3 +1,20 @@
+# LOCAL DEVELOPMENT INFRASTRUCTURE ONLY
+# ======================================
+# This compose file starts the local dev backing services (Postgres, Redis,
+# RabbitMQ, MinIO). It is NOT a deployment template.
+#
+# All credential-shaped values below (POSTGRES_PASSWORD: gocell_dev,
+# RABBITMQ_DEFAULT_PASS: gocell_dev, MINIO_ROOT_PASSWORD: gocell_dev_secret)
+# are NON-PRODUCTION placeholder literals intended solely for zero-config
+# local development on a developer workstation. They MUST NOT be reused in
+# any staging, CI, or production environment.
+#
+# Production deployments MUST inject all secrets via a secret manager
+# (Vault, GitHub Secrets, or equivalent) — never from this file.
+#
+# For a fail-fast "bring-your-own-password" variant that uses ${VAR:?} and
+# refuses to start with a missing secret, see docker-compose.local.yml.
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -43,7 +60,7 @@ services:
       start_period: 15s
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: gocell
@@ -54,7 +71,9 @@ services:
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      # curl is present in minio/minio images; mc is also present but curl
+      # against the liveness endpoint is more portable and avoids mc alias setup.
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
