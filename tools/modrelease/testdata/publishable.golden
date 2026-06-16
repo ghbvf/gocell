@@ -12,6 +12,7 @@ adapters/rabbitmq	github.com/ghbvf/gocell/adapters/rabbitmq
 adapters/ratelimit	github.com/ghbvf/gocell/adapters/ratelimit
 adapters/redis	github.com/ghbvf/gocell/adapters/redis
 adapters/s3	github.com/ghbvf/gocell/adapters/s3
+adapters/softca	github.com/ghbvf/gocell/adapters/softca
 adapters/vault	github.com/ghbvf/gocell/adapters/vault
 adapters/websocket	github.com/ghbvf/gocell/adapters/websocket
 cellmodules	github.com/ghbvf/gocell/cellmodules

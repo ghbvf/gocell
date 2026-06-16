@@ -98,7 +98,34 @@ const (
 	// constraints (TTL above the granted max, or a SAN outside the granted
 	// allowance). Constructed with KindPermissionDenied → HTTP 403.
 	ErrCertConstraintViolation Code = "ERR_CERT_CONSTRAINT_VIOLATION"
-	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
+	// ERR_CERT_ signing / revocation RUNTIME codes (Epic #1895 PR-6, emitted by a
+	// Signer / RevocationStore implementation — softca today, a PG / Vault backend
+	// later). They are provider-agnostic by design: every signer backend emits the
+	// SAME code for the same failure, so a client handles "cert sign failed"
+	// uniformly regardless of which adapter is wired (the framework-owned-contract
+	// philosophy applied to errors).
+	//
+	// ErrCertCAInit signals the signing CA could not be bootstrapped or loaded
+	// (key generation failed, a key/cert PEM is missing or corrupt). Constructed
+	// with KindInternal → HTTP 500.
+	ErrCertCAInit Code = "ERR_CERT_CA_INIT"
+	// ErrCertSignFailed signals the CA could not mint a certificate for an
+	// authorized request (CSR public key unusable, x509.CreateCertificate failed,
+	// issuance ledger unavailable). Constructed with KindInternal → HTTP 500.
+	ErrCertSignFailed Code = "ERR_CERT_SIGN_FAILED"
+	// ErrCertCRLFailed signals CRL generation failed (x509.CreateRevocationList
+	// error). Constructed with KindInternal → HTTP 500.
+	ErrCertCRLFailed Code = "ERR_CERT_CRL_FAILED"
+	// ErrCertRevokeNotFound signals a revocation / CRL target serial was not issued
+	// within the given CertScope — a cross-scope or unknown serial fails closed
+	// (绝不凭裸 serial 跨隔离域). Constructed with KindNotFound → HTTP 404.
+	ErrCertRevokeNotFound Code = "ERR_CERT_REVOKE_NOT_FOUND"
+	// ErrCertRevokeUnsupported signals a revocation reason a provider cannot honor —
+	// e.g. RFC 5280 removeFromCRL (un-hold) against a terminal-revocation backend
+	// that does not model the certificateHold→removeFromCRL lifecycle, so accepting
+	// it would invert the caller's intent. Constructed with KindInvalid → HTTP 400.
+	ErrCertRevokeUnsupported Code = "ERR_CERT_REVOKE_UNSUPPORTED"
+	ErrAdapterPGNoTx         Code = "ERR_ADAPTER_PG_NO_TX"
 	// ErrPGSchemaShape signals that a value read from a PostgreSQL column does
 	// not conform to the expected schema shape — e.g., an enum column returned a
 	// value not in the application's known set. Usable from both adapters/postgres

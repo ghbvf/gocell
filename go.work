@@ -12,6 +12,7 @@ use (
 	./adapters/ratelimit
 	./adapters/redis
 	./adapters/s3
+	./adapters/softca
 	./adapters/vault
 	./adapters/websocket
 	./cellmodules
