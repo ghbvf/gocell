@@ -267,12 +267,11 @@ func validateAuthServiceTokenPlan(
 				internalListenerPositionFmt+" kind=%q requireDistributed=%t",
 				listener, position, p.Store.Kind(), requireDistributed))))
 	}
-	if got := len(p.Ring.Current()); got < auth.MinHMACKeyBytes {
+	if err := p.Ring.Validate(); err != nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"AuthServiceToken Ring.Current() is too short",
+			"AuthServiceToken Ring is invalid",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(
-				internalListenerPositionMinFmt,
-				listener, position, got, auth.MinHMACKeyBytes))))
+				internalListenerPositionFmt+" err=%v", listener, position, err))))
 	}
 	return nil
 }

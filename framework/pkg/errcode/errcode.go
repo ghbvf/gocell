@@ -538,9 +538,10 @@ const (
 
 	// Control-plane startup configuration errors (cmd/corebundle).
 	//
-	// ErrControlplaneServiceSecretMissing signals that the InternalHMACRing field
-	// of composition.SharedDeps is nil, so the /internal/v1/* service-token guard
-	// cannot be constructed. Produced by cmd/corebundle.buildInternalHMACRing and
+	// ErrControlplaneServiceSecretMissing signals that the InternalServiceKeyring
+	// field of composition.SharedDeps is nil (or its env keying is mis-configured),
+	// so the /internal/v1/* service-token guard cannot be constructed. Produced by
+	// cmd/corebundle.buildInternalServiceKeyring and
 	// runtime/composition.SharedDeps.validateInternalListenerGuard; fails the
 	// binary at startup before any listener binds. Never reaches the HTTP layer in
 	// practice.

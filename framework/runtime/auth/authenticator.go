@@ -130,7 +130,7 @@ func mintUserPrincipal(c Claims) *Principal {
 //
 // ref: HashiCorp Vault server fail-closed defaults (no Noop-equivalent path).
 // ref: kubernetes/apiserver pkg/authentication — typed (Authenticator, error).
-func NewServiceTokenAuthenticator(ring kauth.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) (Authenticator, error) {
+func NewServiceTokenAuthenticator(ring kauth.ServiceKeyring, clk clock.Clock, opts ...ServiceTokenOption) (Authenticator, error) {
 	clock.MustHaveClock(clk, "auth.NewServiceTokenAuthenticator")
 	cfg := serviceTokenConfig{clk: clk}
 	for _, o := range opts {
@@ -193,7 +193,7 @@ func NewServiceTokenAuthenticator(ring kauth.HMACKeyring, clk clock.Clock, opts 
 // HTTP status code).
 //
 // This helper is intentionally package-private.
-func verifyServiceTokenPayload(ring kauth.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) (string, error) {
+func verifyServiceTokenPayload(ring kauth.ServiceKeyring, payload string, cfg serviceTokenConfig, r *http.Request) (string, error) {
 	parts := strings.SplitN(payload, ":", 4)
 	switch len(parts) {
 	case 2:
@@ -237,7 +237,7 @@ func verifyServiceTokenPayload(ring kauth.HMACKeyring, payload string, cfg servi
 	if err != nil {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
-	if !verifyServiceTokenMAC(ring, message, providedMAC) {
+	if !verifyServiceTokenMAC(ring, callerCell, message, providedMAC) {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidMAC)
 	}
 

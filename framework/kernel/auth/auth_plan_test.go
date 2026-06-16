@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -191,26 +192,30 @@ func TestMustNewAuthServiceToken_NilStorePanics(t *testing.T) {
 	authtest.MustAuthServiceToken(nil, &stubHMACKeyring{})
 }
 
-// shortHMACKeyring intentionally returns a secret below MinHMACKeyBytes to
+// shortHMACKeyring intentionally fails Validate (sub-MinHMACKeyBytes) to
 // exercise the construction-time strength check.
 type shortHMACKeyring struct{}
 
-func (*shortHMACKeyring) Current() []byte   { return []byte("31-byte-secret-padding---------") }
-func (*shortHMACKeyring) Secrets() [][]byte { return [][]byte{(&shortHMACKeyring{}).Current()} }
+func (*shortHMACKeyring) SigningSecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("31-byte-secret-padding---------")}, nil
+}
+
+func (*shortHMACKeyring) VerifySecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("31-byte-secret-padding---------")}, nil
+}
+
+func (*shortHMACKeyring) Validate() error {
+	return fmt.Errorf("HMAC subkey too short: minimum is %d bytes", auth.MinHMACKeyBytes)
+}
 
 func TestNewAuthServiceToken_RejectsShortKey(t *testing.T) {
 	t.Parallel()
-	// Pre-condition: stub returns 31 bytes (one short of MinHMACKeyBytes=32).
-	if got := len((&shortHMACKeyring{}).Current()); got >= auth.MinHMACKeyBytes {
-		t.Fatalf("test fixture broken: shortHMACKeyring.Current() returned %d bytes, want < %d",
-			got, auth.MinHMACKeyBytes)
-	}
 	_, err := auth.NewAuthServiceToken(&stubNonceStore{}, &shortHMACKeyring{})
 	if err == nil {
-		t.Fatal("expected error for short HMAC ring.Current(), got nil")
+		t.Fatal("expected error for short HMAC ring, got nil")
 	}
-	// Error message format (auth_plan.go::NewAuthServiceToken):
-	//   "auth: NewAuthServiceToken HMAC ring.Current() returned 31 bytes, minimum is 32 (NIST SP 800-107)"
+	// NewAuthServiceToken wraps ring.Validate(): "...ring is invalid: HMAC subkey
+	// too short: minimum is 32 bytes".
 	if !strings.Contains(err.Error(), "minimum is 32") {
 		t.Errorf("error message must mention 'minimum is 32': %q", err.Error())
 	}
@@ -331,8 +336,14 @@ func (s *stubNoopNonceStore) CheckAndMark(_ context.Context, _ string) error {
 
 func (s *stubNoopNonceStore) Kind() auth.NonceStoreKind { return auth.NonceStoreKindNoop }
 
-// stubHMACKeyring satisfies auth.HMACKeyring.
+// stubHMACKeyring satisfies auth.ServiceKeyring.
 type stubHMACKeyring struct{}
 
-func (s *stubHMACKeyring) Current() []byte   { return []byte("stub-secret-32-bytes-padding-----") }
-func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
+func (s *stubHMACKeyring) SigningSecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("stub-secret-32-bytes-padding-----")}, nil
+}
+
+func (s *stubHMACKeyring) VerifySecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("stub-secret-32-bytes-padding-----")}, nil
+}
+func (s *stubHMACKeyring) Validate() error { return nil }

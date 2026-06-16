@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/framework/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (23 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields (24 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -78,29 +78,30 @@ const ruleSharedDepsFieldSetFrozen01 = "SHAREDDEPS-FIELDSET-FROZEN-01"
 // (consumed by exactly one cell) does NOT belong here; pass it via that cell's
 // module constructor / self-build instead (see #1413 / configcore).
 var sharedDepsFrozenExportedFields = map[string]string{
-	"Clock":                "clock.Clock",
-	"Topology":             "bootstrap.Topology",
-	"DeploymentTopology":   "bootstrap.DeploymentTopologySpec",
-	"JWTIssuer":            "*auth.JWTIssuer",
-	"JWTVerifier":          "*auth.JWTVerifier",
-	"MetricsProvider":      "metrics.Provider",
-	"Publisher":            "outbox.Publisher",
-	"Subscriber":           "outbox.Subscriber",
-	"ConfigEventCollector": "metrics.ConfigEventCollector",
-	"ConsumerClaimer":      "idempotency.Claimer",
-	"PG":                   "capability.PGProvider",
-	"Redis":                "capability.RedisProvider",
-	"InternalHMACRing":     "*auth.HMACKeyRing",
-	"NonceStore":           "auth.NonceStore",
-	"PrimaryHTTPAddr":      "string",
-	"InternalHTTPAddr":     "string",
-	"InProcessTransport":   "*transport.InProcessTransport",
-	"HealthHTTPAddr":       "string",
-	"MetricsToken":         "string",
-	"VerboseToken":         "string",
-	"VerboseDisabled":      "bool",
-	"HealthLocalOnly":      "bool",
-	"ProjectRoot":          "string",
+	"Clock":                  "clock.Clock",
+	"Topology":               "bootstrap.Topology",
+	"DeploymentTopology":     "bootstrap.DeploymentTopologySpec",
+	"JWTIssuer":              "*auth.JWTIssuer",
+	"JWTVerifier":            "*auth.JWTVerifier",
+	"MetricsProvider":        "metrics.Provider",
+	"Publisher":              "outbox.Publisher",
+	"Subscriber":             "outbox.Subscriber",
+	"ConfigEventCollector":   "metrics.ConfigEventCollector",
+	"ConsumerClaimer":        "idempotency.Claimer",
+	"PG":                     "capability.PGProvider",
+	"Redis":                  "capability.RedisProvider",
+	"InternalServiceKeyring": "auth.ServiceKeyring",
+	"NonceStore":             "auth.NonceStore",
+	"PrimaryHTTPAddr":        "string",
+	"InternalHTTPAddr":       "string",
+	"InProcessTransport":     "*transport.InProcessTransport",
+	"TransportMetrics":       "*transport.Metrics",
+	"HealthHTTPAddr":         "string",
+	"MetricsToken":           "string",
+	"VerboseToken":           "string",
+	"VerboseDisabled":        "bool",
+	"HealthLocalOnly":        "bool",
+	"ProjectRoot":            "string",
 }
 
 // exportedFieldTypeStrings returns the {name → type-string} map of the exported
@@ -173,29 +174,30 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	// demonstrates that exportedFieldTypeStrings detects type-string divergence,
 	// not just field-set membership divergence.
 	type sharedDepsRetypedClock struct {
-		Clock                string // was clock.Clock — intentional type perturbation
-		Topology             string
-		DeploymentTopology   string
-		JWTIssuer            string
-		JWTVerifier          string
-		MetricsProvider      string
-		Publisher            string
-		Subscriber           string
-		ConfigEventCollector string
-		ConsumerClaimer      string
-		PG                   string
-		Redis                string
-		InternalHMACRing     string
-		NonceStore           string
-		PrimaryHTTPAddr      string
-		InternalHTTPAddr     string
-		InProcessTransport   string
-		HealthHTTPAddr       string
-		MetricsToken         string
-		VerboseToken         string
-		VerboseDisabled      string // was bool
-		HealthLocalOnly      string // was bool
-		ProjectRoot          string
+		Clock                  string // was clock.Clock — intentional type perturbation
+		Topology               string
+		DeploymentTopology     string
+		JWTIssuer              string
+		JWTVerifier            string
+		MetricsProvider        string
+		Publisher              string
+		Subscriber             string
+		ConfigEventCollector   string
+		ConsumerClaimer        string
+		PG                     string
+		Redis                  string
+		InternalServiceKeyring string
+		NonceStore             string
+		PrimaryHTTPAddr        string
+		InternalHTTPAddr       string
+		InProcessTransport     string
+		TransportMetrics       string
+		HealthHTTPAddr         string
+		MetricsToken           string
+		VerboseToken           string
+		VerboseDisabled        string // was bool
+		HealthLocalOnly        string // was bool
+		ProjectRoot            string
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,

@@ -43,7 +43,7 @@ func MustAuthJWTFromAssembly(asm auth.AssemblyRef) auth.AuthJWTFromAssembly {
 
 // MustAuthServiceToken wraps auth.NewAuthServiceToken with panic-on-error.
 // Same caller policy as MustAuthJWT.
-func MustAuthServiceToken(store auth.NonceStore, ring auth.HMACKeyring) auth.AuthServiceToken {
+func MustAuthServiceToken(store auth.NonceStore, ring auth.ServiceKeyring) auth.AuthServiceToken {
 	plan, err := auth.NewAuthServiceToken(store, ring)
 	if err != nil {
 		panic(panicregister.Approved("authtest-auth-service-token",

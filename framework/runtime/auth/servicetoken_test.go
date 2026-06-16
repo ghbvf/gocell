@@ -76,17 +76,6 @@ func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clk clock.Cloc
 	)
 }
 
-func TestHMACKeyRing_Current_ReturnsCopy(t *testing.T) {
-	ring := mustTestRing(t, testHMACKey, "")
-	c := ring.Current()
-	original := make([]byte, len(c))
-	copy(original, c)
-
-	c[0] = 0xFF
-
-	assert.Equal(t, original, ring.Current(), "Current() must return a defensive copy")
-}
-
 func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	now := time.Now()
@@ -197,19 +186,22 @@ func TestGenerateServiceToken_NilRing(t *testing.T) {
 	assert.Empty(t, token)
 }
 
-func TestHMACKeyRing_Secrets_SingleKey(t *testing.T) {
+func TestHMACKeyRing_SigningSecrets_SingleKey(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	secrets := ring.Secrets()
-	assert.Len(t, secrets, 1)
-	assert.Equal(t, []byte(testHMACKey), secrets[0])
+	secrets, err := ring.SigningSecrets("gocell")
+	require.NoError(t, err)
+	assert.Len(t, secrets, 1, "single-secret master derives one subkey generation")
+	assert.Len(t, secrets[0], MinHMACKeyBytes, "derived subkey is MinHMACKeyBytes long")
+	// Derived subkey is NOT the raw master (per-cell HKDF, no raw exposure).
+	assert.NotEqual(t, []byte(testHMACKey), secrets[0])
 }
 
-func TestHMACKeyRing_Secrets_DualKey(t *testing.T) {
+func TestHMACKeyRing_VerifySecrets_DualKey(t *testing.T) {
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
-	secrets := ring.Secrets()
-	assert.Len(t, secrets, 2)
-	assert.Equal(t, []byte(testHMACKeyNew), secrets[0])
-	assert.Equal(t, []byte(testHMACKeyOld), secrets[1])
+	secrets, err := ring.VerifySecrets("gocell")
+	require.NoError(t, err)
+	assert.Len(t, secrets, 2, "dual-secret master derives current+previous subkeys")
+	assert.NotEqual(t, secrets[0], secrets[1], "current and previous subkeys differ")
 }
 
 func TestLoadHMACKeyRingFromEnv_CurrentOnly(t *testing.T) {
@@ -218,8 +210,10 @@ func TestLoadHMACKeyRingFromEnv_CurrentOnly(t *testing.T) {
 
 	ring, err := LoadHMACKeyRingFromEnv()
 	require.NoError(t, err)
-	assert.Equal(t, []byte(testHMACKey), ring.Current())
-	assert.Len(t, ring.Secrets(), 1)
+	require.NoError(t, ring.Validate())
+	secrets, err := ring.SigningSecrets("gocell")
+	require.NoError(t, err)
+	assert.Len(t, secrets, 1)
 }
 
 func TestLoadHMACKeyRingFromEnv_CurrentAndPrevious(t *testing.T) {
@@ -228,8 +222,10 @@ func TestLoadHMACKeyRingFromEnv_CurrentAndPrevious(t *testing.T) {
 
 	ring, err := LoadHMACKeyRingFromEnv()
 	require.NoError(t, err)
-	assert.Equal(t, []byte(testHMACKeyNew), ring.Current())
-	assert.Len(t, ring.Secrets(), 2)
+	require.NoError(t, ring.Validate())
+	secrets, err := ring.SigningSecrets("gocell")
+	require.NoError(t, err)
+	assert.Len(t, secrets, 2)
 }
 
 func TestLoadHMACKeyRingFromEnv_MissingCurrentFails(t *testing.T) {
@@ -341,8 +337,17 @@ func TestServiceTokenMiddleware_TypedNilRing(t *testing.T) {
 // which is the threat model the wiring-time check defends against.
 type shortKeyringStub struct{}
 
-func (*shortKeyringStub) Current() []byte   { return []byte("short") } // 5 bytes
-func (*shortKeyringStub) Secrets() [][]byte { return [][]byte{(&shortKeyringStub{}).Current()} }
+func (*shortKeyringStub) SigningSecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("short")}, nil // 5 bytes
+}
+
+func (*shortKeyringStub) VerifySecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("short")}, nil
+}
+
+func (*shortKeyringStub) Validate() error {
+	return fmt.Errorf("HMAC subkey shorter than minimum (%d bytes)", MinHMACKeyBytes)
+}
 
 func TestServiceTokenMiddleware_ShortKeyReturnsErrorMiddleware(t *testing.T) {
 	handler := ServiceTokenMiddleware(&shortKeyringStub{}, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1441,12 +1441,17 @@ func (s *stubNonceStore) Kind() auth.NonceStoreKind {
 
 type stubHMACKeyring struct{}
 
-// Current/Secrets must return >= auth.MinHMACKeyBytes (32 bytes) — short keys
-// panic at NewAuthServiceToken construction (PR269 round-3 F5).
-func (s *stubHMACKeyring) Current() []byte {
-	return []byte("test-secret-32-bytes-padding----")
+// SigningSecrets/VerifySecrets return >= auth.MinHMACKeyBytes (32 bytes) and
+// Validate passes — short keys are rejected at NewAuthServiceToken construction
+// (PR269 round-3 F5).
+func (s *stubHMACKeyring) SigningSecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("test-secret-32-bytes-padding----")}, nil
 }
-func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
+
+func (s *stubHMACKeyring) VerifySecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("test-secret-32-bytes-padding----")}, nil
+}
+func (s *stubHMACKeyring) Validate() error { return nil }
 
 // ---------------------------------------------------------------------------
 // T-06: phase5 FinalizeAuth called twice returns labeled error
