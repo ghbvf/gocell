@@ -186,8 +186,7 @@ func validateDeployEndpoint(ep, cellID string) error {
 // Coarse proxy (Medium, blind-spot): true for ANY remote cell, even one with
 // only sync (CellTransport) contracts and no cross-process events; the precise
 // "has cross-process event pub/sub" signal would require codegen derivation
-// (tracked as #1967). Currently unreachable in production because the
-// interim TOPO-12 rule blanket-rejects topology.remote at gocell validate.
+// (tracked as #1967).
 func (t DeploymentTopology) HasRemoteCells() bool {
 	return len(t.remote) > 0
 }

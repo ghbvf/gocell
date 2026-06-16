@@ -133,7 +133,10 @@ func (t *InProcessTransport) DoContract(ctx context.Context, contractID string, 
 
 	rec := httptest.NewRecorder()
 	bs.handler.ServeHTTP(rec, req.WithContext(ctx))
-	t.d.metrics.Record(ctx, modeInProc)
+	// In-process dispatch always produces a response (the in-memory handler runs
+	// to completion); the recorded HTTP status is the handler's business, not a
+	// transport-level outcome — so the transport outcome is always success here.
+	t.d.metrics.Record(ctx, modeInProc, outcomeSuccess)
 
 	span.SetAttributes(wrapper.Attr{Key: attrHTTPStatusCode, Value: int64(rec.Code)})
 	if rec.Code >= http.StatusInternalServerError {

@@ -39,18 +39,29 @@ const (
 	ErrReferenceBroken    Code = "ERR_REFERENCE_BROKEN"
 	ErrInternal           Code = "ERR_INTERNAL"
 	ErrServiceUnavailable Code = "ERR_SERVICE_UNAVAILABLE"
-	ErrAuthUnauthorized   Code = "ERR_AUTH_UNAUTHORIZED"
-	ErrAuthForbidden      Code = "ERR_AUTH_FORBIDDEN"
-	ErrRateLimited        Code = "ERR_RATE_LIMITED"
-	ErrCSRFOriginDenied   Code = "ERR_CSRF_ORIGIN_DENIED"
-	ErrBodyTooLarge       Code = "ERR_BODY_TOO_LARGE"
-	ErrJourneyNotFound    Code = "ERR_JOURNEY_NOT_FOUND"
-	ErrTestExecution      Code = "ERR_TEST_EXECUTION"
-	ErrCheckRefInvalid    Code = "ERR_CHECKREF_INVALID"
-	ErrZeroTestMatch      Code = "ERR_ZERO_TEST_MATCH"
-	ErrBusClosed          Code = "ERR_BUS_CLOSED"
-	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
-	ErrCellMissingCodec   Code = "ERR_CELL_MISSING_CODEC"
+	// ErrUpstreamCellUnavailable signals that a remote cell dependency could not
+	// be reached during a synchronous cross-cell transport call — covers
+	// connection refused, dial timeout, or a remote 5xx with no response body.
+	//
+	// Construct with KindUnavailable → HTTP 503. Kind.PublicCode() folds this
+	// code to ErrServiceUnavailable on the wire (callers cannot distinguish
+	// local-dependency failure from remote-cell failure via the wire code); the
+	// specific code is visible in server logs and Internal channel to allow
+	// operator dashboards to route "upstream cell down" separately from
+	// "local infra missing".
+	ErrUpstreamCellUnavailable Code = "ERR_UPSTREAM_CELL_UNAVAILABLE"
+	ErrAuthUnauthorized        Code = "ERR_AUTH_UNAUTHORIZED"
+	ErrAuthForbidden           Code = "ERR_AUTH_FORBIDDEN"
+	ErrRateLimited             Code = "ERR_RATE_LIMITED"
+	ErrCSRFOriginDenied        Code = "ERR_CSRF_ORIGIN_DENIED"
+	ErrBodyTooLarge            Code = "ERR_BODY_TOO_LARGE"
+	ErrJourneyNotFound         Code = "ERR_JOURNEY_NOT_FOUND"
+	ErrTestExecution           Code = "ERR_TEST_EXECUTION"
+	ErrCheckRefInvalid         Code = "ERR_CHECKREF_INVALID"
+	ErrZeroTestMatch           Code = "ERR_ZERO_TEST_MATCH"
+	ErrBusClosed               Code = "ERR_BUS_CLOSED"
+	ErrCellMissingOutbox       Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrCellMissingCodec        Code = "ERR_CELL_MISSING_CODEC"
 	// ErrCellMissingTokenIssuer signals that a Cell was started without a token
 	// issuer dependency that it requires.
 	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"

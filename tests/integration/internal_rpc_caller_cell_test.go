@@ -162,7 +162,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	// WithMemBundle wires (UserRepository, RoleRepository, SetupLock,
 	// store-paired TxRunner) from a single mem.Store — see accesscore.MemBundle
 	// godoc for the Hard funnel rationale.
-	ac := accesscore.NewAccessCore(clock.Real(),
+	ac := accesscore.NewAccessCore(
+		clock.Real(),
 		accesscore.WithMemBundle(accessmem.NewBundle(clock.Real())),
 		accesscore.WithSessionStore(acSessionStore),
 		accesscore.WithRefreshStore(acRefreshStore),
@@ -174,7 +175,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 	)
-	cc := configcore.NewConfigCore(clock.Real(),
+	cc := configcore.NewConfigCore(
+		clock.Real(),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
@@ -194,7 +196,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	callerCellAuditStore, err := ledger.NewMemStore(callerCellAuditProto, clock.Real())
 	require.NoError(t, err)
-	auc := auditcore.NewAuditCore(clock.Real(),
+	auc := auditcore.NewAuditCore(
+		clock.Real(),
 		auditcore.WithLedgerProtocol(callerCellAuditProto),
 		auditcore.WithLedgerStore(callerCellAuditStore),
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
@@ -211,7 +214,8 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	app := bootstrap.New(clock.Real(),
+	app := bootstrap.New(
+		clock.Real(),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(
 			cell.PrimaryListener,
@@ -289,7 +293,7 @@ func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *tes
 	// so it is assignable to both the tenant.TenantID sign param and the string header.
 	const tenantID = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, time.Now())
+		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, "", time.Now())
 	require.NotEmpty(t, token, "token generation must succeed for a valid callerCell")
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -315,7 +319,7 @@ func TestInternalRPC_ConfigCoreCallsConfigRead_Denied_403(t *testing.T) {
 	app := startCallerCellApp(t)
 
 	token := auth.GenerateServiceToken(app.ring, "configcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -343,7 +347,7 @@ func TestInternalRPC_WrongEndpointForCaller_403(t *testing.T) {
 	// auditcore is a valid cell ID and passes HMAC + format checks,
 	// but it is not in the configread contract.clients allowlist.
 	token := auth.GenerateServiceToken(app.ring, "auditcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -406,7 +410,7 @@ func TestInternalRPC_TamperedCallerCellRejected(t *testing.T) {
 
 	// Generate a legitimate token for "accesscore".
 	original := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, original)
 
 	// Token format: ts:nonce:callerCell:mac — 4 colon-separated segments.
@@ -446,7 +450,7 @@ func TestInternalRPC_TamperedTenantHeaderRejected(t *testing.T) {
 	// Sign the token binding tenant A.
 	const signedTenant = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/any-key", "", signedTenant, time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", signedTenant, "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,

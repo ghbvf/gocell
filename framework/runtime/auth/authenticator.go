@@ -226,10 +226,12 @@ func verifyServiceTokenPayload(ring kauth.HMACKeyring, payload string, cfg servi
 		return "", err
 	}
 
-	// Fold the live X-Tenant-ID header into the MAC material (sign/verify share
-	// buildServiceTokenMessage). A tampered, injected, or stripped tenant header
-	// reconstructs a different message and fails verifyServiceTokenMAC below.
-	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce, callerCell, r.Header.Get(HeaderTenantID))
+	// Fold the live X-Tenant-ID and X-Gocell-Principal headers into the MAC
+	// material (sign/verify share buildServiceTokenMessage). A tampered,
+	// injected, or stripped header reconstructs a different message and fails
+	// verifyServiceTokenMAC below.
+	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce, callerCell,
+		r.Header.Get(HeaderTenantID), r.Header.Get(HeaderPrincipal))
 
 	providedMAC, err := hex.DecodeString(sigHex)
 	if err != nil {

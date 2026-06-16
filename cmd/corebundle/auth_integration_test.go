@@ -481,7 +481,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent","tenantId":%q}`, seedUserID, testTenantID))
 		// Spec: 4-part token — callerCell="accesscore" is the identity claim.
 		token := auth.GenerateServiceToken(ring, "accesscore",
-			http.MethodPost, "/internal/v1/access/roles/assign", "", "", time.Now())
+			http.MethodPost, "/internal/v1/access/roles/assign", "", "", "", time.Now())
 		require.NotEmpty(t, token)
 
 		req, err := http.NewRequest(http.MethodPost,
@@ -507,7 +507,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		body := strings.NewReader(fmt.Sprintf(`{"userId":%q,"roleId":"nonexistent","tenantId":%q}`, seedUserID, testTenantID))
 		// Spec: 4-part token — callerCell="accesscore".
 		token := auth.GenerateServiceToken(ring, "accesscore",
-			http.MethodPost, "/internal/v1/access/roles/revoke", "", "", time.Now())
+			http.MethodPost, "/internal/v1/access/roles/revoke", "", "", "", time.Now())
 		require.NotEmpty(t, token)
 
 		req, err := http.NewRequest(http.MethodPost,
@@ -534,7 +534,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	t.Run("internal_replay_same_nonce_401", func(t *testing.T) {
 		// Spec: 4-part token — callerCell="accesscore".
 		token := auth.GenerateServiceToken(ring, "accesscore",
-			http.MethodPost, "/internal/v1/access/roles/revoke", "", "", time.Now())
+			http.MethodPost, "/internal/v1/access/roles/revoke", "", "", "", time.Now())
 		require.NotEmpty(t, token)
 
 		doReq := func() (int, string) {

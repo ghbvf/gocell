@@ -185,9 +185,10 @@ metrics:
       fqName: gocell_cell_transport_requests_total
       namespace: gocell
       type: counter
-      help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
+      help: Total cross-cell sync (http) contract calls, by transport_mode (in_proc | remote) and outcome (success | failure kinds).
       labels:
         - transport_mode
+        - outcome
       file: framework/runtime/transport/metrics.go
     - name: config_event_process_total
       fqName: gocell_config_event_process_total

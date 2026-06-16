@@ -97,9 +97,10 @@ metrics:
       file: framework/runtime/observability/metrics/shutdown.go
     - name: cell_transport_requests_total
       type: counter
-      help: Total cross-cell sync (http) contract calls, by transport mode (in_proc | remote).
+      help: Total cross-cell sync (http) contract calls, by transport_mode (in_proc | remote) and outcome (success | failure kinds).
       labels:
         - transport_mode
+        - outcome
       file: framework/runtime/transport/metrics.go
     - name: config_stale_cipher_total
       type: counter

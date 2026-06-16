@@ -33,7 +33,8 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			reached = true
 			w.WriteHeader(http.StatusOK)
-		}))
+		}),
+	)
 
 	tr := NewInProcess(nil)
 	if err := tr.Bind(guarded, nil); err != nil {
@@ -49,7 +50,7 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 	t.Run("signed request passes the auth chain", func(t *testing.T) {
 		reached = false
 		req := newReq(t, path)
-		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, clock.Real().Now())
+		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, "", clock.Real().Now())
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set(auth.HeaderTenantID, tid.String())
 
@@ -94,7 +95,8 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 				}
 				authzReached = true
 				w.WriteHeader(http.StatusOK)
-			}))
+			}),
+		)
 		authzTr := NewInProcess(nil)
 		if err := authzTr.Bind(guarded, nil); err != nil {
 			t.Fatalf("bind: %v", err)
@@ -102,7 +104,7 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 
 		req := newReq(t, path)
 		// Signed by auditcore — authenticates fine, but not in the {accesscore} allowlist.
-		token := auth.GenerateServiceToken(ring, "auditcore", http.MethodGet, path, "", tid, clock.Real().Now())
+		token := auth.GenerateServiceToken(ring, "auditcore", http.MethodGet, path, "", tid, "", clock.Real().Now())
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set(auth.HeaderTenantID, tid.String())
 

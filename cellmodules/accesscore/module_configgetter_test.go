@@ -39,18 +39,19 @@ func TestWireConfigGetter_Colocated_InjectsGetter(t *testing.T) {
 	assert.Len(t, opts, 1, "colocated configcore must append exactly the config getter option")
 }
 
-// TestWireConfigGetter_RemoteConfigcore_FailFast: configcore declared remote →
-// fail-fast (remote CellTransport is US5 #1966; never silently dispatch in-proc).
-func TestWireConfigGetter_RemoteConfigcore_FailFast(t *testing.T) {
+// TestWireConfigGetter_RemoteConfigcore_InjectsGetter: configcore declared remote
+// → the config getter is wired through a RemoteHTTPTransport (US5 #1966). This
+// replaces the old US4 fail-fast placeholder: the remote CellTransport is now
+// implemented, so a remote configcore is a valid (non-error) configuration.
+func TestWireConfigGetter_RemoteConfigcore_InjectsGetter(t *testing.T) {
 	spec := bootstrap.DeploymentTopologySpec{
 		Colocated: []string{"accesscore"},
 		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "configcore", Endpoint: "configcore:9090"}},
 	}
 	shared := configGetterTestDeps(t, spec, transport.NewInProcess(nil))
-	_, err := wireConfigGetter(shared, nil)
-	require.Error(t, err)
-	errcodetest.AssertCode(t, err, errcode.ErrCellInvalidConfig)
-	assert.Contains(t, err.Error(), "US5", "remote-declared configcore must fail-fast pointing at US5")
+	opts, err := wireConfigGetter(shared, nil)
+	require.NoError(t, err, "remote configcore must now succeed — US5 wires the RemoteHTTPTransport")
+	assert.Len(t, opts, 1, "remote configcore must append exactly the config getter option")
 }
 
 // TestWireConfigGetter_NilTransport_FailFast: colocated configcore but the
@@ -70,5 +71,4 @@ func TestWireConfigGetter_Unclassified_FailFast(t *testing.T) {
 	_, err := wireConfigGetter(shared, nil)
 	require.Error(t, err)
 	errcodetest.AssertCode(t, err, errcode.ErrCellInvalidConfig)
-	assert.Contains(t, err.Error(), "not classified", "unclassified provider must fail-fast")
 }

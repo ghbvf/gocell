@@ -171,6 +171,15 @@ type SharedDeps struct {
 	// internal-listener handler into it at phase5. Build always populates it.
 	InProcessTransport *transport.InProcessTransport
 
+	// TransportMetrics is the SHARED *transport.Metrics minted once by Build (from
+	// MetricsProvider) and reused by both the in-process transport and any remote
+	// transport a module resolves via celltransport.Resolve — so split-topology
+	// remote calls emit cell_transport_requests_total{transport_mode=remote}
+	// instead of dropping the metric (#1966 review P1.3, ADR D4). It is the SAME
+	// instance the in-process holder uses; reusing it (not re-registering) avoids
+	// a duplicate-counter registration error. Build always populates it.
+	TransportMetrics *transport.Metrics
+
 	// HealthHTTPAddr is the bind address for the health+metrics listener.
 	HealthHTTPAddr string
 

@@ -1,7 +1,6 @@
 // INVARIANT: TOPO-13 broker-mandatory static gate (Epic #1423 US3)
-// Medium, permanent ceiling. Blind-spots: (1) production-shadowed by TOPO-12
-// (interim blanket remote ban) until US5 #1966; proven via synthetic unit tests
-// until then. (2) Cannot verify a broker is wired (runtime concern). See
+// Medium, permanent ceiling. Production-reachable since TOPO-12 was removed in
+// US5 #1966. Blind-spot: cannot verify a broker is wired (runtime concern). See
 // validateTOPO13 godoc and ADR 202606131142-1423.
 
 package governance
@@ -63,7 +62,8 @@ func TestTOPO13_CrossProcessEvent_Split(t *testing.T) {
 	pub := metadatatest.CellIDCellA // colocated side
 	sub := metadatatest.CellIDCellB // remote side
 
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub},
 			Remote:    []metadata.TopologyRemoteEntry{{CellID: sub, Endpoint: "remote.svc:9090"}},
@@ -90,7 +90,8 @@ func TestTOPO13_ColocatedEvent_NoError(t *testing.T) {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB
 
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub, sub},
 		},
@@ -108,7 +109,8 @@ func TestTOPO13_EmptyTopology_NoError(t *testing.T) {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB
 
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{},
 	)
 	val := NewValidator(pm, ".", clock.Real())
@@ -123,7 +125,8 @@ func TestTOPO13_NonSplitAssembly_Skipped(t *testing.T) {
 	sub := metadatatest.CellIDCellB
 
 	// No remote entries → not a split assembly → TOPO-13 must skip.
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub, sub},
 		},
@@ -253,7 +256,8 @@ func TestTOPO13_SubscriberRemote_PublisherLocal(t *testing.T) {
 	pub := metadatatest.CellIDCellA // colocated
 	sub := metadatatest.CellIDCellB // remote
 
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub},
 			Remote:    []metadata.TopologyRemoteEntry{{CellID: sub, Endpoint: "remote.svc:9090"}},
@@ -272,7 +276,8 @@ func TestTOPO13_PublisherRemote_SubscriberLocal(t *testing.T) {
 	pub := metadatatest.CellIDCellA // remote
 	sub := metadatatest.CellIDCellB // colocated
 
-	pm := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pm := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{sub},
 			Remote:    []metadata.TopologyRemoteEntry{{CellID: pub, Endpoint: "remote.svc:9090"}},
@@ -381,7 +386,8 @@ func TestTOPO13_AntiVacuity(t *testing.T) {
 	sub := metadatatest.CellIDCellB
 
 	// RED: publisher colocated, subscriber remote.
-	pmRed := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pmRed := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub},
 			Remote:    []metadata.TopologyRemoteEntry{{CellID: sub, Endpoint: "remote.svc:9090"}},
@@ -393,7 +399,8 @@ func TestTOPO13_AntiVacuity(t *testing.T) {
 		"anti-vacuity RED: cross-process event pub/sub must produce ≥1 TOPO-13 finding")
 
 	// GREEN: both in colocated.
-	pmGreen := buildTOPO13Project(pub, sub, []string{pub, sub},
+	pmGreen := buildTOPO13Project(
+		pub, sub, []string{pub, sub},
 		metadata.TopologyMeta{
 			Colocated: []string{pub, sub},
 		},

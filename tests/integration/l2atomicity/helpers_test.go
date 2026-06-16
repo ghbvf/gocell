@@ -543,7 +543,7 @@ func assignRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID, "tenantId": l2TestTenantID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
-		internalPathRolesAssign, "", "", time.Now())
+		internalPathRolesAssign, "", "", "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesAssign,
 		bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -563,7 +563,7 @@ func revokeRole(t *testing.T, h *l2Harness, userID, roleID string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"userId": userID, "roleId": roleID, "tenantId": l2TestTenantID})
 	token := auth.GenerateServiceToken(h.ring, "accesscore", http.MethodPost,
-		internalPathRolesRevoke, "", "", time.Now())
+		internalPathRolesRevoke, "", "", "", time.Now())
 	req, _ := http.NewRequest(http.MethodPost, h.internalBase+internalPathRolesRevoke,
 		bytes.NewReader(body))
 	req.Header.Set("Authorization", "ServiceToken "+token)

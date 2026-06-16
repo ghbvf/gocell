@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
+	"github.com/ghbvf/gocell/cellmodules/celltransport"
 	accesscell "github.com/ghbvf/gocell/corecells/accesscore"
 	"github.com/ghbvf/gocell/corecells/accesscore/configgetter"
 	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
@@ -275,38 +276,35 @@ func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session
 const configProviderCell = "configcore"
 
 // wireConfigGetter selects the config getter transport by configcore's placement
-// in the deployment topology, reusing the SEALED topology semantics
-// (bootstrap.NewDeploymentTopology → IsColocated/RemoteEndpoint) — not a parallel
-// hand-rolled classification. US4 wires only the in-process transport:
-//   - colocated → inject the in-process transport;
-//   - remote → fail-fast (remote CellTransport is US5 #1966; never silently
-//     dispatch in-process to a cell that is not co-located);
-//   - neither (explicit topology, configcore unclassified) → fail-fast (gocell
-//     validate TOPO-11 normally prevents this; defense-in-depth).
+// in the deployment topology via [celltransport.Resolve] (US5 #1966):
+//   - co-located → inProc transport (zero-copy in-process dispatch).
+//   - remote → RemoteHTTPTransport targeting the declared endpoint.
+//   - un-classified → KindInternal fail-fast (defense-in-depth; TOPO-11 prevents
+//     this at static-analysis time).
+//
+// Previously (US4) the remote path fail-fast'ed with a placeholder error; US5
+// replaces that with the real celltransport.Resolve which handles both cases.
 func wireConfigGetter(shared *composition.SharedDeps, accessOpts []accesscell.Option) ([]accesscell.Option, error) {
 	topo, err := bootstrap.NewDeploymentTopology(shared.DeploymentTopology)
 	if err != nil {
 		return nil, fmt.Errorf("accesscore: deployment topology: %w", err)
 	}
-	switch {
-	case topo.IsColocated(configProviderCell):
-		if shared.InProcessTransport == nil {
-			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"accesscore: SharedDeps.InProcessTransport must be set to wire the config getter "+
-					"(composition.Builder.Build mints it)")
-		}
-		return append(accessOpts,
-			configgetter.WithTransport(shared.InProcessTransport, shared.InternalHMACRing, shared.Clock)), nil
-	default:
-		if _, remote := topo.RemoteEndpoint(configProviderCell); remote {
-			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"accesscore: configcore is declared remote in the deployment topology, but the remote "+
-					"CellTransport is not wired yet (US5 #1966); in-process transport cannot reach a remote cell")
-		}
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"accesscore: configcore is not classified in the deployment topology (neither colocated nor "+
-				"remote); the config getter provider must be reachable (gocell validate TOPO-11)")
+	// celltransport.Resolve is the single topology-gated entry for CellTransport
+	// selection (CELLTRANSPORT-SELECT-FUNNEL-01). The SHARED transport metrics
+	// (minted once by composition.Builder, reused — not re-registered) are threaded
+	// so a split-topology remote call emits cell_transport_requests_total{transport_mode=remote}
+	// per ADR D4 (#1966 review P1.3). The tracer stays nil: the cross-cell span
+	// tracer is late-bound at bootstrap phase5 (InProcessTransport.Bind) and is not
+	// available at module-Provide time, so remote span tracing is a tracked
+	// follow-up (#1966 review P1.3 span half); a nil tracer degrades to NoopTracer
+	// per the NewRemoteHTTP contract.
+	ct, err := celltransport.Resolve(topo, configProviderCell,
+		shared.InProcessTransport, shared.Clock, shared.TransportMetrics, nil)
+	if err != nil {
+		return nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
 	}
+	return append(accessOpts,
+		configgetter.WithTransport(ct, shared.InternalHMACRing, shared.Clock)), nil
 }
 
 // resolveAccessStorageOpts selects postgres or memory storage options.

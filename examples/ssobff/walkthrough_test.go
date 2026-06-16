@@ -281,7 +281,7 @@ func walkthroughServiceToken(t *testing.T, secret, method, rawURL string) string
 	ring, err := auth.NewHMACKeyRing([]byte(secret), nil)
 	require.NoError(t, err)
 	// Spec: 4-part token — callerCell="accesscore" (ssobff is the accesscore BFF).
-	return auth.GenerateServiceToken(ring, "accesscore", method, parsed.Path, parsed.RawQuery, "", time.Now())
+	return auth.GenerateServiceToken(ring, "accesscore", method, parsed.Path, parsed.RawQuery, "", "", time.Now())
 }
 
 // TestWalkthrough exercises the complete ssobff API walkthrough.
@@ -620,7 +620,8 @@ func TestWalkthrough(t *testing.T) {
 		testwait.External(t, "ssobff-bootstrap-audit-fail-entry-available", func() bool {
 			data, ok := fetchAuditEntries(
 				base+"/api/v1/audit/entries?eventType=bootstrap.auth.fail",
-				adminToken)
+				adminToken,
+			)
 			if ok {
 				entries = data
 			}

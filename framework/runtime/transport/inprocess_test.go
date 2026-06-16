@@ -61,20 +61,27 @@ func TestInProcessTransport_ZeroValue_FailsFast(t *testing.T) {
 }
 
 // TestMetrics_Record_FailsClosedOnUnregisteredMode asserts Record never emits an
-// unregistered (forged/zero) mode, so the binary closed set {in_proc, remote}
-// cannot be polluted with transport_mode="unknown".
+// unregistered (forged/zero) mode OR outcome, so the closed label sets cannot be
+// polluted with transport_mode="unknown" / outcome="unknown".
 func TestMetrics_Record_FailsClosedOnUnregisteredMode(t *testing.T) {
 	t.Parallel()
 
 	m, cp := newTestMetrics(t)
-	m.Record(context.Background(), TransportMode{}) // forged zero — must NOT record
-	m.Record(context.Background(), ModeInProc())    // registered — records
+	m.Record(context.Background(), TransportMode{}, OutcomeSuccess()) // forged mode — must NOT record
+	m.Record(context.Background(), ModeInProc(), TransportOutcome{})  // forged outcome — must NOT record
+	m.Record(context.Background(), ModeInProc(), OutcomeSuccess())    // both registered — records
 
 	if got := cp.count(TransportModeUnknown); got != 0 {
 		t.Errorf("unregistered mode recorded %d times, want 0 (fail-closed)", got)
 	}
+	if got := cp.countOutcome(TransportOutcomeUnknown); got != 0 {
+		t.Errorf("unregistered outcome recorded %d times, want 0 (fail-closed)", got)
+	}
 	if got := cp.count("in_proc"); got != 1 {
 		t.Errorf("in_proc recorded %d times, want 1", got)
+	}
+	if got := cp.countOutcome("success"); got != 1 {
+		t.Errorf("outcome=success recorded %d times, want 1", got)
 	}
 }
 
@@ -275,7 +282,7 @@ func TestInProcessTransport_DoContract_RecordsInProcMode(t *testing.T) {
 // both so a test can assert recorded label values.
 func newTestMetrics(t *testing.T) (*Metrics, *countingProvider) {
 	t.Helper()
-	cp := &countingProvider{counts: map[string]int{}}
+	cp := &countingProvider{counts: map[string]int{}, outcomeCounts: map[string]int{}}
 	m, err := NewMetrics(cp)
 	if err != nil {
 		t.Fatalf("NewMetrics: %v", err)
@@ -284,11 +291,12 @@ func newTestMetrics(t *testing.T) (*Metrics, *countingProvider) {
 }
 
 // countingProvider embeds the kernel NopProvider and overrides CounterVec to
-// capture transport_mode label values.
+// capture transport_mode + outcome label values.
 type countingProvider struct {
 	kernelmetrics.NopProvider
-	mu     sync.Mutex
-	counts map[string]int
+	mu            sync.Mutex
+	counts        map[string]int // by transport_mode
+	outcomeCounts map[string]int // by outcome
 }
 
 func (cp *countingProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
@@ -305,24 +313,32 @@ func (cp *countingProvider) count(mode string) int {
 	return cp.counts[mode]
 }
 
+func (cp *countingProvider) countOutcome(outcome string) int {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return cp.outcomeCounts[outcome]
+}
+
 type countingCounterVec struct {
 	kernelmetrics.CounterVec
 	cp *countingProvider
 }
 
 func (c *countingCounterVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
-	return &countingCounter{cp: c.cp, mode: l["transport_mode"]}
+	return &countingCounter{cp: c.cp, mode: l["transport_mode"], outcome: l["outcome"]}
 }
 
 type countingCounter struct {
-	cp   *countingProvider
-	mode string
+	cp      *countingProvider
+	mode    string
+	outcome string
 }
 
 func (c *countingCounter) Inc(context.Context) {
 	c.cp.mu.Lock()
 	defer c.cp.mu.Unlock()
 	c.cp.counts[c.mode]++
+	c.cp.outcomeCounts[c.outcome]++
 }
 func (c *countingCounter) Add(context.Context, float64) {}
 

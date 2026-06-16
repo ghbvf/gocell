@@ -187,7 +187,12 @@ type Resolver interface {
   observability 规范「label 值集必须冻结 / 经 typed enum 入口」（对标 OTel RPC metrics 用受控基数
   attribute 过滤）。故 metrics **可**按 transport_mode 过滤（非 trace-only），既满足「trace/metrics
   区分」又不引入高基数；`cell` label 仍来自 closed set。确切常量名与 enum 入口在 US4 #1963 锁定并
-  更新 observability 规范。
+  更新 observability 规范。**#1966 review P2.6 补第二个 frozen typed-enum label `outcome`**
+  （`cell_transport_requests_total{transport_mode, outcome}`，sealed `transport.TransportOutcome`
+  闭值集 `{success, dial_error, timeout, canceled, resolver_error, rewrite_error}`）：**每次**分发
+  都 Record（成功 + 每条失败出口），不只成功路径——否则远端不可达/超时/取消的失败率被低报。失败 kind
+  与 errcode Kind 同源分类（见下 §review amendment P2.8）；超出有界 kind 的 `error.type` 细节留 span，
+  不进 label（≤12 series，仍低基数）。
 - **L0 cell 显式豁免 transport 判定。** L0（纯计算分区）按宪法 Article I「可被同 Assembly 内兄弟 Cell
   直接导入，但 **MUST 在 `cell.l0Dependencies` 显式声明**」——故 transport 规则（含下游 funnel archtest）
   的 L0 carve-out **仅豁免已在 `cell.l0Dependencies` 声明的合法 L0 import**；未声明的 L0 direct import
@@ -248,17 +253,84 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 
 | 缺口 / 威胁 | split 下风险 | 当前补偿 / 约束 | 归属 |
 |---|---|---|---|
-| **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966（spec FR-006，安全 obligation）|
+| **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（评估 + 登记；实现在 #2153）|
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964 不实现 mTLS**，追踪在 **#2153** | US6 #1964（登记；实现在 #2153）|
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
-| **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966（spec T043）|
+| **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
 **安全约束裁定（方向，下游遵循）**：(1) 业务 principal/tenant 跨进程传播 **MUST 经 tamper-evident
 signed/sealed envelope**（经单一 sealed propagation funnel 注入 + 专用 callee middleware 重建），业务
 handler 不得自构 principal header——**不得假定现有 service-token 栈已覆盖业务 principal**（它只认证
 callerCell）；(2) in-proc 与 remote 同样经 `RequireCallerCell`（D4）；(3) 缺口非本 ADR 解，但 MUST
 在下游 issue 落地前不被静默放过——上表即其 backlog 账。
+
+### #1966 Amendment — US5 sync 远程实现落地 + 业务 principal 传播闭合（2026-06-16）
+
+US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint，与 #303 共享形态）+ `transport.RemoteHTTPTransport`
+（实现 `CellTransport`，service token 出站签名 + 真实 TCP）+ 业务 principal 跨进程传播 + `ERR_UPSTREAM_CELL_UNAVAILABLE`
++ 解除 interim 门。**按 AI-robust 章程逐项重评上表威胁矩阵**：
+
+- **「业务 principal 跨进程传播伪造」行 → 现已闭合（CLOSED）**。机制：actor/subject/session 经 `outbox.PrincipalMetadata`
+  序列化（TenantID 清空——tenant 单源仍走 `X-Tenant-ID`）→ base64url(compact-JSON) → 新签名头 `X-Gocell-Principal`，
+  **无条件折进 service-token MAC material**（`buildServiceTokenMessage` 末段 ` x-gocell-principal=<v>`，与 `x-tenant-id`
+  同机制）。故篡改/注入/剥离该头 → MAC 不匹配 → 401，**结构性不可伪造**（Hard，密码学 fail-closed）。注入收口于**单一
+  sealed funnel** `auth.SignInternalRequest`（裸 `GenerateServiceToken` 经 `SVCTOKEN-CALLER-CELL-REQUIRED-01` 收口，
+  函数级 carve-out 仅放行 funnel 自身的转发）；callee 验签后经 `runtime/auth/principal_propagation.go` 重建（先清 4 键
+  再 restore，业务 principal WIN 过 service 派生 actor=CallerCellID），该写入点纳入 `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`
+  allowlist。**in-proc 与 remote 同构闭合**（configclient 无论拓扑都经 funnel 签）——位置透明覆盖业务 principal，非仅 tenant。
+- **残留缺口不变**：本闭合**假定 keyring 在信任边界内可信**——「共享 HMAC keyring」（任何持 keyring 的 cell 可伪造任意
+  `callerCell` 及其 principal 头）仍开，per-cell HKDF 子密钥追踪在 **#2153**；「无 mTLS」仍开（**#2153**）。即 US5 把业务
+  principal 提升到与 `callerCell` 同等的 MAC 完整性等级，但**未**提升 keyring 的 per-cell 隔离强度——二者正交，后者归 #2153。
+- **「token replay」「upstream-cell-unavailable」行 → 已落地**（前者复用既有分布式 NonceStore；后者 `ERR_UPSTREAM_CELL_UNAVAILABLE`
+  仅 transport「连不上/超时/ctx deadline」用，5xx 仍返回 response 由调用方区分，resolver miss → `KindInternal`）。
+
+**新增 enforcement（同 PR 三件套）**：`REMOTE-TRANSPORT-SEALED-01`（reflect 字段 freeze，Hard）；`CELLTRANSPORT-SELECT-FUNNEL-01`
+（wiring 层裸构造 `transport.NewRemoteHTTP` ban，调用级 AST 扫描，Medium，仿 `REPLAYDEPS-INMEM-FUNNEL-01`）——transport 选型
+经 `cellmodules/celltransport.Resolve`（topology-gated，`eventtransport`/`replaydeps`/`sagaprojectiondeps` 的第 4 sibling）。
+**interim 门移除**：TOPO-12（governance）+ `metadata.CheckRemotePlacementSupported`（codegen）已删，`topology.remote` 现过
+`gocell validate` + codegen；TOPO-13（split + in-memory bus → reject）随之 production-reachable，成为真门。**集成测试**为单进程
+真实 TCP loopback（覆盖 sign→TCP→verify→handler→response + connection refused/timeout/5xx/401/403/resolver-miss 全分支）；
+真双进程端到端属 US7 journey 验收，非本 issue。
+
+### #1966 review Amendment — 门删后威胁矩阵重评 + 远程边界语义/可观测收敛（2026-06-16）
+
+`/pr-review` #2228 R1/R2 提出：本 PR **删除 interim 门**（TOPO-12 + `CheckRemotePlacementSupported`）后，
+`topology.remote` 成 production-reachable，故「共享 HMAC keyring + 自报 `callerCell` + 明文 HTTP」不再是
+理论缺口，而是真实生产路径——质疑 split topology 在 per-cell 身份 / mTLS 落地前是否可合并。按 AI-robust 章程
+「ADR amendment 落地必须同步重评威胁矩阵」，逐项裁定：
+
+- **per-cell keyring 隔离（矩阵行「共享 HMAC keyring」）+ mTLS（行「无 mTLS」）→ 维持 #2153 分阶段 defer
+  （决策 A）**。理由：二者是 epic 级密码学/身份工作流（HKDF 子密钥派生 / 密钥分发 / 轮换 / SPIFFE-SVID 或
+  mTLS 证书），已有 OPEN tracking issue **#2153**（US6 实施）+ 上表登记，**不**塞进本 transport-shape PR。
+  门删**不引入新缺口**——它使**既有登记缺口可达**，故本 amendment 的职责是把**操作边界写明、写响**，而非
+  静默放行。
+- **操作约束（文档化、fail-closed-by-deployment）**：在 #2153 的 TLS/per-cell-key 落地前，`topology.remote`
+  **MUST 仅部署于可信/私有网络**，且 ① 所有 cell 进程共享同一 `GOCELL_SERVICE_SECRET`（跨进程 service token
+  验签前提）；② internal listener 绑定 pod/网络可达地址并由 NetworkPolicy/VPC 限制 ingress 至授权 caller cell；
+  ③ 服务端 `RequireCallerCell` allowlist 仍是当前补偿控制（防跳入预期外 internal endpoint）。该 checklist 落
+  `docs/guides/deployment-topology.md`（#1966 review P2.10），把「明文 + 共享 secret + 自报身份」的适用边界
+  与残留风险对运维显式可见——区别于「悄悄能跑」。残留威胁画像：明文 = wire 无机密性（私网部署补偿，mTLS 归
+  #2153）；shared keyring = 已被攻陷且持 secret 的 cell 可伪造他 cell 身份（per-cell HKDF 归 #2153）。MAC 仍
+  保证 `callerCell` + principal **完整性**（Hard）不变。**`netutil.go` 对 TLS/loopback enforcement 的 US6
+  归属注记保持不动**（不在本 PR 反转该 scope）。
+- **远程错误语义对齐既有 contract（P2.8）**：`RemoteHTTPTransport` 对 `client.Do` 失败按因分类——caller-ctx
+  cancel → `KindClientClosed`(499)；deadline-exceeded / net timeout → `KindDeadlineExceeded`(504，复用既有
+  `pkg/errcode/status.go` 映射)；其余 dial（refused/reset/DNS）→ `KindUnavailable`(503)。errcode Code 恒为
+  `ERR_UPSTREAM_CELL_UNAVAILABLE`（Kind 驱动 HTTP status，Code 作服务端诊断）——不再把 timeout 误折成 503。
+- **失败也进 transport metrics（P2.6）**：`cell_transport_requests_total` 加 sealed `outcome` 第二 label，
+  **每条出口**（成功 + dial/timeout/cancel/resolver/rewrite 失败）Record，失败率不再低报。详见上 §D4 + observability 规范。
+- **端点 path/query/fragment fail-closed（P2.9）**：`netutil.IsValidNetworkAddress`（配置期校验）+
+  `rewriteToAbsolute`（请求期纵深）拒绝携 path/query/fragment 的 endpoint（仅容忍裸根 `/`），不再静默截断。
+- **生产 remote metrics 接线（P1.3）**：composition `SharedDeps.TransportMetrics` 暴露 Build 单例 metrics，
+  accesscore `celltransport.Resolve` 传入（非 nil），split topology remote 调用现发 `transport_mode=remote`
+  指标（关闭 ADR D4 指标缺口）。**span tracer 半残留**：cross-cell span tracer 在 bootstrap phase5
+  late-bind（`InProcessTransport.Bind`），module-Provide 期不可得 → remote span tracing 追踪在独立 follow-up
+  issue（结构性 late-bind blocker，非静默缺口）。
+- **AI-robust 护栏补全（P1.4 / P1.5）**：`SVCTOKEN-CALLER-CELL-REQUIRED-01` 增「auth 包外生产代码禁直调
+  `GenerateServiceToken`（须走 `SignInternalRequest` funnel）」arm + red fixture——把 godoc 已宣称但未 enforce
+  的禁令落为机器可判定（Medium）；`CELLTRANSPORT-SELECT-FUNNEL-01` 扫描根加 `corecells` + red fixture，封死
+  core cell 直构 `transport.NewRemoteHTTP` 绕 topology gate 的未来路径。
 
 ### #1964 Amendment — per-cell 基础设施 seam 落地记录
 

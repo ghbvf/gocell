@@ -90,7 +90,7 @@ func TestHMACKeyRing_Current_ReturnsCopy(t *testing.T) {
 func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	now := time.Now()
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", "", now)
 
 	singleRing := mustTestRing(t, testHMACKeyNew, "")
 	handler := mustTestServiceHandler(t, singleRing, clockmock.New(now))
@@ -107,7 +107,7 @@ func TestHMACKeyRing_VerifyWithPrevious(t *testing.T) {
 	now := time.Now()
 
 	oldRing := mustTestRing(t, testHMACKeyOld, "")
-	token := GenerateServiceToken(oldRing, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(oldRing, "gocell", http.MethodGet, "/api", "", "", "", now)
 
 	newRing := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	handler := mustTestServiceHandler(t, newRing, clockmock.New(now))
@@ -124,7 +124,7 @@ func TestHMACKeyRing_RejectUnknownSecret(t *testing.T) {
 	now := time.Now()
 
 	unknownRing := mustTestRing(t, testHMACKeyUnk, "")
-	token := GenerateServiceToken(unknownRing, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(unknownRing, "gocell", http.MethodGet, "/api", "", "", "", now)
 
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
@@ -141,7 +141,7 @@ func TestHMACKeyRing_SingleSecretMode(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testHMACKeyOne, "")
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -156,7 +156,7 @@ func TestHMACKeyRing_SameSecretBothPositions(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testHMACKeySam, testHMACKeySam)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -193,7 +193,7 @@ func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
 }
 
 func TestGenerateServiceToken_NilRing(t *testing.T) {
-	token := GenerateServiceToken(nil, "gocell", "GET", "/api", "", "", time.Now())
+	token := GenerateServiceToken(nil, "gocell", "GET", "/api", "", "", "", time.Now())
 	assert.Empty(t, token)
 }
 
@@ -247,7 +247,7 @@ func TestLoadHMACKeyRingFromEnv_MissingCurrentFails(t *testing.T) {
 func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -298,7 +298,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/other", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/other", "", "", "", now)
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -363,7 +363,7 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	oldTime := now.Add(svcTokenDNeg6min)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", "", oldTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -378,7 +378,7 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	boundaryTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", boundaryTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", "", boundaryTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -393,7 +393,7 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	recentTime := now.Add(svcTokenDNeg4min59s)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", recentTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", "", recentTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -408,7 +408,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	futureTime := now.Add(svcTokenD6min)
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", "", "", futureTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -440,8 +440,8 @@ func TestGenerateServiceToken_Deterministic(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", "", ts)
-	t2 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", "", ts)
+	t1 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", "", "", ts)
+	t2 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", "", "", ts)
 
 	parts1 := strings.SplitN(t1, ":", 4)
 	parts2 := strings.SplitN(t2, ":", 4)
@@ -455,7 +455,7 @@ func TestGenerateServiceToken_Deterministic(t *testing.T) {
 	assert.NotEqual(t, parts1[1], parts2[1], "nonces must differ between calls")
 
 	// Different method produces a different HMAC (nonces also differ).
-	t3 := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/api", "", "", ts)
+	t3 := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/api", "", "", "", ts)
 	assert.NotEqual(t, t1, t3)
 }
 
@@ -463,7 +463,7 @@ func TestGenerateServiceToken_IncludesNonce(t *testing.T) {
 	// Spec: 4-part format {ts}:{nonce}:{caller_cell}:{hex_hmac}
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
-	token := GenerateServiceToken(ring, "configcore", http.MethodGet, "/api", "", "", ts)
+	token := GenerateServiceToken(ring, "configcore", http.MethodGet, "/api", "", "", "", ts)
 
 	parts := strings.SplitN(token, ":", 4)
 	require.Len(t, parts, 4, "token must have 4 colon-separated parts: {ts}:{nonce}:{caller_cell}:{hex_hmac}")
@@ -477,8 +477,8 @@ func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", "", ts)
-	t2 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", "", ts)
+	t1 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", "", "", ts)
+	t2 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", "", "", ts)
 
 	parts1 := strings.SplitN(t1, ":", 4)
 	parts2 := strings.SplitN(t2, ":", 4)
@@ -501,7 +501,7 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", "", now)
 
 	// First use — accepted.
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
@@ -530,8 +530,8 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token1 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", now)
-	token2 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", now)
+	token1 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", "", now)
+	token2 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", "", "", now)
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
 	req1.Header.Set("Authorization", "ServiceToken "+token1)
@@ -558,7 +558,7 @@ func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *te
 		t.Fatal("handler must not be called when NonceStore is missing")
 	}))
 
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -582,7 +582,7 @@ func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t 
 		t.Fatal("handler must not be called when NonceStore is Noop")
 	}))
 
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -722,7 +722,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", "", "", now)
 
 	handler := ServiceTokenMiddleware(
 		ring, clockmock.New(now),
@@ -751,7 +751,7 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 	now := time.Now()
 
 	// Sign with query=foo=bar
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "foo=bar", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "foo=bar", "", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	// Same path+query should succeed.
@@ -777,7 +777,7 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 
 	var gotPrincipal *Principal
 	handler := ServiceTokenMiddleware(
@@ -819,7 +819,7 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 func TestServiceTokenMiddleware_InjectsPrincipalCtxKeys(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 
 	var gotActor, gotSubject, gotSession, gotTenant string
 	var actorOK, subjectOK, sessionOK, tenantOK bool
@@ -969,7 +969,7 @@ func TestServiceTokenMiddleware_CallerCellPropagated(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	// Spec: 4-part signature with explicit callerCell
-	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 
 	var gotPrincipal *Principal
 	handler := ServiceTokenMiddleware(
@@ -1006,7 +1006,7 @@ func TestServiceTokenMiddleware_TamperedCallerCell_Rejected(t *testing.T) {
 	now := time.Now()
 
 	// Sign with "accesscore" as caller_cell.
-	goodToken := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", now)
+	goodToken := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 
 	// Tamper: replace the caller_cell segment (parts[2]) with "configcore".
 	parts := strings.SplitN(goodToken, ":", 4)
@@ -1042,7 +1042,7 @@ func TestServiceTokenMiddleware_CallerCellWithColon_Rejected(t *testing.T) {
 	now := time.Now()
 
 	// Spec: GenerateServiceToken must return "" when callerCell contains ':'
-	token := GenerateServiceToken(ring, "bad:cell", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "bad:cell", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 	assert.Empty(t, token,
 		"GenerateServiceToken must return empty string when callerCell contains ':'")
 }
@@ -1056,7 +1056,7 @@ func TestServiceTokenMiddleware_EmptyCallerCell_Rejected(t *testing.T) {
 	now := time.Now()
 
 	// Spec: GenerateServiceToken must return "" when callerCell is empty.
-	token := GenerateServiceToken(ring, "", http.MethodGet, "/internal/v1/resource", "", "", now)
+	token := GenerateServiceToken(ring, "", http.MethodGet, "/internal/v1/resource", "", "", "", now)
 	assert.Empty(t, token,
 		"GenerateServiceToken must return empty string when callerCell is empty")
 }

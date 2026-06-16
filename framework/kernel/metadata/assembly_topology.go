@@ -100,29 +100,6 @@ func classifyNonEmptyTopology(topo TopologyMeta, cellID string) CellLocation {
 	return CellLocation{Kind: CellLocationMissing}
 }
 
-// errMsgRemotePlacementUnsupported is the const literal for
-// CheckRemotePlacementSupported — MESSAGE-CONST-LITERAL-01 compliance.
-const errMsgRemotePlacementUnsupported = "topology.remote placement is not yet supported" +
-	" (cross-process transport lands in US4 #1963); only colocated topology is currently honored"
-
-// CheckRemotePlacementSupported is the INTERIM gate: until US4 #1963 wires
-// cross-process transport (and US3 #1965 the broker), a non-empty
-// topology.remote cannot be honored — the cell would still be composed
-// locally (silent degrade). Returns an errcode error to fail-close the
-// assembly.yaml declaration path (gocell validate + codegen). US4 REMOVES
-// this gate (helper + TOPO-12 rule + the codegen call) when it makes
-// composition honor the partition. The runtime DeploymentTopology API and
-// the structural validator intentionally still accept remote (US4-ready).
-func CheckRemotePlacementSupported(asm *AssemblyMeta) error {
-	if len(asm.Topology.Remote) == 0 {
-		return nil
-	}
-	return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-		errMsgRemotePlacementUnsupported,
-		errcode.WithInternal(errcode.InternalAttr("assembly", asm.ID)),
-		errcode.WithDetails(errcode.PublicString("assembly", asm.ID)))
-}
-
 // Error message constants — MESSAGE-CONST-LITERAL-01 compliance.
 const (
 	errMsgTopoMutualExclusion = "topology: mutual exclusion violation — cell appears in both colocated and remote"
@@ -192,7 +169,8 @@ func buildColocatedSet(colocated []string, known map[string]struct{}) (map[strin
 				errMsgTopoDuplicateColoc,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", fieldPath)))
+					errcode.PublicString("field", fieldPath),
+				))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
@@ -200,7 +178,8 @@ func buildColocatedSet(colocated []string, known map[string]struct{}) (map[strin
 				errMsgTopoUnknownColoc,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", fieldPath)))
+					errcode.PublicString("field", fieldPath),
+				))
 		}
 	}
 	return seen, nil
@@ -219,7 +198,8 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 				errMsgTopoDuplicateRemote,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		seen[id] = struct{}{}
 		if _, ok := known[id]; !ok {
@@ -227,14 +207,16 @@ func buildRemoteSet(remote []TopologyRemoteEntry, known, colocSet map[string]str
 				errMsgTopoUnknownRemote,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		if _, inColoc := colocSet[id]; inColoc {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 				errMsgTopoMutualExclusion,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", cellFieldPath)))
+					errcode.PublicString("field", cellFieldPath),
+				))
 		}
 		if err := validateEndpoint(entry.Endpoint, id, epFieldPath); err != nil {
 			return nil, err
@@ -253,7 +235,8 @@ func validateEndpoint(ep, cellID, fieldPath string) error {
 			errMsgTopoEmptyEndpoint,
 			errcode.WithDetails(
 				errcode.PublicString("cellID", cellID),
-				errcode.PublicString("field", fieldPath)))
+				errcode.PublicString("field", fieldPath),
+			))
 	}
 	if netutil.IsValidNetworkAddress(ep) {
 		return nil
@@ -263,7 +246,8 @@ func validateEndpoint(ep, cellID, fieldPath string) error {
 		errcode.WithDetails(
 			errcode.PublicString("cellID", cellID),
 			errcode.PublicString("endpoint", ep),
-			errcode.PublicString("field", fieldPath)))
+			errcode.PublicString("field", fieldPath),
+		))
 }
 
 // checkExhaustive verifies that every cell in known appears in either colocSet
@@ -277,7 +261,8 @@ func checkExhaustive(known, colocSet, remoteSet map[string]struct{}) error {
 				errMsgTopoNonExhaustive,
 				errcode.WithDetails(
 					errcode.PublicString("cellID", id),
-					errcode.PublicString("field", "topology")))
+					errcode.PublicString("field", "topology"),
+				))
 		}
 	}
 	return nil

@@ -92,7 +92,7 @@ func TestServiceTokenMiddleware_TenantHeaderBinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ring := mustTestRing(t, testHMACKey, "")
 
-			token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", tc.signTenant, now)
+			token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", tc.signTenant, "", now)
 			require.NotEmpty(t, token, "token generation must succeed")
 
 			var called bool
@@ -121,12 +121,14 @@ func TestServiceTokenMiddleware_TenantHeaderBinding(t *testing.T) {
 }
 
 // TestBuildServiceTokenMessage_TenantSegment_Golden freezes the canonical MAC
-// message format including the unconditional x-tenant-id segment. Any drift in
-// the MAC material (dropping, renaming, reordering the tenant segment) shows up
-// as a byte-level diff here — the static-guard leg of the #1717 closure.
+// message format including the unconditional x-tenant-id and x-gocell-principal
+// segments. Any drift in the MAC material (dropping, renaming, reordering a
+// segment) shows up as a byte-level diff here — the static-guard leg of the
+// #1717 closure (tenant) and #1966 T042 closure (principal header).
 //
-// INVARIANT: X-Tenant-ID is unconditionally part of the service-token MAC
-// material; the segment is the lowercased canonical "x-tenant-id=<value>".
+// INVARIANT: X-Tenant-ID and X-Gocell-Principal are unconditionally part of
+// the service-token MAC material; segments are lowercased canonical form.
+// The ordering is: method path [?query] ts nonce callerCell x-tenant-id=<v> x-gocell-principal=<v>.
 func TestBuildServiceTokenMessage_TenantSegment_Golden(t *testing.T) {
 	const (
 		ts    = "1700000000"
@@ -134,56 +136,73 @@ func TestBuildServiceTokenMessage_TenantSegment_Golden(t *testing.T) {
 	)
 
 	cases := []struct {
-		name       string
-		method     string
-		path       string
-		rawQuery   string
-		callerCell string
-		tenantID   string
-		want       string
+		name            string
+		method          string
+		path            string
+		rawQuery        string
+		callerCell      string
+		tenantID        string
+		principalHeader string
+		want            string
 	}{
 		{
-			name:       "with tenant, no query",
-			method:     http.MethodGet,
-			path:       "/internal/v1/resource",
-			rawQuery:   "",
-			callerCell: "accesscore",
-			tenantID:   tenantSignA,
+			name:            "with tenant, no query, no principal",
+			method:          http.MethodGet,
+			path:            "/internal/v1/resource",
+			rawQuery:        "",
+			callerCell:      "accesscore",
+			tenantID:        tenantSignA,
+			principalHeader: "",
 			want: "GET /internal/v1/resource 1700000000 abcdef0123456789abcdef0123456789 accesscore " +
-				"x-tenant-id=11111111-1111-4111-8111-111111111111",
+				"x-tenant-id=11111111-1111-4111-8111-111111111111 x-gocell-principal=",
 		},
 		{
-			name:       "no tenant, no query",
-			method:     http.MethodGet,
-			path:       "/internal/v1/resource",
-			rawQuery:   "",
-			callerCell: "accesscore",
-			tenantID:   "",
-			want:       "GET /internal/v1/resource 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id=",
+			name:            "no tenant, no query, no principal",
+			method:          http.MethodGet,
+			path:            "/internal/v1/resource",
+			rawQuery:        "",
+			callerCell:      "accesscore",
+			tenantID:        "",
+			principalHeader: "",
+			want:            "GET /internal/v1/resource 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id= x-gocell-principal=",
 		},
 		{
-			name:       "with tenant and canonicalized query",
-			method:     http.MethodGet,
-			path:       "/api",
-			rawQuery:   "b=2&a=1",
-			callerCell: "accesscore",
-			tenantID:   tenantSignA,
-			want:       "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id=11111111-1111-4111-8111-111111111111",
+			name:            "with tenant and canonicalized query, no principal",
+			method:          http.MethodGet,
+			path:            "/api",
+			rawQuery:        "b=2&a=1",
+			callerCell:      "accesscore",
+			tenantID:        tenantSignA,
+			principalHeader: "",
+			want: "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore " +
+				"x-tenant-id=11111111-1111-4111-8111-111111111111 x-gocell-principal=",
 		},
 		{
-			name:       "no tenant, with query",
-			method:     http.MethodGet,
-			path:       "/api",
-			rawQuery:   "b=2&a=1",
-			callerCell: "accesscore",
-			tenantID:   "",
-			want:       "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id=",
+			name:            "no tenant, with query, no principal",
+			method:          http.MethodGet,
+			path:            "/api",
+			rawQuery:        "b=2&a=1",
+			callerCell:      "accesscore",
+			tenantID:        "",
+			principalHeader: "",
+			want:            "GET /api?a=1&b=2 1700000000 abcdef0123456789abcdef0123456789 accesscore x-tenant-id= x-gocell-principal=",
+		},
+		{
+			name:            "with tenant, no query, with principal",
+			method:          http.MethodGet,
+			path:            "/internal/v1/resource",
+			rawQuery:        "",
+			callerCell:      "accesscore",
+			tenantID:        tenantSignA,
+			principalHeader: "eyJhY3RvcklkIjoidXNyLWFiYyJ9",
+			want: "GET /internal/v1/resource 1700000000 abcdef0123456789abcdef0123456789 accesscore " +
+				"x-tenant-id=11111111-1111-4111-8111-111111111111 x-gocell-principal=eyJhY3RvcklkIjoidXNyLWFiYyJ9",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildServiceTokenMessage(tc.method, tc.path, tc.rawQuery, ts, nonce, tc.callerCell, tc.tenantID)
+			got := buildServiceTokenMessage(tc.method, tc.path, tc.rawQuery, ts, nonce, tc.callerCell, tc.tenantID, tc.principalHeader)
 			assert.Equal(t, tc.want, got, "canonical MAC message must match golden")
 		})
 	}

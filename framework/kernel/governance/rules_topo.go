@@ -682,10 +682,7 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 // runtime-injected instance, not statically expressible (ADR 1423 §214-219).
 //
 // Blind-spots:
-//  1. Production-shadowed by the interim TOPO-12 (blanket topology.remote ban)
-//     until US5 #1966 removes TOPO-12. Proven effective via synthetic unit tests
-//     until then.
-//  2. Structural-only gate: asserts cross-process pub/sub but cannot verify a
+//  1. Structural-only gate: asserts cross-process pub/sub but cannot verify a
 //     broker is actually wired (runtime concern, enforced by the bootstrap
 //     runtime gate). This causes TOPO-13 to over-constrain future broker-backed
 //     split topologies (US7 #1967 reconciliation tracked separately).
@@ -826,43 +823,4 @@ func isCrossProcessEventPair(pubLoc, subLoc metadata.CellLocation) bool {
 		return pubEP != subEP // same remote endpoint = same process
 	}
 	return true // one local + one remote → cross-process
-}
-
-// validateTOPO12 is the INTERIM fail-close gate for topology.remote.
-// Until US4 #1963 wires cross-process transport, a non-empty topology.remote
-// declaration cannot be honored — the cell would still be composed locally
-// (silent degrade). This rule rejects any assembly that declares topology.remote
-// at gocell validate time. US4 REMOVES this rule (+ its const + the codegen
-// call site) when it makes composition honor the partition.
-// The runtime DeploymentTopology API and ValidateTopologyStructure intentionally
-// still accept remote (US4-ready schema shape preserved).
-func (v *Validator) validateTOPO12() []ValidationResult {
-	var results []ValidationResult
-
-	keys := make([]string, 0, len(v.project.Assemblies))
-	for k := range v.project.Assemblies {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, asmID := range keys {
-		asm := v.project.Assemblies[asmID]
-		if asm == nil || len(asm.Topology.Remote) == 0 {
-			continue
-		}
-		results = append(results, v.newError(
-			codeTOPO12, IssueForbidden,
-			assemblyFile(asm),
-			"topology.remote",
-			fmt.Sprintf(
-				"assembly %q declares topology.remote (%d cell(s))"+
-					" which is not yet supported — cross-process transport lands in US4 #1963;"+
-					" cells are still composed locally (silent degrade)",
-				asm.ID, len(asm.Topology.Remote),
-			),
-			"remove topology.remote (only colocated is supported until US4 #1963),"+
-				" or keep all cells in topology.colocated",
-		))
-	}
-	return results
 }
