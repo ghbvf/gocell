@@ -1,4 +1,4 @@
-// F06: table-driven tests for buildInternalHMACRing behavior.
+// F06: table-driven tests for buildInternalServiceKeyring behavior.
 //
 // SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is required in ALL adapter modes.
 // Missing secret returns an error regardless of mode (no dev-mode silent bypass).
@@ -72,7 +72,7 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 
 			buf := captureSlogWarnLines(t)
 
-			ring, err := buildInternalHMACRing(tc.adapterMode)
+			ring, err := buildInternalServiceKeyring(tc.adapterMode)
 
 			if tc.wantErr {
 				require.Error(t, err,

@@ -129,14 +129,15 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 	// ConsumerClaimer: in-memory idempotency claimer (single-process only).
 	claimer := idempotency.NewInMemClaimer(clk)
 
-	// InternalHMACRing: dev HMAC key ring for /internal/v1/* service tokens.
+	// InternalServiceKeyring: dev master-derived keyring for /internal/v1/* service
+	// tokens (monolith; per-cell subkeys derived in-process via HKDF, #2153).
 	ring, err := auth.NewHMACKeyRing([]byte(devServiceSecret), nil)
 	if err != nil {
 		return nil, fmt.Errorf("HMAC key ring: %w", err)
 	}
 
 	// NonceStore: in-memory replay-defense store for /internal/v1/* service
-	// tokens. It lives on SharedDeps (alongside InternalHMACRing) so the same
+	// tokens. It lives on SharedDeps (alongside InternalServiceKeyring) so the same
 	// validated instance backs the internal-listener auth plan in
 	// starterRuntimeOptions — the runtime store and the control-plane-validated
 	// store are one, not two. Building a separate store in the RuntimeOptionsFunc
@@ -148,21 +149,21 @@ func buildStarterMemSharedDeps(_ context.Context) (*composition.SharedDeps, erro
 	}
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		JWTIssuer:            jwtIssuer,
-		JWTVerifier:          jwtVerifier,
-		MetricsProvider:      mp,
-		Publisher:            eb,
-		Subscriber:           eb,
-		ConfigEventCollector: cfgEventCollector,
-		ConsumerClaimer:      claimer,
-		InternalHMACRing:     ring,
-		NonceStore:           nonceStore,
-		PrimaryHTTPAddr:      starterPrimaryAddr,
-		InternalHTTPAddr:     starterInternalAddr,
-		HealthHTTPAddr:       starterHealthAddr,
-		VerboseDisabled:      true,
+		Clock:                  clk,
+		Topology:               topo,
+		JWTIssuer:              jwtIssuer,
+		JWTVerifier:            jwtVerifier,
+		MetricsProvider:        mp,
+		Publisher:              eb,
+		Subscriber:             eb,
+		ConfigEventCollector:   cfgEventCollector,
+		ConsumerClaimer:        claimer,
+		InternalServiceKeyring: ring,
+		NonceStore:             nonceStore,
+		PrimaryHTTPAddr:        starterPrimaryAddr,
+		InternalHTTPAddr:       starterInternalAddr,
+		HealthHTTPAddr:         starterHealthAddr,
+		VerboseDisabled:        true,
 		// EventbusCacheCollector / ConfigStaleCipherInc removed (#1413): configcore
 		// self-builds them from MetricsProvider (NopProvider here).
 		// PG / Redis are nil → all platform modules take the in-memory path.
@@ -236,7 +237,7 @@ func buildStarterBootstrapOpts(
 	// (the same validated instance built in buildStarterMemSharedDeps, not a fresh
 	// one) so the runtime auth plan and the control-plane-validated store cannot
 	// diverge (#1410 review F5).
-	svcTokenAuth, err := kauth.NewAuthServiceToken(shared.NonceStore, shared.InternalHMACRing)
+	svcTokenAuth, err := kauth.NewAuthServiceToken(shared.NonceStore, shared.InternalServiceKeyring)
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}

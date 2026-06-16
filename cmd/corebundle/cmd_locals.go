@@ -16,7 +16,7 @@ import (
 // modules read exclusively from composition.SharedDeps.
 //
 // Fields that the composition layer needs (MetricsProvider, JWTIssuer/Verifier,
-// InternalHMACRing, PG, Redis, ConsumerClaimer, etc.) are on composition.SharedDeps.
+// InternalServiceKeyring, PG, Redis, ConsumerClaimer, etc.) are on composition.SharedDeps.
 // Fields that only cmd-layer functions (defaultRuntimeOptions, buildAssembly,
 // runCorebundle defers, log functions) need are here.
 //

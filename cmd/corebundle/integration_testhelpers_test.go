@@ -113,8 +113,8 @@ func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	shared := &composition.SharedDeps{
-		InternalHMACRing: ring,
-		NonceStore:       nonceStore,
+		InternalServiceKeyring: ring,
+		NonceStore:             nonceStore,
 	}
 	chain, err := buildInternalAuthChain(shared)
 	require.NoError(t, err)

@@ -23,10 +23,10 @@ func configGetterTestDeps(t *testing.T, spec bootstrap.DeploymentTopologySpec, t
 	ring, err := auth.NewHMACKeyRing([]byte("test-hmac-key-32-bytes-long-xxxxx"), nil)
 	require.NoError(t, err)
 	return &composition.SharedDeps{
-		DeploymentTopology: spec,
-		InProcessTransport: tp,
-		InternalHMACRing:   ring,
-		Clock:              clock.Real(),
+		DeploymentTopology:     spec,
+		InProcessTransport:     tp,
+		InternalServiceKeyring: ring,
+		Clock:                  clock.Real(),
 	}
 }
 

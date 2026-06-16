@@ -74,19 +74,19 @@ func buildTestSharedDepsAndLocals(t *testing.T) (*composition.SharedDeps, *cmdLo
 	require.NoError(t, err)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                clock.Real(),
-		Topology:             mkTopo("", "memory", false),
-		JWTIssuer:            issuer,
-		JWTVerifier:          verifier,
-		MetricsProvider:      ps.metricProvider,
-		Publisher:            eb,
-		Subscriber:           eb,
-		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:     ring,
-		NonceStore:           nonceStore,
-		InternalHTTPAddr:     "127.0.0.1:9090",
-		HealthHTTPAddr:       "127.0.0.1:9091",
+		Clock:                  clock.Real(),
+		Topology:               mkTopo("", "memory", false),
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        ps.metricProvider,
+		Publisher:              eb,
+		Subscriber:             eb,
+		ConfigEventCollector:   configEventCollector,
+		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
+		InternalServiceKeyring: ring,
+		NonceStore:             nonceStore,
+		InternalHTTPAddr:       "127.0.0.1:9090",
+		HealthHTTPAddr:         "127.0.0.1:9091",
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
@@ -132,19 +132,19 @@ func newValidatedSharedDepsAndLocals(t *testing.T, topo bootstrap.Topology) (*co
 	eb2 := eventbus.New(clock.Real())
 
 	shared := &composition.SharedDeps{
-		Clock:                clock.Real(),
-		Topology:             topo,
-		JWTIssuer:            issuer,
-		JWTVerifier:          verifier,
-		MetricsProvider:      ps.metricProvider,
-		Publisher:            eb2,
-		Subscriber:           eb2,
-		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
-		InternalHMACRing:     ring,
-		NonceStore:           nonceStore,
-		InternalHTTPAddr:     "127.0.0.1:9090",
-		HealthHTTPAddr:       ":9091",
+		Clock:                  clock.Real(),
+		Topology:               topo,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        ps.metricProvider,
+		Publisher:              eb2,
+		Subscriber:             eb2,
+		ConfigEventCollector:   configEventCollector,
+		ConsumerClaimer:        idempotency.NewInMemClaimer(clock.Real()),
+		InternalServiceKeyring: ring,
+		NonceStore:             nonceStore,
+		InternalHTTPAddr:       "127.0.0.1:9090",
+		HealthHTTPAddr:         ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.
@@ -196,8 +196,8 @@ func TestBuildInternalAuthChain_NonNilSharedDeps_ReturnsServiceToken(t *testing.
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	shared := &composition.SharedDeps{
-		InternalHMACRing: ring,
-		NonceStore:       nonceStore,
+		InternalServiceKeyring: ring,
+		NonceStore:             nonceStore,
 	}
 	chain, err := buildInternalAuthChain(shared)
 	require.NoError(t, err)
@@ -214,8 +214,8 @@ func TestBuildInternalAuthChain_NoopNonceStoreRejected(t *testing.T) {
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
 	shared := &composition.SharedDeps{
-		InternalHMACRing: ring,
-		NonceStore:       auth.NewNoopNonceStore(),
+		InternalServiceKeyring: ring,
+		NonceStore:             auth.NewNoopNonceStore(),
 	}
 
 	_, err = buildInternalAuthChain(shared)

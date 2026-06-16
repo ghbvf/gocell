@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/ports"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
@@ -37,8 +38,8 @@ const (
 
 	msgTransportNil = "accesscore/http.NewHTTPConfigGetter: CellTransport is required (nil rejected); " +
 		"the composition root must inject the in-process or remote transport"
-	msgRingNil = "accesscore/http.NewHTTPConfigGetter: HMACKeyRing is required (nil rejected); " +
-		"the composition root must supply InternalHMACRing"
+	msgRingNil = "accesscore/http.NewHTTPConfigGetter: ServiceKeyring is required (nil rejected); " +
+		"the composition root must supply InternalServiceKeyring"
 )
 
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
@@ -54,16 +55,17 @@ type configEntryDataResponse struct {
 
 // HTTPConfigGetter calls configcore's internal GET /internal/v1/config/{key}
 // contract through the injected [transport.CellTransport] seam. It signs every
-// outbound request with a service token derived from the provided HMACKeyRing,
-// then hands the signed request to the transport — co-located it short-circuits
-// in process (no loopback TCP), split it dials configcore remotely (US5 #1966).
-// The transport never bypasses the auth chain, so signing stays here.
+// outbound request with a service token keyed by accesscore's per-cell subkey
+// (resolved from the provided ServiceKeyring, #2153), then hands the signed
+// request to the transport — co-located it short-circuits in process (no loopback
+// TCP), split it dials configcore remotely (US5 #1966). The transport never
+// bypasses the auth chain, so signing stays here.
 //
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
 type HTTPConfigGetter struct {
 	transport transport.CellTransport
-	ring      *auth.HMACKeyRing
+	ring      kauth.ServiceKeyring
 	clock     clock.Clock
 }
 
@@ -71,14 +73,14 @@ type HTTPConfigGetter struct {
 // transport (the composition root injects the in-process or remote impl chosen
 // from the deployment topology); ring signs the service-token Authorization
 // header.
-func NewHTTPConfigGetter(t transport.CellTransport, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
+func NewHTTPConfigGetter(t transport.CellTransport, ring kauth.ServiceKeyring, clk clock.Clock) *HTTPConfigGetter {
 	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetter")
 	// Strong deps fail-fast at construction (programmer/wiring error), not at the
 	// first request: a nil/typed-nil transport or a nil keyring is unrecoverable.
 	if validation.IsNilInterface(t) {
 		panic(panicregister.Approved("configgetter-transport-nil", errcode.Assertion(msgTransportNil)))
 	}
-	if ring == nil {
+	if validation.IsNilInterface(ring) {
 		panic(panicregister.Approved("configgetter-ring-nil", errcode.Assertion(msgRingNil)))
 	}
 	return &HTTPConfigGetter{

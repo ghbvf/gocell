@@ -83,20 +83,20 @@ func buildMemSharedDeps(t *testing.T) *composition.SharedDeps {
 	require.NoError(t, err)
 
 	shared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		JWTIssuer:            issuer,
-		JWTVerifier:          verifier,
-		MetricsProvider:      kernelmetrics.NopProvider{},
-		Publisher:            eb,
-		Subscriber:           eb,
-		ConfigEventCollector: obmetrics.NoopConfigEventCollector{},
-		ConsumerClaimer:      claimer,
-		InternalHMACRing:     ring,
-		PrimaryHTTPAddr:      ":8080",
-		InternalHTTPAddr:     "127.0.0.1:9090",
-		HealthHTTPAddr:       "127.0.0.1:9091",
-		VerboseDisabled:      true,
+		Clock:                  clk,
+		Topology:               topo,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        kernelmetrics.NopProvider{},
+		Publisher:              eb,
+		Subscriber:             eb,
+		ConfigEventCollector:   obmetrics.NoopConfigEventCollector{},
+		ConsumerClaimer:        claimer,
+		InternalServiceKeyring: ring,
+		PrimaryHTTPAddr:        ":8080",
+		InternalHTTPAddr:       "127.0.0.1:9090",
+		HealthHTTPAddr:         "127.0.0.1:9091",
+		VerboseDisabled:        true,
 	})
 	require.NoError(t, err)
 	return shared

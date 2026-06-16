@@ -78,7 +78,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
-	internalRing, err := buildInternalHMACRing(adapterMode)
+	internalKeyring, err := buildInternalServiceKeyring(adapterMode)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,29 +128,29 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// platform cell modules). The control-plane production checks (verbose /
 	// metrics tokens, internal-listener guard, nonce-store kind, claimer kind)
 	// now run inside NewSharedDeps → validate (#1410), reading the promoted
-	// InternalHMACRing + NonceStore + the self-reporting ConsumerClaimer.Kind().
+	// InternalServiceKeyring + NonceStore + the self-reporting ConsumerClaimer.Kind().
 	// Prometheus adapter types stay in cmdLocals.
 	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		DeploymentTopology:   generatedDeploymentTopology(),
-		JWTIssuer:            jwt.issuer,
-		JWTVerifier:          jwt.verifier,
-		MetricsProvider:      metricsDeps.PromStack.metricProvider,
-		Publisher:            transport.Publisher,
-		Subscriber:           transport.Subscriber,
-		ConfigEventCollector: metricsDeps.ConfigEventCollector,
-		ConsumerClaimer:      replay.ConsumerClaimer,
-		InternalHMACRing:     internalRing,
-		NonceStore:           replay.NonceStore,
-		PrimaryHTTPAddr:      primaryAddr,
-		InternalHTTPAddr:     internalAddr,
-		HealthHTTPAddr:       healthAddr,
-		HealthLocalOnly:      healthLocalOnly,
-		MetricsToken:         metricsToken,
-		VerboseToken:         verboseToken,
-		VerboseDisabled:      verboseDisabled,
-		ProjectRoot:          os.Getenv("GOCELL_PROJECT_ROOT"),
+		Clock:                  clk,
+		Topology:               topo,
+		DeploymentTopology:     generatedDeploymentTopology(),
+		JWTIssuer:              jwt.issuer,
+		JWTVerifier:            jwt.verifier,
+		MetricsProvider:        metricsDeps.PromStack.metricProvider,
+		Publisher:              transport.Publisher,
+		Subscriber:             transport.Subscriber,
+		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
+		ConsumerClaimer:        replay.ConsumerClaimer,
+		InternalServiceKeyring: internalKeyring,
+		NonceStore:             replay.NonceStore,
+		PrimaryHTTPAddr:        primaryAddr,
+		InternalHTTPAddr:       internalAddr,
+		HealthHTTPAddr:         healthAddr,
+		HealthLocalOnly:        healthLocalOnly,
+		MetricsToken:           metricsToken,
+		VerboseToken:           verboseToken,
+		VerboseDisabled:        verboseDisabled,
+		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
 	})
 	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",
