@@ -19,10 +19,10 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -33,10 +33,6 @@ import (
 
 // testTenantID is a canonical UUID used across integration tests.
 const testTenantIDStr = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-
-// t4DeadlineTimeout is the tiny per-request deadline T4 uses to force a
-// context-deadline-exceeded against a server that never responds (TEST-TIME-LITERAL-01).
-const t4DeadlineTimeout = 1 * time.Millisecond
 
 // testTenantID parses the shared test tenant ID (panics if invalid — a test
 // helper invoked at test init, not in production).
@@ -305,32 +301,54 @@ func TestRemoteIntegration_T3_ConnectionRefused(t *testing.T) {
 }
 
 // T4: ctx deadline exceeded → KindUnavailable.
+//
+// The server handler blocks on r.Context().Done() so the timeout fires while
+// waiting for the response (not in a racy dial window). A controllable cancel
+// is used to ensure the deadline fires only after the connection is established
+// and the server is blocking — making the test deterministic rather than relying
+// on a 1 ms wall-clock race.
 func TestRemoteIntegration_T4_CtxDeadline(t *testing.T) {
 	t.Parallel()
 
-	block := make(chan struct{})
+	// reqReceived signals that the server handler has been entered — the
+	// connection is established and the request is in-flight — so the test can
+	// cancel deterministically without a wall-clock sleep / timing race.
+	reqReceived := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-block
+		close(reqReceived)
+		<-r.Context().Done() // block until the client cancels.
 	}))
-	t.Cleanup(func() {
-		close(block)
-		srv.Close()
-	})
+	t.Cleanup(srv.Close)
 
 	resolver := transport.NewStaticResolver(map[string]string{"configcore": srv.URL})
 	tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, srv.Client(), nil, nil)
 
-	ctx, cancel := context.WithTimeout(context.Background(), t4DeadlineTimeout)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://ignored/x", nil)
-	_, err := tr.DoContract(ctx, "http.config.internal.get.v1", req)
-	if err == nil {
-		t.Fatal("expected error for deadline exceeded, got nil")
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://ignored/x", nil)
+		resp, err := tr.DoContract(ctx, "http.config.internal.get.v1", req)
+		ch <- result{resp, err}
+	}()
+
+	<-reqReceived // deterministic: handler reached, request in-flight.
+	cancel()
+
+	res := <-ch
+	if res.resp != nil {
+		_ = res.resp.Body.Close()
+	}
+	if res.err == nil {
+		t.Fatal("expected error for canceled ctx, got nil")
 	}
 	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	if !errors.As(res.err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", res.err, res.err)
 	}
 	if ec.Kind != errcode.KindUnavailable {
 		t.Errorf("Kind = %v, want KindUnavailable", ec.Kind)
@@ -436,6 +454,157 @@ func TestRemoteIntegration_T9_ResolverMiss_KindInternal(t *testing.T) {
 	}
 	if ec.Kind != errcode.KindInternal {
 		t.Errorf("Kind = %v, want KindInternal (wiring error)", ec.Kind)
+	}
+}
+
+// T10: nonce replay (FR-005) — a replayed service token is rejected with 401.
+//
+// The same signed Authorization header value is sent twice to a server that
+// has a NonceStore. The first request must succeed (200) and the second must
+// fail (401) because the nonce has already been consumed.
+func TestRemoteIntegration_T10_NonceReplay_Rejected(t *testing.T) {
+	t.Parallel()
+
+	ring := mustRing(t)
+	ns := mustNonceStore(t)
+	clk := clock.Real()
+	tid := mustTenantID(t)
+	srv := buildServer(t, ring, clk, ns)
+
+	resolver := transport.NewStaticResolver(map[string]string{"configcore": srv.URL})
+	tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, srv.Client(), nil, nil)
+
+	// Build two independent requests that carry the same Authorization header
+	// (same nonce embedded in the token) to simulate a replay.
+	// We sign the first request and extract the Authorization header value,
+	// then stamp it onto a second, fresh request.
+	req1 := signedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x", ring, tid, clk)
+	authHeader := req1.Header.Get("Authorization")
+	if authHeader == "" {
+		t.Fatal("Authorization header must be set after signing")
+	}
+
+	// First dispatch: should succeed (200).
+	resp1, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req1)
+	if err != nil {
+		t.Fatalf("T10 first DoContract: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Errorf("T10 first request: StatusCode = %d, want 200", resp1.StatusCode)
+	}
+
+	// Second dispatch: replay the same token (nonce already consumed → 401).
+	req2 := unsignedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x")
+	req2.Header.Set("Authorization", authHeader)
+	req2.Header.Set(auth.HeaderTenantID, tid.String())
+
+	resp2, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req2)
+	if err != nil {
+		t.Fatalf("T10 replay DoContract: %v (want nil error + 401 response)", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Errorf("T10 replay: StatusCode = %d, want 401 (nonce replay must be rejected)", resp2.StatusCode)
+	}
+}
+
+// T11: X-Gocell-Principal end-to-end — when DoContract carries a principal in
+// ctx, SignInternalRequest embeds it in X-Gocell-Principal; the server's
+// ServiceTokenMiddleware rebuilds actor/subject/session into the request context,
+// making them visible to the business handler.
+func TestRemoteIntegration_T11_PrincipalPropagation_EndToEnd(t *testing.T) {
+	t.Parallel()
+
+	ring := mustRing(t)
+	clk := clock.Real()
+	tid := mustTenantID(t)
+	ns := mustNonceStore(t)
+
+	const (
+		wantActor   = "usr-propagated-actor"
+		wantSubject = "usr-propagated-subject"
+		wantSession = "sess-propagated-123"
+	)
+
+	// Server that captures the principal fields rebuilt by ServiceTokenMiddleware.
+	var (
+		capturedActor   string
+		capturedSubject string
+		capturedSession string
+		mu              sync.Mutex
+	)
+
+	biz := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor, _ := ctxkeys.ActorIDFrom(r.Context())
+		subject, _ := ctxkeys.SubjectIDFrom(r.Context())
+		session, _ := ctxkeys.SessionIDFrom(r.Context())
+		mu.Lock()
+		capturedActor = actor
+		capturedSubject = subject
+		capturedSession = session
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+	})
+
+	guarded := auth.ServiceTokenMiddleware(ring, clk, auth.WithServiceTokenNonceStore(ns))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := auth.RequireCallerCell("accesscore")(r); err != nil {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			biz.ServeHTTP(w, r)
+		}),
+	)
+	srv := httptest.NewServer(guarded)
+	t.Cleanup(srv.Close)
+
+	resolver := transport.NewStaticResolver(map[string]string{"configcore": srv.URL})
+	tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, srv.Client(), nil, nil)
+
+	// Build a ctx with business principal fields (as injectPrincipalCtxKeys would
+	// set them after JWT auth).
+	ctx := ctxkeys.WithActorID(context.Background(), wantActor)
+	ctx = ctxkeys.WithSubjectID(ctx, wantSubject)
+	ctx = ctxkeys.WithSessionID(ctx, wantSession)
+
+	// Sign: SignInternalRequest encodes ctx principal into X-Gocell-Principal.
+	req := unsignedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x")
+	req = req.WithContext(ctx)
+	if err := auth.SignInternalRequest(ctx, ring, "accesscore", req, tid, clk); err != nil {
+		t.Fatalf("SignInternalRequest: %v", err)
+	}
+
+	// Check X-Gocell-Principal header was set before sending.
+	if req.Header.Get(auth.HeaderPrincipal) == "" {
+		t.Error("X-Gocell-Principal must be set when ctx has a principal")
+	}
+
+	resp, err := tr.DoContract(ctx, "http.config.internal.get.v1", req)
+	if err != nil {
+		t.Fatalf("T11 DoContract: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("T11 status = %d, want 200", resp.StatusCode)
+	}
+
+	mu.Lock()
+	gotActor := capturedActor
+	gotSubject := capturedSubject
+	gotSession := capturedSession
+	mu.Unlock()
+
+	if gotActor != wantActor {
+		t.Errorf("T11 server actor = %q, want %q", gotActor, wantActor)
+	}
+	if gotSubject != wantSubject {
+		t.Errorf("T11 server subject = %q, want %q", gotSubject, wantSubject)
+	}
+	if gotSession != wantSession {
+		t.Errorf("T11 server session = %q, want %q", gotSession, wantSession)
 	}
 }
 

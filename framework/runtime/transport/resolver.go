@@ -32,11 +32,11 @@ const msgResolverCellNotRemote = "static resolver: cellID has no remote endpoint
 // is immutable (WriteOnce) so concurrent Resolve calls require no
 // synchronization.
 //
-// Construction: use [NewStaticResolver] (from an explicit endpoint map) or
-// [NewStaticResolverFromEndpoints] (same). Callers in cellmodules/ that have
-// a [bootstrap.DeploymentTopology] use [cellmodules/celltransport.Resolve],
-// which extracts the remote endpoints and calls [NewStaticResolver] — keeping
-// the bootstrap→transport import direction intact.
+// Construction: use [NewStaticResolver] (from an explicit endpoint map).
+// Callers in cellmodules/ that have a [bootstrap.DeploymentTopology] use
+// [cellmodules/celltransport.Resolve], which extracts the remote endpoints
+// and calls [NewStaticResolver] — keeping the bootstrap→transport import
+// direction intact.
 type StaticResolver struct {
 	// endpoints is the immutable cellID→endpoint map. An endpoint is a bare
 	// host:port or an http(s):// URL (as stored in DeploymentTopology).

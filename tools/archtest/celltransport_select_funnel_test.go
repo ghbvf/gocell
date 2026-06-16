@@ -46,6 +46,37 @@ func TestCELLTRANSPORT_SELECT_FUNNEL_01_RedFixture(t *testing.T) {
 	t.Logf("RemoteHTTP RED fixture hit at line %d", line)
 }
 
+// TestCELLTRANSPORT_SELECT_FUNNEL_01_GreenAllowlist_SanctionedCallerNotFlagged
+// asserts that the sanctioned caller (cellmodules/celltransport/resolve.go) is
+// NOT flagged by CheckCelltransportSelectFunnel01 — i.e. the allowlist works
+// correctly and the allowlisted file produces zero diagnostics.
+//
+// Anti-vacuity companion: also asserts the scanned file set is non-empty, so a
+// broken scanner that returns an empty set cannot silently appear GREEN.
+func TestCELLTRANSPORT_SELECT_FUNNEL_01_GreenAllowlist_SanctionedCallerNotFlagged(t *testing.T) {
+	t.Parallel()
+
+	root := findModuleRoot(t)
+	files, err := scanner.DirsScope(root, celltransportWiringRoots).Files()
+	require.NoError(t, err, "DirsScope must succeed")
+
+	// Anti-vacuity: the scanned file set must contain at least one file so a
+	// broken scanner (returns empty set) does not silently pass.
+	require.NotEmpty(t, files,
+		"CELLTRANSPORT-SELECT-FUNNEL-01 GREEN: scanned file set is empty — "+
+			"the scanner is broken or celltransportWiringRoots point at non-existent dirs")
+
+	// The sanctioned caller must not appear in the diagnostics.
+	diags := CheckCelltransportSelectFunnel01(t, ConfigForExternalCell{})
+	for _, d := range diags {
+		if len(d.Rel) >= len("cellmodules/celltransport/") &&
+			d.Rel[:len("cellmodules/celltransport/")] == "cellmodules/celltransport/" {
+			t.Errorf("sanctioned caller %s was flagged by CELLTRANSPORT-SELECT-FUNNEL-01 "+
+				"at line %d — allowlist is broken: %s", d.Rel, d.Line, d.Message)
+		}
+	}
+}
+
 // TestCELLTRANSPORT_SELECT_FUNNEL_01_NoDotImportBlindSpot closes the dot-import
 // blind spot: a dot-import of runtime/transport would make NewRemoteHTTP a bare
 // ident the SelectorExpr scan misses. Asserts no production file in the wiring

@@ -30,25 +30,25 @@ assemblies and requires no configuration change.
 - **Endpoint format** (syntactic only): remote cell endpoints must be a bare
   `host:port` or an `http`/`https` URL with a non-empty host. Other schemes
   (e.g. `grpc://`) are rejected. Production TLS enforcement is US6 #1964.
-- **Remote placement fail-closed** (INTERIM): declaring `topology.remote` fails
-  `gocell validate` and `gocell generate` until US4 #1963 wires transport.
+- **Remote placement**: declaring `topology.remote` is now production-reachable.
+  US4 #1963 wired in-process transport selection; US5 #1966 added the
+  `RemoteHTTPTransport` and removed the TOPO-12 fail-close gate. A real event
+  broker is required for split topologies (TOPO-13).
 
-## Current status: `topology.remote` is fail-closed (until US4 #1963)
+## Current status: `topology.remote` is production-reachable (US5 #1966)
 
-`topology.remote` is part of the schema (US4-ready shape) but **currently
-fail-closed**: declaring any `remote` cell in `assembly.yaml` fails both
-`gocell validate` and `gocell generate` with an error until US4 #1963 wires
-cross-process transport. Without that transport, cells declared as remote would
-still be composed locally (silent degrade), which is worse than a clear error.
+`topology.remote` is now active. US4 #1963 wired topology-gated transport
+selection (`celltransport.Resolve`) and in-process dispatch; US5 #1966
+introduced `RemoteHTTPTransport` + `StaticResolver` and removed the TOPO-12
+fail-close gate. Both `topology.colocated` and `topology.remote` are honored
+by `gocell validate`, `gocell generate`, and the composition root.
 
-**Only `topology.colocated` (or omitting `topology` entirely) is honored now.**
-
-US4 #1963 removes the fail-close gate (TOPO-12 rule + one codegen check) when
-it makes composition honor the partition.
+A split topology requires a real event broker (TOPO-13 enforces this). See the
+§Split topology requirements section below for the full infrastructure checklist.
 
 ## Endpoint format
 
-Remote cell endpoints (when US4 lands) must be a **bare `host:port`** or an
+Remote cell endpoints must be a **bare `host:port`** or an
 **`http`/`https` URL with a non-empty host**. Other schemes (e.g. `grpc://`) are
 rejected. This is a **syntactic** check only — production TLS/mTLS enforcement
 for remote endpoints is handled separately by US6 #1964 (see ADR
@@ -63,18 +63,14 @@ Four governance rules enforce deployment topology:
 |------|---------------|
 | **TOPO-10** | Structural validity: mutual exclusion, exhaustive partition, valid endpoints |
 | **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell reachable (colocated or remote) within that assembly |
-| **TOPO-12** | INTERIM: topology.remote fail-closed until US4 #1963 wires transport |
-| **TOPO-13** | Broker-mandatory static gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
+| **TOPO-13** | Active broker gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
 
-Run `gocell validate` to check all four. TOPO-12 fires if any assembly declares
-`topology.remote`; remove it until US4 lands. TOPO-13 runs normally in
-`gocell validate` and would fire on cross-process event pub/sub, but its trigger
-condition (split topology with cross-process event pub/sub) is currently
-**unreachable** because TOPO-12 issues a blanket rejection of all
-`topology.remote` declarations first — TOPO-13 is not disabled, it simply has
-no valid input to check until TOPO-12 is removed. Correctness is proven by
-synthetic RED/GREEN unit tests. When TOPO-12 is removed (US5 #1966), TOPO-13
-becomes the event-specific broker guard for split topologies.
+Run `gocell validate` to check all three. TOPO-12 (the former topology.remote
+fail-close gate) was removed by US5 #1966 — `topology.remote` is now
+production-reachable. TOPO-13 is the active event-specific broker gate for split
+topologies: it fires when a split topology uses an in-memory EventBus for a
+cross-process event contract. Correctness is proven by synthetic RED/GREEN unit
+tests.
 
 ## Example YAML
 
@@ -96,7 +92,7 @@ topology:
       # or: endpoint: "https://auditcore.internal/"
 ```
 
-## Split topology requirements (future — US4 #1963 + US5 #1966)
+## Split topology requirements (US4 #1963 + US5 #1966, now active)
 
 When cells are split across processes, the following infrastructure is required:
 
@@ -115,15 +111,20 @@ When cells are split across processes, the following infrastructure is required:
   broker" closed). The runtime gate is a coarse proxy: it fires on any remote
   cell, even one with only sync (no cross-process events); a precise
   codegen-derived signal is a follow-up (US7 #1967).
-- **Remote sync transport** (US4 #1963 / US5 #1966): a remote dispatch
-  transport layer for synchronous cross-cell calls (planned, not yet
-  implemented). US4 also removes the TOPO-12 fail-close gate.
+- **Remote sync transport** (US4 #1963 + US5 #1966, active): US4 wired
+  topology-gated transport selection (`celltransport.Resolve`) and the
+  in-process dispatch path. US5 added `RemoteHTTPTransport` + `StaticResolver`
+  for synchronous cross-cell HTTP calls. The TOPO-12 fail-close gate was removed
+  by US5. Composition roots wire the transport via `celltransport.Resolve`
+  (CELLTRANSPORT-SELECT-FUNNEL-01 enforces this at PR-time).
 - **TLS/mTLS enforcement** (US6 #1964): production transport security for
-  remote endpoints. The endpoint syntax check (TOPO-10) is syntactic-only;
-  non-loopback TLS enforcement is deferred to US6.
+  remote endpoints. Bare `host:port` endpoints currently default to plaintext
+  HTTP; bearer/principal headers are integrity-protected by MAC but not
+  confidential. Non-loopback TLS enforcement is wired by US6.
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
-split topology in production. `topology.remote` is fail-closed until US4 lands.
+split topology in production. `topology.remote` is production-reachable as of
+US5 #1966, pending US6 #1964 for TLS enforcement.
 
 **Diagnosing broker status via `/readyz?verbose`**: the framework-level
 `Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/idutil"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // TestEncodePrincipalHeader verifies round-trip encoding of PrincipalMetadata.
@@ -286,6 +287,50 @@ func TestHandleServiceToken_PrincipalHeaderRebuild(t *testing.T) {
 	assert.Equal(t, "usr-real", capturedActor, "business actor must be propagated")
 	assert.Equal(t, "usr-real", capturedSubject, "business subject must be propagated")
 	assert.Equal(t, "sess-abc", capturedSession, "business session must be propagated")
+}
+
+// TestSignInternalRequest_WithCanonicalTenant verifies that SignInternalRequest
+// sets the X-Tenant-ID header to the canonical UUID string representation of a
+// non-empty TenantID, and that the resulting token verifies correctly under the
+// same ring (round-trip).
+func TestSignInternalRequest_WithCanonicalTenant(t *testing.T) {
+	t.Parallel()
+
+	ring := mustTestRing(t, testHMACKey, "")
+	clk := clockmock.New(time.Now())
+
+	const canonicalTenantStr = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+	tid, err := tenant.ParseTenantID(canonicalTenantStr)
+	require.NoError(t, err, "must parse canonical tenant UUID")
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/config/mykey", nil)
+	signErr := SignInternalRequest(context.Background(), ring, "accesscore", req, tid, clk)
+	require.NoError(t, signErr)
+
+	// X-Tenant-ID header must equal the canonical UUID string.
+	gotTenantHeader := req.Header.Get(HeaderTenantID)
+	assert.Equal(t, canonicalTenantStr, gotTenantHeader,
+		"X-Tenant-ID header must equal canonical UUID string from TenantID.String()")
+
+	// Authorization header must be present.
+	assert.NotEmpty(t, req.Header.Get("Authorization"),
+		"Authorization header must be set")
+	assert.True(t, strings.HasPrefix(req.Header.Get("Authorization"), "ServiceToken "),
+		"Authorization must start with 'ServiceToken '")
+
+	// Round-trip: the signed request must verify under the same ring.
+	// Build a handler that returns 200 on verify success, and exercise it.
+	handler := ServiceTokenMiddleware(
+		ring, clk,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+	)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"signed request with canonical tenant must verify successfully (round-trip)")
 }
 
 // TestHandleServiceToken_TamperedPrincipalHeader_Rejected verifies that tampering

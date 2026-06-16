@@ -42,7 +42,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
-	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 const (
@@ -111,9 +110,12 @@ func rebuildPropagatedPrincipal(ctx context.Context, header string) context.Cont
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(header)
 	if err != nil {
-		// MAC-validated upstream; decode failure is a send-side bug.
-		slog.Debug("auth: rebuildPropagatedPrincipal: base64 decode failed",
-			slog.Any("error", err))
+		// MAC-validated upstream; decode failure is a send-side bug — Warn so
+		// it is ops-visible. Neither the raw error nor the header is logged: both
+		// derive from the (header-tainted) input, so emitting either is a PII +
+		// log-injection vector (gosec G706). The const message alone flags the
+		// send-side bug for triage.
+		slog.Warn("auth: rebuildPropagatedPrincipal: base64 decode failed")
 		return ctx
 	}
 	var pm outbox.PrincipalMetadata
@@ -185,7 +187,7 @@ func SignInternalRequest(
 	if callerCell == "" {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgSignEmptyCallerCell)
 	}
-	if validation.IsNilInterface(req) || req == nil {
+	if req == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgSignNilReq)
 	}
 

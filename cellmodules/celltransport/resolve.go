@@ -2,6 +2,7 @@ package celltransport
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
@@ -9,6 +10,13 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
+
+// remoteHTTPClientTimeout is the backstop timeout for the http.Client used in
+// remote transport. It is intentionally much larger than any typical caller
+// context budget (e.g. configclient 5s) so the caller's ctx cancellation fires
+// first in all normal paths. This value exists solely to prevent goroutine leaks
+// from unbounded-context callers — it is NOT a second per-request budget.
+const remoteHTTPClientTimeout = 30 * time.Second
 
 // Error messages — MESSAGE-CONST-LITERAL-01.
 const (
@@ -70,5 +78,5 @@ func Resolve(
 	}
 
 	resolver := transport.NewStaticResolver(map[string]string{cellID: endpoint})
-	return transport.NewRemoteHTTP(clk, cellID, resolver, &http.Client{}, metrics, tracer), nil
+	return transport.NewRemoteHTTP(clk, cellID, resolver, &http.Client{Timeout: remoteHTTPClientTimeout}, metrics, tracer), nil
 }

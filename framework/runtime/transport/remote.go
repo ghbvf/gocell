@@ -136,11 +136,13 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 
 	endpoint, err := t.resolver.Resolve(ctx, t.targetCellID)
 	if err != nil {
+		span.RecordError(err)
 		span.SetStatus(wrapper.StatusError, "resolver error")
 		return nil, err
 	}
 
 	if err := rewriteToAbsolute(req, endpoint); err != nil {
+		span.RecordError(err)
 		span.SetStatus(wrapper.StatusError, "URL rewrite failed")
 		return nil, err
 	}
@@ -150,8 +152,10 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 	// This is the intended cross-cell dial, not an SSRF sink.
 	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G704: see rationale above (operator-configured endpoint)
 	if err != nil {
+		dialErr := wrapDialError(contractID, t.targetCellID, err)
+		span.RecordError(dialErr)
 		span.SetStatus(wrapper.StatusError, "dial failed")
-		return nil, wrapDialError(contractID, t.targetCellID, err)
+		return nil, dialErr
 	}
 
 	// Success: record metric and set span attributes. 5xx marks span StatusError
@@ -190,6 +194,10 @@ func rewriteToAbsolute(req *http.Request, endpoint string) error {
 		return nil
 	}
 	// Bare host:port — default to http (TLS enforcement is US6 #1964).
+	// Security note: postgres topology bare host:port walks over plaintext HTTP,
+	// so bearer/principal headers are confidential only within a private network.
+	// MAC (X-Gocell-ServiceToken) ensures integrity but NOT confidentiality;
+	// mTLS confidentiality is wired by US6 #1964.
 	req.URL.Scheme = "http"
 	req.URL.Host = endpoint
 	return nil

@@ -43,8 +43,8 @@ func TestResolve_Colocated(t *testing.T) {
 	}
 }
 
-// TestResolve_Remote verifies that a remote cellID returns a non-nil CellTransport
-// (RemoteHTTPTransport) distinct from inProc.
+// TestResolve_Remote verifies that a remote cellID returns a non-nil
+// *transport.RemoteHTTPTransport distinct from inProc.
 func TestResolve_Remote(t *testing.T) {
 	t.Parallel()
 
@@ -68,6 +68,33 @@ func TestResolve_Remote(t *testing.T) {
 	if got == transport.CellTransport(inProc) {
 		t.Error("Resolve returned inProc for a remote cell — expected a RemoteHTTPTransport")
 	}
+	// Type assertion: must be *transport.RemoteHTTPTransport, not the inProc impl.
+	if _, ok := got.(*transport.RemoteHTTPTransport); !ok {
+		t.Errorf("Resolve returned %T for remote cell, want *transport.RemoteHTTPTransport", got)
+	}
+}
+
+// TestResolve_NilClockPanics verifies that passing a nil clock to Resolve
+// triggers a registered panic (clock.MustHaveClock inside Resolve).
+func TestResolve_NilClockPanics(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil clock in celltransport.Resolve, got none")
+		}
+	}()
+
+	topo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"configcore"},
+	})
+	if err != nil {
+		t.Fatalf("NewDeploymentTopology: %v", err)
+	}
+
+	inProc := transport.NewInProcess(nil)
+	// nil clock must panic via clock.MustHaveClock("celltransport.Resolve").
+	_, _ = celltransport.Resolve(topo, "configcore", inProc, nil, nil, nil)
 }
 
 // TestResolve_UnclassifiedCellReturnsKindInternal verifies defense-in-depth for
