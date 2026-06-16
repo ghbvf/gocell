@@ -36,9 +36,13 @@ func NewCrossCellObs(metrics *Metrics, tracer wrapper.Tracer) CrossCellObs {
 // Metrics returns the shared transport metrics (may be nil → no recording).
 func (o CrossCellObs) Metrics() *Metrics { return o.metrics }
 
-// Tracer returns the bundle's tracer. It is non-nil for any bundle produced by
-// [NewCrossCellObs]; a zero-value bundle returns nil (consumers degrade nil to
-// NoopTracer).
+// Tracer returns the bundle's tracer. Two cases, by construction path:
+//   - a bundle minted by [NewCrossCellObs] always returns a non-nil tracer (nil
+//     input was normalized to wrapper.NoopTracer{} at mint time) — this is the
+//     production path (composition.Builder always mints via NewCrossCellObs).
+//   - a zero-value CrossCellObs{} (test-only "no observability" input) returns
+//     nil; the sole consumer [NewRemoteHTTP] degrades a nil tracer to NoopTracer,
+//     so a zero-value bundle is functionally equivalent to NewCrossCellObs(nil, nil).
 func (o CrossCellObs) Tracer() wrapper.Tracer { return o.tracer }
 
 // msgEndpointDialInvalid — MESSAGE-CONST-LITERAL-01.

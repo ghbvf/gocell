@@ -202,6 +202,9 @@ func TestResolve_Remote_PropagatesTracer(t *testing.T) {
 	if !rec.hasAttr("transport_mode", "remote") {
 		t.Error("remote DoContract span missing transport_mode=remote attr (tracer not propagated)")
 	}
+	if !rec.hasAttr("contract.id", "http.config.internal.get.v1") {
+		t.Error("remote DoContract span missing contract.id attr")
+	}
 }
 
 // --- #2251 P2.7: remote-peer readiness probe ---

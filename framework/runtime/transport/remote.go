@@ -158,7 +158,7 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 	// The request host was rewritten from the resolver's endpoint, which derives
 	// from the operator-configured (sealed) deployment topology — not user input.
 	// This is the intended cross-cell dial, not an SSRF sink.
-	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G704: see rationale above (operator-configured endpoint)
+	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G107: sealed-topology endpoint, not user input (see above)
 	if err != nil {
 		dialErr := classifyDialError(contractID, t.targetCellID, err)
 		t.metrics.Record(ctx, modeRemote, dialOutcome(err))

@@ -171,9 +171,10 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 
 	// (c) Same field NAMES but one field RETYPED: proves that type-string drift is
 	// caught at constant field count, not just count drift. Clock is retyped from
-	// clock.Clock → string; all other 20 field names are preserved. This red case
-	// demonstrates that exportedFieldTypeStrings detects type-string divergence,
-	// not just field-set membership divergence.
+	// clock.Clock → string; all other 24 field names (the full golden set) are
+	// preserved so the ONLY divergence is Clock's type. This red case demonstrates
+	// that exportedFieldTypeStrings detects type-string divergence, not just
+	// field-set membership divergence.
 	type sharedDepsRetypedClock struct {
 		Clock                string // was clock.Clock — intentional type perturbation
 		Topology             string
@@ -192,6 +193,8 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 		PrimaryHTTPAddr      string
 		InternalHTTPAddr     string
 		InProcessTransport   string
+		Tracer               string
+		TransportObs         string
 		HealthHTTPAddr       string
 		MetricsToken         string
 		VerboseToken         string
@@ -201,7 +204,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
-		"%s anti-vacuity (type drift): a struct with the same 23 field names but Clock "+
+		"%s anti-vacuity (type drift): a struct with the same 25 field names but Clock "+
 			"retyped to string must NOT match the golden — proves type-string drift detection, "+
 			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
 

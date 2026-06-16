@@ -2,6 +2,7 @@ package celltransport
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -21,6 +22,14 @@ import (
 // first in all normal paths. This value exists solely to prevent goroutine leaks
 // from unbounded-context callers — it is NOT a second per-request budget.
 const remoteHTTPClientTimeout = 30 * time.Second
+
+// remoteReadinessDialTimeout is the backstop dial timeout for the readiness
+// probe. DialContext uses the earlier of this and the ctx deadline, so the
+// /readyz aggregator deadline (bootstrap.WithReadyzDeadline) still binds when
+// tighter; this backstop only guards a caller that passes a deadline-less ctx,
+// preventing a SYN-blackhole peer from hanging the probe until the kernel TCP
+// timeout (#2251 review F2).
+const remoteReadinessDialTimeout = 3 * time.Second
 
 // Error messages — MESSAGE-CONST-LITERAL-01.
 const (
@@ -111,18 +120,22 @@ func Resolve(
 func remoteReadiness(cellID, endpoint string) (lifecycle.ManagedResource, error) {
 	target, err := transport.EndpointDialTarget(endpoint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("celltransport: remote readiness dial target for cell %q: %w", cellID, err)
 	}
 	name, err := healthz.RemoteCellReadyProbeName(cellID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("celltransport: remote readiness probe name for cell %q: %w", cellID, err)
 	}
 	probe := healthz.NewProbe(name, func(ctx context.Context) error {
-		conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", target)
+		conn, dialErr := (&net.Dialer{Timeout: remoteReadinessDialTimeout}).DialContext(ctx, "tcp", target)
 		if dialErr != nil {
 			return dialErr
 		}
-		return conn.Close()
+		// A successful dial alone proves TCP reachability; a Close error is a
+		// local cleanup concern unrelated to peer health, so it must NOT degrade
+		// readiness (#2251 review F1).
+		_ = conn.Close()
+		return nil
 	})
 	return remoteReadinessResource{probe: probe}, nil
 }
