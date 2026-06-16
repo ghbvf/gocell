@@ -165,11 +165,25 @@ func TestValidateTopologyStructure(t *testing.T) {
 			asm: assemblyWith(cells, metadata.TopologyMeta{
 				Colocated: []string{"alpha"},
 				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "https://svc.internal:9000/api"},
+					{CellID: "beta", Endpoint: "https://svc.internal:9000"},
 					{CellID: "gamma", Endpoint: "host:8080"},
 				},
 			}),
 			wantErr: false,
+		},
+		{
+			// #1966 review P2.9: an endpoint carrying a path/query/fragment would
+			// be silently truncated by the remote transport (only scheme+host are
+			// kept), so it is rejected at config-validation time (fail-closed).
+			name: "endpoint with path => error",
+			asm: assemblyWith(cells, metadata.TopologyMeta{
+				Colocated: []string{"alpha"},
+				Remote: []metadata.TopologyRemoteEntry{
+					{CellID: "beta", Endpoint: "https://svc.internal:9000/api"},
+					{CellID: "gamma", Endpoint: "host:8080"},
+				},
+			}),
+			wantErr: true,
 		},
 		{
 			name: "remote entry with grpc:// scheme (non-http/https) => error",
