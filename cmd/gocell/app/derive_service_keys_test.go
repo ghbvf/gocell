@@ -302,6 +302,16 @@ func TestRunDeriveServiceKeys_InvalidCell(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestRunDeriveServiceKeys_NoCallers_Succeeds covers the outbound-only cell path:
+// omitting --callers is valid (the cell accepts no inbound internal calls) and the
+// command succeeds while printing a stderr notice so an accidental omission is visible.
+func TestRunDeriveServiceKeys_NoCallers_Succeeds(t *testing.T) {
+	t.Setenv(auth.EnvServiceSecret, testMasterSecret)
+	t.Setenv(auth.EnvServiceSecretPrevious, "")
+	err := runDeriveServiceKeys(context.Background(), []string{"--cell", "accesscore"})
+	require.NoError(t, err, "omitting --callers is valid (no inbound) and must succeed")
+}
+
 // TestRunDeriveServiceKeys_ValidProducesShellBlock is an integration test that
 // runs the full command via Dispatch and asserts the stdout output contains the
 // expected export lines.
