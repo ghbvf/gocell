@@ -477,6 +477,9 @@ func (s *LedgerStore) Query(
 	if err := ledger.ValidateQueryTenant(t); err != nil {
 		return nil, err
 	}
+	if err := ledger.ValidateQueryFilters(filters); err != nil {
+		return nil, err
+	}
 	if err := vis.Validate(); err != nil {
 		return nil, err
 	}

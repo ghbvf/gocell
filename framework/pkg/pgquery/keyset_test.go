@@ -269,9 +269,14 @@ func requireCursorInvalid(t *testing.T, err error, reason string) {
 	var got *errcode.Error
 	require.ErrorAs(t, err, &got)
 	assert.Equal(t, errcode.ErrCursorInvalid, got.Code)
-	reasonAttr, ok := got.FindAttr("reason")
-	require.True(t, ok)
-	s, ok := reasonAttr.Value().(string)
-	require.True(t, ok, "reason must be a string value")
-	assert.Equal(t, reason, s)
+
+	// Regression guard for #1103: reason must NOT appear in the public/wire
+	// details surface. FindAttr searches only e.Details (public), so
+	// ok==false proves the reason is not leaking via the 4xx response.
+	_, ok := got.FindAttr("reason")
+	assert.False(t, ok, "reason must not be in public Details (wire-leaking regression)")
+
+	// The reason text must still be present on the internal surface (Error()
+	// includes InternalDetails under the "_" sentinel key).
+	assert.Contains(t, got.Error(), reason, "reason must still surface in Error() for server-side diagnostics")
 }

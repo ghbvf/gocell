@@ -74,11 +74,22 @@ func WithCrossTenantStore(s ledger.CrossTenantQueryStore) ServiceOption {
 // txRunner for the tenant-scoped RunInTx that activates FORCE RLS on reads.
 // opts are optional ServiceOption values; currently WithCrossTenantStore is the
 // only supported option.
+//
+// logger is an OPTIONAL dependency normalized to slog.Default() when nil — the
+// "optional dependency gets a default in the constructor" pattern (go-standards.md).
+// This is the single chokepoint every s.logger consumer (LogCursorError and the
+// admin-breadcrumb logAdminAuditQuery) flows through, so a nil logger can never be
+// dereferenced downstream (e.g. logAdminAuditQuery's logger.InfoContext). Mirrors
+// log/slog's top-level Info/InfoContext, which fall back to the default logger
+// rather than requiring callers to hold a non-nil *Logger.
 func NewService(
 	store ledger.QueryStore, codec *query.CursorCodec, logger *slog.Logger,
 	txRunner persistence.CellTxManager, runMode query.RunMode,
 	opts ...ServiceOption,
 ) (*Service, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{store: store, codec: codec, txRunner: txRunner, logger: logger, runMode: runMode}
 	for _, o := range opts {
 		o(s)

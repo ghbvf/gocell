@@ -228,6 +228,28 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 	return copyEntry(e), nil
 }
 
+// validateQueryArgs validates the mandatory preconditions shared by all MemStore
+// query paths. Extracted from Query to keep cognitive complexity ≤ 15.
+func validateQueryArgs(t tenant.TenantID, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) error {
+	if err := ValidateQueryTenant(t); err != nil {
+		return err
+	}
+	if err := ValidateQueryFilters(filters); err != nil {
+		return err
+	}
+	if err := vis.Validate(); err != nil {
+		return err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return RowScopeAllUnsupportedError()
+	}
+	if len(params.Sort) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger: query requires a non-empty sort")
+	}
+	return nil
+}
+
 // Query returns entries matching the supplied filters using keyset cursor
 // pagination: candidates are filtered, sorted by params.Sort, then ApplyCursor
 // skips past params.CursorValues and returns up to params.FetchLimit() (Limit+1)
@@ -241,18 +263,8 @@ func (m *MemStore) Query(
 	_ context.Context, t tenant.TenantID, vis tenant.RowVisibility,
 	filters AuditFilters, params query.ListParams,
 ) ([]*Entry, error) {
-	if err := ValidateQueryTenant(t); err != nil {
+	if err := validateQueryArgs(t, vis, filters, params); err != nil {
 		return nil, err
-	}
-	if err := vis.Validate(); err != nil {
-		return nil, err
-	}
-	if vis.Scope() == tenant.RowScopeAll {
-		return nil, RowScopeAllUnsupportedError()
-	}
-	if len(params.Sort) == 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: query requires a non-empty sort")
 	}
 
 	m.mu.Lock()

@@ -1901,3 +1901,290 @@ func TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough(t *testing.T) {
 	wantTo := "2026-06-30T23:59:59Z"
 	assert.Equal(t, wantTo, filters.To.UTC().Format(time.RFC3339), "to must reach the cross-tenant store")
 }
+
+// --- Issue #2199: empty Payload must not cause 5xx ---
+
+// TestHandleQuery_EmptyPayload_Returns200 is the regression guard for #2199:
+// an audit entry with nil/empty Payload must not cause 5xx when ToMap tries to
+// marshal an empty json.RawMessage. The fix ensures toListResponseDataItem leaves
+// the Payload field nil when the redacted bytes are empty, so ToMap omits the key
+// and json.Marshal never sees an empty RawMessage.
+//
+// Additionally, items WITH a non-empty payload must still render correctly in the
+// same response.
+func TestHandleQuery_EmptyPayload_Returns200(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// Entry with nil payload (pre-populated rows or framework events may have none).
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-nil-1", EventID: "evt-ep-nil-1", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base,
+		Payload:   nil, // empty / absent payload
+	}))
+	// Entry with empty-slice payload.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-nil-2", EventID: "evt-ep-nil-2", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base.Add(time.Minute),
+		Payload:   []byte{}, // zero-length payload
+	}))
+	// Entry with a non-empty payload — must still render the payload key.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "ep-data-3", EventID: "evt-ep-data-3", EventType: "event.test.v1",
+		ActorID:   "usr-ep",
+		Timestamp: base.Add(seedThirdEntryOffset),
+		Payload:   []byte(`{"k":"v"}`),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-ep", nil)
+	req = req.WithContext(auditTestCtx("usr-ep", nil))
+	mux.ServeHTTP(w, req)
+
+	require.Equalf(t, http.StatusOK, w.Code, "#2199: empty-payload entry must not cause 5xx; body=%s", w.Body.String())
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 3, "all three entries must be present")
+
+	for _, item := range resp.Data {
+		eventID, _ := item["eventId"].(string)
+		if eventID == "evt-ep-data-3" {
+			// Non-empty payload must appear as a valid JSON value.
+			_, hasPayload := item["payload"]
+			assert.True(t, hasPayload, "item with non-empty payload must include 'payload' key")
+		} else {
+			// Empty-payload items must NOT include the 'payload' key (omit nil).
+			_, hasPayload := item["payload"]
+			assert.False(t, hasPayload, "item %s with empty payload must NOT include 'payload' key", eventID)
+		}
+	}
+}
+
+// --- Issue #1742: actorId/subjectId/traceId/eventType input validation ---
+
+// maxIDLen matches idutil.MaxMetadataIDLen (256). Redeclared here as a
+// test-local const rather than importing idutil so tests stay in the auditquery
+// package and match the "mock in same-package test file" convention. The actual
+// enforcement uses idutil.SafeID(x).Validate() whose cap is MaxMetadataIDLen.
+const testMaxIDLen = 256
+
+// TestHandleQuery_FilterValidation_IDFormats is a table-driven test that verifies
+// the wire-boundary validation introduced for #1742 (CWE-117 log injection + SQL
+// predicate hygiene). Invalid actorId/subjectId/traceId (too long or unsafe chars)
+// must return 400 BEFORE any logging of the untrusted input occurs. Valid inputs
+// must pass through and produce 200.
+//
+// Critically: the validation MUST run BEFORE logAdminAuditQuery logs req.ActorID
+// (CWE-117 — never log unvalidated input). The ordering is: validate → log →
+// query. A 400 for an invalid filter means the log never fires.
+func TestHandleQuery_FilterValidation_IDFormats(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Seed one entry so a valid query returns 200 with data.
+	base := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "fv-1", EventID: "evt-fv-1", EventType: "event.test.v1",
+		ActorID: "admin-user", Timestamp: base, Payload: []byte("{}"),
+	}))
+
+	tooLong := func(n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = 'a'
+		}
+		return string(b)
+	}
+
+	tests := []struct {
+		name       string
+		param      string // query param to set
+		value      string
+		wantStatus int
+		wantCode   string // error code in JSON when wantStatus != 200
+	}{
+		// --- actorId ---
+		{
+			name:  "actorId too long",
+			param: "actorId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		// Space is outside the SafeID charset (ASCII letters, digits, ._:/-).
+		{
+			name:  "actorId unsafe chars (space)",
+			param: "actorId", value: "usr injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		// '@' is outside the SafeID charset.
+		{
+			name:  "actorId unsafe chars (at-sign)",
+			param: "actorId", value: "usr@injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "actorId valid (self)",
+			param: "actorId", value: "admin-user",
+			wantStatus: http.StatusOK,
+		},
+		{
+			// Exactly at MaxMetadataIDLen (256) is allowed; one over is rejected.
+			name:  "actorId exactly at max len is valid",
+			param: "actorId", value: tooLong(testMaxIDLen),
+			wantStatus: http.StatusOK,
+		},
+		// --- subjectId ---
+		{
+			name:  "subjectId too long",
+			param: "subjectId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "subjectId unsafe chars (bracket)",
+			param: "subjectId", value: "subject[injection]",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "subjectId valid",
+			param: "subjectId", value: "victim-user",
+			wantStatus: http.StatusOK,
+		},
+		// --- traceId ---
+		{
+			name:  "traceId too long",
+			param: "traceId", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "traceId unsafe chars (semicolon)",
+			param: "traceId", value: "trace;injection",
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "traceId valid",
+			param: "traceId", value: "trace-abc-123",
+			wantStatus: http.StatusOK,
+		},
+		// --- eventType: length cap only (dotted label, not SafeID charset) ---
+		{
+			name:  "eventType too long (length cap)",
+			param: "eventType", value: tooLong(testMaxIDLen + 1),
+			wantStatus: http.StatusBadRequest, wantCode: "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:  "eventType valid dotted label",
+			param: "eventType", value: "some.event.v1",
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Build the request using net/url.Values to correctly percent-encode
+			// special characters (spaces, brackets, etc.) in query param values,
+			// avoiding httptest.NewRequest panicking on raw control characters.
+			// For non-self actorId we need an admin with allow-all authorizer.
+			ctx := auditTestCtx("admin-user", []string{"admin"})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+			// Set RawQuery after construction so the value is properly encoded.
+			qv := req.URL.Query()
+			qv.Set(tc.param, tc.value)
+			req.URL.RawQuery = qv.Encode()
+			req = req.WithContext(ctx)
+			mux.ServeHTTP(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code, "case %q body=%s", tc.name, w.Body.String())
+			if tc.wantCode != "" {
+				var resp struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.Equal(t, tc.wantCode, resp.Error.Code, "case %q", tc.name)
+			}
+		})
+	}
+}
+
+// TestHandleQuery_FilterValidation_ValidationBeforeLogging asserts the CWE-117
+// ordering: when actorId is invalid, the handler must return 400 WITHOUT logging
+// the untrusted actorId value. This is a smoke test for the correct call order
+// (validate → log, never log → validate).
+func TestHandleQuery_FilterValidation_ValidationBeforeLogging(t *testing.T) {
+	store := newHandlerStore(t)
+
+	capture := &testCaptureHandler{}
+	log := slog.New(capture)
+
+	svc, err := NewService(store, testCodec(), log, outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Use a malformed actorId (unsafe chars — '@' is outside SafeID charset)
+	// so validation returns 400 before logging.
+	malformedActor := "actor@injection"
+
+	// Admin context so logAdminAuditQuery would fire IF we got past validation.
+	ctx := auditTestCtx("admin-user", []string{"admin"})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	qv := req.URL.Query()
+	qv.Set("actorId", malformedActor)
+	req.URL.RawQuery = qv.Encode()
+	req = req.WithContext(ctx)
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "invalid actorId must return 400; body=%s", w.Body.String())
+
+	// No log record should contain the malformed actor value — if validation fired
+	// before logging, logAdminAuditQuery was never called with the bad input.
+	for _, rec := range capture.records {
+		rec.Attrs(func(a slog.Attr) bool {
+			assert.NotContains(t, a.Value.String(), malformedActor,
+				"malformed actorId must not appear in any log record (CWE-117)")
+			return true
+		})
+	}
+}
+
+// TestList_NilLogger_AdminQuery_NoPanic is the regression guard for the codex F1
+// finding: the admin audit-query breadcrumb (logAdminAuditQuery) switched from the
+// nil-safe package-level slog.InfoContext to an injected logger.InfoContext, so a
+// Service constructed with a nil logger would nil-panic on the admin path. NewService
+// now normalizes a nil logger to slog.Default(), so the dereference is safe.
+//
+// The admin-with-empty-actorId case is the exact branch that panicked: it hits
+// `case actorIDFilter == "":` → logger.InfoContext("audit: admin querying all actors").
+func TestList_NilLogger_AdminQuery_NoPanic(t *testing.T) {
+	store := newHandlerStore(t)
+
+	// nil logger: pre-fix this nil-panics inside logAdminAuditQuery.InfoContext.
+	svc, err := NewService(store, testCodec(), nil, outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Admin with NO actorId filter → logAdminAuditQuery fires the "querying all
+	// actors" breadcrumb, dereferencing the (formerly nil) injected logger.
+	ctx := auditTestCtx("admin-user", []string{"admin"})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(ctx)
+
+	require.NotPanics(t, func() { mux.ServeHTTP(w, req) },
+		"admin audit query must not panic when the Service was built with a nil logger")
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}

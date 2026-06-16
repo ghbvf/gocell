@@ -173,37 +173,23 @@ func QueryContext(pairs ...string) string {
 }
 
 // cursorInvalidMsg is the stable, client-facing message for all cursor
-// validation failures. Specific diagnostics go into errcode.Error.Details
-// so they appear in the response "details" field without polluting "message".
+// validation failures. Runtime diagnostic details (reason, got, want) are
+// server-only and must never reach the wire — they go to WithInternal only.
 const cursorInvalidMsg = "invalid cursor; restart from first page (client should discard stored cursor)"
 
 // cursorInvalid returns a standardized cursor error with a stable client-facing
-// message and diagnostic reason in the details field. The reason is also set as
-// an InternalDetail under the "_" sentinel key so it appears in server-side
-// logs via Error().
+// message. The reason is set as an InternalDetail under the "_" sentinel key so
+// it appears in server-side logs via Error() but is never emitted on the wire.
+//
+// By design there is no API to attach public wire details to a cursor-invalid
+// error — all diagnostic detail goes to WithInternal only, making keyset-structure
+// leaks non-expressible (#1103).
 func cursorInvalid(reason string) error {
 	return errcode.New(
 		errcode.KindInvalid,
 		errcode.ErrCursorInvalid,
 		cursorInvalidMsg,
 		errcode.WithInternal(errcode.InternalAttr("_", reason)),
-		errcode.WithDetails(errcode.PublicString("reason", reason)),
-	)
-}
-
-// cursorInvalidExtra returns a standardized cursor error with extra diagnostic
-// attributes appended after the reason key. The reason attribute is appended
-// last so dashboards can rely on it appearing in a stable position.
-func cursorInvalidExtra(reason string, extra ...errcode.PublicDetail) error {
-	attrs := make([]errcode.PublicDetail, 0, len(extra)+1)
-	attrs = append(attrs, extra...)
-	attrs = append(attrs, errcode.PublicString("reason", reason))
-	return errcode.New(
-		errcode.KindInvalid,
-		errcode.ErrCursorInvalid,
-		cursorInvalidMsg,
-		errcode.WithInternal(errcode.InternalAttr("_", reason)),
-		errcode.WithDetails(attrs...),
 	)
 }
 
@@ -216,15 +202,15 @@ func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
 		return cursorInvalid("sort scope is required")
 	}
 	if expected := SortScope(sort); cur.Scope != expected {
-		return cursorInvalidExtra("sort scope mismatch",
-			errcode.PublicString("got", cur.Scope), errcode.PublicString("want", expected))
+		// got/want folded into internal reason — never exposed on wire (#1103).
+		return cursorInvalid(fmt.Sprintf("sort scope mismatch: got %q want %q", cur.Scope, expected))
 	}
 	if cur.Context == "" {
 		return cursorInvalid("query context is required")
 	}
 	if cur.Context != queryCtx {
-		return cursorInvalidExtra("query context mismatch",
-			errcode.PublicString("got", cur.Context), errcode.PublicString("want", queryCtx))
+		// got/want folded into internal reason — never exposed on wire (#1103).
+		return cursorInvalid(fmt.Sprintf("query context mismatch: got %q want %q", cur.Context, queryCtx))
 	}
 	if len(cur.Values) != len(sort) {
 		return cursorInvalid(fmt.Sprintf("has %d values but expected %d sort columns", len(cur.Values), len(sort)))

@@ -402,9 +402,11 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 // TestService_Query_CursorContextMismatch_SubjectID is the subjectId sibling of
@@ -441,9 +443,11 @@ func TestService_Query_CursorContextMismatch_SubjectID(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 // TestService_Query_CursorContextMismatch_TraceID is the traceId sibling of
@@ -481,9 +485,11 @@ func TestService_Query_CursorContextMismatch_TraceID(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 func newTestServiceWithLogBuf() (*Service, *ledger.MemStore, *bytes.Buffer) {
@@ -618,9 +624,11 @@ func TestService_Query_CursorContextMismatch_TenantID(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	reasonAttr, ok := ecErr.FindAttr("reason")
-	require.True(t, ok)
-	assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+	// Regression guard (#1103): reason must not be in public Details.
+	_, ok := ecErr.FindAttr("reason")
+	assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+	assert.Contains(t, ecErr.Error(), "query context mismatch",
+		"reason must still surface in Error() for server-side diagnostics")
 }
 
 // TestService_Query_CursorContextMismatch_RowScope is the row-visibility sibling
@@ -655,9 +663,11 @@ func TestService_Query_CursorContextMismatch_RowScope(t *testing.T) {
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
 		assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-		reasonAttr, ok := ecErr.FindAttr("reason")
-		require.True(t, ok)
-		assert.Equal(t, "query context mismatch", reasonAttr.Value().(string))
+		// Regression guard (#1103): reason must not be in public Details.
+		_, ok := ecErr.FindAttr("reason")
+		assert.False(t, ok, "reason must not appear in public Details (wire-leaking regression #1103)")
+		assert.Contains(t, ecErr.Error(), "query context mismatch",
+			"reason must still surface in Error() for server-side diagnostics")
 	}
 
 	t.Run("scope change self→tenant", func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
@@ -113,6 +114,53 @@ func ValidateQueryTenant(t tenant.TenantID) error {
 		return nil
 	}
 	return t.Validate()
+}
+
+// ValidateQueryFilters is the single fail-closed filter validation chokepoint
+// shared by every Store.Query backend (MemStore / PG LedgerStore / MultiStore)
+// AND by every CrossTenantQueryStore.QueryCrossTenant backend (MemCrossTenantStore
+// / AuditCrossTenantStore). It is the defense-in-depth counterpart to
+// ValidateQueryTenant: just as every backend calls ValidateQueryTenant to reject a
+// garbage tenant, every backend calls ValidateQueryFilters to reject garbage ID
+// filters before they reach SQL predicates or logs (CWE-117 log injection +
+// unbounded input to SQL predicate).
+//
+// Rules per field:
+//   - ActorID, SubjectID, TraceID: validated via idutil.SafeID.Validate (SafeID
+//     charset ASCII letters/digits/._:/- + MaxMetadataIDLen). Empty is allowed
+//     ("no filter"). The SafeID charset excludes newlines, tabs, control chars and
+//     most punctuation that could trigger log injection or SQL injection.
+//   - EventType: length cap only (len > MaxMetadataIDLen). EventType is a dotted
+//     label (e.g. "event.type.v1") — the dot and other separators are valid label
+//     chars but outside the SafeID charset, so charset validation is NOT applied.
+//     A length cap is the minimum hygiene that bounds database predicate size.
+//
+// Empty values for all fields are valid ("no filter").
+//
+// On any violation this function returns errcode.KindInvalid / ErrValidationFailed
+// with the offending field name in a WithInternal attr (never on wire).
+func ValidateQueryFilters(f AuditFilters) error {
+	if err := idutil.SafeID(f.ActorID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query filter: actorId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "actorId")))
+	}
+	if err := idutil.SafeID(f.SubjectID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query filter: subjectId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "subjectId")))
+	}
+	if err := idutil.SafeID(f.TraceID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query filter: traceId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "traceId")))
+	}
+	if len(f.EventType) > idutil.MaxMetadataIDLen {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query filter: eventType too long",
+			errcode.WithInternal(errcode.InternalAttr("field", "eventType")))
+	}
+	return nil
 }
 
 // QuerySort returns the canonical ordering for audit ledger listings: newest

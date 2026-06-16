@@ -90,6 +90,9 @@ func (m *MemCrossTenantStore) QueryCrossTenant(
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			errMsgCrossTenantObligation)
 	}
+	if err := ValidateQueryFilters(filters); err != nil {
+		return nil, err
+	}
 	if len(params.Sort) == 0 {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"audit ledger: cross-tenant query requires a non-empty sort")

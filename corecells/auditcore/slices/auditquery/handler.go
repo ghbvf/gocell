@@ -10,6 +10,7 @@ import (
 	cell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/idutil"
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/redaction"
@@ -73,11 +74,18 @@ func auditQueryPolicy(r *http.Request) error {
 // ledger (all actors, or a specific other user). Non-admins and admin-self
 // queries are silent. Factored out of List for cognitive-complexity budget.
 //
+// The logger parameter is the Service's injected *slog.Logger (not the global
+// slog default). Using the injected logger ensures that tests capturing the
+// injected logger can observe — and therefore guard — the CWE-117 ordering
+// invariant (validate before log). Using the global slog default would make
+// the TestHandleQuery_FilterValidation_ValidationBeforeLogging test vacuous:
+// breadcrumbs would go to global slog while the test watches the injected handler.
+//
 // Super-admin access is excluded from this breadcrumb: the mandatory FR-007
 // slog.Error cross-tenant audit is emitted inside p.CrossTenantVisibility on the
 // super-admin path. Emitting a second admin-breadcrumb would be redundant and
 // confusing (a lower-severity Info record for a higher-privilege event).
-func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorIDFilter string) {
+func logAdminAuditQuery(ctx context.Context, logger *slog.Logger, p *auth.Principal, subject, actorIDFilter string) {
 	if p.HasRole(auth.RoleSuperAdmin) {
 		return // FR-007 audit already emitted inside p.CrossTenantVisibility
 	}
@@ -86,9 +94,9 @@ func logAdminAuditQuery(ctx context.Context, p *auth.Principal, subject, actorID
 	}
 	switch {
 	case actorIDFilter == "":
-		slog.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
+		logger.InfoContext(ctx, "audit: admin querying all actors", slog.String("admin", subject))
 	case actorIDFilter != subject:
-		slog.InfoContext(ctx, "audit: admin querying other user",
+		logger.InfoContext(ctx, "audit: admin querying other user",
 			slog.String("admin", subject), slog.String("target_actor", actorIDFilter))
 	}
 }
@@ -187,7 +195,16 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	}
 	vis := vr.vis
 
-	logAdminAuditQuery(ctx, p, subject, req.ActorID)
+	// CWE-117 ordering: validate filter inputs BEFORE any logging of request
+	// fields (buildAuditFilters is the wire-boundary gate; logAdminAuditQuery
+	// must not receive unvalidated input — a malformed actorId would otherwise
+	// appear in log records before the 400 is returned).
+	filters, err := buildAuditFilters(req)
+	if err != nil {
+		return nil, err
+	}
+
+	logAdminAuditQuery(ctx, a.S.logger, p, subject, req.ActorID)
 
 	// Column masking (epic #1337 PR-12, FR-016/FR-017): derive the mask obligation
 	// from the row-visibility scope ONCE here — it gates both the query predicates
@@ -198,11 +215,6 @@ func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlis
 	// mask (full column view) — same as RowScopeTenant.
 	mask := auditFieldMask(vis.Scope())
 	if err := rejectMaskedFilters(mask, req); err != nil {
-		return nil, err
-	}
-
-	filters, err := buildAuditFilters(req)
-	if err != nil {
 		return nil, err
 	}
 
@@ -323,13 +335,27 @@ func rejectMaskedFilters(mask authz.FieldMask, req *auditlist.Request) error {
 	return nil
 }
 
-// buildAuditFilters parses the request time-range fields and constructs an
+// buildAuditFilters validates and parses the request filter fields into an
 // AuditFilters. Extracted from List to keep cognitive complexity ≤ 15.
+//
+// This is the wire-boundary validation gate (CWE-117 / #1742): it must run
+// BEFORE any logging of req fields. The handler's List function calls this
+// before logAdminAuditQuery so an invalid actorId is never logged.
+//
+// ID fields (actorId, subjectId, traceId): validated via idutil.SafeID.Validate
+// (SafeID charset + MaxMetadataIDLen length cap). Empty is allowed.
+//
+// eventType: length cap only (len > MaxMetadataIDLen). EventType is a dotted
+// label and uses characters outside the SafeID charset (e.g. dots), so only
+// a length cap is enforced here.
 //
 // Inbound from/to use RFC3339Nano (optional sub-second precision) so a caller
 // can round-trip a returned occurredAt/timestamp verbatim as a filter bound
 // without truncation.
 func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
+	if err := validateIDFilters(req); err != nil {
+		return ledger.AuditFilters{}, err
+	}
 	filters := ledger.AuditFilters{
 		EventType: req.EventType,
 		ActorID:   req.ActorID,
@@ -353,6 +379,46 @@ func buildAuditFilters(req *auditlist.Request) (ledger.AuditFilters, error) {
 		filters.To = t
 	}
 	return filters, nil
+}
+
+// validateIDFilters validates the ID-typed query filter parameters from the
+// wire request before any logging or store access. Extracted from buildAuditFilters
+// to keep cognitive complexity ≤ 15.
+//
+// Empty values are allowed ("no filter"). Violations yield KindInvalid /
+// ErrValidationFailed → HTTP 400 (already declared in contract.yaml).
+//
+// INTENTIONAL TWO-LAYER DESIGN: this function is the wire-boundary gate (layer 1).
+// It runs at the handler before any logging (CWE-117: never log unvalidated input)
+// and returns a client-facing 400. ledger.ValidateQueryFilters is the store-layer
+// defense-in-depth chokepoint (layer 2) shared by all backends including
+// CrossTenantQueryStore, guarding non-handler callers such as internal tooling,
+// direct store access, and cross-tenant read paths. Both layers call the same
+// idutil.SafeID validation and MaxMetadataIDLen cap — they must NOT be merged
+// (the handler layer must stay at the wire boundary; the ledger layer must stay
+// at the store entry). The apparent duplication is load-bearing security layering.
+func validateIDFilters(req *auditlist.Request) error {
+	if err := idutil.SafeID(req.ActorID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: actorId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "actorId")))
+	}
+	if err := idutil.SafeID(req.SubjectID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: subjectId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "subjectId")))
+	}
+	if err := idutil.SafeID(req.TraceID).Validate(); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: traceId format",
+			errcode.WithInternal(errcode.InternalAttr("field", "traceId")))
+	}
+	if len(req.EventType) > idutil.MaxMetadataIDLen {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid query parameter: eventType too long",
+			errcode.WithInternal(errcode.InternalAttr("field", "eventType")))
+	}
+	return nil
 }
 
 // requireAuditReadForCrossTenant enforces the audit:read PDP check unconditionally
@@ -479,7 +545,7 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	if !e.OccurredAt.IsZero() {
 		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
 	}
-	return &auditlist.ResponseDataItem{
+	item := &auditlist.ResponseDataItem{
 		ID:            e.ID,
 		EventID:       e.EventID,
 		EventType:     e.EventType,
@@ -491,8 +557,16 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		OccurredAt:    occurredAt,
 		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
 		Scope:         rowScope(e.TenantID),
-		Payload:       json.RawMessage(redaction.RedactPayload(e.Payload)),
 	}
+	// Only set Payload when redacted bytes are non-empty. An empty []byte stored
+	// as json.RawMessage in the any-typed Payload field is non-nil, so ToMap
+	// includes it and json.Marshal fails with "unexpected end of JSON input"
+	// (#2199). Leaving Payload nil means ToMap omits the key entirely via the
+	// `if i.Payload != nil` guard in generated/contracts/http/audit/list/v1/types_gen.go.
+	if raw := redaction.RedactPayload(e.Payload); len(raw) > 0 {
+		item.Payload = json.RawMessage(raw)
+	}
+	return item
 }
 
 // rowScope classifies an audit row relative to the calling tenant for the wire
