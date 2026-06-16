@@ -28,6 +28,10 @@ var _ certsigning.Signer = (*Signer)(nil)
 // NewSigner builds a Signer. clk is the positional clock (clock.MustHaveClock);
 // ca and ledger are required (a nil dependency fails fast). Inject a persistent
 // Ledger to retain renewal epochs across restarts; [NewMemLedger] is the dev default.
+//
+// The ledger MUST be the SAME instance passed to [NewRevocationStore] — revocation
+// can only see certificates this Signer recorded. Prefer [NewSoftCA], which wires
+// both halves over one Ledger so they cannot diverge.
 func NewSigner(clk clock.Clock, ca *CA, ledger Ledger) (*Signer, error) {
 	clock.MustHaveClock(clk, "softca.NewSigner")
 	if ca == nil {
@@ -61,7 +65,7 @@ func (s *Signer) Sign(ctx context.Context, authReq certsigning.AuthorizedCertReq
 	}
 	serial, err := randomSerial()
 	if err != nil {
-		return certsigning.IssuedCert{}, err
+		return certsigning.IssuedCert{}, errSignFailed("serial generation failed", err)
 	}
 	sans := req.SubjectAltNames()
 	tmpl := &x509.Certificate{

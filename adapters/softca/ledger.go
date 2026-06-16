@@ -22,12 +22,19 @@ import (
 type Ledger interface {
 	// Record persists an issuance (scope, serial, notAfter) and returns the
 	// renewal epoch: 0 for the first certificate issued under scope, prior+1 for
-	// each subsequent renewal.
+	// each subsequent renewal. Serials are unique by construction (random 159-bit);
+	// a duplicate serial within scope MUST fail closed in a persistent
+	// implementation — [MemLedger] overwrites it (safe only because a dev CA's
+	// state is ephemeral). A PG-backed Ledger should reject the collision.
 	Record(ctx context.Context, scope certsigning.CertScope, serial certsigning.Serial, notAfter time.Time) (epoch uint64, err error)
 
 	// Revoke marks an issued serial revoked within scope, at instant at. A serial
 	// not issued within scope fails closed (a cross-scope or unknown serial is
-	// treated as not found — 绝不凭裸 serial 跨隔离域).
+	// treated as not found — 绝不凭裸 serial 跨隔离域). Revocation is TERMINAL: every
+	// reason (including RFC 5280 certificateHold / removeFromCRL) marks the serial
+	// revoked — softca does NOT model the hold→un-hold lifecycle, so removeFromCRL
+	// does not lift a hold. Modeling held-vs-revoked state (without enabling
+	// un-revocation of a compromised key) is deferred to a later PR.
 	Revoke(
 		ctx context.Context,
 		scope certsigning.CertScope,
@@ -40,9 +47,11 @@ type Ledger interface {
 	// ordered by serial for deterministic CRL output.
 	Revoked(ctx context.Context, scope certsigning.CertScope) ([]certsigning.RevokedCertificate, error)
 
-	// Tidy removes revocation records within scope whose certificate notAfter is
-	// before the given instant (an expired certificate no longer needs to appear
-	// on a CRL).
+	// Tidy drops the whole record of any revoked certificate within scope whose
+	// notAfter is before the given instant — an expired certificate no longer needs
+	// to appear on a CRL (RFC 5280 §5.2.6). Non-revoked records are untouched. (The
+	// epoch counter is independent of the record set, so dropping expired records
+	// does not perturb renewal epochs.)
 	Tidy(ctx context.Context, scope certsigning.CertScope, before time.Time) error
 }
 

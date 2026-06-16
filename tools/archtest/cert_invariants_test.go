@@ -81,9 +81,13 @@
 // []byte / string (PEM) is NOT a typed-field match — the standing ceiling of a
 // field-type scan; (2) "only softca holds the key" is a caller/holder allowlist
 // (Medium), not type-expressible, because any package can syntactically declare
-// a crypto.Signer field. crypto.PrivateKey is matched safely: it is a DEFINED
-// named type (type PrivateKey any), so a field typed crypto.PrivateKey resolves
-// to that Named type — a bare `any` / `interface{}` field does NOT match.
+// a crypto.Signer field; (3) the scan is bounded to DIRECT importers of the seam
+// (pkgImports is one hop) — a package importing certsigning only transitively and
+// holding a key field is NOT flagged; direct-import is the deliberate scope (it
+// captures packages working with the seam without a transitive-closure walk).
+// crypto.PrivateKey is matched safely: it is a DEFINED named type
+// (type PrivateKey any), so a field typed crypto.PrivateKey resolves to that
+// Named type — a bare `any` / `interface{}` field does NOT match.
 package archtest
 
 import (

@@ -60,6 +60,11 @@ type CA struct {
 // NewDevCA generates an ephemeral in-memory two-tier CA (ECDSA P-256). It is the
 // zero-dependency dev/test default; the keys live only in this process and are
 // lost on restart. For persistence across restarts use [NewFileCA].
+//
+// On restart the trust anchor CHANGES, so every previously issued device
+// certificate becomes unverifiable and all enrolled devices must re-enroll — fine
+// for dev/test, but a reason to choose [NewFileCA] (paired with a persistent
+// [Ledger]) for anything longer-lived.
 func NewDevCA(clk clock.Clock) (*CA, error) {
 	clock.MustHaveClock(clk, "softca.NewDevCA")
 	return bootstrapCA(clk)
@@ -125,7 +130,7 @@ func bootstrapCA(clk clock.Clock) (*CA, error) {
 func selfSignRoot(now time.Time, key crypto.Signer) (*x509.Certificate, []byte, error) {
 	serial, err := randomSerial()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errCAInit("root serial generation failed", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -152,7 +157,7 @@ func selfSignRoot(now time.Time, key crypto.Signer) (*x509.Certificate, []byte, 
 func signIntermediate(now time.Time, rootCert *x509.Certificate, rootKey, interKey crypto.Signer) (*x509.Certificate, []byte, error) {
 	serial, err := randomSerial()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errCAInit("intermediate serial generation failed", err)
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
@@ -186,14 +191,12 @@ func (ca *CA) trustBundle() [][]byte {
 	}
 }
 
-// randomSerial returns a positive random certificate serial number.
+// randomSerial returns a positive random certificate serial number. It returns
+// the bare crypto/rand error so each caller can classify it in its own context
+// (CA bootstrap → ErrCertCAInit; leaf signing → ErrCertSignFailed).
 func randomSerial() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), serialBits)
-	serial, err := rand.Int(rand.Reader, limit)
-	if err != nil {
-		return nil, errCAInit("serial generation failed", err)
-	}
-	return serial, nil
+	return rand.Int(rand.Reader, limit)
 }
 
 // ── file custody ───────────────────────────────────────────────────────────
@@ -248,6 +251,13 @@ func loadFileCA(clk clock.Clock, dir string) (*CA, error) {
 func persistCA(dir string, ca *CA) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return errCAInit("create ca directory failed", err)
+	}
+	// MkdirAll does not tighten an already-existing directory; force 0700 so a
+	// pre-created 0755 dir cannot leave the key file names world-listable. 0700 is
+	// a DIRECTORY mode (traverse needs the execute bit); the key files themselves
+	// are written 0600.
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: 0700 is a directory mode, not a file mode; keys are 0600
+		return errCAInit("tighten ca directory perms failed", err)
 	}
 	if err := writeKey(filepath.Join(dir, rootKeyFile), ca.rootKey); err != nil {
 		return err

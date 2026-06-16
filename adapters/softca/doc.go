@@ -31,6 +31,9 @@
 //   - KMS / HSM custody is intentionally ABSENT (not a silent no-op stub): real
 //     hardware-backed key custody is a separate future adapter, designed when it
 //     lands so the export surface for key injection is not prematurely widened.
+//     A KMS-backed CA implements the same certsigning.Signer in its own
+//     adapters/<kms> package — injecting the hardware-held crypto.Signer there —
+//     rather than widening this package's API with a key setter.
 //
 //     ref: SPIRE pkg/server/ca (KeyManager — key never leaves the manager)
 //     ref: step-ca authority/sign.go (Authority.Sign; private key adapter-held)
@@ -50,7 +53,18 @@
 // does not expose, so it is not a redundant re-layering of the seam. The default
 // [MemLedger] is in-memory (a dev CA resets on restart); a PG-backed Ledger can
 // be injected (as a required constructor argument) to persist epochs and
-// revocations across restarts with no API change.
+// revocations across restarts with no API change. A persistent Ledger is only
+// meaningful alongside [NewFileCA] — pairing it with [NewDevCA] keeps epochs but
+// rotates the CA key on restart, so the persisted records reference a vanished
+// trust anchor.
+//
+// # Wiring
+//
+// Build the CA, then wire both seam halves over ONE shared Ledger via [NewSoftCA]
+// (so revocation sees the certs the signer issued):
+//
+//	ca, err := softca.NewDevCA(clk)            // or NewFileCA(clk, dir)
+//	signer, revStore, err := softca.NewSoftCA(clk, ca, softca.NewMemLedger())
 //
 // # Enforced invariants
 //

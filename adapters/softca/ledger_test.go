@@ -71,6 +71,52 @@ func TestMemLedger_RevokedSortedAndUTC(t *testing.T) {
 	require.Equal(t, time.UTC, list[0].RevokedAt.Location(), "RevokedAt normalized to UTC")
 }
 
+func TestMemLedger_TidyEdges(t *testing.T) {
+	t.Parallel()
+	ledger := softca.NewMemLedger()
+	ctx := context.Background()
+	scope := mustScope(t, testTenant, "device-1")
+	expired := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cutoff := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// Tidy on a scope with no records is a no-op (does not panic / error).
+	require.NoError(t, ledger.Tidy(ctx, scope, cutoff))
+
+	// A non-revoked, already-expired record must survive Tidy (only revoked
+	// expired records are dropped).
+	live, err := cs.NewSerial("0a")
+	require.NoError(t, err)
+	_, err = ledger.Record(ctx, scope, live, expired)
+	require.NoError(t, err)
+	require.NoError(t, ledger.Tidy(ctx, scope, cutoff))
+	// Still recordable/revocable → its record survived (not tidied as non-revoked).
+	require.NoError(t, ledger.Revoke(ctx, scope, live, cs.ReasonSuperseded(), cutoff))
+}
+
+func TestMemLedger_DoubleRevokeOverwrites(t *testing.T) {
+	t.Parallel()
+	ledger := softca.NewMemLedger()
+	ctx := context.Background()
+	scope := mustScope(t, testTenant, "device-1")
+	serial, err := cs.NewSerial("0b")
+	require.NoError(t, err)
+	notAfter := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	_, err = ledger.Record(ctx, scope, serial, notAfter)
+	require.NoError(t, err)
+
+	at1 := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	at2 := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, ledger.Revoke(ctx, scope, serial, cs.ReasonSuperseded(), at1))
+	// Re-revoke is idempotent overwrite (last reason / time win), not an error.
+	require.NoError(t, ledger.Revoke(ctx, scope, serial, cs.ReasonKeyCompromise(), at2))
+
+	list, err := ledger.Revoked(ctx, scope)
+	require.NoError(t, err)
+	require.Len(t, list, 1, "double-revoke does not duplicate the entry")
+	require.Equal(t, cs.ReasonKeyCompromise(), list[0].Reason, "last reason wins")
+	require.True(t, list[0].RevokedAt.Equal(at2.UTC()), "last revokedAt wins")
+}
+
 // hexN renders a small uint64 as a non-empty hex serial string.
 func hexN(n uint64) string {
 	const digits = "0123456789abcdef"

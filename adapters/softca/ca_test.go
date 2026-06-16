@@ -79,6 +79,12 @@ func TestNewFileCA_PartialMaterialFailsClosed(t *testing.T) {
 	require.Error(t, err, "partial CA material must fail closed")
 }
 
+func TestNewCA_NilClockPanics(t *testing.T) {
+	t.Parallel()
+	require.Panics(t, func() { _, _ = softca.NewDevCA(nil) }, "NewDevCA nil clock must panic")
+	require.Panics(t, func() { _, _ = softca.NewFileCA(nil, t.TempDir()) }, "NewFileCA nil clock must panic")
+}
+
 // trustRoot returns the DER of the CA's root certificate via the public trust bundle.
 func trustRoot(t *testing.T, clk *clockmock.FakeClock, ca *softca.CA) []byte {
 	t.Helper()
