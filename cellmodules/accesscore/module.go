@@ -106,7 +106,7 @@ func (m module) Provide(
 		return composition.ModuleResult{}, err
 	}
 
-	innerSessionStore, storageOpts, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
+	innerSessionStore, storageOpts, transportResources, err := resolveAccessStorageOpts(shared, sessionProto, accessOpts)
 	if err != nil {
 		return composition.ModuleResult{}, err
 	}
@@ -168,9 +168,14 @@ func (m module) Provide(
 	// fails before bootstrap.Run starts) from that one entry. The module does not
 	// call bootstrap.WithManagedResource itself (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
 	limiterRes := bootstrapLimiterResource{lim: rlLimiter}
+	// transportResources carries the remote config-getter peer readiness probe in
+	// split topology (#2251 P2.7); nil/empty when configcore is co-located. Build
+	// derives BOTH the steady-state WithManagedResource registration AND the
+	// pre-Run rollback stack from ModuleResult.Resources (single source).
+	resources := append([]kernellifecycle.ManagedResource{limiterRes}, transportResources...)
 	return composition.ModuleResult{
 		Cell:      c,
-		Resources: []kernellifecycle.ManagedResource{limiterRes},
+		Resources: resources,
 	}, nil
 }
 
@@ -226,49 +231,54 @@ func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *
 	return opts, sessionProto, nil
 }
 
-// accessPostgresOptions builds the postgres-specific accesscore options.
-func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session.Protocol) ([]accesscell.Option, session.Store, error) {
+// accessPostgresOptions builds the postgres-specific accesscore options. It also
+// returns any readiness ManagedResources the config-getter transport contributes
+// (a remote-peer probe in split topology; nil when co-located) so Provide can
+// surface them via ModuleResult.Resources (#2251 P2.7).
+func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session.Protocol) ([]accesscell.Option, session.Store, []kernellifecycle.ManagedResource, error) {
 	if shared.PG == nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
 			"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 	}
 	db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
 	if poolErr != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: %w", poolErr)
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: %w", poolErr)
 	}
 	txMgr := shared.PG.TxManager()
 	pgBundle, err := accesspg.NewBundle(db, txMgr, shared.Clock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGBundle: %w", err)
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGBundle: %w", err)
 	}
 	pgSessionStore, err := adapterpg.NewSessionStore(db, txMgr, sessionProto, shared.Clock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGSessionStore: %w", err)
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGSessionStore: %w", err)
 	}
 	pgRefreshStore, err := adapterpg.NewRefreshStore(
 		db, txMgr,
 		accesscell.DefaultRefreshPolicy(), shared.Clock, rand.Reader,
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
 	accessOpts := []accesscell.Option{
 		accesscell.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
 		accesscell.WithPGBundle(pgBundle),
 		accesscell.WithRefreshStore(pgRefreshStore),
 	}
-	// Wire the ConfigGetter through the in-process CellTransport seam (US4 #1963).
+	// Wire the ConfigGetter through the CellTransport seam (US4 #1963 / US5 #1966).
 	// signing uses shared.InternalHMACRing (promoted from cmd-private
 	// internalGuard.ring onto composition.SharedDeps); the transport carries the
 	// signed request to configcore's internal handler.
+	var resources []kernellifecycle.ManagedResource
 	if shared.InternalHMACRing != nil {
-		opts, err := wireConfigGetter(shared, accessOpts)
+		opts, res, err := wireConfigGetter(shared, accessOpts)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		accessOpts = opts
+		resources = res
 	}
-	return accessOpts, pgSessionStore, nil
+	return accessOpts, pgSessionStore, resources, nil
 }
 
 // configProviderCell is the cell that provides the internal config-get contract
@@ -284,56 +294,62 @@ const configProviderCell = "configcore"
 //
 // Previously (US4) the remote path fail-fast'ed with a placeholder error; US5
 // replaces that with the real celltransport.Resolve which handles both cases.
-func wireConfigGetter(shared *composition.SharedDeps, accessOpts []accesscell.Option) ([]accesscell.Option, error) {
+func wireConfigGetter(
+	shared *composition.SharedDeps, accessOpts []accesscell.Option,
+) ([]accesscell.Option, []kernellifecycle.ManagedResource, error) {
 	topo, err := bootstrap.NewDeploymentTopology(shared.DeploymentTopology)
 	if err != nil {
-		return nil, fmt.Errorf("accesscore: deployment topology: %w", err)
+		return nil, nil, fmt.Errorf("accesscore: deployment topology: %w", err)
 	}
 	// celltransport.Resolve is the single topology-gated entry for CellTransport
-	// selection (CELLTRANSPORT-SELECT-FUNNEL-01). The SHARED transport metrics
-	// (minted once by composition.Builder, reused — not re-registered) are threaded
-	// so a split-topology remote call emits cell_transport_requests_total{transport_mode=remote}
-	// per ADR D4 (#1966 review P1.3). The tracer stays nil: the cross-cell span
-	// tracer is late-bound at bootstrap phase5 (InProcessTransport.Bind) and is not
-	// available at module-Provide time, so remote span tracing is a tracked
-	// follow-up (#1966 review P1.3 span half); a nil tracer degrades to NoopTracer
-	// per the NewRemoteHTTP contract.
-	ct, err := celltransport.Resolve(topo, configProviderCell,
-		shared.InProcessTransport, shared.Clock, shared.TransportMetrics, nil)
+	// selection (CELLTRANSPORT-SELECT-FUNNEL-01). The SHARED cross-cell observability
+	// bundle (shared.TransportObs: transport metrics + tracer, minted once by
+	// composition.Builder) is threaded as ONE value so a split-topology remote call
+	// emits cell_transport_requests_total{transport_mode=remote} AND produces spans
+	// with the SAME tracer bootstrap wires for in-process calls — closing the ADR D4
+	// span half (#2251 P1.3, was a nil-tracer follow-up under #1966). Resolve also
+	// returns a TCP-dial readiness ManagedResource for the remote peer so an
+	// unreachable configcore degrades this cell's /readyz (#2251 P2.7); it is
+	// surfaced via ModuleResult.Resources by the Provide caller.
+	ct, resources, err := celltransport.Resolve(topo, configProviderCell,
+		shared.InProcessTransport, shared.Clock, shared.TransportObs)
 	if err != nil {
-		return nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
+		return nil, nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
 	}
 	return append(accessOpts,
-		configgetter.WithTransport(ct, shared.InternalHMACRing, shared.Clock)), nil
+		configgetter.WithTransport(ct, shared.InternalHMACRing, shared.Clock)), resources, nil
 }
 
-// resolveAccessStorageOpts selects postgres or memory storage options.
+// resolveAccessStorageOpts selects postgres or memory storage options. It also
+// returns any readiness ManagedResources the transport seam contributes (remote
+// config-getter peer probe in postgres split topology; nil in memory mode where
+// no cross-cell transport is wired) so Provide can surface them (#2251 P2.7).
 func resolveAccessStorageOpts(
 	shared *composition.SharedDeps,
 	sessionProto *session.Protocol,
 	base []accesscell.Option,
-) (session.Store, []accesscell.Option, error) {
+) (session.Store, []accesscell.Option, []kernellifecycle.ManagedResource, error) {
 	if shared.Topology.StorageBackend() == "postgres" {
-		pgOpts, pgSessionStore, err := accessPostgresOptions(shared, sessionProto)
+		pgOpts, pgSessionStore, resources, err := accessPostgresOptions(shared, sessionProto)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return pgSessionStore, append(base, pgOpts...), nil
+		return pgSessionStore, append(base, pgOpts...), resources, nil
 	}
 	sessionMemStore, err := session.NewMemStore(sessionProto, shared.Clock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
+		return nil, nil, nil, fmt.Errorf("accesscore: session.NewMemStore: %w", err)
 	}
 	refreshMemStore, err := refreshmem.New(accesscell.DefaultRefreshPolicy(), shared.Clock, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
+		return nil, nil, nil, fmt.Errorf("accesscore: refreshmem.New: %w", err)
 	}
 	base = append(
 		base,
 		accesscell.WithMemBundle(accessmem.NewBundle(shared.Clock)),
 		accesscell.WithRefreshStore(refreshMemStore),
 	)
-	return sessionMemStore, base, nil
+	return sessionMemStore, base, nil, nil
 }
 
 // wrapSessionStoreWithCache decides whether to wrap inner with the AUTH-CACHE-01

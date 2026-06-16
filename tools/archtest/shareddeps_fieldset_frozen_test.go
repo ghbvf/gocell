@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/framework/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (23 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields (25 exported fields)
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -95,6 +95,8 @@ var sharedDepsFrozenExportedFields = map[string]string{
 	"PrimaryHTTPAddr":      "string",
 	"InternalHTTPAddr":     "string",
 	"InProcessTransport":   "*transport.InProcessTransport",
+	"Tracer":               "wrapper.Tracer",
+	"TransportObs":         "transport.CrossCellObs",
 	"HealthHTTPAddr":       "string",
 	"MetricsToken":         "string",
 	"VerboseToken":         "string",

@@ -1,11 +1,15 @@
 package celltransport
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
-	"github.com/ghbvf/gocell/framework/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/kernel/healthz"
+	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/worker"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
@@ -37,46 +41,102 @@ const (
 //   - topo: the sealed deployment topology (obtained via
 //     bootstrap.NewDeploymentTopology from the assembly spec).
 //   - cellID: the target cell whose transport to resolve.
-//   - inProc: the shared in-process transport; must be non-nil (the composition
-//     root's Builder.Build always populates it).
+//   - inProc: the shared in-process transport; must be non-nil for a co-located
+//     cell (the composition root's Builder.Build always populates it).
 //   - clk: mandatory positional clock (clock.MustHaveClock, ADR clock-positional).
-//   - metrics: transport metrics for the remote transport; nil = no recording.
-//   - tracer: tracing backend for the remote transport; nil = no-op.
+//   - obs: the SINGLE-SOURCE cross-cell observability bundle (metrics + tracer)
+//     minted by composition.Builder. Passing one bundle (rather than separate
+//     metrics + tracer args) makes "wired metrics but forgot the tracer"
+//     unrepresentable at this boundary (#2251 P1.3). A zero-value bundle = no
+//     observability (nil metrics, NoopTracer).
 //
-// Selection logic:
+// Returns the selected transport plus the readiness ManagedResources it
+// contributes:
 //
-//   - co-located → returns inProc.
-//   - remote → builds and returns a *transport.RemoteHTTPTransport targeting
-//     the declared endpoint, using a transport.StaticResolver over the topology's
-//     remote endpoint map.
-//   - un-classified → returns (nil, KindInternal) as defense-in-depth (TOPO-11
+//   - co-located → (inProc, nil, nil): the in-process peer shares this process,
+//     so there is no remote endpoint to health-check.
+//   - remote → (RemoteHTTPTransport, [remote-readiness probe], nil): a TCP-dial
+//     readiness probe for the declared endpoint so an unreachable peer degrades
+//     this cell's /readyz (lets ops shed traffic) without killing liveness
+//     (#2251 P2.7).
+//   - un-classified → (nil, nil, KindInternal): defense-in-depth (TOPO-11
 //     normally prevents this at static-analysis time).
 func Resolve(
 	topo bootstrap.DeploymentTopology,
 	cellID string,
 	inProc *transport.InProcessTransport,
 	clk clock.Clock,
-	metrics *transport.Metrics,
-	tracer wrapper.Tracer,
-) (transport.CellTransport, error) {
+	obs transport.CrossCellObs,
+) (transport.CellTransport, []lifecycle.ManagedResource, error) {
 	clock.MustHaveClock(clk, "celltransport.Resolve")
 
 	if topo.IsColocated(cellID) {
 		if inProc == nil {
-			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				msgNilInProc,
 				errcode.WithInternal(errcode.InternalAttr("cellID", cellID)))
 		}
-		return inProc, nil
+		return inProc, nil, nil
 	}
 
 	endpoint, ok := topo.RemoteEndpoint(cellID)
 	if !ok {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+		return nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			msgUnclassifiedCell,
 			errcode.WithInternal(errcode.InternalAttr("cellID", cellID)))
 	}
 
+	readiness, err := remoteReadiness(cellID, endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	resolver := transport.NewStaticResolver(map[string]string{cellID: endpoint})
-	return transport.NewRemoteHTTP(clk, cellID, resolver, &http.Client{Timeout: remoteHTTPClientTimeout}, metrics, tracer), nil
+	ct := transport.NewRemoteHTTP(clk, cellID, resolver,
+		&http.Client{Timeout: remoteHTTPClientTimeout}, obs.Metrics(), obs.Tracer())
+	return ct, []lifecycle.ManagedResource{readiness}, nil
 }
+
+// remoteReadiness builds the TCP-dial readiness ManagedResource for a remote
+// peer endpoint. The dial target and typed probe name are resolved eagerly so an
+// invalid endpoint / cellID fails fast at Resolve time rather than per /readyz
+// invocation.
+//
+// The probe TCP-dials the peer's resolved host:port ONLY — it never issues an
+// HTTP /readyz — so it reports reachability without recursively importing the
+// peer's own readiness (cascade-safe: a peer that depends on this cell cannot
+// deadlock both /readyz endpoints). A failed dial degrades readiness (this cell
+// returns /readyz 503) but never kills liveness (the probe joins the readiness
+// aggregator, not a liveness gate).
+func remoteReadiness(cellID, endpoint string) (lifecycle.ManagedResource, error) {
+	target, err := transport.EndpointDialTarget(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	name, err := healthz.RemoteCellReadyProbeName(cellID)
+	if err != nil {
+		return nil, err
+	}
+	probe := healthz.NewProbe(name, func(ctx context.Context) error {
+		conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", target)
+		if dialErr != nil {
+			return dialErr
+		}
+		return conn.Close()
+	})
+	return remoteReadinessResource{probe: probe}, nil
+}
+
+// remoteReadinessResource adapts a single readiness probe to the ManagedResource
+// contract so a cell module can contribute it via ModuleResult.Resources
+// (WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01). It owns no background goroutine and
+// holds nothing to close: the endpoint is a startup-period snapshot of the sealed
+// (static) deployment topology, and the per-Check dial connection is closed in
+// the probe itself.
+type remoteReadinessResource struct {
+	probe healthz.Probe
+}
+
+func (r remoteReadinessResource) Probes() []healthz.Probe { return []healthz.Probe{r.probe} }
+func (remoteReadinessResource) Worker() worker.Worker     { return nil }
+func (remoteReadinessResource) Close(context.Context) error { return nil }

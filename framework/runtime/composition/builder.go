@@ -221,8 +221,10 @@ func (b *Builder) Build(
 	}
 	// Share the SAME *transport.Metrics with both the in-process holder and any
 	// remote transport a module resolves via celltransport.Resolve (#1966 P1.3):
-	// reuse, never re-register, the single counter.
-	shared.TransportMetrics = txMetrics
+	// reuse, never re-register, the single counter. The metrics is bundled with the
+	// (optional) tracer into the SINGLE-SOURCE CrossCellObs so a module cannot wire
+	// metrics while forgetting the tracer (#2251 P1.3).
+	shared.TransportObs = transport.NewCrossCellObs(txMetrics, shared.Tracer)
 	shared.InProcessTransport = transport.NewInProcess(txMetrics)
 
 	var cells []cell.Cell
@@ -275,6 +277,13 @@ func (b *Builder) Build(
 		bootstrap.WithDeploymentTopology(shared.DeploymentTopology),
 		bootstrap.WithInProcessTransport(shared.InProcessTransport),
 	)
+	//   4. WithTracer: when a tracer is configured, thread the SINGLE source
+	//      (shared.Tracer) into bootstrap so router/in-process/event-router tracing
+	//      use the SAME tracer the remote transport got via shared.TransportObs
+	//      (#2251 P1.3). Nil = no tracing (no option appended; seam-only default).
+	if shared.Tracer != nil {
+		cellOpts = append(cellOpts, bootstrap.WithTracer(shared.Tracer))
+	}
 
 	runtimeOpts, err := runtimeOptsFn(cells)
 	if err != nil {
