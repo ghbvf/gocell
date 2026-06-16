@@ -258,15 +258,23 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 				len(spec.MethodPermissions), spec.ContractID, spec.CellID)))
 	}
 
-	// Record the per-method public-auth overlay (#1675): spec.PublicMethods
-	// (cellgen-derived from endpoints.grpc.methods[] public:true entries, keyed
-	// identically to the attribution map's /{ServiceName}/{method}) become the
-	// auth interceptor's bypass set via IsPublicMethod. Referential integrity —
-	// each entry ∈ this spec's registered method set — is enforced at build time
-	// (contractgen pre-pass + cellgen golden + governance FMT-41) AND re-checked
-	// here at runtime (#2008, F2 defense-in-depth: a hand-written spec bypassing
-	// codegen, or a stale key, fails fast rather than carrying an inert entry).
-	// Recorded under the same write lock as the attribution map.
+	// Record the per-method public-auth (#1675) + ABAC permission (#2008) overlays
+	// under the same write lock as the attribution map.
+	r.recordMethodOverlays(spec, scoped)
+	return nil
+}
+
+// recordMethodOverlays records spec's per-method public-auth bypass set (#1675)
+// and ABAC permission overlay (#2008), validating each entry against the methods
+// the scoped registrar actually registered. Both maps are cellgen-derived and
+// keyed identically to the attribution map's /{ServiceName}/{method}; their
+// referential integrity is enforced at build time (contractgen pre-pass + cellgen
+// golden + governance FMT-41) AND re-checked here (#2008, F2 defense-in-depth: a
+// hand-written spec bypassing codegen, or a stale key, fails fast rather than
+// carrying an inert entry). Must be called under r.mu.
+func (r *ServiceRegistrar) recordMethodOverlays(spec cell.GRPCServiceSpec, scoped *cellScopedRegistrar) {
+	// IsPublicMethod bypass set: each entry must name a method this spec
+	// registered (a stale key would carry an inert bypass).
 	for _, m := range spec.PublicMethods {
 		if _, ok := scoped.localMethods[m]; !ok {
 			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
@@ -279,16 +287,10 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 		r.publicMethods[m] = struct{}{}
 	}
 
-	// Record the per-method ABAC permission overlay (#2008): spec.MethodPermissions
-	// (cellgen-derived from endpoints.grpc.methods[] permission entries, keyed
-	// identically to the attribution map) become the auth interceptor's PDP gate
-	// source via PermissionForMethod. Two fail-fast checks (both wiring bugs only
-	// reachable by a hand-written spec bypassing codegen, since contractgen +
-	// FMT-41 already guard the build): the full-method KEY must name a method this
-	// spec registered (F2 referential integrity — a stale key would DENY a
+	// PermissionForMethod PDP gate source: two fail-fast checks — the full-method
+	// KEY must name a method this spec registered (a stale key would DENY a
 	// non-existent RPC, a dead 403), and the permission VALUE must be a member of
-	// the closed authz registry. Recorded under the same write lock as the
-	// attribution map.
+	// the closed authz registry.
 	for method, permName := range spec.MethodPermissions {
 		if _, ok := scoped.localMethods[method]; !ok {
 			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
@@ -309,7 +311,6 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 		}
 		r.methodPermissions[method] = perm
 	}
-	return nil
 }
 
 // CellIDForMethod returns the cellID attributed to fullMethod (e.g.
