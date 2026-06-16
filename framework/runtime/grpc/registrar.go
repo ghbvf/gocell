@@ -171,6 +171,13 @@ func (r *ServiceRegistrar) BindServer(inner grpc.ServiceRegistrar) {
 //   - the cellScopedRegistrar is retained and used after the callback returns
 //     (escaped scope — would let registration leak past Serve):
 //     panicregister.Approved("grpc-registrar-escaped-scope", …).
+//   - a permission-gated spec is drained with no PDP Authorizer wired into the
+//     gRPC auth interceptor (#2008, F1 startup parity guard):
+//     panicregister.Approved("grpc-registrar-permission-gate-unwired", …).
+//   - a per-method public-auth (#1675) / ABAC permission (#2008) overlay entry
+//     names an unregistered method or an unknown permission — see the dedicated
+//     recordMethodOverlays helper (grpc-registrar-unknown-method-key /
+//     grpc-registrar-unknown-permission).
 //
 // Register must be called before grpcServer.Serve (enforced by the drain ordering:
 // bootstrap calls Register in phase7b before grpcServeAll). The scope is closed
@@ -232,7 +239,11 @@ func (r *ServiceRegistrar) Register(spec cell.GRPCServiceSpec) error {
 
 	// Each GRPCServiceSpec maps to exactly one gRPC service. Zero means the spec
 	// is declared but silently unserved; more than one means a single spec is
-	// smuggling multiple services past the contract/attribution model.
+	// smuggling multiple services past the contract/attribution model. This
+	// check is intentionally ordered BEFORE the permission-gate/overlay guards
+	// below: a malformed service count is the more fundamental wiring error, so
+	// it is the diagnostic surfaced first (the later guards re-run on the next
+	// drain once the spec shape is fixed).
 	if scoped.count != 1 {
 		panic(panicregister.Approved("grpc-registrar-service-count",
 			errcode.Assertion(

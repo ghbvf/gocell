@@ -99,6 +99,14 @@ const projectionWiringConsumerBaseOption = "WithConsumerBase"
 // TxRunner keeps todoorder + cmd/corebundle + the reverse fixture covered while
 // dropping the saga-journal false positive. See TestProjectionConsumerBaseWiring_
 // SagaJournalOnly_NoFire for the regression lock.
+//
+// Note: a saga-journal root that ALSO wires an outbox-coordinator option (e.g.
+// WithProjectionCheckpointStore) still fires — correctly, since it then runs the
+// outbox coordinator too and must wire WithConsumerBase.
+//
+// ref: framework/runtime/bootstrap/phases_projection.go — cellSnapshotsHave
+// Projections excludes ProjectionSourceSagaJournal; that phase6 gating is the
+// source of truth this exclusion tracks, so re-verify here if it changes.
 var projectionWiringOptions = map[string]bool{
 	"WithProjectionCheckpointStore": true,
 	"WithProjectionReplaySource":    true,
