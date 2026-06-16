@@ -217,6 +217,20 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   cell 在本进程、消费 cell 在 remote，或反之）即为 split。双闸 = 静态（`gocell validate` 遍历
   contractUsages 判跨进程 pub/sub）+ 启动期（bootstrap phase0，同形于 `runtime/bootstrap/topology.go`
   既有「postgres requires real adapter」耦合规则）拒绝。→ US3 #1965（blocked-by #1940）。
+
+  > **Amendment 2026-06-15（#2211，US3 加固）**：phase0 启动期闸 `validateSplitTopologyBroker` 的
+  > 「是否真实 broker」判定，由 #1965 的 `StorageBackend()=="postgres" ∧ non-nil pub/sub` 代理升级为
+  > **sealed `bootstrap.EventTransportKind` 事实**：`cellmodules/eventtransport.Resolve` 在构造 RabbitMQ
+  > transport 的同一分支 mint `RealBrokerEventTransport()`，composition root 经 `WithEventTransportKind`
+  > 透传 `Transport.Kind`，闸改查 `IsRealBroker()`。威胁矩阵重评：#1965 闸 godoc 记录的残留洞
+  > 「`StorageBackend==postgres` + 手注入 non-nil in-memory 实例（non-nil ≠ real broker）」对 honest
+  > wiring（经 Resolve）**已关闭**——Resolve 只在真实 broker 分支 mint real-broker kind；dishonest
+  > forge（直调 `RealBrokerEventTransport()` 配 in-mem 总线）由 caller-funnel archtest
+  > `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01` 守，生产侧另由既有 `COREBUNDLE-EVENTBUS-FUNNEL-01` depguard
+  > 使 in-mem 总线在生产 root **import 层不可表达**（Hard 端到端）。分层评级随之细化：sealed 构造 Hard、
+  > minter-单调用方结构性 Medium（跨模块 `framework`↔`cellmodules`，`internal/` 不可桥接 → 无低成本 Hard
+  > 路径，不立升级 issue）、闸运行时比较仍 Medium。「拓扑 × bus 类型 type system 不可表达」在 bus-realness
+  > 维度被 sealed-kind 收紧；「split 是否真有跨进程 *event*」（vs sync-only-remote 粗代理）仍属 US7 #1967。
 - **进程内跨 cell Go 直传 = 0 + gRPC 盲区收口 → Medium archtest。** 金丝雀
   `ModuleExports.BootstrapLedgerStore` 已删（PR #1467），archtest 收口直传=0 + 覆盖 #1752 引入的
   gRPC cross-cell 盲区。typed AST scan 即足，无低成本 Hard 化路径。→ US8 #1961。

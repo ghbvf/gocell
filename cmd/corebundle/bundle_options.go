@@ -51,6 +51,9 @@ func runtimeBaseOptions(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.Publisher),
 		bootstrap.WithSubscriber(shared.Subscriber),
+		// Sealed broker-kind fact (from eventtransport.Resolve via cmdLocals): the
+		// phase0 split-topology gate requires a real broker, not an in-process bus (#2211).
+		bootstrap.WithEventTransportKind(locals.eventTransportKind),
 		// ConsumerBase is field-injected into SubscriberWithMiddleware (not a
 		// middleware list entry). It is the explicit EntryHandler→SubscriberHandler
 		// conversion boundary: idempotency Claim/Commit/Release + retry live here,

@@ -106,10 +106,15 @@ When cells are split across processes, the following infrastructure is required:
   topology combined with an in-memory EventBus is rejected by a **double gate**:
   the static `gocell validate` rule TOPO-13 and a bootstrap **phase0 runtime
   gate** (`validateSplitTopologyBroker`) that fail-fasts when the deployment has
-  remote cells while `StorageBackend() != postgres` (the in-memory bus is
-  reachable only in non-postgres topology — #1940 funnel). The runtime gate is a
-  coarse proxy: it fires on any remote cell, even one with only sync (no
-  cross-process events); a precise codegen-derived signal is a follow-up.
+  remote cells while the resolved event transport is not a real broker. Since
+  #2211 that decision is the sealed `EventTransportKind` (minted only by
+  `eventtransport.Resolve`, threaded via `bootstrap.WithEventTransportKind`): the
+  gate checks `IsRealBroker()`, and an **unset** kind — e.g. a composition root
+  that declared remote cells but forgot the option — is fail-closed. This
+  replaced the earlier `StorageBackend() != postgres` proxy ("non-nil ≠ real
+  broker" closed). The runtime gate is a coarse proxy: it fires on any remote
+  cell, even one with only sync (no cross-process events); a precise
+  codegen-derived signal is a follow-up (US7 #1967).
 - **Remote sync transport** (US4 #1963 / US5 #1966): a remote dispatch
   transport layer for synchronous cross-cell calls (planned, not yet
   implemented). US4 also removes the TOPO-12 fail-close gate.

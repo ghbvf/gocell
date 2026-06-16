@@ -8,6 +8,7 @@ import (
 	promadapter "github.com/ghbvf/gocell/adapters/prometheus"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // cmdLocals holds cmd-private wiring that is NOT on composition.SharedDeps —
@@ -44,6 +45,14 @@ type cmdLocals struct {
 	// consumer that publishes/subscribes through the broker drain (registered later
 	// via cell opts → close first), and before the PG pool closes (#1940).
 	brokerResources []kernellifecycle.ManagedResource
+
+	// eventTransportKind is the sealed broker-kind fact resolved by
+	// eventtransport.Resolve (real broker in postgres mode, in-memory in demo).
+	// runtimeBaseOptions threads it into bootstrap.WithEventTransportKind so the
+	// phase0 split-topology broker gate trusts a type-system fact rather than a
+	// StorageBackend proxy (#2211). It is transport-derived like brokerResources,
+	// so it lives here beside it rather than on composition.SharedDeps.
+	eventTransportKind bootstrap.EventTransportKind
 
 	// metricsHandler is the Prometheus HTTP handler.
 	metricsHandler http.Handler
