@@ -59,7 +59,7 @@ func TestSign_RenewalEpochIncrements(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), first.Epoch(), "initial enrollment epoch is 0")
 
-	clk.Advance(30 * time.Minute)
+	clk.Advance(renewGap)
 
 	second, err := signer.Sign(ctx, authedRequest(t, "device-1", "leaf", time.Hour))
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestSign_TTLClampedToIssuerExpiry(t *testing.T) {
 	require.NoError(t, err)
 	intermediate, _ := parseTrustBundle(t, bundle)
 
-	hugeTTL := 100 * 365 * 24 * time.Hour // far beyond the intermediate's lifetime
+	hugeTTL := beyondCALifetime // far beyond the intermediate's lifetime
 	issued, err := signer.Sign(ctx, authedRequest(t, "device-1", "leaf", hugeTTL))
 	require.NoError(t, err)
 

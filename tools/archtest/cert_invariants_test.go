@@ -234,8 +234,9 @@ func TestCertValueSealedConstruction01_SoleConstructionSurface(t *testing.T) {
 // softCAAdapterPkgPath is the import path of the built-in soft CA adapter — the
 // sanctioned Signer / RevocationStore implementation (PR-6 #1902). It is the
 // sole member of both the mint allowlist (CERT-SIGN-FUNNEL-01) and the private
-// key custody allowlist (CERT-PRIVATE-KEY-CUSTODY-01).
-const softCAAdapterPkgPath = "github.com/ghbvf/gocell/adapters/softca"
+// key custody allowlist (CERT-PRIVATE-KEY-CUSTODY-01). Derived from
+// PlatformModulePath per ARCHTEST-MODULE-PATH-FUNNEL-01 (no bare org literal).
+const softCAAdapterPkgPath = PlatformModulePath + "/adapters/softca"
 
 // certIssuedMintAllowlist is the set of package import paths permitted to call
 // certsigning.NewIssuedCert (the certificate mint funnel). adapters/softca

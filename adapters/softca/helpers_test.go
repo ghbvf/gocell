@@ -24,6 +24,14 @@ const (
 	csrCN       = "csr-common-name-ignored"
 )
 
+// Test-time durations extracted to package-level consts (TEST-TIME-LITERAL-01:
+// no inline N*time.X at call sites).
+const (
+	renewGap         = 30 * time.Minute           // clock advance between two issuances
+	tidyAdvance      = 2 * time.Hour              // clock advance past a 1h leaf TTL for Tidy
+	beyondCALifetime = 100 * 365 * 24 * time.Hour // a TTL far past the intermediate's lifetime
+)
+
 // newCA builds an in-memory dev CA at a fixed epoch for deterministic tests.
 func newCA(t *testing.T) (*softca.CA, *clockmock.FakeClock) {
 	t.Helper()

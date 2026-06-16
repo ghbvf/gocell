@@ -120,7 +120,7 @@ const (
 	// within the given CertScope — a cross-scope or unknown serial fails closed
 	// (绝不凭裸 serial 跨隔离域). Constructed with KindNotFound → HTTP 404.
 	ErrCertRevokeNotFound Code = "ERR_CERT_REVOKE_NOT_FOUND"
-	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
+	ErrAdapterPGNoTx      Code = "ERR_ADAPTER_PG_NO_TX"
 	// ErrPGSchemaShape signals that a value read from a PostgreSQL column does
 	// not conform to the expected schema shape — e.g., an enum column returned a
 	// value not in the application's known set. Usable from both adapters/postgres

@@ -25,9 +25,9 @@ import (
 //
 //nolint:all // intentional violation for archtest RED fixture
 type forbiddenHolder struct {
-	scope cs.CertScope       // ties this struct to the certsigning seam (importer-scan trigger)
-	key   crypto.Signer      // VIOLATION: a private-key-typed field
-	raw   *ecdsa.PrivateKey  // VIOLATION: a concrete private-key field
+	scope cs.CertScope      // ties this struct to the certsigning seam (importer-scan trigger)
+	key   crypto.Signer     // VIOLATION: a private-key-typed field
+	raw   *ecdsa.PrivateKey // VIOLATION: a concrete private-key field
 }
 
 //nolint:all // keep the fixture types referenced

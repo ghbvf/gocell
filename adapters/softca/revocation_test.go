@@ -90,7 +90,7 @@ func TestTidy_DropsExpiredRevocations(t *testing.T) {
 	require.Len(t, list, 1, "an unexpired revocation survives tidy")
 
 	// Advance past expiry, then tidy drops it.
-	clk.Advance(2 * time.Hour)
+	clk.Advance(tidyAdvance)
 	require.NoError(t, revs.Tidy(ctx, scope, clk.Now()))
 	list, err = revs.RevocationList(ctx, scope)
 	require.NoError(t, err)
