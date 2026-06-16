@@ -32,6 +32,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -122,4 +123,99 @@ func countFuncDecls(root ast.Node, name string) int {
 		}
 	})
 	return n
+}
+
+// INVARIANT: CONFORMANCE-ENROLLMENT-FOLD-EQUIVALENCE-01
+
+// TestConformanceEnrollmentFoldEquivalence01 locks the FOLD's semantic equivalence
+// (#2262 pr-review F1): for every one of the 6 conformance-enrollment specs, the
+// folded single Tests=true collection (loadConformanceEnrollmentImpls /
+// productionImplCandidates) must yield the SAME concrete-impl set as the prior
+// two-load Tests=false collection (collectImplsFromScope) — the property the
+// single-Run counter alone cannot prove. The enrollment/credit path is unchanged-
+// by-construction (creditEnrollmentsFromFactory / hasConformanceCallTo reused
+// verbatim), so impl collection is the only fold-divergence risk worth locking;
+// this is the permanent form of the one-off set-equality probes run when #2249
+// landed. AI-robust: Medium (runtime set-equality; can't compile-force).
+//
+// packages.Load-heavy → nightly-only (NOT in the PR-time inv fast lane); its keys
+// are shared with the main tests + RED fixtures, so it cache-hits in a full run.
+func TestConformanceEnrollmentFoldEquivalence01(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based equivalence test in -short mode")
+	}
+	root := findModuleRoot(t)
+
+	t.Run("repo", func(t *testing.T) {
+		t.Parallel()
+		for _, spec := range []repoConformanceSpec{
+			policyRepoConformanceSpec(), roleRepoConformanceSpec(), userRepoConformanceSpec(),
+		} {
+			patterns := repoConformanceLoadPatterns(root)
+			_, newSet, _ := loadConformanceEnrollmentImpls(
+				t, patterns, FlatNonDefaultTags(), repoPortsPkg, spec.ifaceName,
+				true /*exportedOnly*/, false /*collectFromIfacePkg*/)
+			old := oldFoldImplSet(t, patterns, repoPortsPkg, spec.ifaceName, true, false)
+			assertImplSetEqual(t, spec.ruleID, old, newSet)
+		}
+	})
+
+	t.Run("saga", func(t *testing.T) {
+		t.Parallel()
+		for _, spec := range []sagaConformanceSpec{
+			sagaJournalConformanceSpec(), sagaGlobalReaderConformanceSpec(), sagaOwnerCheckpointConformanceSpec(),
+		} {
+			patterns := spec.loadPatterns(root)
+			_, newSet, _ := loadConformanceEnrollmentImpls(
+				t, patterns, FlatNonDefaultTags(), spec.ifacePkg, spec.ifaceName,
+				false /*exportedOnly*/, true /*collectFromIfacePkg*/)
+			old := oldFoldImplSet(t, patterns, spec.ifacePkg, spec.ifaceName, false, true)
+			assertImplSetEqual(t, spec.ruleID, old, newSet)
+		}
+	})
+}
+
+// oldFoldImplSet reconstructs the pre-fold collection: a Tests=false load (the
+// lighter pass the RED fixtures still use) + collectImplsFromScope, mirroring each
+// family's collectFromIfacePkg behavior (repo excludes the iface package, saga
+// includes it). Two same-key Runs (iface resolve, then collect) share the resolver
+// cache, so it is one load + one hit.
+func oldFoldImplSet(
+	t *testing.T, patterns []string, ifacePkg, ifaceName string, exportedOnly, collectFromIfacePkg bool,
+) map[string]bool {
+	t.Helper()
+	var iface *types.Interface
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg != nil && p.Pkg.Path() == ifacePkg && iface == nil {
+				iface = lookupNamedIface(p.Pkg, ifaceName)
+			}
+			return nil
+		})
+	require.NotNil(t, iface, "old path: resolve %s iface", ifaceName)
+
+	implSet := map[string]bool{}
+	implPkgSet := map[string]bool{}
+	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, patterns),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil {
+				return nil
+			}
+			if p.Pkg.Path() == ifacePkg && !collectFromIfacePkg {
+				return nil // repo excludes the iface package from impl collection
+			}
+			collectImplsFromScope(p.Pkg, iface, exportedOnly, implSet, implPkgSet)
+			return nil
+		})
+	return implSet
+}
+
+// assertImplSetEqual asserts oldSet == newSet (set equality) and non-empty
+// (anti-vacuity: a both-empty result would otherwise pass vacuously).
+func assertImplSetEqual(t *testing.T, ruleID string, oldSet, newSet map[string]bool) {
+	t.Helper()
+	require.NotEmpty(t, newSet, "%s: folded Tests=true collection is empty (anti-vacuity)", ruleID)
+	assert.Equal(t, sortedKeys(oldSet), sortedKeys(newSet),
+		"%s: folded single Tests=true impl set must equal the prior two-load Tests=false collection", ruleID)
 }

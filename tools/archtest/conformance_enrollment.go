@@ -409,7 +409,11 @@ type sagaConformanceSpec struct {
 	ifaceName     string
 	humanIface    string // e.g. "kernel/saga/journal.Journal" for messages
 	emptyImplHint string // e.g. "Expect at least kernel/saga/journal.MemJournal."
-	loadPatterns  func(root string) []string
+	// diagRel is the repo-relative path used as Diagnostic.Rel on the
+	// iface-resolve / zero-impl failure branches, so the report stays clickable
+	// (e.g. "kernel/saga/journal", not the full import path).
+	diagRel      string
+	loadPatterns func(root string) []string
 	// credit scans one test file and marks the impls it enrolls. The files
 	// slice (all files of the pass) is used only by the factory-closure form
 	// (Journal / GlobalReader, to resolve a named-func / local-var factory);
@@ -429,7 +433,7 @@ func checkSagaConformanceEnrollment(t *testing.T, spec sagaConformanceSpec) []Di
 		spec.ifacePkg, spec.ifaceName, false /*exportedOnly*/, true /*collectFromIfacePkg*/)
 
 	if iface == nil {
-		return []Diagnostic{{Rel: spec.ifacePkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.diagRel, Message: fmt.Sprintf(
 			"%s: failed to resolve %s interface; check import path %s",
 			spec.ruleID, spec.humanIface, spec.ifacePkg)}}
 	}
@@ -438,7 +442,7 @@ func checkSagaConformanceEnrollment(t *testing.T, spec sagaConformanceSpec) []Di
 	// (folded load broke pointer-identity) or a loadPatterns gap — fail loud rather
 	// than report zero violations (a silent vacuous-green for this saga rule).
 	if len(implSet) == 0 {
-		return []Diagnostic{{Rel: spec.ifacePkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.diagRel, Message: fmt.Sprintf(
 			"%s: zero %s implementations collected — likely a type-universe regression "+
 				"(iface and impls must share one packages.Load) or a loadPatterns gap. %s",
 			spec.ruleID, spec.ifaceName, spec.emptyImplHint)}}
@@ -459,6 +463,7 @@ func sagaJournalConformanceSpec() sagaConformanceSpec {
 		ruleID: "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01", ifacePkg: sagaJournalPkg,
 		ifaceName: sagaJournalIfaceName, humanIface: "kernel/saga/journal.Journal",
 		emptyImplHint: "Expect at least kernel/saga/journal.MemJournal.",
+		diagRel:       "kernel/saga/journal",
 		loadPatterns:  sagaJournalLoadPatterns,
 		credit: func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditEnrollmentsFromFactory(info, files, file, sagaConformanceFuncName, implSet, enrolled)
@@ -478,6 +483,7 @@ func sagaGlobalReaderConformanceSpec() sagaConformanceSpec {
 		ruleID: "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01", ifacePkg: sagaJournalPkg,
 		ifaceName: sagaGlobalReaderIfaceName, humanIface: "kernel/saga/journal.GlobalReader",
 		emptyImplHint: "Expect at least kernel/saga/journal.MemJournal.",
+		diagRel:       "kernel/saga/journal",
 		loadPatterns:  sagaJournalLoadPatterns,
 		credit: func(info *types.Info, files []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditEnrollmentsFromFactory(info, files, file, sagaGlobalReaderConformanceFunc, implSet, enrolled)
@@ -497,6 +503,7 @@ func sagaOwnerCheckpointConformanceSpec() sagaConformanceSpec {
 		ruleID: "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", ifacePkg: sagaKernelProjectionPkg,
 		ifaceName: sagaOwnerCheckpointIfaceName, humanIface: "kernel/projection.OwnerCheckpointStore",
 		emptyImplHint: "Expect at least kernel/projection.MemOwnerCheckpointStore.",
+		diagRel:       "kernel/projection",
 		loadPatterns:  sagaOwnerCheckpointLoadPatterns,
 		credit: func(info *types.Info, _ []*ast.File, file *ast.File, implSet, enrolled map[string]bool) {
 			creditOwnerCheckpointEnrollments(info, file, sagaKernelProjectionTestPkg,
