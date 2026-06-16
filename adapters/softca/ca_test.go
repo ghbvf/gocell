@@ -85,6 +85,62 @@ func TestNewCA_NilClockPanics(t *testing.T) {
 	require.Panics(t, func() { _, _ = softca.NewFileCA(nil, t.TempDir()) }, "NewFileCA nil clock must panic")
 }
 
+// TestNewFileCA_RejectsBroadKeyPerms asserts a key file loosened beyond 0600 on
+// reload fails closed — a world/group-readable CA signing key must not be trusted.
+func TestNewFileCA_RejectsBroadKeyPerms(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	_, err := softca.NewFileCA(clk, dir) // bootstrap + persist 0600 keys
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(filepath.Join(dir, "root.key"), 0o644), "loosen key perms")
+
+	_, err = softca.NewFileCA(clk, dir)
+	require.Error(t, err, "a key file with permissions broader than 0600 must fail closed")
+}
+
+// TestNewFileCA_RejectsSymlinkKey asserts a key path redirected via symlink fails
+// closed (Lstat rejects rather than follows) — custody must not trust a redirect.
+func TestNewFileCA_RejectsSymlinkKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	_, err := softca.NewFileCA(clk, dir) // bootstrap + persist valid keys
+	require.NoError(t, err)
+	interKey := filepath.Join(dir, "inter.key")
+	// Replace inter.key with a symlink pointing at the (otherwise valid) root.key:
+	// only the symlink check should fire, not a parse/perm failure of the target.
+	require.NoError(t, os.Remove(interKey))
+	require.NoError(t, os.Symlink(filepath.Join(dir, "root.key"), interKey))
+
+	_, err = softca.NewFileCA(clk, dir)
+	require.Error(t, err, "a symlinked key file must fail closed")
+}
+
+// TestNewFileCA_RejectsKeyCertMismatch asserts a key file that does not correspond
+// to its certificate fails closed — softca must not sign with a key whose public
+// half differs from the certificate it presents (every issued leaf would be
+// unverifiable). Swapping inter.key for root.key's content reproduces this.
+func TestNewFileCA_RejectsKeyCertMismatch(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	_, err := softca.NewFileCA(clk, dir) // bootstrap + persist valid material
+	require.NoError(t, err)
+	rootKeyPEM, err := os.ReadFile(filepath.Join(dir, "root.key")) //nolint:gosec // test fixture path under t.TempDir()
+	require.NoError(t, err)
+	// inter.key now holds the ROOT private key — a valid PKCS#8 key, 0600, that
+	// parses and is a CA, but whose public half ≠ inter.crt's public key.
+	//nolint:gosec // test fixture path under t.TempDir(), not attacker-controlled
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inter.key"), rootKeyPEM, 0o600))
+
+	_, err = softca.NewFileCA(clk, dir)
+	require.Error(t, err, "a key not matching its certificate must fail closed")
+}
+
 // trustRoot returns the DER of the CA's root certificate via the public trust bundle.
 func trustRoot(t *testing.T, clk *clockmock.FakeClock, ca *softca.CA) []byte {
 	t.Helper()

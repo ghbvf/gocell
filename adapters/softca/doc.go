@@ -46,14 +46,15 @@
 // revoked records whose certificate has expired — both need per-issuance
 // metadata the seam does not carry. softca funnels that through ONE pluggable
 // issuance-record store, [Ledger]: it records every issued certificate (deriving
-// the per-scope renewal epoch) and the revocation state over those records.
-// [Signer] (epoch) and [RevocationStore] (revoke / list / tidy) share a single
-// Ledger instance — they are thin seam-facing implementations over this shared
-// internal persistence, which additionally carries the epoch + notAfter the seam
-// does not expose, so it is not a redundant re-layering of the seam. The default
-// [MemLedger] is in-memory (a dev CA resets on restart); a PG-backed Ledger can
-// be injected (as a required constructor argument) to persist epochs and
-// revocations across restarts with no API change. A persistent Ledger is only
+// the per-scope renewal epoch), the revocation state over those records, and the
+// monotonic per-scope CRL Number. [Signer] (epoch) and [RevocationStore] (revoke /
+// list / tidy / CRL Number) share a single Ledger instance — they are thin
+// seam-facing implementations over this shared internal persistence, which
+// additionally carries the epoch + notAfter + CRL Number the seam does not expose,
+// so it is not a redundant re-layering of the seam. The default [MemLedger] is
+// in-memory (a dev CA resets on restart); a PG-backed Ledger can be injected (as a
+// required constructor argument) to persist epochs, revocations, and CRL Numbers
+// across restarts (RFC 5280 §5.2.3 monotonicity) with no API change. A persistent Ledger is only
 // meaningful alongside [NewFileCA] — pairing it with [NewDevCA] keeps epochs but
 // rotates the CA key on restart, so the persisted records reference a vanished
 // trust anchor.
@@ -70,15 +71,18 @@
 //
 // CERT-PRIVATE-KEY-CUSTODY-01 (upstream Hard / downstream Medium). Upstream
 // Hard: the certsigning Signer interface has no key getter, so kernel/runtime
-// cannot obtain the signing key THROUGH the seam (a compile-time fact), and
-// softca declares no exported key getter. Downstream Medium: an archtest
-// (tools/archtest/cert_invariants_test.go) scans every package importing
-// certsigning for a private-key-typed struct field and allows only adapters/softca
-// — defense in depth against a rogue key field appearing elsewhere in the cert
-// subsystem. Blind spot: a private key smuggled as raw []byte (PEM) is not a
-// typed-field match (the common ceiling of a field-type scan); and "only softca
-// holds the key" is a caller/holder allowlist (Medium), not type-expressible,
-// because any package can syntactically declare a crypto.Signer field.
+// cannot obtain the signing key THROUGH the seam (a compile-time fact). Downstream
+// Medium has two legs (tools/archtest/cert_invariants_test.go): (1) a FIELD scan
+// over every package importing certsigning forbids a private-key-typed struct field
+// outside the adapters/softca allowlist — defense in depth against a rogue key
+// field elsewhere in the cert subsystem; (2) a GETTER scan forbids an exported func
+// or method whose result is a private-key type EVEN IN softca — so "softca holds
+// the key but never exports it" is machine-enforced, not just a convention (the
+// allowlist sanctions the field, never the getter). Blind spot: a private key
+// smuggled as raw []byte (PEM) is not a typed match (the common ceiling of a type
+// scan); and "only softca holds the key" is a caller/holder allowlist (Medium),
+// not type-expressible, because any package can syntactically declare a
+// crypto.Signer field.
 //
 // CERT-SIGN-FUNNEL-01 (downstream Medium). softca is the sanctioned minter:
 // Signer.Sign returns certsigning.IssuedCert built via certsigning.NewIssuedCert,

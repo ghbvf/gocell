@@ -50,6 +50,7 @@ func TestErrorHelpers_CodesAndKinds(t *testing.T) {
 		{"sign-failed", errSignFailed("x", cause), errcode.ErrCertSignFailed, errcode.KindInternal},
 		{"crl-failed", errCRLFailed("x", cause), errcode.ErrCertCRLFailed, errcode.KindInternal},
 		{"revoke-not-found", errRevokeNotFound("x"), errcode.ErrCertRevokeNotFound, errcode.KindNotFound},
+		{"revoke-unsupported", errRevokeUnsupported("x"), errcode.ErrCertRevokeUnsupported, errcode.KindInvalid},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

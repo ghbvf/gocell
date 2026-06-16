@@ -53,6 +53,16 @@ type Ledger interface {
 	// epoch counter is independent of the record set, so dropping expired records
 	// does not perturb renewal epochs.)
 	Tidy(ctx context.Context, scope certsigning.CertScope, before time.Time) error
+
+	// NextCRLNumber returns the next strictly-monotonic CRL Number for scope (RFC
+	// 5280 §5.2.3: a CRL Number MUST be greater than every prior one for the same
+	// CRL, else a strict cache ignores the newer list → stale revocation). The
+	// counter lives in the Ledger — the persistence boundary — so a PG-backed Ledger
+	// keeps numbers climbing across restarts; [MemLedger] resets on restart (a dev CA
+	// is ephemeral anyway). Numbers are per-scope (each scope publishes its own CRL)
+	// and need not be gap-free: a burned number from a CRL that later failed to sign
+	// is fine, only monotonicity matters.
+	NextCRLNumber(ctx context.Context, scope certsigning.CertScope) (uint64, error)
 }
 
 // MemLedger is the in-memory [Ledger] — softca's dev/test default. It loses all
@@ -65,10 +75,11 @@ type MemLedger struct {
 }
 
 // scopeRecords holds one isolation scope's issuance count (the next renewal
-// epoch) and its per-serial certificate records.
+// epoch), its monotonic CRL Number, and its per-serial certificate records.
 type scopeRecords struct {
-	issued uint64
-	certs  map[certsigning.Serial]*certRecord
+	issued    uint64
+	crlNumber uint64
+	certs     map[certsigning.Serial]*certRecord
 }
 
 // certRecord is one issued certificate's ledger entry: its expiry plus the
@@ -151,6 +162,18 @@ func (l *MemLedger) Revoked(_ context.Context, scope certsigning.CertScope) ([]c
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Serial.String() < out[j].Serial.String() })
 	return out, nil
+}
+
+// NextCRLNumber implements [Ledger]: a per-scope counter incremented under the
+// ledger lock, so two CRLs minted within the same instant (or after a clock
+// step-back) never share or regress a Number. It resets on restart with the
+// in-memory state — a persistent Ledger seeds it from durable storage instead.
+func (l *MemLedger) NextCRLNumber(_ context.Context, scope certsigning.CertScope) (uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sr := l.scope(scope)
+	sr.crlNumber++
+	return sr.crlNumber, nil
 }
 
 // Tidy implements [Ledger]: drops revoked records whose certificate expired

@@ -117,6 +117,29 @@ func TestMemLedger_DoubleRevokeOverwrites(t *testing.T) {
 	require.True(t, list[0].RevokedAt.Equal(at2.UTC()), "last revokedAt wins")
 }
 
+// TestMemLedger_NextCRLNumberPerScopeMonotonic asserts the CRL Number is a
+// per-scope strictly-increasing counter (RFC 5280 §5.2.3), independent across
+// scopes — the durable source GenerateCRL now reads instead of per-store state.
+func TestMemLedger_NextCRLNumberPerScopeMonotonic(t *testing.T) {
+	t.Parallel()
+	ledger := softca.NewMemLedger()
+	ctx := context.Background()
+	scopeA := mustScope(t, testTenant, "device-1")
+	scopeB := mustScope(t, testTenantB, "device-1")
+
+	n1, err := ledger.NextCRLNumber(ctx, scopeA)
+	require.NoError(t, err)
+	n2, err := ledger.NextCRLNumber(ctx, scopeA)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), n1, "first CRL Number for a scope is 1")
+	require.Equal(t, uint64(2), n2, "CRL Number strictly increments per scope")
+
+	// A different scope keeps its own counter, unperturbed by scopeA.
+	m1, err := ledger.NextCRLNumber(ctx, scopeB)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), m1, "a fresh scope starts at 1, independent of other scopes")
+}
+
 // hexN renders a small uint64 as a non-empty hex serial string.
 func hexN(n uint64) string {
 	const digits = "0123456789abcdef"

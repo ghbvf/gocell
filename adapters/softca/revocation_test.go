@@ -3,12 +3,14 @@ package softca_test
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/adapters/softca"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
 
@@ -40,7 +42,8 @@ func TestRevoke_EntersCRL(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, crl.RevokedCertificateEntries, 1)
 	require.Equal(t, 0, crl.RevokedCertificateEntries[0].SerialNumber.Cmp(
-		mustBigSerial(t, issued.Serial().String())), "CRL must list the revoked serial")
+		mustBigSerial(t, issued.Serial().String()),
+	), "CRL must list the revoked serial")
 	require.Equal(t, 1, crl.RevokedCertificateEntries[0].ReasonCode,
 		"reason code must round-trip end-to-end (keyCompromise = 1)")
 
@@ -139,6 +142,66 @@ func TestGenerateCRL_NumberMonotonic(t *testing.T) {
 	c2, err := x509.ParseRevocationList(second)
 	require.NoError(t, err)
 	require.Positive(t, c2.Number.Cmp(c1.Number), "CRL Number must strictly increase even without clock advance")
+}
+
+// TestGenerateCRL_NumberMonotonicAcrossStoreRebuild asserts the CRL Number keeps
+// climbing when a NEW RevocationStore is built over the SAME Ledger (simulating a
+// process/store rebuild) — the number is sourced from the Ledger, not per-store
+// state, so it does not regress (RFC 5280 §5.2.3). Before the fix the per-store
+// counter restarted at 1 on rebuild, regressing the Number → stale-revocation cache.
+func TestGenerateCRL_NumberMonotonicAcrossStoreRebuild(t *testing.T) {
+	t.Parallel()
+	ca, clk := newCA(t)
+	ledger := softca.NewMemLedger()
+	signer, err := softca.NewSigner(clk, ca, ledger)
+	require.NoError(t, err)
+	store1, err := softca.NewRevocationStore(clk, ca, ledger)
+	require.NoError(t, err)
+	ctx := context.Background()
+	scope := mustScope(t, testTenant, "device-1")
+
+	issued, err := signer.Sign(ctx, authedRequest(t, "device-1", "leaf", time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, store1.Revoke(ctx, scope, issued.Serial(), cs.ReasonKeyCompromise()))
+	first, err := store1.GenerateCRL(ctx, scope)
+	require.NoError(t, err)
+
+	store2, err := softca.NewRevocationStore(clk, ca, ledger)
+	require.NoError(t, err)
+	second, err := store2.GenerateCRL(ctx, scope)
+	require.NoError(t, err)
+
+	c1, err := x509.ParseRevocationList(first)
+	require.NoError(t, err)
+	c2, err := x509.ParseRevocationList(second)
+	require.NoError(t, err)
+	require.Positive(t, c2.Number.Cmp(c1.Number),
+		"CRL Number must keep increasing across a store rebuild (sourced from the shared Ledger)")
+}
+
+// TestRevoke_RejectsRemoveFromCRL asserts removeFromCRL (RFC 5280 reason 8, un-hold)
+// is rejected fail-closed: softca issues complete CRLs with a terminal-revocation
+// model and has no hold to lift, so accepting it would invert the caller's intent.
+// The serial must NOT be recorded as revoked.
+func TestRevoke_RejectsRemoveFromCRL(t *testing.T) {
+	t.Parallel()
+	signer, revs, _ := newProvider(t)
+	ctx := context.Background()
+	scope := mustScope(t, testTenant, "device-1")
+
+	issued, err := signer.Sign(ctx, authedRequest(t, "device-1", "leaf", time.Hour))
+	require.NoError(t, err)
+
+	err = revs.Revoke(ctx, scope, issued.Serial(), cs.ReasonRemoveFromCRL())
+	require.Error(t, err, "removeFromCRL must be rejected fail-closed")
+	var e *errcode.Error
+	require.True(t, errors.As(err, &e), "must be *errcode.Error")
+	require.Equal(t, errcode.ErrCertRevokeUnsupported, e.Code)
+	require.Equal(t, errcode.KindInvalid, e.Kind)
+
+	list, err := revs.RevocationList(ctx, scope)
+	require.NoError(t, err)
+	require.Empty(t, list, "a rejected removeFromCRL must not record a revocation")
 }
 
 // TestNewSoftCA_SharedLedgerWires asserts the bundle constructor produces a

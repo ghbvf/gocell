@@ -236,6 +236,16 @@ func loadFileCA(clk clock.Clock, dir string) (*CA, error) {
 	if err := interCert.CheckSignatureFrom(rootCert); err != nil {
 		return nil, errCAInit("intermediate not signed by loaded root", err)
 	}
+	// Bind each loaded private key to its certificate: a swapped or unrelated key
+	// file (e.g. inter.key replaced with root.key, or a foreign key) would
+	// otherwise sign with a key that does not correspond to the certificate softca
+	// presents, making every issued leaf unverifiable. Fail closed for both tiers.
+	if !publicKeyMatches(rootKey, rootCert) {
+		return nil, errCAInit("root key does not match root certificate", nil)
+	}
+	if !publicKeyMatches(interKey, interCert) {
+		return nil, errCAInit("intermediate key does not match intermediate certificate", nil)
+	}
 	return &CA{
 		clk:       clk,
 		rootCert:  rootCert,
@@ -271,9 +281,46 @@ func persistCA(dir string, ca *CA) error {
 	return writeCert(filepath.Join(dir, intCertFile), ca.interDER)
 }
 
-// readKey loads a PKCS#8 PEM private key as a crypto.Signer.
+// publicKeyMatches reports whether the loaded signer's public key equals the
+// certificate's public key. The crypto stdlib public-key types (ecdsa / rsa /
+// ed25519) all implement Equal(crypto.PublicKey) bool (Go ≥1.15); a signer whose
+// public key is not one of those, or does not equal the cert's, fails closed.
+func publicKeyMatches(signer crypto.Signer, cert *x509.Certificate) bool {
+	type equalPublicKey interface{ Equal(crypto.PublicKey) bool }
+	pub, ok := signer.Public().(equalPublicKey)
+	return ok && pub.Equal(cert.PublicKey)
+}
+
+// requireSecureKeyFile fails closed unless path is a regular file (not a symlink
+// or special file) whose permission bits are a subset of keyFilePerm (0600) — the
+// custody the writeKey path establishes, re-asserted on reload because an operator
+// may have loosened the mode or redirected the path via symlink between writes. It
+// uses Lstat so a symlink is rejected, not followed. The Lstat→ReadFile window is
+// a benign TOCTOU for a dev file-custody adapter (the operator owns the directory).
+func requireSecureKeyFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return errCAInit("stat key file failed", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return errCAInit("key file is a symlink", nil)
+	}
+	if !info.Mode().IsRegular() {
+		return errCAInit("key file is not a regular file", nil)
+	}
+	if info.Mode().Perm()&^os.FileMode(keyFilePerm) != 0 {
+		return errCAInit("key file permissions too broad", nil)
+	}
+	return nil
+}
+
+// readKey loads a PKCS#8 PEM private key as a crypto.Signer, after validating the
+// file's custody (regular file, not a symlink, permissions no broader than 0600).
 func readKey(path string) (crypto.Signer, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // dev file-custody path supplied by the operator
+	if err := requireSecureKeyFile(path); err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // path validated by requireSecureKeyFile (regular file, non-symlink, ≤0600)
 	if err != nil {
 		return nil, errCAInit("read key file failed", err)
 	}

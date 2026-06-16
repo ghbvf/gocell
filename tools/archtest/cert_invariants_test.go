@@ -65,35 +65,57 @@
 // the Signer interface exposes Sign / TrustBundle and NO key getter, so
 // kernel/runtime cannot obtain a key THROUGH the seam.
 //
-// Downstream Medium (this scan): a private-key-typed struct field
-// (crypto.Signer / crypto.PrivateKey / crypto.Decrypter, or a concrete
-// crypto/{rsa,ecdsa,ed25519,ecdh}.PrivateKey, optionally behind one pointer) is
-// forbidden in any package that imports certsigning (the cert subsystem) UNLESS
-// the package is in certPrivateKeyCustodyAllowlist (only adapters/softca), and
-// is forbidden in the certsigning seam package itself (which must never carry a
-// key). Two anti-vacuity guards back the GREEN baseline:
-//   - the allowlist is load-bearing — softca is scanned WITHOUT the allowlist in
-//     a dedicated test and must yield ≥ 1 hit (it genuinely holds the key);
-//   - the RED fixture (a non-allowlisted importer with a crypto.Signer field)
-//     must fire the detector.
+// Downstream Medium (this scan) has TWO legs, because custody is "hold the key
+// but never let it leave", and a key leaves in two ways — a struct FIELD that
+// holds it where it should not, or an exported GETTER that hands it out:
+//
+//   - FIELD leg: a private-key-typed struct field (crypto.Signer / crypto.PrivateKey
+//     / crypto.Decrypter, or a concrete crypto/{rsa,ecdsa,ed25519,ecdh}.PrivateKey,
+//     optionally behind one pointer) is forbidden in any package that imports
+//     certsigning (the cert subsystem) UNLESS the package is in
+//     certPrivateKeyCustodyAllowlist (only adapters/softca), and is forbidden in the
+//     certsigning seam package itself (which must never carry a key).
+//
+//   - GETTER leg (scanExportedKeyGetters): an exported package-level func or an
+//     exported method of an exported named type whose RESULT is a private-key type
+//     is forbidden EVEN IN the allowlisted adapter. The allowlist sanctions HOLDING
+//     the key (the field), never EXPORTING it — so softca holding crypto.Signer
+//     fields is GREEN, but a softca `func (*CA) Key() crypto.Signer` is RED. This
+//     closes the gap where the allowlist short-circuit (return on allowlist hit)
+//     left the sanctioned adapter's own export surface unscanned, so the seam's
+//     "no key getter" Hard property was unenforced for the one package that holds
+//     the key.
+//
+// Three anti-vacuity guards back the GREEN baseline:
+//   - the field-allowlist is load-bearing — softca is scanned WITHOUT the allowlist
+//     in a dedicated test and must yield ≥ 1 field hit (it genuinely holds the key);
+//   - the field RED fixture (a non-allowlisted importer with a crypto.Signer field)
+//     must fire the field detector;
+//   - the getter RED fixture (an exported func + an exported method returning
+//     crypto.Signer) must fire the getter detector.
 //
 // Blind spots (per AI-robust §强制盲区自检): (1) a private key smuggled as raw
-// []byte / string (PEM) is NOT a typed-field match — the standing ceiling of a
-// field-type scan; (2) "only softca holds the key" is a caller/holder allowlist
+// []byte / string (PEM) is NOT a typed-field/result match — the standing ceiling of
+// a type scan; (2) "only softca holds the key" is a caller/holder allowlist
 // (Medium), not type-expressible, because any package can syntactically declare
 // a crypto.Signer field; (3) the scan is bounded to DIRECT importers of the seam
 // (pkgImports is one hop) — a package importing certsigning only transitively and
 // holding a key field is NOT flagged; direct-import is the deliberate scope (it
-// captures packages working with the seam without a transitive-closure walk).
-// crypto.PrivateKey is matched safely: it is a DEFINED named type
-// (type PrivateKey any), so a field typed crypto.PrivateKey resolves to that
-// Named type — a bare `any` / `interface{}` field does NOT match.
+// captures packages working with the seam without a transitive-closure walk);
+// (4) the getter leg covers exported funcs + exported methods of EXPORTED named
+// types — a getter on an unexported type, reachable only when another exported
+// func returns that type, is a residual gap (the externally-nameable getter surface
+// is the deliberate scope). crypto.PrivateKey is matched safely: it is a DEFINED
+// named type (type PrivateKey any), so a field/result typed crypto.PrivateKey
+// resolves to that Named type — a bare `any` / `interface{}` does NOT match.
 package archtest
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 	"reflect"
+	"strings"
 	"testing"
 
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
@@ -502,10 +524,29 @@ func pkgImports(pkg *types.Package, path string) bool {
 	return false
 }
 
+// relByAbsFiles indexes each Pass file's absolute path to its module-relative
+// slash path, so a types.Object position (which carries the absolute filename) can
+// be resolved to the repo-relative path used in diagnostics. p.Abs(f) equals
+// pass.Fset.Position(f.Pos()).Filename by construction, so object positions match.
+func relByAbsFiles(p *Pass) map[string]string {
+	m := make(map[string]string, len(p.Files))
+	for _, f := range p.Files {
+		m[p.Abs(f)] = p.Rel(f)
+	}
+	return m
+}
+
+// posRel resolves an object/field position to its repo-relative file path + line.
+func posRel(p *Pass, rels map[string]string, pos token.Pos) (string, int) {
+	position := p.Fset.Position(pos)
+	return rels[position.Filename], position.Line
+}
+
 // scanStructFieldsForKeys flags every package-scope struct field whose type is a
 // private-key type. label identifies the package in diagnostics.
 func scanStructFieldsForKeys(p *Pass, label string) []Diagnostic {
 	var diags []Diagnostic
+	rels := relByAbsFiles(p)
 	scope := p.Pkg.Scope()
 	for _, name := range scope.Names() {
 		tn, ok := scope.Lookup(name).(*types.TypeName)
@@ -521,9 +562,10 @@ func scanStructFieldsForKeys(p *Pass, label string) []Diagnostic {
 			if !isPrivateKeyFieldType(f.Type()) {
 				continue
 			}
-			pos := p.Fset.Position(f.Pos())
+			rel, line := posRel(p, rels, f.Pos())
 			diags = append(diags, Diagnostic{
-				Line:    pos.Line,
+				Rel:     rel,
+				Line:    line,
 				Message: certKeyCustodyMsg + " (" + label + "." + name + "." + f.Name() + ")",
 			})
 		}
@@ -531,21 +573,101 @@ func scanStructFieldsForKeys(p *Pass, label string) []Diagnostic {
 	return diags
 }
 
-// scanPrivateKeyCustody applies the field scan to a package in the cert
-// subsystem (the certsigning seam itself, or any direct importer) that is not in
-// the custody allowlist.
+const certKeyGetterMsg = "forbidden exported function/method returning a private key in the cert subsystem — the CA " +
+	"signing key must never leave its custody package via an exported getter (it is reached only through Signer.Sign " +
+	"/ CRL generation); even the custody-allowlisted adapter may hold the key but not export it " +
+	"(CERT-PRIVATE-KEY-CUSTODY-01)"
+
+// sigResultIsKey reports whether any result of sig is a private-key type.
+func sigResultIsKey(sig *types.Signature) bool {
+	res := sig.Results()
+	for i := 0; i < res.Len(); i++ {
+		if isPrivateKeyFieldType(res.At(i).Type()) {
+			return true
+		}
+	}
+	return false
+}
+
+// scanExportedKeyGetters flags exported package-level funcs and exported methods
+// of exported named types whose result includes a private-key type — an exported
+// getter that hands the CA signing key across the package boundary. Unlike the
+// field scan it applies even to the custody-allowlisted adapter: holding the key
+// (a field) is sanctioned, EXPORTING it (a getter result) is not.
+func scanExportedKeyGetters(p *Pass, label string) []Diagnostic {
+	var diags []Diagnostic
+	rels := relByAbsFiles(p)
+	scope := p.Pkg.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if !obj.Exported() {
+			continue
+		}
+		diags = append(diags, keyGetterDiagsForObj(p, rels, label, name, obj)...)
+	}
+	return diags
+}
+
+// keyGetterDiagsForObj dispatches one exported object to the func or method-set scan.
+func keyGetterDiagsForObj(p *Pass, rels map[string]string, label, name string, obj types.Object) []Diagnostic {
+	switch o := obj.(type) {
+	case *types.Func:
+		sig, ok := o.Type().(*types.Signature)
+		if !ok || !sigResultIsKey(sig) {
+			return nil
+		}
+		rel, line := posRel(p, rels, o.Pos())
+		return []Diagnostic{{Rel: rel, Line: line, Message: certKeyGetterMsg + " (" + label + "." + name + ")"}}
+	case *types.TypeName:
+		return keyGetterDiagsForType(p, rels, label, name, o)
+	default:
+		return nil
+	}
+}
+
+// keyGetterDiagsForType flags exported methods of an exported named type whose
+// result is a private-key type.
+func keyGetterDiagsForType(p *Pass, rels map[string]string, label, name string, tn *types.TypeName) []Diagnostic {
+	named, ok := tn.Type().(*types.Named)
+	if !ok {
+		return nil
+	}
+	var diags []Diagnostic
+	for i := 0; i < named.NumMethods(); i++ {
+		m := named.Method(i)
+		if !m.Exported() {
+			continue
+		}
+		sig, ok := m.Type().(*types.Signature)
+		if !ok || !sigResultIsKey(sig) {
+			continue
+		}
+		rel, line := posRel(p, rels, m.Pos())
+		diags = append(diags, Diagnostic{
+			Rel: rel, Line: line,
+			Message: certKeyGetterMsg + " (" + label + "." + name + "." + m.Name() + ")",
+		})
+	}
+	return diags
+}
+
+// scanPrivateKeyCustody applies the custody scan to a package in the cert
+// subsystem (the certsigning seam itself, or any direct importer). The allowlist
+// exempts HOLDING the key (a struct field) but NOT EXPORTING it (a getter result):
+// allowlisted packages skip the field scan yet still get the getter scan, and every
+// other cert-subsystem package gets both.
 func scanPrivateKeyCustody(p *Pass, certSigningPath string) []Diagnostic {
 	if p.Pkg == nil {
 		return nil
 	}
 	path := p.Pkg.Path()
-	if _, ok := certPrivateKeyCustodyAllowlist[path]; ok {
-		return nil
-	}
 	if path != certSigningPath && !pkgImports(p.Pkg, certSigningPath) {
 		return nil
 	}
-	return scanStructFieldsForKeys(p, path)
+	if _, allowlisted := certPrivateKeyCustodyAllowlist[path]; allowlisted {
+		return scanExportedKeyGetters(p, path)
+	}
+	return append(scanStructFieldsForKeys(p, path), scanExportedKeyGetters(p, path)...)
 }
 
 // TestCertPrivateKeyCustody01_GreenProduction asserts no production package in
@@ -619,6 +741,38 @@ func TestCertPrivateKeyCustody01_RedFixture(t *testing.T) {
 	if len(diags) == 0 {
 		t.Error("CERT-PRIVATE-KEY-CUSTODY-01 RED fixture: scanner found 0 hits; expected ≥ 1 from " +
 			"forbidden_key_holder.go — the detector scanPrivateKeyCustody may be broken")
+	}
+}
+
+// TestCertPrivateKeyCustody01_GetterRedFixture isolates the GETTER leg: it runs
+// scanExportedKeyGetters ALONE (not via scanPrivateKeyCustody, so a working field
+// scan cannot mask a broken getter scan) over the fixture and asserts it fires on
+// the exported func ForbiddenKeyGetter and the exported method KeyVault.Signer.
+// Without this, softca silently adding an exported key getter would go uncaught.
+func TestCertPrivateKeyCustody01_GetterRedFixture(t *testing.T) {
+	t.Parallel()
+	var hits, visited int
+	diags := Run(t, Fixture(FixtureOpts{Tests: false},
+		[]string{"./tools/archtest/internal/certcustodyfixture/..."}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || !strings.HasSuffix(p.Pkg.Path(), "/certcustodyfixture") {
+				return nil
+			}
+			visited++
+			return scanExportedKeyGetters(p, p.Pkg.Path())
+		})
+	for _, d := range diags {
+		t.Logf("getter RED fixture hit: %s:%d %s", d.Rel, d.Line, d.Message)
+		if strings.Contains(d.Message, certKeyGetterMsg[:40]) {
+			hits++
+		}
+	}
+	if visited == 0 {
+		t.Fatal("CERT-PRIVATE-KEY-CUSTODY-01 getter RED fixture: certcustodyfixture was never scanned — vacuous")
+	}
+	if hits < 2 {
+		t.Errorf("CERT-PRIVATE-KEY-CUSTODY-01 getter RED fixture: expected ≥ 2 getter hits "+
+			"(ForbiddenKeyGetter func + KeyVault.Signer method), got %d — scanExportedKeyGetters may be broken", hits)
 	}
 }
 
