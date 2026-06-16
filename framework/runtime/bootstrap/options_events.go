@@ -47,6 +47,27 @@ func WithSubscriber(s outbox.Subscriber) Option {
 	}
 }
 
+// WithEventTransportKind declares whether the injected event transport is a real
+// cross-process broker or an in-process bus, as resolved by
+// cellmodules/eventtransport.Resolve (which mints the sealed EventTransportKind).
+// The composition root threads the resolver's Transport.Kind here, so the phase0
+// broker-mandatory gate (validateSplitTopologyBroker) trusts a type-system fact
+// instead of the older StorageBackend proxy (#2211).
+//
+// When WithDeploymentTopology declares any remote cell, this option becomes
+// effectively MANDATORY: the gate requires IsRealBroker()==true for a split
+// topology, so omitting it (or passing the zero value EventTransportKind{} —
+// identical to omitting it, both read as "unset") causes phase0 to reject the
+// bootstrap fail-closed. Colocated deployments may omit it — the gate does not
+// fire without remote cells.
+//
+// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+func WithEventTransportKind(k EventTransportKind) Option {
+	return func(b *Bootstrap) {
+		b.eventTransportKind = k
+	}
+}
+
 // WithConsumerMiddleware registers business subscriber-side middleware applied to
 // every topic's EntryHandler before ConsumerBase idempotency is applied.
 // Middleware is applied in registration order; each entry wraps the next, so the

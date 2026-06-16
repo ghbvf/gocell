@@ -4,7 +4,6 @@ package websocket_test
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/nettest"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testwait"
 	authpkg "github.com/ghbvf/gocell/framework/runtime/auth"
@@ -33,6 +33,9 @@ func (s *stubIntegrationAuth) Authenticate(_ *http.Request) (*authpkg.Principal,
 // setupIntegrationHub creates a running Hub + httptest server for integration tests.
 func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
+	// Probe TCP before starting the Hub goroutine so a sandbox skip raised later
+	// inside nettest.NewServer cannot leak the running Hub (see nettest godoc).
+	nettest.RequireTCP(t)
 	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
 	hub := rtws.NewHub(clock.Real(), cfg, handler)
@@ -51,7 +54,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 		AllowedOrigins: []string{"http://*"},
 		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "integration-user"}},
 	}))
-	server := httptest.NewServer(mux)
+	server := nettest.NewServer(t, mux)
 
 	t.Cleanup(func() {
 		server.Close()
@@ -180,22 +183,10 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 	mu.Unlock()
 }
 
-// checkTCPAvailable skips the test if TCP listening is not permitted (sandbox).
-func checkTCPAvailable(t *testing.T) {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
-		return
-	}
-	_ = ln.Close()
-}
-
 // T13: UpgradeHandler accepts a handshake when the Origin header exactly
 // matches the AllowedOrigins entry. Hub.ConnCount() must reach 1.
 func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
-	checkTCPAvailable(t)
-
+	nettest.RequireTCP(t) // probe before starting the Hub so a sandbox skip can't leak it
 	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
 	hub := rtws.NewHub(clock.Real(), cfg, nil)
@@ -210,7 +201,7 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 		AllowedOrigins: []string{"https://example.com"},
 		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "test"}},
 	}))
-	server := httptest.NewServer(mux)
+	server := nettest.NewServer(t, mux)
 	t.Cleanup(func() {
 		server.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
@@ -236,8 +227,7 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 // T14: UpgradeHandler rejects a handshake when the Origin header does not
 // match the AllowedOrigins list (forbidden origin).
 func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
-	checkTCPAvailable(t)
-
+	nettest.RequireTCP(t) // probe before starting the Hub so a sandbox skip can't leak it
 	cfg := rtws.DefaultHubConfig()
 	cfg.PingInterval = testtime.D200ms
 	hub := rtws.NewHub(clock.Real(), cfg, nil)
@@ -251,7 +241,7 @@ func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
 		AllowedOrigins: []string{"https://example.com"},
 		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "test"}},
 	}))
-	server := httptest.NewServer(mux)
+	server := nettest.NewServer(t, mux)
 	t.Cleanup(func() {
 		server.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)

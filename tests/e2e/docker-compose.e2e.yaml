@@ -46,6 +46,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -55,6 +56,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+      start_period: 10s
 
   # RabbitMQ: postgres (durable) topology wires a real broker as the outbox
   # transport (#1940) — corebundle fail-closes at startup without GOCELL_AMQP_URL.
@@ -72,6 +74,7 @@ services:
       interval: 3s
       timeout: 5s
       retries: 40
+      start_period: 15s
 
   migrate:
     build:
@@ -166,3 +169,4 @@ services:
       interval: 2s
       timeout: 3s
       retries: 60
+      start_period: 10s

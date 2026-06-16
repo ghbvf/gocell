@@ -6,7 +6,7 @@
 //
 // The runtime registrar is the SINGLE source of the gRPC public-method bypass set
 // (#1675). The only sanctioned production installer of the auth interceptor's
-// WithPublicMethod predicate is authOptionsWithPublicMethods in
+// WithPublicMethod predicate is authChainOptions in
 // runtime/grpc/interceptor/chain.go, which wires WithPublicMethod(reg.IsPublicMethod)
 // for both the unary and stream chains (stream.go routes through that helper, so it
 // holds no direct reference). Public methods are declared in the contract via
@@ -155,7 +155,7 @@ func scanPublicMethodFieldWrites(t *testing.T, allowlist map[string]struct{}) ([
 
 // withPublicMethodCallerAllowlist is the set of production files permitted to
 // reference interceptor.WithPublicMethod. The sole sanctioned site is
-// authOptionsWithPublicMethods in chain.go, which installs
+// authChainOptions in chain.go, which installs
 // WithPublicMethod(reg.IsPublicMethod) for both the unary and stream chains;
 // stream.go routes through that helper and holds no direct reference.
 var withPublicMethodCallerAllowlist = map[string]struct{}{
@@ -201,7 +201,7 @@ func scanWithPublicMethodRefs(t *testing.T, allowlist map[string]struct{}) ([]Di
 						"GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01: interceptor.WithPublicMethod is referenced from "+
 							"%s, which is not the sanctioned wiring site. The registrar is the single runtime source "+
 							"of the gRPC public-method bypass set (#1675): the only sanctioned installer is "+
-							"authOptionsWithPublicMethods in runtime/grpc/interceptor/chain.go, which wires "+
+							"authChainOptions in runtime/grpc/interceptor/chain.go, which wires "+
 							"WithPublicMethod(reg.IsPublicMethod). WithPublicMethod predicates compose (OR), so a "+
 							"composition root passing one via Deps.AuthOptions would WIDEN the public set beyond the "+
 							"contract-derived overlay — a latent auth bypass. Declare public methods via "+

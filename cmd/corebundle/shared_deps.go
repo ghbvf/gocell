@@ -120,6 +120,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// mode; empty in demo mode) to cmd wiring so runtimeBaseOptions registers them
 	// as ManagedResources for LIFO shutdown.
 	locals.brokerResources = transport.Resources
+	// Hand the sealed broker-kind fact to cmd wiring so runtimeBaseOptions threads
+	// it into bootstrap.WithEventTransportKind for the phase0 split-topology gate (#2211).
+	locals.eventTransportKind = transport.Kind
 
 	// Build composition.SharedDeps (public, interface-only fields consumed by
 	// platform cell modules). The control-plane production checks (verbose /

@@ -5,6 +5,8 @@ import (
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // recordingTracer / recordingSpan capture span lifecycle for assertions.
@@ -58,4 +60,76 @@ type panicVerifier struct{ val any }
 
 func (v panicVerifier) VerifyIntent(context.Context, string, kauth.TokenIntent) (kauth.Claims, error) {
 	panic(v.val)
+}
+
+// stubAuthorizer is a configurable auth.Authorizer for the #2008 PDP gate tests.
+// It satisfies runtime/auth.Authorizer structurally (no import needed). A non-nil
+// panicVal makes Authorize panic, exercising the gate's coverage by authorize's
+// stage-level panic guard.
+type stubAuthorizer struct {
+	dec      authz.Decision
+	err      error
+	panicVal any
+}
+
+func (a stubAuthorizer) Authorize(context.Context, string, string, string) (authz.Decision, error) {
+	if a.panicVal != nil {
+		panic(a.panicVal)
+	}
+	return a.dec, a.err
+}
+
+// mustAllow builds a zero-obligation Allow decision (the normal permit path).
+func mustAllow() authz.Decision {
+	d, err := authz.Allow(authz.Obligations{})
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// allowWithObligation builds an Allow carrying a non-zero (FieldMask) obligation,
+// to exercise the gate's HTTP-F5-parity fail-closed-on-obligation path.
+func allowWithObligation() authz.Decision {
+	d, err := authz.Allow(authz.Obligations{FieldMask: authz.FieldMask{Fields: []string{"secret"}}})
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// permResolverFor returns a PermissionResolver mapping exactly method → a fixed
+// permission (PermDeviceCommand), reporting ok=false for any other method — the
+// test analog of the registrar's PermissionForMethod.
+func permResolverFor(method string) PermissionResolver {
+	return func(m string) (authz.Permission, bool) {
+		if m == method {
+			return authz.PermDeviceCommand(), true
+		}
+		return authz.Permission{}, false
+	}
+}
+
+// roleGateAuthorizer mimics a real cell PDP for the production-path e2e: it reads
+// the principal from ctx (as the real Authorizer does) and allows only when the
+// principal holds the given role, else denies. The test drives allow/deny via the
+// principal's roles (set by the verifier), exercising the full chain rather than a
+// fixed decision.
+type roleGateAuthorizer struct{ role string }
+
+func (a roleGateAuthorizer) Authorize(ctx context.Context, _, _, _ string) (authz.Decision, error) {
+	if p, ok := auth.FromContext(ctx); ok && p != nil && p.HasRole(a.role) {
+		return authz.Allow(authz.Obligations{})
+	}
+	return authz.Deny("role-gate: missing role"), nil
+}
+
+// rolesFromTokenVerifier is a test IntentTokenVerifier that treats the bearer token
+// string as a single role on the returned principal. One server can then exercise
+// both allow and deny by varying the client's token (e.g. "operator" vs "guest")
+// without minting real JWTs.
+type rolesFromTokenVerifier struct{}
+
+func (rolesFromTokenVerifier) VerifyIntent(_ context.Context, token string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{Subject: "subj-" + token, Roles: []string{token}}, nil
 }

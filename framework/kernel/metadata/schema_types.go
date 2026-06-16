@@ -161,10 +161,14 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 // no duplicates, methods⇒codegen:true, and — in #1675 where public is the only
 // flag — each entry must assert public:true).
 //
-// #1675 carries only the public flag. ABAC fields (permission/resource/action)
-// and internalOnly are deferred to #2008, where they land together with their
-// live PDP consumer — adding them here would be dead config (the anti-pattern
-// #1672 deleted when it removed the vestigial service-level auth.public).
+// #1675 carried only the public flag; #2008 extended the overlay with the ABAC
+// Permission field (GRPCMethodMeta.Permission) — the action a non-public RPC
+// requires, consumed by the runtime interceptor's PDP gate. Both Public and
+// Permission are now live exported fields (mutually exclusive per RPC). The PDP
+// resource is the full method name (coarse, applied at the gate, not authored
+// here); per-message owner-scoped resource extraction and an internalOnly flag
+// remain unmodeled (no live consumer — adding them would be dead config, the
+// anti-pattern #1672 deleted when it removed the vestigial service-level auth.public).
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — the proto service name is the wire identity.
@@ -182,11 +186,15 @@ type GRPCTransportMeta struct {
 	Methods []GRPCMethodMeta `yaml:"methods,omitempty" json:"methods,omitempty"`
 }
 
-// GRPCMethodMeta is one entry of the per-RPC auth overlay (#1675). It annotates
-// a single proto RPC with a non-default auth flag. Only methods needing a
-// non-default appear in GRPCTransportMeta.Methods; an absent method is authed
-// (fail-closed). In #1675 the sole flag is Public; #2008 will add ABAC fields
-// (permission/resource/action) when it wires the gRPC PDP.
+// GRPCMethodMeta is one entry of the per-RPC auth overlay (#1675, ABAC extended
+// in #2008). It annotates a single proto RPC with its non-default auth posture —
+// either JWT-exempt (Public) or its required ABAC permission (Permission). Under
+// the #2008 strict-fail-closed model the overlay is COMPLETE for non-public
+// methods: every authed RPC carries a Permission, and a method absent from the
+// overlay is DENIED at the interceptor gate (not merely authed). The cellgen
+// completeness pre-pass (EnrichGrpcServicesWithProtoInfo, gocell generate cell)
+// enforces that every non-public proto method has a Permission entry, so
+// "absent ⇒ dead 403" cannot ship silently.
 //
 // ref: grpc-ecosystem/go-grpc-middleware interceptors/auth — per-method
 // AuthFuncOverride (declarative public-method exemption)
@@ -196,17 +204,26 @@ type GRPCMethodMeta struct {
 	// member of the proto service's method set (the .proto is the single source);
 	// FMT-41 + the contractgen pre-pass enforce referential integrity.
 	Name string `yaml:"name" json:"name"`
-	// Public marks this RPC as JWT-exempt. Absent (no entry) → authed. Codegen
-	// derives GRPCServiceSpec.PublicMethods from the public:true entries, which
-	// the runtime registrar aggregates into the auth interceptor's bypass set.
+	// Public marks this RPC as JWT-exempt. Codegen derives
+	// GRPCServiceSpec.PublicMethods from the public:true entries, which the runtime
+	// registrar aggregates into the auth interceptor's bypass set.
 	//
-	// omitempty is intentional: public:false is semantically identical to omitting
-	// the entry (both → authed), and FMT-41 rejects a public:false entry as vacuous
-	// (#1675 has no other flag). So the only meaningful value is true; the field is
-	// NOT a tri-state. #2008 adds further per-method fields, after which a
-	// public:false entry becomes meaningful (it may carry ABAC fields) and FMT-41's
-	// vacuous-entry guard widens accordingly.
+	// omitempty is intentional: a public:false entry is meaningful only when it
+	// carries a Permission (an authed RPC declaring its ABAC action). Public and
+	// Permission are MUTUALLY EXCLUSIVE — a JWT-exempt RPC has no authenticated
+	// subject to authorize, so requiring a permission on it is contradictory; FMT-41
+	// + the schema reject the combination. An entry with neither (vacuous) is also
+	// rejected.
 	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
+	// Permission is the ABAC action string (e.g. "device:command") the non-public
+	// RPC requires (#2008). It is the value carried as `action` into the PDP
+	// (auth.Authorizer.Authorize); codegen derives GRPCServiceSpec.MethodPermissions
+	// from these entries and the runtime registrar resolves the string back to a
+	// sealed authz.Permission (fail-fast on an unknown action). It MUST be a member
+	// of the closed authz registry — FMT-41 validates membership statically via
+	// authz.IsKnownPermissionString, so a typo fails at `gocell validate` rather than
+	// silently denying at runtime. Mutually exclusive with Public (see above).
+	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.

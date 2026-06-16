@@ -182,9 +182,19 @@ func TestIsPublishable(t *testing.T) {
 	}
 }
 
-// TestBumpTree exercises the actual release entry: it bumps every PUBLISHABLE
-// member of a synthetic workspace (root + adapters), leaves a denied member
-// (examples/*) untouched, preserves replace, and stamps Result.Dir.
+// TestBumpTree exercises the actual release entry (the PIN set): it rewrites the
+// internal requires of EVERY workspace MEMBER of a synthetic workspace — the
+// publishable libraries AND the non-publishable members that `go work sync`
+// would otherwise rewrite (examples/*, cmd/*, tests/* subdirs) — preserving
+// replace and stamping Result.Dir. The pin set is a SUPERSET of the publishable
+// TAG set ([PublishableModules]/[TagPaths]).
+//
+// #2212: pinning ONLY the publishable set left tests/*, cmd/*, examples/*
+// internal requires at v0.0.0, so the release `Verify pinned tree` step's
+// `go work sync` rewrote them to the release version and `git diff --exit-code`
+// found uncommitted drift, failing the first stable release since #1565. The pin
+// set must cover every member with an internal require so `go work sync` is a
+// no-op after the pin commit.
 func TestBumpTree(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, content string) {
@@ -198,42 +208,73 @@ func TestBumpTree(t *testing.T) {
 		}
 	}
 	write("go.mod", "module github.com/ghbvf/gocell\n\ngo 1.25\n")
-	write("go.work", "go 1.25\n\nuse (\n\t.\n\t./adapters/a\n\t./adapters/b\n\t./examples/demo\n)\n")
+	// go.work includes the non-publishable members go work sync rewrites:
+	// examples/demo, cmd/foo (a binary), tests/integration (a tests/ subdir).
+	write("go.work", "go 1.25\n\nuse (\n\t.\n\t./adapters/a\n\t./adapters/b\n"+
+		"\t./examples/demo\n\t./cmd/foo\n\t./tests/integration\n)\n")
 	write("adapters/a/go.mod", "module github.com/ghbvf/gocell/adapters/a\n\ngo 1.25\n\n"+
 		"require github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => ../../\n")
 	write("adapters/b/go.mod", "module github.com/ghbvf/gocell/adapters/b\n\ngo 1.25\n\n"+
 		"require (\n\tgithub.com/ghbvf/gocell v0.0.0\n\tgithub.com/ghbvf/gocell/adapters/a v0.0.0\n)\n")
 	write("examples/demo/go.mod", "module github.com/ghbvf/gocell/examples/demo\n\ngo 1.25\n\n"+
-		"require github.com/ghbvf/gocell v0.0.0\n")
+		"require github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => ../../\n")
+	write("cmd/foo/go.mod", "module github.com/ghbvf/gocell/cmd/foo\n\ngo 1.25\n\n"+
+		"require github.com/ghbvf/gocell v0.0.0\n\nreplace github.com/ghbvf/gocell => ../../\n")
+	write("tests/integration/go.mod", "module github.com/ghbvf/gocell/tests/integration\n\ngo 1.25\n\n"+
+		"require github.com/ghbvf/gocell/adapters/a v0.0.0\n\n"+
+		"replace github.com/ghbvf/gocell/adapters/a => ../../adapters/a\n")
 
 	results, err := BumpTree(root, testVersion)
 	if err != nil {
 		t.Fatalf("BumpTree: %v", err)
-	}
-	// Publishable = root + adapters/a + adapters/b (examples/demo denied).
-	if len(results) != 3 {
-		t.Fatalf("want 3 publishable results, got %d: %+v", len(results), results)
 	}
 	for _, r := range results {
 		if r.Dir == "" {
 			t.Errorf("Result.Dir not stamped: %+v", r)
 		}
 	}
-	a := mustRead(t, filepath.Join(root, "adapters", "a", "go.mod"))
-	if !strings.Contains(a, "require github.com/ghbvf/gocell v1.2.3") {
-		t.Errorf("adapters/a require not bumped:\n%s", a)
+
+	// Every member with an internal require must be bumped — publishable AND
+	// the non-publishable members go work sync would otherwise drift (#2212).
+	// Each carries a replace that must be preserved.
+	for _, m := range []struct{ dir, replace string }{
+		{"adapters/a", "replace github.com/ghbvf/gocell => ../../"},
+		{"examples/demo", "replace github.com/ghbvf/gocell => ../../"},
+		{"cmd/foo", "replace github.com/ghbvf/gocell => ../../"},
+		{"tests/integration", "replace github.com/ghbvf/gocell/adapters/a => ../../adapters/a"},
+	} {
+		got := mustRead(t, filepath.Join(root, filepath.FromSlash(m.dir), "go.mod"))
+		if strings.Contains(got, "v0.0.0") {
+			t.Errorf("%s internal require not pinned (still v0.0.0) — pin set must cover non-publishable members (#2212):\n%s", m.dir, got)
+		}
+		if !strings.Contains(got, m.replace) {
+			t.Errorf("%s replace must be preserved:\n%s", m.dir, got)
+		}
 	}
-	if !strings.Contains(a, "replace github.com/ghbvf/gocell => ../../") {
-		t.Errorf("adapters/a replace must be preserved:\n%s", a)
-	}
+	// adapters/b has two internal requires; both must bump.
 	b := mustRead(t, filepath.Join(root, "adapters", "b", "go.mod"))
 	if strings.Contains(b, "v0.0.0") {
 		t.Errorf("adapters/b still has v0.0.0 (both internal requires must bump):\n%s", b)
 	}
-	// Denied member is left as-is.
-	demo := mustRead(t, filepath.Join(root, "examples", "demo", "go.mod"))
-	if !strings.Contains(demo, "v0.0.0") {
-		t.Errorf("examples/demo is denied and must be untouched, got:\n%s", demo)
+
+	// pin set ⊇ tag set: every publishable (tag-set) member appears in the
+	// pin-set results, so the pin commit can never be a strict subset of the
+	// tagged tree (the #2212 failure mode). Both BumpTree results and
+	// PublishableModules derive Dir from the same workspace.Modules enumeration
+	// (go.work use-dirs, filepath.Clean'd — no "./" prefix), so the map lookup
+	// keys align and this comparison is not vacuous.
+	pub, err := PublishableModules(root)
+	if err != nil {
+		t.Fatalf("PublishableModules: %v", err)
+	}
+	resultDirs := make(map[string]bool, len(results))
+	for _, r := range results {
+		resultDirs[r.Dir] = true
+	}
+	for _, m := range pub {
+		if !resultDirs[m.Dir] {
+			t.Errorf("publishable (tag-set) member %q missing from pin-set results — pin must be a superset of tag", m.Dir)
+		}
 	}
 
 	// Invalid version rejected before touching the tree.

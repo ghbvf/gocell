@@ -1,14 +1,14 @@
 // Command modrelease drives the synchronized multi-module release transform for
-// the GoCell workspace. With --version it rewrites every publishable library
-// module's internal require versions in place (keeping replace); with
+// the GoCell workspace. With --version it pins every workspace member's internal
+// require versions in place (the pin set, keeping replace); with
 // --print-tag-paths it emits the per-module library git tags (one per line) for
 // the release workflow's resume-verification path; with --print-stable-tags it
 // emits the FULL stable push set (the bare vX.Y.Z marker first + library tags)
 // that the workflow's "Tag modules" step consumes; with --print-installable-tags
 // it emits the installable binary git tags; with --installable it strips
 // replace+pins internal requires in every installable binary module; with
-// --dry-run it previews the set and tags without writing. It is invoked by
-// .github/workflows/release.yml.
+// --dry-run it previews the pin set, stable tags, and installable tags without
+// writing. It is invoked by .github/workflows/release.yml.
 package main
 
 import (
@@ -55,7 +55,7 @@ func parseFlags() (flags, error) {
 	installable := flag.Bool("installable", false,
 		"strip replace+pin internal requires in every installable binary module")
 	dryRun := flag.Bool("dry-run", false,
-		"preview the publishable set and tags without writing go.mod files")
+		"preview the pin set, stable tags, and installable tags without writing go.mod files")
 	flag.Parse()
 
 	if *version == "" {
@@ -107,7 +107,7 @@ func run() error {
 	case f.installable:
 		return stripInstallable(root, f.version)
 	default:
-		return bumpLibraries(root, f.version)
+		return pinInternalRequires(root, f.version)
 	}
 }
 
@@ -157,21 +157,23 @@ func printInstallableTagPaths(root, version string) error {
 	return nil
 }
 
-// bumpLibraries rewrites internal requires for all publishable library modules.
-func bumpLibraries(root, version string) error {
+// pinInternalRequires pins internal requires for every workspace member (the pin
+// set — a superset of the publishable tag set), so the release `go work sync`
+// finds nothing to rewrite (#2212).
+func pinInternalRequires(root, version string) error {
 	results, err := modrelease.BumpTree(root, version)
 	if err != nil {
 		return err
 	}
-	bumped := 0
+	pinned := 0
 	for _, res := range results {
 		if len(res.Requires) > 0 {
-			bumped++
-			p("bumped %s: %v -> %s\n", res.Dir, res.Requires, version)
+			pinned++
+			p("pinned %s: %v -> %s\n", res.Dir, res.Requires, version)
 		}
 	}
-	p("modrelease: bumped internal requires in %d/%d publishable modules to %s\n",
-		bumped, len(results), version)
+	p("modrelease: pinned internal requires in %d/%d workspace members to %s\n",
+		pinned, len(results), version)
 	return nil
 }
 
@@ -199,7 +201,9 @@ func stripInstallable(root, version string) error {
 }
 
 func preview(root, version string) error {
-	mods, err := modrelease.PublishableModules(root)
+	// Pin set = every workspace member (a superset of the publishable tag set);
+	// --version pins them all so the release `go work sync` is drift-free (#2212).
+	pinMods, err := workspace.Modules(root)
 	if err != nil {
 		return err
 	}
@@ -218,9 +222,9 @@ func preview(root, version string) error {
 	if err != nil {
 		return err
 	}
-	p("modrelease --dry-run: %d publishable modules would bump internal requires to %s\n",
-		len(mods), version)
-	for _, m := range mods {
+	p("modrelease --dry-run: %d workspace members (pin set) would have internal requires pinned to %s "+
+		"(members with no internal require are no-ops):\n", len(pinMods), version)
+	for _, m := range pinMods {
 		p("  %s (%s)\n", m.Dir, m.ImportPath)
 	}
 	p("fresh stable release would push %d tags (bare marker first + %d library):\n", len(stable), len(stable)-1)

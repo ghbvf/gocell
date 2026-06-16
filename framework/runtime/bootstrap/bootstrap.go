@@ -148,6 +148,7 @@ type Bootstrap struct {
 	workers                []worker.Worker
 	publisher              outbox.Publisher
 	subscriber             outbox.Subscriber
+	eventTransportKind     EventTransportKind   // sealed broker-kind fact for the phase0 split gate (#2211); unset = fail-closed
 	consumerBase           *outbox.ConsumerBase // field-injected into SubscriberWithMiddleware for idempotency
 	consumerMiddleware     []outbox.SubscriptionMiddleware
 	routerReadyTimeout     time.Duration

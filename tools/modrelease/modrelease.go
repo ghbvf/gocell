@@ -1,8 +1,21 @@
 // Package modrelease is the synchronized multi-module release tool for the
-// GoCell workspace. It rewrites the internal `require` versions of every
-// publishable LIBRARY module to a single release version and derives the
-// per-module git tag set, so satellites become externally consumable via
+// GoCell workspace. It rewrites the internal `require` versions of the workspace
+// members to a single release version and derives the per-module git tag set, so
+// publishable satellites become externally consumable via
 // `go get <module>@vX.Y.Z`.
+//
+// Two distinct concerns, two distinct member sets (do NOT conflate):
+//
+//   - PIN set ([BumpTree]) — EVERY go.work member with an internal require. The
+//     release pin commit must rewrite them all so the workflow's `go work sync`
+//     (hack/verify-workspace.sh) is a no-op and the pinned tree is drift-free
+//     (#2212). This is a SUPERSET of the tag set: it includes the non-publishable
+//     members (examples/*, cmd/*, tests/* subdirs) that go work sync would
+//     otherwise rewrite to the release version, leaving uncommitted drift.
+//   - TAG set ([PublishableModules]/[TagPaths]/[StableTags]) — only the
+//     externally-published LIBRARY members (see [IsPublishable]) get a
+//     `<reldir>/vX.Y.Z` git tag. A non-publishable member is pinned but never
+//     tagged.
 //
 // # Why
 //
@@ -10,9 +23,11 @@
 // `require github.com/ghbvf/gocell[/path] v0.0.0` + a local
 // `replace … => ../relative`. `v0.0.0` is an unpublished placeholder: an external
 // consumer's `go get github.com/ghbvf/gocell/adapters/postgres@<tag>` cannot
-// resolve it. The release rewrites every internal require to the real release
-// version (v0.0.0 / pseudo / a prior real version → vX.Y.Z) and tags each module
-// `<reldir>/vX.Y.Z`.
+// resolve it. The release pins every workspace member's internal requires to the
+// real release version (v0.0.0 / pseudo / a prior real version → vX.Y.Z) and tags
+// ONLY the publishable modules `<reldir>/vX.Y.Z` — non-publishable members
+// (examples/*, cmd/*, tests/* subdirs) are pinned but never tagged, per the
+// pin-set ⊇ tag-set split above.
 //
 // # Keep replace (NOT stripped)
 //
@@ -28,11 +43,14 @@
 // touches require versions only; replace lines carry no version and are never
 // matched.
 //
-// # Scope: library modules only (publishable set) + installable binaries
+// # Scope: pin set (all members) + tag set (publishable) + installable binaries
 //
-// The publishable library set is every go.work member EXCEPT examples/*, tests/*,
-// and cmd/* (see [IsPublishable]). The publishable set is handled by [BumpTree] and
-// [TagPaths] which preserve replace directives (OTel-canonical shape).
+// The pin set is every go.work member ([BumpTree], via workspace.Modules); the
+// tag set is every member EXCEPT examples/*, tests/*, and cmd/* (see
+// [IsPublishable], via [PublishableModules]/[TagPaths]). Both preserve replace
+// directives (OTel-canonical shape) — the version-only rewrite is identical; only
+// the member set differs (pin ⊇ tag). A member with no internal require is a
+// no-op in the pin set (it is iterated but nothing is rewritten).
 //
 // # Installable binaries
 //
@@ -259,10 +277,32 @@ func bumpRequireLine(line []byte, re *regexp.Regexp, version string) ([]byte, st
 	return []byte(string(m[1]) + path + string(m[3]) + version + string(m[5])), path
 }
 
-// BumpTree rewrites the internal require versions of every publishable module
-// under root to version, in place. The platform module prefix is read from
-// root/go.mod (never a hardcoded literal). Returns one Result per publishable
-// module, in go.work order.
+// BumpTree rewrites the internal require versions of every workspace MEMBER
+// under root to version, in place — the PIN set. The platform module prefix is
+// read from root/go.mod (never a hardcoded literal). Returns one Result per
+// member, in go.work order (a member with no internal require yields an empty
+// Result.Requires and is left untouched on disk).
+//
+// The pin set is the full go.work membership (workspace.Modules), a SUPERSET of
+// the publishable tag set ([PublishableModules]): it deliberately includes the
+// non-publishable members (examples/*, cmd/*, tests/* subdirs) so that after the
+// release pin commit the workflow's `go work sync` finds nothing to rewrite and
+// the pinned tree is drift-free. Pinning only the publishable set left those
+// members at v0.0.0, which `go work sync` then rewrote to the release version,
+// producing uncommitted drift that failed the stable release (#2212). The
+// version-only rewrite preserves replace directives (OTel-canonical shape), so a
+// pinned-but-not-tagged member (e.g. cmd/gocell, which the separate
+// [StripReplaceAndPin] installable path tags from its own stripped tree) keeps
+// its develop-branch replaces intact.
+//
+// go.sum is unaffected: every internal require carries a local `replace … =>
+// ../relative`, so the bumped require resolves to the on-disk sibling, not the
+// module proxy — no checksum is computed or recorded for it. The full-member pin
+// therefore leaves BOTH go.mod (require versions already at the release version)
+// and go.sum (no internal sum entries) matching what `go work sync` would write,
+// so the workflow's drift check (hack/verify-workspace.sh diffs go.mod AND
+// go.sum) is clean. The release-verification drift gate empirically confirms
+// this on the real tree.
 func BumpTree(root, version string) ([]Result, error) {
 	if err := validReleaseVersion(version); err != nil {
 		return nil, err
@@ -271,9 +311,9 @@ func BumpTree(root, version string) ([]Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("modrelease: read root module path: %w", err)
 	}
-	mods, err := PublishableModules(root)
+	mods, err := workspace.Modules(root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("modrelease: enumerate workspace: %w", err)
 	}
 	re := internalRequireRE(prefix)
 	results := make([]Result, 0, len(mods))

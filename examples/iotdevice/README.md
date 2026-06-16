@@ -86,10 +86,44 @@ export IOT_ADMIN_TOKEN="$(go run ./examples/iotdevice/localtoken)"
 go run ./examples/iotdevice
 ```
 
-The server starts with primary listener on `:8083` (API), internal listener on `127.0.0.1:9083` (loopback control-plane), and health listener on `127.0.0.1:9093` (`/healthz` `/readyz` `/metrics`).
+The server starts with primary HTTP listener on `:8083` (API), gRPC listener on `:8084` (the `DeviceCommandService` ABAC surface), internal listener on `127.0.0.1:9083` (loopback control-plane), and health listener on `127.0.0.1:9093` (`/healthz` `/readyz` `/metrics`).
 `IOT_ADMIN_TOKEN` is a real RS256 access token signed by the local key above.
 The helper defaults to the roles needed by the walkthrough; override with
 `go run ./examples/iotdevice/localtoken -roles admin,role:operator,role:device`.
+
+### gRPC API (ABAC-gated)
+
+`device.command.v1.DeviceCommandService` is served on the gRPC listener (default
+`:8084`, override with `GOCELL_IOTDEVICE_GRPC_ADDR`). The demo runs plaintext out of
+the box; durable mode (`GOCELL_IOTDEVICE_DSN` set) refuses plaintext unless you supply
+TLS (`GOCELL_IOTDEVICE_GRPC_TLS_CERT_FILE` + `GOCELL_IOTDEVICE_GRPC_TLS_KEY_FILE`, plus
+`..._CLIENT_CA_FILE` for mTLS) or set `GOCELL_IOTDEVICE_GRPC_ALLOW_INSECURE=true`.
+
+Both RPCs (`IssueCommand` unary, `WatchCommands` server-stream) are non-public and pass
+the same ABAC PDP as the HTTP routes: the runtime auth interceptor authenticates the
+bearer token, then authorizes `device:command` (admin/operator) — no token, wrong role,
+or a missing permission mapping is denied (`Unauthenticated` / `PermissionDenied`),
+fail-closed.
+
+Smoke-test `IssueCommand` with an admin/operator token (the proto isn't served via
+reflection, so point `grpcurl` at the contract `.proto`; use a `device_id` you
+registered via the HTTP API below):
+
+```bash
+# payload is proto `bytes` → base64; "e30=" is "{}"
+grpcurl -plaintext \
+  -import-path examples/iotdevice/contracts/grpc \
+  -proto device/command/v1/device_command.proto \
+  -H "authorization: Bearer ${IOT_ADMIN_TOKEN}" \
+  -d '{"device_id":"<registered-device-id>","command_type":"reboot","payload":"e30="}' \
+  localhost:8084 device.command.v1.DeviceCommandService/IssueCommand
+# → {"ackId":"cmd-...","acknowledgedAtUnixNano":"..."}
+# Auth boundaries: omit the -H → Unauthenticated (no bearer); a token whose roles
+# lack admin/operator → PermissionDenied (the device:command ABAC gate, fail-closed).
+# Each denial also carries a machine-readable google.rpc.ErrorInfo detail
+# (Reason ∈ {AUTHENTICATION_REQUIRED, INSUFFICIENT_PERMISSIONS, ...},
+# Domain=gocell.authz.grpc), so clients branch on Reason instead of the message text.
+```
 
 ## Docker Mode
 

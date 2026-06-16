@@ -528,7 +528,10 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command-grpc: %w", err)
 	}
-	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc, c.authorizer)
+	// Authorization (device:command) is enforced by the runtime gRPC auth
+	// interceptor (#2008), wired from the same dc.Authorizer() via grpcDeps in the
+	// composition root — the handler no longer holds the Authorizer.
+	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
 	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same

@@ -162,10 +162,10 @@ jobs:
       # first and goreleaser would only fail afterwards, leaving an orphan tag.
       - name: Install goreleaser
         if: steps.resolve.outputs.skip != 'true'
-        uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
-          version: 'v2.16.0' # pinned (F6); bump via dependabot
-          install-only: true
+          version: 'v2.16.0' # pinned (F6); bump via dependabot — CLI version decoupled from action via install-only
+          install-only: true # v7.2.2 keeps version+install-only inputs (verified vs v6); v7 major bump is node20->node24 runtime only
 
       - name: goreleaser config check (pre-tag, no side effects)
         if: steps.resolve.outputs.skip != 'true'
@@ -208,11 +208,17 @@ jobs:
           cache-dependency-path: "**/go.sum"
 
       - name: Pin internal requires & commit (stable only)
-        # Synchronized multi-module release (#1843): pin every publishable LIBRARY
-        # module's internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a local
-        # commit — the single tag target for root and all satellites. It is NEITHER
-        # pushed NOR tagged here: the pinned tree is first re-verified (next step),
-        # so the released commit is never an unverified tree (F1). Snapshots skip.
+        # Synchronized multi-module release (#1843): pin EVERY workspace member's
+        # internal requires v0.0.0 -> vX.Y.Z (keeping replace) on a local commit —
+        # the pin set, a superset of the tagged publishable set. Pinning the full
+        # membership (incl. examples/*, cmd/*, tests/* subdirs) makes the next
+        # step's `go work sync` a no-op, so the pinned tree is drift-free (#2212 —
+        # a publishable-only pin left those members at v0.0.0 and `go work sync`
+        # drifted them). cmd/gocell is in this pin set with its replace KEPT; the
+        # separate "Release installable CLI" step strips replace on its own child
+        # commit/tree (#2045) — orthogonal, no conflict. It is NEITHER pushed NOR
+        # tagged here: the pinned tree is first re-verified (next step), so the
+        # released commit is never an unverified tree (F1). Snapshots skip.
         if: needs.verify.outputs.tag_exists != 'true' && needs.verify.outputs.prerelease != 'true'
         run: |
           set -euo pipefail
@@ -224,7 +230,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           go run ./tools/modrelease/cmd --version "$TAG"
           if git diff --quiet; then
-            echo "::warning::modrelease pinned no requires (already at $TAG?) — tagging $SHA as-is." \
+            echo "::warning::modrelease changed nothing — every member already pinned to $TAG (resume path) or carries no internal require; tagging $SHA as-is." \
               | tee -a "$GITHUB_STEP_SUMMARY"
           else
             git commit -am "release($TAG): pin internal module requires"
@@ -387,10 +393,10 @@ jobs:
 
       - name: Install goreleaser (stable only)
         if: needs.verify.outputs.prerelease != 'true'
-        uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
-          version: 'v2.16.0' # pinned (F6); bump via dependabot
-          install-only: true
+          version: 'v2.16.0' # pinned (F6); bump via dependabot — CLI version decoupled from action via install-only
+          install-only: true # v7.2.2 keeps version+install-only inputs (verified vs v6); v7 major bump is node20->node24 runtime only
 
       - name: Pre-publish version smoke (no side effects, stable only)
         # F1/C1: validate the ldflags-injected version BEFORE any publish side

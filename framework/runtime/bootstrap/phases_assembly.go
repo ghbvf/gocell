@@ -126,42 +126,53 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 }
 
 // validateSplitTopologyBroker rejects the illegal combination of a split
-// deployment topology (≥1 remote cell) with an in-memory EventBus. The bus is
-// in-memory iff the storage backend is not postgres (#1940 eventtransport
-// funnel: in-memory is reachable only in demo/non-postgres topology), so this
-// gate is expressed via controlPlaneTopology.StorageBackend() — the same shape
-// as topology.go's "postgres requires real adapter" coupling check. Called at
-// phase0 after validateDeploymentTopology seals b.deploymentTopology.
+// deployment topology (≥1 remote cell) with an in-process EventBus — the bus
+// cannot deliver events across process boundaries. Called at phase0 after
+// validateDeploymentTopology seals b.deploymentTopology.
 //
-// Split topology additionally requires explicit broker publisher/subscriber
-// injection; a nil publisher or subscriber causes phase2InitPubSub to fall back
-// to the in-memory EventBus regardless of StorageBackend, so this gate also
-// rejects that combination. The nil check uses validation.IsNilInterface so a
-// typed-nil interface value (e.g. WithPublisher((*T)(nil))) cannot slip past a
-// bare == nil comparison — the same defense SharedDeps applies to its
-// Publisher/Subscriber. Residual blind-spot: StorageBackend==postgres with a
-// hand-injected non-nil in-memory publisher/subscriber instance is not caught
-// here (non-nil ≠ real broker); that hole is closed by the
-// COREBUNDLE-EVENTBUS-FUNNEL-01 depguard (in-memory bus is import-banned in the
-// production composition roots, reachable only via eventtransport.Resolve's
-// non-postgres branch). Promoting this gate to a sealed broker-kind check is
-// tracked as a follow-up (#1965 review F2).
+// The "is it a real cross-process broker?" decision is the sealed
+// EventTransportKind fact (#2211): cellmodules/eventtransport.Resolve mints
+// RealBrokerEventTransport() exactly when it constructs the RabbitMQ transport,
+// InMemoryEventTransport() for the demo/in-process bus, and the composition root
+// threads it here via WithEventTransportKind. The gate therefore checks a
+// type-system fact (IsRealBroker) rather than the older
+// StorageBackend()=="postgres" proxy ("non-nil ≠ real broker" closed). An unset
+// kind (composition root omitted the option) reports IsRealBroker()==false, so a
+// split topology is fail-closed.
 //
-// Medium gate (Hard unreachable: compares two runtime values). Coarse proxy:
-// fires on ANY remote cell — even one with only sync (HTTP/CellTransport)
-// contracts and no cross-process events — because HasRemoteCells is a
-// per-assembly signal, not a per-contract signal (US7 #1967 refines this).
-// Fail-closed: an un-injected controlPlaneTopology reads as memory, so a split
-// topology that forgot to declare postgres storage is correctly rejected; a nil
-// (or typed-nil) publisher or subscriber is also rejected (phase2 would degrade
-// to in-memory bus). See also DeploymentTopology.HasRemoteCells for the blind-spot.
+// Split topology additionally requires non-nil publisher/subscriber; a nil (or
+// typed-nil) sink causes phase2InitPubSub to fall back to the in-process bus, so
+// the gate keeps that as an independent fail-closed invariant (a real-broker
+// kind paired with a nil sink is still broken wiring). The nil check uses
+// validation.IsNilInterface so a typed-nil interface value (e.g.
+// WithPublisher((*T)(nil))) cannot slip past a bare == nil comparison.
+//
+// Grading: sealed-kind construction is Hard (unexported fields → no
+// struct-literal forgery); "only eventtransport.Resolve mints the real-broker
+// variant" is a structural Medium (cross-module Go ceiling, archtest
+// EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01); the production end-to-end guarantee is
+// Hard via the COREBUNDLE-EVENTBUS-FUNNEL-01 depguard (an in-memory bus is
+// import-unexpressible in the production composition roots, so a forged
+// real-broker kind cannot be paired with one there). This gate itself stays
+// Medium (compares two runtime values). Coarse proxy (separate blind-spot, US7
+// #1967): HasRemoteCells fires on ANY remote cell, even a sync-only one with no
+// cross-process events — see DeploymentTopology.HasRemoteCells.
 func (b *Bootstrap) validateSplitTopologyBroker() error {
 	if b.deploymentTopology.HasRemoteCells() &&
-		(b.controlPlaneTopology.StorageBackend() != StorageBackendPostgres ||
+		(!b.eventTransportKind.IsRealBroker() ||
 			validation.IsNilInterface(b.publisher) || validation.IsNilInterface(b.subscriber)) {
+		// Distinct internal attrs so the server log pinpoints WHICH sub-cause
+		// tripped the gate — an unset/in-memory kind (composition root forgot
+		// WithEventTransportKind), a nil publisher, and a nil subscriber are
+		// different wiring mistakes that the single const message cannot
+		// distinguish on the wire (MESSAGE-CONST-LITERAL-01).
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgSplitTopologyRequiresBroker,
-			errcode.WithInternal(errcode.InternalAttr("storageBackend", b.controlPlaneTopology.StorageBackend())))
+			errcode.WithInternal(
+				errcode.InternalAttr("eventTransportKind", b.eventTransportKind.String()),
+				errcode.InternalAttr("publisherNil", validation.IsNilInterface(b.publisher)),
+				errcode.InternalAttr("subscriberNil", validation.IsNilInterface(b.subscriber)),
+			))
 	}
 	return nil
 }
@@ -240,9 +251,11 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
 const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
 	"the in-memory EventBus cannot deliver events across process boundaries — " +
-	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL, " +
-	"and inject a real broker publisher/subscriber via WithPublisher/WithSubscriber" +
-	" — or remove topology.remote to keep all cells co-located (no broker needed)"
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL so " +
+	"eventtransport.Resolve selects a real broker, and thread its Transport.Kind via " +
+	"WithEventTransportKind plus a non-nil publisher/subscriber via WithPublisher/WithSubscriber" +
+	" — or drop the remote cells from the deployment topology (assembly topology.remote / " +
+	"DeploymentTopologySpec.Remote) to keep all cells co-located (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx

@@ -14,6 +14,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
   # redis + rabbitmq back the MULTI-POD topology only (GOCELL_ADAPTER_MODE=real
   # + GOCELL_CELL_ADAPTER_MODE=postgres): the distributed idempotency claimer +
@@ -42,6 +43,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
 
   rabbitmq:
     image: rabbitmq:3-management-alpine

@@ -209,7 +209,8 @@ func TestInstallableStripTransform01(t *testing.T) {
 //	(a) output has 0 replace lines
 //	(b) every pinned internal require path is in PublishableModules(root)
 //
-// (INSTALLABLE-REQUIRES-PUBLISHABLE-01, Hard).
+// (INSTALLABLE-REQUIRES-PUBLISHABLE-01, Medium — see §Grading above; this is a
+// dynamic runtime scan, not a Hard byte/type freeze).
 func TestInstallableRequiresPublishable01(t *testing.T) {
 	const rule = "INSTALLABLE-REQUIRES-PUBLISHABLE-01"
 

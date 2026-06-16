@@ -9,3 +9,13 @@ endpoints:
   grpc:
     service: device.command.v1.DeviceCommandService
     proto: contracts/grpc/device/command/v1/device_command.proto
+    # Per-method ABAC permission overlay (#2008). Both RPCs are authed and gated on
+    # device:command (admin/operator baseline) — the same coarse gate the HTTP
+    # devicecommand enqueue route uses. The interceptor PDP gate enforces this;
+    # the handler no longer hand-authorizes. Strict fail-closed: every non-public
+    # RPC must appear here (completeness pre-pass), else it is a dead 403.
+    methods:
+      - name: IssueCommand
+        permission: device:command
+      - name: WatchCommands
+        permission: device:command

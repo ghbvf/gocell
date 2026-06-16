@@ -259,6 +259,9 @@ func buildSSOBFFBootstrapOptions(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(infra.transport.Publisher),
 		bootstrap.WithSubscriber(infra.transport.Subscriber),
+		// Sealed broker-kind fact from eventtransport.Resolve: the phase0
+		// split-topology gate requires a real broker, not an in-process bus (#2211).
+		bootstrap.WithEventTransportKind(infra.transport.Kind),
 		bootstrap.WithConsumerBase(cb),
 		bootstrap.WithManagedResource(pool),
 		// Defense-in-depth: validate NonceStore/ConsumerClaimer kind against topology

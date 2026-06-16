@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 )
 
 // pathPlaceholderRe extracts every `{name}` placeholder from an HTTP path
@@ -959,12 +960,23 @@ const fieldEndpointsGRPCMethods = "endpoints.grpc.methods"
 //     contractgen referential pre-pass — it is silently inert. Rejecting it keeps
 //     "every overlay has a live consumer" true and makes the referential pre-pass
 //     a guaranteed gate (no overlay can exist outside codegen).
-//   - vacuous-entry (public:true required): in #1675 public is the only flag, so
-//     a public:false entry is indistinguishable from omission — pure config noise.
-//     #2008 widens this guard to "asserts ≥1 non-default" when ABAC fields land.
+//   - vacuous-entry (≥1 non-default required): an entry must assert public:true OR
+//     a permission. Neither (a bare {name} or public:false) is indistinguishable
+//     from omission — pure config noise. (#1675 carried only public; #2008 widened
+//     this to "public:true OR permission".)
+//   - public ⊕ permission mutex (#2008): a JWT-exempt RPC has no authenticated
+//     subject to authorize, so carrying a permission on it is contradictory.
+//   - permission closed-set (#2008): a non-empty permission must be a member of the
+//     closed authz registry (authz.IsKnownPermissionString) — a typo fails at
+//     validate time rather than silently denying at runtime. This is the one guard
+//     that reaches outside metadata (into pkg/authz), legal because authz is a leaf
+//     pkg package (kernel→pkg is allowed) with no kernel dependency.
 //
 // AI-robust: Medium (governance YAML-metadata validate layer, same tier as
-// FMT-37). The Hard referential gate is the contractgen pre-pass + cellgen golden.
+// FMT-37). The Hard referential gate is the contractgen pre-pass + cellgen golden;
+// the cellgen completeness pre-pass (EnrichGrpcServicesWithProtoInfo: every non-public
+// proto method carries a permission) is the #2008 sibling that FMT-41 cannot do (it
+// cannot read the .proto).
 func (v *Validator) validateFMT41() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -1017,12 +1029,26 @@ func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []Validat
 				fmt.Sprintf("grpc contract %q declares endpoints.grpc.methods entry %q more than once", c.ID, m.Name),
 				"remove the duplicate method entry",
 			))
-		case !m.Public:
+		case !m.Public && m.Permission == "":
 			results = append(results, v.newError(
 				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
 				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q asserts no non-default flag "+
-					"(public:false is equivalent to omission)", c.ID, m.Name),
-				"set public:true, or remove the entry (#1675 carries only the public flag; ABAC fields arrive in #2008)",
+					"(neither public:true nor a permission)", c.ID, m.Name),
+				"set public:true (JWT-exempt) or permission:<action> (ABAC-gated), or remove the entry",
+			))
+		case m.Public && m.Permission != "":
+			results = append(results, v.newError(
+				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q sets BOTH public and permission; "+
+					"a JWT-exempt RPC has no authenticated subject to authorize", c.ID, m.Name),
+				"keep public:true (no auth) OR permission:<action> (ABAC-gated), not both",
+			))
+		case m.Permission != "" && !authz.IsKnownPermissionString(m.Permission):
+			results = append(results, v.newError(
+				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q has permission %q, "+
+					"which is not a member of the closed authz permission registry", c.ID, m.Name, m.Permission),
+				"use a registered authz action string (e.g. device:command); add a new Perm* to framework/pkg/authz if needed",
 			))
 		}
 	}

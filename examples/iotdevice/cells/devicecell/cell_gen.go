@@ -95,6 +95,10 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registrar) error {
 		ContractID: "grpc.device.command.v1",
 		CellID:     "devicecell",
 		Listener:   cell.PrimaryListener,
+		MethodPermissions: map[string]string{
+			"/device.command.v1.DeviceCommandService/IssueCommand":  "device:command",
+			"/device.command.v1.DeviceCommandService/WatchCommands": "device:command",
+		},
 		Register: func(r grpc.ServiceRegistrar) {
 			grpc0.RegisterDeviceCommandServiceServer(r, c.commandRPCServer)
 		},

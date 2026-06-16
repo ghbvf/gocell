@@ -4,9 +4,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	runtimegrpc "github.com/ghbvf/gocell/framework/runtime/grpc"
 	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
@@ -34,6 +36,26 @@ type Deps struct {
 	Clock clock.Clock
 	// Verifier authenticates bearer tokens (required; nil fails closed).
 	Verifier auth.IntentTokenVerifier
+	// Authorizer is the ABAC PDP the per-method permission gate consults (#2008),
+	// the gRPC analog of bootstrap.WithPrimaryAuthorizer for HTTP. The composition
+	// root supplies the same cell-provided Authorizer it wires into the HTTP primary
+	// listener so gRPC method authorization is the identical decision.
+	//
+	// nil is permitted ONLY when no cell declares permission-gated methods. NewServerInterceptors
+	// threads whether this is non-nil into the minted registrar (WithPermissionGate); if any
+	// registered spec carries endpoints.grpc.methods[].permission while this is nil, Register
+	// fail-fasts at startup (phase7b drain, after Init, before Serve) — parity with HTTP's
+	// bootstrap.ResolveAuthorizer pre-serve guard (#2008 F1). A gated method with no Authorizer
+	// no longer boots-and-403s-at-request-time; the wiring bug surfaces at boot.
+	Authorizer auth.Authorizer
+	// MetricsProvider is the assembly's metrics backend. When it is a REAL provider
+	// (kernelmetrics.IsReal — non-nil, non-Nop) NewServerInterceptors wraps Authorizer in
+	// auth.NewObservableAuthorizer so every gRPC PDP decision is counted + timed under the same
+	// auth_pdp_decision_* series HTTP uses (#2008 F8 — transport parity; the metric family is
+	// shared via the provider's registerOrReuse, no transport label, no double-registration).
+	// A Nop/nil provider leaves Authorizer bare (metrics are best-effort and never gate the
+	// verdict), mirroring the HTTP bootstrap hasRealMetricsProvider gate.
+	MetricsProvider kernelmetrics.Provider
 	// AuthOptions configures the auth interceptor (public-method and
 	// password-reset-exempt predicates).
 	AuthOptions []AuthOption
@@ -71,26 +93,37 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 		UnaryTracing(deps.Tracer),
 		UnaryAccessLog(deps.Clock),
 		UnaryMetrics(deps.Collector, deps.Clock, validCellIDs),
-		UnaryAuth(deps.Verifier, authOptionsWithPublicMethods(deps.AuthOptions, reg)...),
+		UnaryAuth(deps.Verifier, authChainOptions(deps, reg)...),
 		UnaryRecovery(),
 	)
 }
 
-// authOptionsWithPublicMethods returns the composition-root AuthOptions with the
-// registrar-sourced public-method predicate added. The registrar is the SINGLE
-// runtime source of the public-method bypass set (#1675): chain.go installs
-// WithPublicMethod(reg.IsPublicMethod) — derived from each cell's
-// endpoints.grpc.methods[] overlay — and GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01
-// forbids any OTHER production reference to WithPublicMethod, so the composed
-// (OR) union has exactly one member in production: the registrar. WithPublicMethod
-// composes additively (see its doc), so this is the sole production installer; test
-// harnesses may OR-in synthetic exemptions via deps.AuthOptions (allowed only in
-// _test.go). A fresh slice is returned so the unary and stream chains (sharing one
-// Deps) never alias-append into the same backing array.
-func authOptionsWithPublicMethods(opts []AuthOption, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
-	out := make([]AuthOption, 0, len(opts)+1)
-	out = append(out, opts...)
-	out = append(out, WithPublicMethod(reg.IsPublicMethod))
+// authChainOptions returns the composition-root AuthOptions with the
+// registrar/authorizer-sourced predicates added. The registrar is the SINGLE
+// runtime source of BOTH gRPC auth dimensions:
+//
+//   - public-method bypass (#1675): WithPublicMethod(reg.IsPublicMethod), derived
+//     from each cell's endpoints.grpc.methods[] (public:true). Guarded by
+//     GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01.
+//   - per-method permission gate (#2008): WithPermissionResolver(reg.PermissionForMethod),
+//     derived from endpoints.grpc.methods[].permission, plus WithPDPAuthorizer(deps.Authorizer)
+//     — the cell-provided PDP, the gRPC analog of bootstrap.WithPrimaryAuthorizer.
+//     Guarded by GRPC-PERMISSION-GATE-WIRING-FUNNEL-01.
+//
+// chain.go is the SOLE production installer of all three; the funnel archtests
+// forbid any other production reference, so each composed source has exactly one
+// member in production: the registrar/authorizer. Test harnesses may add synthetic
+// options via deps.AuthOptions (allowed only in _test.go). A fresh slice is returned
+// so the unary and stream chains (sharing one Deps) never alias-append into the same
+// backing array.
+func authChainOptions(deps Deps, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
+	out := make([]AuthOption, 0, len(deps.AuthOptions)+3)
+	out = append(out, deps.AuthOptions...)
+	out = append(out,
+		WithPublicMethod(reg.IsPublicMethod),
+		WithPermissionResolver(reg.PermissionForMethod),
+		WithPDPAuthorizer(deps.Authorizer),
+	)
 	return out
 }
 
@@ -108,7 +141,30 @@ func authOptionsWithPublicMethods(opts []AuthOption, reg *runtimegrpc.ServiceReg
 // two. It also closes the "forgot newStreamChain" streaming-auth gap while keeping
 // adapters/grpc free of a direct interceptor import.
 func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
-	reg := runtimegrpc.NewServiceRegistrar()
+	// F1 (#2008): capture whether a PDP Authorizer backs the gate BEFORE the F8
+	// wrap (the observable decorator is always non-nil, so reading after would mask
+	// a nil source). The minted registrar carries this bit so Register fail-fasts
+	// at startup if a permission-gated spec is registered with no Authorizer.
+	permissionGateWired := !validation.IsNilInterface(deps.Authorizer)
+
+	// F8 (#2008): wrap the PDP Authorizer with decision metrics when a real metrics
+	// provider is configured, so gRPC PDP decisions reach the same auth_pdp_decision_*
+	// series as HTTP (transport parity). Centralized here — every gRPC cell gets it,
+	// not per-composition-root. Skipped when there is no Authorizer (nothing to gate)
+	// or no real provider (metrics are best-effort, never gate the verdict). The metric
+	// family is shared with the HTTP path via the provider's registerOrReuse (same name +
+	// labels), so wrapping in both transports does not double-register.
+	if permissionGateWired && kernelmetrics.IsReal(deps.MetricsProvider) {
+		pdpMetrics, err := auth.NewPDPMetrics(deps.MetricsProvider)
+		if err != nil {
+			panic(panicregister.Approved("grpc-interceptor-pdp-metrics",
+				errcode.Assertion(
+					"interceptor.NewServerInterceptors: register PDP decision metrics: %v", err)))
+		}
+		deps.Authorizer = auth.NewObservableAuthorizer(deps.Clock, deps.Authorizer, pdpMetrics)
+	}
+
+	reg := runtimegrpc.NewServiceRegistrar(runtimegrpc.WithPermissionGate(permissionGateWired))
 	drain := runtimegrpc.NewDrainSignal()
 	return runtimegrpc.NewServerInterceptorsBundle(
 		[]grpc.ServerOption{
