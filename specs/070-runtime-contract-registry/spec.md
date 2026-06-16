@@ -281,7 +281,7 @@ HTTP 数据面从「启动期一次性 drain 注册」升级为运行时 add/rem
 1. **Given** 一个声明 HTTP-provider 契约的活体外部 cell，**When** 框架在隔离窗口跑读/幂等面 conformance，**Then** 通过则晋级 conformant 并写 result record，失败则停 probing。
 2. **Given** 一个声明了 setup 但缺 teardown 的 conformance 用例，**When** 校验，**Then** sealed 类型不可表达（编译/校验错）。
 
-**Trigger**: 随 US7（P3a Admin 审批）落地后启动；首档不 hard-depend 多租户。
+**Trigger**: 随 US7（Admin 审批，P2）落地后启动；首档不 hard-depend 多租户。
 
 ---
 

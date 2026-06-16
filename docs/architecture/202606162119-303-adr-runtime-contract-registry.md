@@ -9,7 +9,7 @@
   控制面/数据面转发的架构形态；③ 完整威胁矩阵 + 每行补偿 sub-issue 指针；④ 与既有扇出
   archtest 的 scope 边界。注册中心的**实现**——`registrycore` cell、`contract_registrations`
   表、状态机、governance gate adapter、数据面运行时增删、conformance 探测——一律属下游
-  US2-US18（#2231–#2248），**不在本 ADR 落地**。证据底座：
+  US2-US18（#2231 + #2233–#2248；#2232 为无关 CI issue、非本 epic），**不在本 ADR 落地**。证据底座：
   `specs/070-runtime-contract-registry/{spec,research,tasks}.md`。
 
 ## Context
