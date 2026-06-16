@@ -92,7 +92,7 @@ Hard」措辞掩盖此降级**（AI-robust 章程：Soft 严禁、Medium 须显�
                                                               (#2240/#2241/#2242) ──转发──▶ 外部 cell 端点 (#2244)
 ```
 
-状态机：`submitted → probing → (conformant → pending-approval → approved | rejected) → active → retired`。
+状态机（分支式，`rejected` 是终态、无 →active 迁移）：主路径 `submitted → probing → conformant → pending-approval → approved → active → retired`；终态分支 `probing → rejected`（conformance 失败）、`pending-approval → rejected`（admin 拒绝）。`active → retired` 由 admin retire 触发并 remove 数据面订阅/路由。
 
 **范式对标（research.md §2/§4 实拉源码）**：
 - **K8s CRD + API aggregation layer**：CRD 运行时注册新资源类型而不重启 apiserver；
@@ -132,7 +132,7 @@ seam，其 §「discovery 接口形态与 #303 共享」已显式预留。#303 �
 | T3 | **命名空间冲突**：runtime 契约与 in-tree 契约 ID/topic/HTTP path 撞车 | 注册时 `(kind,domain-path,version,owner)` 四元组唯一性校验 + 外部契约强制命名空间前缀（对标 CRD NamesAccepted） | #2245 |
 | T4 | **consistency 越权**：runtime cell 声明超出 actor ceiling 的一致性级别 | 复用 actors.yaml `maxConsistencyLevel` 语义的 runtime 形态，超限 fail-closed | #2245 |
 | T5 | **数据面动态加载并发**：add/remove subscription 与正在消费的 goroutine 竞争 | per-handler 子 ctx 隔离 + map 锁 + Close 三阶段 drain；版本化 diff + 回退 fail-closed | #2240、#2241 |
-| T6 | **conformance 探测 SSRF / 出站攻击面**：框架主动向「提交方声明的任意端点」发请求 | egress allowlist + 鉴权 + 限流，禁裸打任意地址 | #2246 |
+| T6 | **出站攻击面（SSRF / 身份外泄）**：框架主动向「提交方声明的端点」出站——conformance 探测**与** US14 数据面转发（携 service token + principal/tenant）**与** ExternalEndpoint 注册 | **统一 endpoint egress allowlist admission**（egress allowlist + 鉴权 + 限流，禁裸打/内网 metadata 地址；数据面只消费 admitted endpoint，「探测过门、转发裸打」的边界不一致被消除）；US17 探测 blocked-by US16 admission 先就位 | #2246（admission）、#2244（转发只消费 admitted endpoint） |
 | T7 | **合成租户副作用泄漏**（conformance 写面）：合成租户请求触发真实外发 / 数据漏进共享态 | egress-suppression 标记（禁真实外发）+ 整租户可清除；**hard-depend 多租户 GA #1337 的隔离边界为真** | #2248（gated #1337） |
 | T8 | **gate fail-open**：校验器/租户/store 不可用时放行 | `FailurePolicy=Fail` fail-closed（对标 K8s admission 默认）——缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny | #2234、#2238 |
 | T9 | **审计不可追溯**：审批/激活无留痕 | submit/approve/reject/retire → auditcore hash chain（replayable PII hash/redaction） | #2239 |

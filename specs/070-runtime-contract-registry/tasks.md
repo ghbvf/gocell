@@ -39,6 +39,7 @@
 
 - [ ] T030 [US3] 包 `governance.Validator` 为 `{allowed,result,warnings}`（AdmissionResponse 式）；`:check`(dry-run 不落库) + `submit`(落库前同步校验) 双入口共用校验逻辑
 - [ ] T031 [P] [US3] FailurePolicy=Fail fail-closed（校验器/租户/store 不可用 → deny）+ 测试
+- [ ] T032 [US3] **runtime 扇出完整性校验**（ADR 承诺的等价 runtime 补偿）：注册时验 publisher/subscriber/owner 齐全（扇出 archtest 对 runtime 契约 vacuous 的 register-time 补偿）+ 缺 publisher/subscriber/owner 的 fail-closed 测试（与 US15 命名空间/ceiling 校验同走 gate）
 
 ### US4 — registrycore cell 骨架 + submit/list 契约声明（P1）→ #2235
 
@@ -56,15 +57,16 @@
 
 ### US6 — submit/list handlers + service 接线 + 契约测试（P1）→ #2237
 
-- [ ] T060 [US6] submit/list handler（typed response envelope）+ application service（`gocell:"required"` 依赖）接 US2 状态机 / US3 gate / US5 store
-- [ ] T061 [P] [US6] httptest：submit（合法→pending / 非法→4xx shared error schema）+ list（按 state 过滤）端到端闭环
+- [ ] T060 [US6] submit/list handler（typed response envelope）+ application service（`gocell:"required"` 依赖）接 US2 状态机 / US3 gate / US5 store；list 强制分页（`limit`≤500 截断 + `data`/`nextCursor`/`hasMore` envelope，per go-standards；复用现有 query pagination helper）
+- [ ] T061 [P] [US6] httptest：submit（合法→pending / 非法→4xx shared error schema）+ list（按 state 过滤 + cursor 翻页 + limit 上限截断）端到端闭环
 
 ## Phase 5: 审批 + 审计/事件（Wave 5，blocked-by US6）
 
-### US7 — Admin 审批 approve/reject + RBAC（P2）→ #2238
+### US7 — Admin 审批 approve/reject/retire + RBAC（P2）→ #2238
 
-- [ ] T070 [US7] `approve.v1`/`reject.v1` 契约 + handler；路由门禁 `auth.RequirePermission(authz.Permission)` 接 accesscore admin（PDP，不硬编 role）
-- [ ] T071 [P] [US7] 状态机不变式（conformant→pending-approval→approved；reject 不可激活）+ 非 admin fail-closed 测试
+- [ ] T070 [US7] `approve.v1`/`reject.v1`/`retire.v1` 契约 + handler；路由门禁 `auth.RequirePermission(authz.Permission)` 接 accesscore admin（PDP，不硬编 role）
+- [ ] T071 [P] [US7] 状态机不变式（conformant→pending-approval→approved；reject 不可激活；active→retired 终态）+ 非 admin fail-closed 测试（approve/reject/retire 三端点对称）
+- [ ] T072 [US7] retire：`active→retired` 迁移 + 审计（US8）+ `contract-retired` 事件 + 触发数据面 remove（US11/US12 消费）；contract test 覆盖 retire handler + 非 admin deny（FR-001 五端点闭合）
 
 ### US8 — 审批审计落账 + 激活/退役事件（P2）→ #2239
 
@@ -110,15 +112,15 @@
 - [ ] T150 [US15] 注册唯一性 `(kind,domain-path,version,owner)` 四元组（对标 CRD NamesAccepted）+ 外部契约命名空间前缀；与 in-tree 契约撞车拒绝
 - [ ] T151 [P] [US15] consistency 越权：runtime cell 声明级别经 actors.yaml `maxConsistencyLevel` runtime 形态裁决，超限 fail-closed
 
-### US16 — 恶意注册防护 + 限流 + conformance egress allowlist（P2）→ #2246
+### US16 — 恶意注册防护 + 限流 + endpoint egress allowlist（P2）→ #2246
 
 - [ ] T160 [US16] 注册端点鉴权 + 限流（防重复/恶意注册，429/稳定 errcode）
-- [ ] T161 [US16] conformance 探测 SSRF 防护：egress allowlist + 鉴权 + 限流，禁裸打任意端点
-- [ ] T162 [P] [US16] 测试：超频限流 / 非 allowlist 目标拒绝 / 未授权 submit 拒绝
+- [ ] T161 [US16] **统一 endpoint egress allowlist admission**：一切向提交方端点的出站——conformance 探测（US17）+ US14 数据面转发 + ExternalEndpoint 注册——同走一条 admission（egress allowlist + 鉴权 + 限流，禁裸打/内网 metadata 地址）；数据面只消费 admitted endpoint
+- [ ] T162 [P] [US16] 测试：超频限流 / conformance 或 US14 转发非 allowlist 目标拒绝 / 内网 metadata 地址拒绝 / 未授权 submit 拒绝
 
 ## Phase 9: 注册 conformance 自动测试（flag-cond，分档）
 
-### US17 — conformance 首档：读/幂等面 + setup/teardown（P2，flag-cond，blocked-by US7）→ #2247
+### US17 — conformance 首档：读/幂等面 + setup/teardown（P2，flag-cond，blocked-by US7 + US16）→ #2247
 
 - [ ] T170 [US17] `probing` 态机器门：合成 consumer 按契约 request schema 打活体端点（读/幂等面），断言 successStatus+响应 schema+声明 4xx/5xx 可达+error envelope 合规
 - [ ] T171 [US17] setup/teardown sealed 配对（缺 teardown 校验/编译错，AI-robust Hard）+ 凭据注入不入契约
@@ -136,9 +138,9 @@ US1(ADR) ─┬─ US2(SM) ─┬─ US3(gate) ─┐
           │           └─ US4(cell) ─┴─ US5(store) ─ US6(submit闭环) ─┬─ US7(approve) ─ US8(audit/event) ─┐
 US9(map) ──── US10(add/remove) ───────────────────────────────────── US11(reconcile) ←──────────────────┘
           └─ US12(http route)                                         │
-                                              US6 ─┬─ US13(SDK) ─ US14(转发) ←── #1423/#1966
-                                                   ├─ US15(namespace/ceiling) ─ US16(防护/egress)
-                                                   └─ US7 ─ US17(conformance 首档, flag-cond)
+                                              US6 ─┬─ US13(SDK) ─ US14(转发) ←── #1423/#1966 + US16(endpoint egress admission)
+                                                   ├─ US15(namespace/ceiling) ─ US16(防护/endpoint egress)
+                                                   └─ US7 ─┬─ US17(conformance 首档, flag-cond) ←── US16
                                               #1337 + US14 + US17 ─ US18(conformance 彻底档, flag-cond)
 ```
 
