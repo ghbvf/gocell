@@ -96,8 +96,10 @@ func (g *LastAdminGuard) CheckRemove(ctx context.Context, userID string, hasAdmi
 改用：
 
 - 应用层 `LastAdminGuard.CheckRemove` 在 tx 内执行
-- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`；trigger 在 count 前持有 transaction-scoped advisory lock，序列化 direct SQL / cascade delete 并发
+- DB 兜底：`role_assignments` 表上加 `BEFORE DELETE` trigger（行级），当被删行 `role_id='admin'` 且 `(SELECT COUNT(*) FROM role_assignments WHERE role_id='admin') = 1` 时 `RAISE EXCEPTION 'last_admin_protected'`；trigger 在 count 前持有 transaction-scoped advisory lock，序列化 direct SQL / cascade delete 并发
 - trigger 不替代应用层校验（应用层错误码更精准），是 DB 兜底防直连 SQL 误删
+
+> 注：migration 024（S4.0）进一步把本节的 admin 计数收紧为「effective admin = active AND admin role」，其 Up 强化 / Down 弱化语义见 §3.6。
 
 ### 3.3 setup endpoint lifecycle
 
@@ -131,6 +133,80 @@ POST /api/v1/access/setup/admin  → 201 if count(admin)==0
 ### 3.5 与 PR262 / typed AuthPlan 的关系
 
 本 ADR 是**纯产品语义决议**，不引入 typed Go primitive（admin 不变量是 cell 业务规则，不是跨 cell 协议）。runtime/auth 不出现 `AdminProtocol` 之类的 sealed type。
+
+### 3.6 Migration 024：S4.0 强化与 Down 弱化语义
+
+**Up 强化（S4.0）**
+
+migration 024（`adapters/postgres/migrations/024_effective_admin_invariant.sql`）把 §3.2
+描述的弱不变量（migration 019：计任何持有 `role_id='admin'` 的 `role_assignments` 行，含
+`users.status='locked'` 或 `'suspended'` 的用户）**收紧**为 S4.0 强不变量：
+
+> **effective admin = `users.status='active'` AND 持有 `role_id='admin'` 的 `role_assignments` 行**
+
+具体机制：
+
+- 在 `role_assignments` 上新建 `BEFORE DELETE` trigger（`effective_admin_invariant_on_role_assignments`）。
+- 在 `users` 上新建 `BEFORE UPDATE OR DELETE` trigger（`effective_admin_invariant_on_users`），
+  捕获 migration 019 触发器完全看不到的 `UPDATE users SET status='locked'` 路径。
+- 两个 trigger 共用单一函数 `effective_admin_invariant_fn()`，持同一 advisory lock key
+  与应用层 CTE 序列化。
+- migration 019 的 `last_admin_protected` trigger 及其函数在 Up 顶部被显式 DROP，
+  不保留兼容 shim（S4.0 彻底不向后兼容原则）。
+
+关闭的 loophole：019 弱计数允许 `DELETE FROM users WHERE id = <active admin>` 在
+`role_assignments` 触发器完全无感知的情况下成功（users 表的 DELETE 只在 024 之后才被守卫），
+从而留下系统中仅有一个 locked/suspended admin、HTTP 恢复路径全部失效的状态。
+
+**Down 弱化（S4.0 hazard 重开）**
+
+024 的 Down 段回滚到 019 的 `last_admin_protected_fn()`：
+
+```
+-- WARNING: rolling back weakens the at-least-one-admin invariant — a locked
+-- admin would once again count as a usable holder, re-opening the S4.0 hazard.
+-- Destructive-down gate is enforced in Go (Migrator.Down + DestructiveDownPermit); see issue #1248.
+```
+
+回滚后，`users` 表上的 trigger 被 DROP，locked/suspended admin 重新计入 admin 持有者总数
+→ **S4.0 hazard 重开**（active admin 可被删除且 locked admin 顶替其位置、系统失去可用 admin）。
+
+**门控**
+
+destructive Down 由 Go 层 sealed `DestructiveDownPermit`（`adapters/postgres/migrator.go` 中
+`Migrator.Down` 的 `permit` 位置参，唯一构造器 `AllowDestructiveDown`）门控：包外无法伪造，
+非授权调用方无法触达 Down 路径（issue #1248）。migration 024 内的三行 inline WARNING 与本节
+描述同源。
+
+**回滚后运维验证**
+
+自 migration 050 起，effective-admin invariant 是 **per-tenant** 的——每个 tenant 至少
+需要一个 active admin，全局计数非零可能掩盖某个 tenant 已无可用 admin 的情况。因此
+回滚验证必须按 tenant 分组，不能依赖全局计数。
+
+回滚完成后，执行以下 SQL 列出「没有 active admin 的 tenant」（结果不为空即为危险集）：
+
+```sql
+SELECT u.tenant_id,
+       count(*) FILTER (WHERE ra.role_id = 'admin' AND u.status = 'active') AS active_admins
+  FROM users u
+  LEFT JOIN role_assignments ra
+    ON ra.tenant_id = u.tenant_id AND ra.user_id = u.id
+ GROUP BY u.tenant_id
+HAVING count(*) FILTER (WHERE ra.role_id = 'admin' AND u.status = 'active') = 0;
+```
+
+结果中出现的任一 tenant（active_admins = 0）必须为该 tenant reactivate 一个 admin，
+或（该 tenant 从未初始化）经 `/api/v1/access/setup/admin` 恢复。若只需检查单个
+tenant，在 `FROM users u` 后加 `WHERE u.tenant_id = '<target>'` 即可。
+
+**参考**
+
+- `adapters/postgres/migrations/024_effective_admin_invariant.sql`（Up 强化 + Down WARNING）
+- `adapters/postgres/migrations/050_accesscore_tenant_id.sql`（per-tenant invariant 重建）
+- `adapters/postgres/migrations/019_roles.sql`（`last_admin_protected_fn` 弱语义）
+- `adapters/postgres/migrator.go`（`DestructiveDownPermit` sealed 门控）
+- issue #1248（destructive-down permit 设计）；来源 PR #1396（关联 issue #1054 / #740）
 
 ---
 

@@ -26,7 +26,7 @@ Compose v2 ships bundled with Docker Desktop and with the `docker-compose-plugin
 package on Linux. The `make local-up` target calls `docker compose` (v2 syntax).
 
 
-## Quick Start (5 steps)
+## Quick Start (6 steps)
 
 Run these commands from the repository root in a single terminal. Each step
 takes a few seconds; the whole sequence finishes in under 5 minutes.
@@ -44,7 +44,7 @@ cd gocell
 bash scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 13 values in `.env.local` (see §Secrets table for the
+The script generates 14 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -108,11 +108,58 @@ A successful response is HTTP 201 and a JSON body containing an RS256-signed
 access token and a refresh token. For example:
 
 ```json
-{"data": {"accessToken": "eyJ...", "refreshToken": "eyJ...", "expiresIn": 900}}
+{
+  "data": {
+    "accessToken": "eyJ...",
+    "refreshToken": "eyJ...",
+    "expiresAt": "2026-06-15T13:15:49Z",
+    "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "passwordResetRequired": false
+  }
+}
 ```
 
 Use the `accessToken` as a `Bearer` token in the `Authorization` header for all
 subsequent calls to `/api/v1/*` endpoints.
+
+### Step 6: Verify the audit hash chain
+
+With the admin Bearer token from step 5 (admin carries the `audit:read` permission),
+query the audit ledger:
+
+```bash
+TOKEN="<paste accessToken here>"
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/api/v1/audit/entries?limit=10' | jq .
+```
+
+Because the admin token carries `audit:read`, omitting `actorId` performs a
+**permissioned ledger-wide read** — the response includes entries from all actors.
+You should see at least two event types produced by the steps above:
+
+- `event.user.created.v1` — published by the `system` actor during `setup/admin` (step 4)
+- `event.session.created.v1` — published when you logged in (step 5)
+
+**`actorId` query parameter semantics:**
+
+- Omit `actorId` — permissioned ledger-wide read; requires `audit:read` permission.
+- `?actorId=<your userId>` — explicit self-read; exempt from the permission gate (the
+  caller is reading their own rows). Note: this exemption applies only at the routing
+  gate layer; data-layer row visibility is still governed independently by the
+  principal's RowScope (self → only the caller's own rows).
+- `?actorId=system` — filters to system-actor events only (setup, migrations, and
+  other platform operations). Unlike `?actorId=<your userId>`, this does NOT trigger
+  the self-read exemption (the caller's subject is a UUID and can never equal the
+  string `"system"`); the request still requires `audit:read` permission (satisfied
+  here by the admin token).
+
+To see only system-actor events (useful for verifying what setup/admin wrote):
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/api/v1/audit/entries?actorId=system&limit=10' | jq .
+```
 
 
 ## Topology
@@ -307,7 +354,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
 
    ```bash
    docker compose -f docker-compose.local.yml --env-file .env.local exec corebundle \
-     curl -fsS "http://127.0.0.1:9091/readyz?verbose" | grep audit_admin
+     sh -c 'curl -fsS -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" "http://127.0.0.1:9091/readyz?verbose"' | grep audit_admin
    ```
 
    A healthy output contains `"postgres_audit_admin_restricted_ready": "ok"`.
