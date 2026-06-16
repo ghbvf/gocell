@@ -2159,3 +2159,32 @@ func TestHandleQuery_FilterValidation_ValidationBeforeLogging(t *testing.T) {
 		})
 	}
 }
+
+// TestList_NilLogger_AdminQuery_NoPanic is the regression guard for the codex F1
+// finding: the admin audit-query breadcrumb (logAdminAuditQuery) switched from the
+// nil-safe package-level slog.InfoContext to an injected logger.InfoContext, so a
+// Service constructed with a nil logger would nil-panic on the admin path. NewService
+// now normalizes a nil logger to slog.Default(), so the dereference is safe.
+//
+// The admin-with-empty-actorId case is the exact branch that panicked: it hits
+// `case actorIDFilter == "":` → logger.InfoContext("audit: admin querying all actors").
+func TestList_NilLogger_AdminQuery_NoPanic(t *testing.T) {
+	store := newHandlerStore(t)
+
+	// nil logger: pre-fix this nil-panics inside logAdminAuditQuery.InfoContext.
+	svc, err := NewService(store, testCodec(), nil, outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Admin with NO actorId filter → logAdminAuditQuery fires the "querying all
+	// actors" breadcrumb, dereferencing the (formerly nil) injected logger.
+	ctx := auditTestCtx("admin-user", []string{"admin"})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(ctx)
+
+	require.NotPanics(t, func() { mux.ServeHTTP(w, req) },
+		"admin audit query must not panic when the Service was built with a nil logger")
+	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}
