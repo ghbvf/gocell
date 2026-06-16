@@ -48,6 +48,27 @@
 // the emit DRIVER (it produces the data and triggers the fenced write); the
 // consumer cell is the L2 atomic EXECUTOR.
 //
+// # Consumer wiring
+//
+// A consuming cell wires this Reconciler by:
+//  1. implementing DeviceCertRepository — ListRenewalCandidates (scan State=active
+//     certs with NotAfter <= cutoff) and ApplyFenced (the monotonic-epoch CAS that
+//     persists the cert row AND writes the cert-issued L2 outbox entry in ONE
+//     transaction — see ApplyFenced's contract);
+//  2. NewReconciler(clk, repo, signer, authorizer, policy, logger);
+//  3. binding it on a reconcile.Loop in the composition root:
+//     reconcile.New(rec, SingleTenant()|TenantScoped()).WithTrigger(
+//     reconcile.TickerTrigger(clk, interval)).WithLeader(le).WithFencedRepo(repo).
+//     WithoutDefaultRequeue().Build() — a TickerTrigger is the intended driver
+//     (this Reconciler always does a full bounded sweep; entity-specific Requests
+//     are ignored), and WithLeader+WithFencedRepo are REQUIRED (Reconcile fails
+//     closed without a fenced writer).
+//
+// The Signer / Authorizer are bound by the certsigning composition root (a later
+// epic PR). Specific-certificate lookup (by CertScope, never a bare serial — the
+// #1899 status-contract isolation invariant) is NOT part of this seam: it belongs
+// to the device status / EST endpoints (a later epic PR), not this renewal sweep.
+//
 // # Enforced invariants
 //
 // CERTLIFECYCLE-SIGN-VIA-FUNNEL-01. This Reconciler obtains issued certificates
@@ -55,8 +76,9 @@
 // reaches into a concrete CA. The SECURITY PROPERTY is Hard by inheritance, no
 // new Hard mechanism required:
 //   - certsigning.IssuedCert has only unexported fields, so this package cannot
-//     forge one by composite literal (compile-time Hard,
-//     CERT-VALUE-SEALED-CONSTRUCTION-01);
+//     forge a POPULATED IssuedCert by composite literal (the empty literal
+//     IssuedCert{} compiles but is the invalid zero value its consumers reject)
+//     (compile-time Hard, CERT-VALUE-SEALED-CONSTRUCTION-01);
 //   - the sole minter certsigning.NewIssuedCert is restricted by the existing
 //     CERT-SIGN-FUNNEL-01 caller-allowlist to {adapters/softca}, which excludes
 //     certlifecycle;
@@ -70,10 +92,14 @@
 // does not call NewIssuedCert, and is absent from the mint allowlist) — see
 // tools/archtest/certlifecycle_invariants_test.go.
 //
-// RECONCILE-FENCED-WRITE-FUNNEL-01 (Hard, reused). The renewed certificate is
+// RECONCILE-FENCED-WRITE-FUNNEL-01 (funnel, reused). The renewed certificate is
 // persisted EXCLUSIVELY through reconcile.FencedWriterFrom(ctx).Write; this
-// package never calls DeviceCertRepository.ApplyFenced directly. The fenced
-// writer's monotonic lease-epoch CAS is the cross-replica at-most-once guarantee.
+// package never calls DeviceCertRepository.ApplyFenced directly. The funnel is
+// upstream-Hard (FencedWriter's epoch field is unexported, so a writer with a
+// chosen epoch is uncompilable) and downstream-Medium (the ban on calling
+// ApplyFenced directly is the kernel archtest's caller-allowlist scan, which
+// covers this package). The fenced writer's monotonic lease-epoch CAS is the
+// cross-replica at-most-once guarantee.
 //
 // Why not runtime/command: the issue's "reuse runtime/command" is satisfied at
 // the reconcile-loop archetype level; the "queue active-uniqueness, at most one

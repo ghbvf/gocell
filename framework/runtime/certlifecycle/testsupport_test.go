@@ -8,12 +8,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"math/big"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	cl "github.com/ghbvf/gocell/framework/runtime/certlifecycle"
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
@@ -42,31 +44,13 @@ func deviceCSR(t *testing.T, cn string) []byte {
 	return der
 }
 
-// leafCertDER builds a parseable self-signed leaf certificate DER with the given
-// CN, serial and validity window — for the fakeSigner to wrap in an IssuedCert
-// (NewIssuedCert parses it to derive serial / notBefore / notAfter).
-func leafCertDER(cn string, serial int64, notBefore, notAfter time.Time) []byte {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		panic(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(serial),
-		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    notBefore,
-		NotAfter:     notAfter,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		panic(err)
-	}
-	return der
-}
-
 // fakeSigner is a certsigning.Signer minting an IssuedCert from a per-call leaf
-// DER. It records every AuthorizedCertRequest and can be configured to fail.
+// DER (signed by a key generated once at construction). It records every
+// AuthorizedCertRequest and can be configured to fail. Runtime crypto errors are
+// returned (never panicked) so a Sign failure surfaces as a clean test failure.
 type fakeSigner struct {
 	mu        sync.Mutex
+	key       *ecdsa.PrivateKey
 	err       error
 	notBefore time.Time
 	notAfter  time.Time
@@ -75,8 +59,13 @@ type fakeSigner struct {
 	calls     int
 }
 
-func newFakeSigner(notBefore, notAfter time.Time) *fakeSigner {
-	return &fakeSigner{notBefore: notBefore, notAfter: notAfter, serial: 1000}
+func newFakeSigner(t *testing.T, notBefore, notAfter time.Time) *fakeSigner {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen signer key: %v", err)
+	}
+	return &fakeSigner{key: key, notBefore: notBefore, notAfter: notAfter, serial: 1000}
 }
 
 func (s *fakeSigner) Sign(_ context.Context, req cs.AuthorizedCertRequest) (cs.IssuedCert, error) {
@@ -88,10 +77,19 @@ func (s *fakeSigner) Sign(_ context.Context, req cs.AuthorizedCertRequest) (cs.I
 		return cs.IssuedCert{}, s.err
 	}
 	s.serial++
-	der := leafCertDER(req.Request().Subject().CommonName(), s.serial, s.notBefore, s.notAfter)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(s.serial),
+		Subject:      pkix.Name{CommonName: req.Request().Subject().CommonName()},
+		NotBefore:    s.notBefore,
+		NotAfter:     s.notAfter,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &s.key.PublicKey, s.key)
+	if err != nil {
+		return cs.IssuedCert{}, fmt.Errorf("fake sign: create cert: %w", err)
+	}
 	issued, err := cs.NewIssuedCert(req.Request().Scope(), der, nil, 0)
 	if err != nil {
-		panic(err)
+		return cs.IssuedCert{}, fmt.Errorf("fake sign: new issued cert: %w", err)
 	}
 	return issued, nil
 }
@@ -212,7 +210,7 @@ func activeCandidate(t *testing.T, deviceID string, notBefore, notAfter time.Tim
 	t.Helper()
 	return cl.Candidate{
 		DeviceID:   deviceID,
-		TenantID:   testTenant,
+		TenantID:   tenant.TenantID(testTenant),
 		IssuerID:   testIssuer,
 		Serial:     "00aa",
 		Epoch:      1,

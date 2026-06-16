@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
-	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
@@ -133,28 +132,52 @@ func NewReconciler(
 func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
 	// Fail-closed BEFORE any work: the renewal persist MUST be fenced. A Loop wired
 	// without WithFencedRepo+WithLeader has no lease-scoped write surface, so
-	// persisting would be unfenced — refuse rather than scan and then write unsafely.
+	// persisting would be unfenced. This is a wiring misconfiguration that every
+	// tick would hit identically, so mark it PermanentError — the Loop dead-letters
+	// it rather than burning indefinite transient backoff (fail-fast on misconfig).
 	fw, ok := reconcile.FencedWriterFrom(ctx)
 	if !ok {
-		return reconcile.Result{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			"certlifecycle: no fenced writer in ctx — wire reconcile.WithFencedRepo + WithLeader")
+		return reconcile.Result{}, reconcile.PermanentError(errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"certlifecycle: no fenced writer in ctx — wire reconcile.WithFencedRepo + WithLeader"))
 	}
 	now := r.clk.Now()
 	cutoff := now.Add(r.policy.MaxLookahead)
 	candidates, err := r.repo.ListRenewalCandidates(ctx, cutoff)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("certlifecycle: scan near-expiry: %w", err)
+		// Transient (DB/scan I/O may recover): errcode.Wrap stamps the Kind so the
+		// Loop classifies it as retryable rather than guessing from a bare error.
+		return reconcile.Result{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrInternal,
+			"certlifecycle: scan near-expiry failed", err)
 	}
 	var firstErr error
+	c := sweepCounts{total: len(candidates)}
 	for _, cand := range candidates {
-		if err := r.reconcileOne(ctx, fw, cand, now); err != nil && firstErr == nil {
+		if err := r.reconcileOne(ctx, fw, cand, now, &c); err != nil && firstErr == nil {
 			// Bubble the first transient error so the Loop backs off and re-sweeps;
 			// the fenced CAS makes a re-sweep idempotent. Per-candidate deny / stale
 			// outcomes are handled inside reconcileOne and never returned.
 			firstErr = err
 		}
 	}
+	// Per-sweep summary: the reconcile Loop maps a nil return to result="success",
+	// so deny / not-due / skipped outcomes are invisible in the framework metric.
+	// This single Info line per sweep makes the renewed/denied/skipped/errored
+	// distribution observable (e.g. a long-running all-denied state) without a
+	// per-device (high-cardinality) metric.
+	r.logger.Info("certlifecycle: swept cert renewals",
+		slog.Int("candidates", c.total), slog.Int("renewed", c.renewed),
+		slog.Int("denied", c.denied), slog.Int("skipped", c.skipped),
+		slog.Int("errored", c.errored))
 	return reconcile.Result{}, firstErr
+}
+
+// sweepCounts aggregates per-candidate outcomes of one Reconcile sweep for the
+// summary log. denied counts authorization deny/error (the security-relevant
+// "policy said no"); skipped counts benign non-renewals (not-due, non-renewable
+// state, malformed row, constraint violation, lost fencing race); errored counts
+// transient failures that also bubble to the Loop.
+type sweepCounts struct {
+	total, renewed, denied, skipped, errored int
 }
 
 // reconcileOne renews one candidate. It returns a non-nil (transient) error only
@@ -162,13 +185,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 // signing failure, an unexpected fenced-write error). Deny, malformed-row, jitter
 // not-due, non-renewable state, and stale-epoch rejection are logged and skipped
 // (return nil) — they must not poison the rest of the sweep.
-func (r *Reconciler) reconcileOne(ctx context.Context, fw reconcile.FencedWriter, cand Candidate, now time.Time) error {
+func (r *Reconciler) reconcileOne(ctx context.Context, fw reconcile.FencedWriter, cand Candidate, now time.Time, c *sweepCounts) error {
 	if !cand.State.renewable() {
 		r.logger.Debug("certlifecycle: skip non-renewable cert",
 			slog.String("device_id", cand.DeviceID), slog.String("state", cand.State.String()))
+		c.skipped++
 		return nil
 	}
 	if !dueForRenewal(now, cand.NotBefore, cand.NotAfter, cand.DeviceID, cand.Serial) {
+		c.skipped++
 		return nil
 	}
 	if now.After(cand.NotAfter) {
@@ -178,35 +203,43 @@ func (r *Reconciler) reconcileOne(ctx context.Context, fw reconcile.FencedWriter
 			slog.String("device_id", cand.DeviceID), slog.Uint64("epoch", cand.Epoch),
 			slog.Duration("expired_for", now.Sub(cand.NotAfter)))
 	}
-	return r.renew(ctx, fw, cand)
+	return r.renew(ctx, fw, cand, c)
 }
 
 // renew runs the Authorize → Sign → fenced-persist pipeline for one candidate.
-func (r *Reconciler) renew(ctx context.Context, fw reconcile.FencedWriter, cand Candidate) error {
+func (r *Reconciler) renew(ctx context.Context, fw reconcile.FencedWriter, cand Candidate, c *sweepCounts) error {
 	scope, subject, err := buildScopeSubject(cand)
 	if err != nil {
 		// Malformed row data (e.g. non-canonical tenant) — retry won't fix it; skip
 		// this candidate without poisoning the sweep.
 		r.logger.Error("certlifecycle: skip candidate with invalid identity",
-			slog.String("device_id", cand.DeviceID), slog.Any("err", err))
+			slog.String("device_id", cand.DeviceID), slog.String("tenant", string(cand.TenantID)),
+			slog.Any("err", err))
+		c.skipped++
 		return nil
 	}
 	grant, ok := r.authorize(ctx, scope, subject, cand)
 	if !ok {
+		c.denied++
 		return nil // fail-closed deny: do NOT sign, existing cert untouched
 	}
 	authReq, ok := r.buildAuthorizedRequest(scope, subject, cand, grant)
 	if !ok {
+		c.skipped++
 		return nil // request build / constraint violation: do NOT sign
 	}
 	issued, err := r.signer.Sign(ctx, authReq)
 	if err != nil {
 		// Signing failure: do NOT persist or emit; the existing certificate is
-		// untouched. Bubble transient so the Loop backs off (the CA may be down).
+		// untouched. Log at Error in the certlifecycle namespace (device-level
+		// visibility) and bubble transient so the Loop backs off (the CA may be down).
+		r.logger.Error("certlifecycle: sign renewed certificate failed",
+			slog.String("device_id", cand.DeviceID), slog.Any("err", err))
+		c.errored++
 		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrCertSignFailed,
 			"certlifecycle: sign renewed certificate failed", err)
 	}
-	return r.persist(ctx, fw, cand, issued)
+	return r.persist(ctx, fw, cand, issued, c)
 }
 
 // authorize evaluates the enrollment claim fail-closed. It returns ok=false (and
@@ -273,7 +306,9 @@ func (r *Reconciler) buildAuthorizedRequest(
 // epoch-bound FencedWriter. A stale-epoch rejection means another replica won the
 // fencing race: do NOT retry and do NOT emit (the winner's fenced write carries
 // the cert-issued fact). Any other write error is transient and bubbles.
-func (r *Reconciler) persist(ctx context.Context, fw reconcile.FencedWriter, cand Candidate, issued certsigning.IssuedCert) error {
+func (r *Reconciler) persist(
+	ctx context.Context, fw reconcile.FencedWriter, cand Candidate, issued certsigning.IssuedCert, c *sweepCounts,
+) error {
 	mut := &IssuedMutation{
 		DeviceID:    cand.DeviceID,
 		TenantID:    cand.TenantID,
@@ -290,10 +325,14 @@ func (r *Reconciler) persist(ctx context.Context, fw reconcile.FencedWriter, can
 		if errors.Is(err, reconcile.ErrFencedWriteStale) {
 			r.logger.Info("certlifecycle: lost fencing race — another replica renewed",
 				slog.String("device_id", cand.DeviceID), slog.Uint64("target_epoch", mut.TargetEpoch))
+			c.skipped++
 			return nil
 		}
-		return fmt.Errorf("certlifecycle: persist renewed certificate: %w", err)
+		c.errored++
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrInternal,
+			"certlifecycle: persist renewed certificate failed", err)
 	}
+	c.renewed++
 	r.logger.Info("certlifecycle: renewed certificate",
 		slog.String("device_id", cand.DeviceID), slog.Uint64("epoch", mut.TargetEpoch),
 		slog.String("serial", mut.Serial), slog.Time("not_after", mut.NotAfter))
@@ -301,13 +340,10 @@ func (r *Reconciler) persist(ctx context.Context, fw reconcile.FencedWriter, can
 }
 
 // buildScopeSubject derives the typed CertScope and DeviceSubject from the
-// candidate row. The tenant comes from cand.TenantID (the row), never from ctx
-// (#1821 — the reconcile Loop runs under a tenantless system identity).
+// candidate row. The tenant comes from cand.TenantID (the typed row value, never
+// from ctx — #1821 the reconcile Loop runs under a tenantless system identity);
+// NewCertScope / NewDeviceSubject validate it (canonical UUID) at construction.
 func buildScopeSubject(cand Candidate) (certsigning.CertScope, certsigning.DeviceSubject, error) {
-	tenantID, err := tenant.ParseTenantID(cand.TenantID)
-	if err != nil {
-		return certsigning.CertScope{}, certsigning.DeviceSubject{}, fmt.Errorf("tenant: %w", err)
-	}
 	issuer, err := certsigning.NewIssuerID(cand.IssuerID)
 	if err != nil {
 		return certsigning.CertScope{}, certsigning.DeviceSubject{}, fmt.Errorf("issuer: %w", err)
@@ -316,11 +352,11 @@ func buildScopeSubject(cand Candidate) (certsigning.CertScope, certsigning.Devic
 	if err != nil {
 		return certsigning.CertScope{}, certsigning.DeviceSubject{}, fmt.Errorf("device: %w", err)
 	}
-	scope, err := certsigning.NewCertScope(tenantID, issuer, device)
+	scope, err := certsigning.NewCertScope(cand.TenantID, issuer, device)
 	if err != nil {
 		return certsigning.CertScope{}, certsigning.DeviceSubject{}, fmt.Errorf("scope: %w", err)
 	}
-	subject, err := certsigning.NewDeviceSubject(tenantID, device, cand.CommonName)
+	subject, err := certsigning.NewDeviceSubject(cand.TenantID, device, cand.CommonName)
 	if err != nil {
 		return certsigning.CertScope{}, certsigning.DeviceSubject{}, fmt.Errorf("subject: %w", err)
 	}

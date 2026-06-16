@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile/reconciletest"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	cl "github.com/ghbvf/gocell/framework/runtime/certlifecycle"
 	cs "github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
@@ -108,7 +109,7 @@ func TestReconcileHappyPathRenews(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -123,7 +124,7 @@ func TestReconcileHappyPathRenews(t *testing.T) {
 	if mut.NewState != cl.StateActive() {
 		t.Errorf("NewState = %q, want active", mut.NewState.String())
 	}
-	if mut.TenantID != testTenant {
+	if string(mut.TenantID) != testTenant {
 		t.Errorf("mutation TenantID = %q, want %q (from row, not ctx)", mut.TenantID, testTenant)
 	}
 	if mut.IssuerID != testIssuer {
@@ -147,7 +148,7 @@ func TestReconcileSigningFailureDoesNotDamageCert(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	signer.err = errFake
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
@@ -166,7 +167,7 @@ func TestReconcileFailClosedDenyDoesNotSign(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{} // zero SignConstraints == not granted (deny)
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -186,7 +187,7 @@ func TestReconcileAuthorizeErrorDoesNotSign(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{err: errFake}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -205,7 +206,7 @@ func TestReconcileConstraintViolationDoesNotSign(t *testing.T) {
 	cand := activeCandidate(t, "device-1", nb, na)
 	cand.DNSNames = []string{"device-1.example"} // requested SAN outside the empty grant allowance
 	repo := newFakeRepo(cand)
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)} // allows NO SANs
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -225,7 +226,7 @@ func TestReconcileTTLViolationDoesNotSign(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL-time.Hour)} // maxTTL < SignTTL
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -242,7 +243,7 @@ func TestReconcileNotDueSkips(t *testing.T) {
 	now := time.Now()
 	nb, na := notDueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -264,7 +265,7 @@ func TestReconcileNonRenewableStateSkips(t *testing.T) {
 	cand := activeCandidate(t, "device-1", nb, na)
 	cand.State = cl.StateRevoked() // operator terminal — never renewed
 	repo := newFakeRepo(cand)
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -285,7 +286,7 @@ func TestReconcileExpiredCertReSignsToRecover(t *testing.T) {
 	// Already past notAfter, but active with a valid stored CSR → re-sign to recover.
 	nb, na := now.Add(-100*time.Hour), now.Add(-1*time.Hour)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -307,7 +308,7 @@ func TestReconcileStaleFencedWriteSkipsNoDuplicate(t *testing.T) {
 	if _, err := repo.ApplyFenced(context.Background(), "device-1", 99, "seed-high-epoch"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -325,9 +326,9 @@ func TestReconcileInvalidRowTenantSkips(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	cand := activeCandidate(t, "device-1", nb, na)
-	cand.TenantID = "not-a-canonical-uuid" // malformed row → identity build fails
+	cand.TenantID = tenant.TenantID("not-a-canonical-uuid") // malformed row → identity build fails
 	repo := newFakeRepo(cand)
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -352,7 +353,7 @@ func TestReconcileCorruptStoredCSRSkips(t *testing.T) {
 	cand := activeCandidate(t, "device-1", nb, na)
 	cand.CSRDER = []byte("not-a-valid-csr") // unparseable stored CSR → request build fails
 	repo := newFakeRepo(cand)
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -370,7 +371,7 @@ func TestReconcileCorruptStoredCSRSkips(t *testing.T) {
 func TestNewReconcilerValidatesDeps(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	okSigner := newFakeSigner(now, now.Add(testSignTTL))
+	okSigner := newFakeSigner(t, now, now.Add(testSignTTL))
 	okAuthz := &fakeAuthorizer{}
 	okRepo := newFakeRepo()
 	okPolicy := cl.Policy{MaxLookahead: testMaxLookahead, SignTTL: testSignTTL}
@@ -398,12 +399,34 @@ func TestNewReconcilerValidatesDeps(t *testing.T) {
 	}
 }
 
+func TestReconcileScanErrorBubblesTransient(t *testing.T) {
+	t.Parallel()
+	repo := newFakeRepo() // candidates irrelevant — the scan itself fails
+	repo.listErr = errFake
+	now := time.Now()
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
+	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
+	rec := newReconciler(t, repo, signer, authz)
+
+	stop := driveLoop(t, rec, repo)
+	defer stop()
+	// A scan error bubbles as transient → the Loop backs off and re-sweeps, so the
+	// scan is retried (listCount climbs past the first attempt). Nothing is signed.
+	waitUntil(t, "scan retried after transient error", func() bool { return repo.listCount() >= 2 })
+	if got := signer.callCount(); got != 0 {
+		t.Errorf("signer called %d times when scan failed, want 0", got)
+	}
+	if got := len(repo.mutations()); got != 0 {
+		t.Errorf("recorded %d mutations when scan failed, want 0", got)
+	}
+}
+
 func TestReconcileNoFencedWriterFailsClosed(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 

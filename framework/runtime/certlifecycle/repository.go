@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 // Candidate is the projection [DeviceCertRepository.ListRenewalCandidates]
@@ -20,9 +21,11 @@ type Candidate struct {
 	// subject device.
 	DeviceID string
 	// TenantID is the isolation domain of this certificate, sourced from the row
-	// (NOT ctx). It flows into the CertScope/DeviceSubject and the cert-issued
-	// event so a multi-tenant reconciler keeps tenants distinct.
-	TenantID string
+	// (NOT ctx). Typed (tenancy.md FR-003: repo/service APIs carry typed tenant,
+	// not a bare string) so the consumer must parse/validate at the row boundary;
+	// it flows into the CertScope/DeviceSubject and the cert-issued event so a
+	// multi-tenant reconciler keeps tenants distinct.
+	TenantID tenant.TenantID
 	// IssuerID identifies the issuing CA for the scope.
 	IssuerID string
 	// Serial is the current certificate's serial — the stable per-certificate
@@ -70,9 +73,10 @@ type Candidate struct {
 // reconciler.
 type IssuedMutation struct {
 	// DeviceID / TenantID / IssuerID / Serial identify the issued certificate for
-	// both the row and the cert-issued event's certRef.
+	// both the row and the cert-issued event's certRef. TenantID is typed
+	// (tenancy.md FR-003) so the consumer's ApplyFenced writes a validated tenant.
 	DeviceID string
-	TenantID string
+	TenantID tenant.TenantID
 	IssuerID string
 	Serial   string
 	// TargetEpoch is the renewed generation (Candidate.Epoch+1) — the cert epoch
@@ -112,20 +116,34 @@ type DeviceCertRepository interface {
 	// before cutoff AND whose State is renewable (active), in a deterministic
 	// order (NotAfter ascending, then DeviceID). It is a bounded full sweep per
 	// tick (the cutoff bounds the scan; there is no LIMIT) — the precise per-cert
-	// 70–90% jitter decision is applied by the Reconciler, not the scan.
+	// 70–90% jitter decision is applied by the Reconciler, not the scan. The
+	// implementation returns only State=active rows: near-expiry / renewing are
+	// computed in-memory by the Reconciler and never persisted, so the consumer
+	// does NOT write those states.
 	ListRenewalCandidates(ctx context.Context, cutoff time.Time) ([]Candidate, error)
 
 	// ApplyFenced is the reconcile.FencedRepository monotonic-epoch CAS. The Loop
 	// (via FencedWriter) calls it with the LEASE epoch as the fencing token; the
 	// implementation MUST apply the write only when epoch >= the highest lease
 	// epoch seen for entityID (advancing it), returning accepted=false (NOT an
-	// error) on a stale epoch so a zombie leader's late write is rejected. mutation
-	// is an *IssuedMutation; the implementation type-asserts it and, in ONE local
-	// transaction, persists the certificate row (advancing the CERT epoch to
-	// IssuedMutation.TargetEpoch and the state to NewState) AND writes the
-	// cert-issued L2 outbox entry. The two epochs are distinct monotonic counters:
-	// the LEASE epoch (this param) fences cross-replica ordering; the CERT epoch
-	// (mutation.TargetEpoch) tracks renewal generations on the row.
+	// error) on a stale epoch so a zombie leader's late write is rejected.
+	//
+	// CONTRACT (L2 atomicity — load-bearing): mutation is an *IssuedMutation; the
+	// implementation type-asserts it and, in ONE local transaction, persists the
+	// certificate row (advancing the CERT epoch to IssuedMutation.TargetEpoch and
+	// the state to NewState) AND writes the event.deviceidentity.cert-issued.v1 L2
+	// outbox entry (Action=renewed). This single-transaction co-write IS the L2
+	// guarantee: an implementation that writes the row but NOT the outbox entry (or
+	// writes them in separate transactions) silently downgrades the lifecycle to
+	// L1 — the cert-issued event is lost with no retry path once the transaction
+	// commits. The Reconciler cannot do this co-write itself (the only transaction
+	// is the consumer's, and the framework module cannot import the generated
+	// contract types), so it carries every cert-issued field on IssuedMutation and
+	// relies on this contract.
+	//
+	// The two epochs are distinct monotonic counters: the LEASE epoch (this param)
+	// fences cross-replica ordering; the CERT epoch (mutation.TargetEpoch) tracks
+	// renewal generations on the row.
 	reconcile.FencedRepository
 }
 

@@ -20,7 +20,7 @@ func TestReconcileLoopBoundedSweep(t *testing.T) {
 		activeCandidate(t, "device-2", nb, na),
 		activeCandidate(t, "device-3", nb, na),
 	)
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
@@ -66,7 +66,7 @@ func TestReconcileLoopMultiReplicaFencing(t *testing.T) {
 	now := time.Now()
 	nb, na := dueWindow(now)
 	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
-	signer := newFakeSigner(now, now.Add(testSignTTL))
+	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
 
