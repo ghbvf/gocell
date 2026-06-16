@@ -6,11 +6,11 @@
 |---|---|---|
 | **角色** | 治理 / 元数据 / 代码生成器 CLI | 运行时组装产物（部署二进制） |
 | **使用时机** | dev + CI（构建期、治理期） | 生产部署（运行时） |
-| **子命令** | validate / scaffold / generate (含 required-deps / shared-schema 子命令) / check / verify / graph / export | —（单一入口，启动 bootstrap） |
+| **子命令** | validate / scaffold / generate (含 required-deps / shared-schema 子命令) / check / verify / graph / export / derive-service-keys | —（单一入口，启动 bootstrap） |
 | **进入运行时进程** | 否 | 是 |
 | **对标定位** | 构建 / 治理工具（类似 `kubectl` / `go generate`） | Composition Root（类似 Uber fx 的 wire-up 入口） |
 
-- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生；含 `required-deps` 子命令 — 从 Service struct `gocell:"required"` tag 生成 `service_required_gen.go`，对应 `REQUIRED-DEP-NIL-GUARD-01` funnel；含 `shared-schema` 子命令 — 把 `contracts/shared/errors/error-response-v1.schema.json` 字节恒等派生到每个声明 mirror（目标集以 `tools/codegen/sharedschema.Mirrors` 为准），对应 `SHARED-SCHEMA-MIRROR-FUNNEL-01` funnel）、check（自定义规则检查）、verify（验收规格对齐；含 `codegen-shared-schema` 子命令 — in-process 字节 diff 守护各声明 mirror 与 canonical 同步）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）。**不进入运行时进程**，不依赖生产外部资源。
+- **`cmd/gocell`**：治理与元数据 CLI，供 dev 与 CI 调用。执行 validate（contract / cell / slice 声明合规）、scaffold（脚手架）、generate（codegen 契约派生；含 `required-deps` 子命令 — 从 Service struct `gocell:"required"` tag 生成 `service_required_gen.go`，对应 `REQUIRED-DEP-NIL-GUARD-01` funnel；含 `shared-schema` 子命令 — 把 `contracts/shared/errors/error-response-v1.schema.json` 字节恒等派生到每个声明 mirror（目标集以 `tools/codegen/sharedschema.Mirrors` 为准），对应 `SHARED-SCHEMA-MIRROR-FUNNEL-01` funnel）、check（自定义规则检查）、verify（验收规格对齐；含 `codegen-shared-schema` 子命令 — in-process 字节 diff 守护各声明 mirror 与 canonical 同步）、graph（模块包依赖图输出）、export（项目元数据 / 目录导出为 JSON/YAML）、**`derive-service-keys`**（从 master secret 派生 per-cell 签名/验签子密钥，供 split 模式进程注入）。**不进入运行时进程**，不依赖生产外部资源。
 
 - **`cmd/corebundle`**：`assemblies/corebundle/` 的运行时组装产物。负责 bootstrap wiring：加载 SharedDeps（PG / Redis / AMQP / JWT / HMAC 等）、调用 `cellmodules/<cell>.Module()` 构造各 CellModule（平台 cell 业务 wiring 已迁移至 `cellmodules/` 层）、配置三个 HTTP listener（Primary / Internal / Health）、启动 `bootstrap.Run`。**是实际部署运行的二进制**，也是项目唯一的生产 Composition Root。`corebundle-no-cells` depguard 强制 `cmd/corebundle` 不直接 import `cells/`（cellmodules 层负责绑定 cell 与 adapter）。
 
@@ -66,11 +66,11 @@ if err != nil {
 bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
     []auth.ListenerAuth{jwtAuth})
 
-// Internal：控制平面 + ServiceToken（HMAC-SHA256 + replay guard）
-// nonce store + HMAC ring 提升到 composition.SharedDeps（#1410），auth plan 用
+// Internal：控制平面 + ServiceToken（HMAC-SHA256 per-cell 子密钥 + replay guard）
+// nonce store + per-cell keyring 提升到 composition.SharedDeps（#1410/#2153），auth plan 用
 // 同一份已校验的 SharedDeps 字段构造——不要另造 nonce store（否则绕过
 // SharedDeps.NonceStore.Kind() 的 control-plane 校验）。
-svcTokenAuth, err := auth.NewAuthServiceToken(shared.NonceStore, shared.InternalHMACRing)
+svcTokenAuth, err := auth.NewAuthServiceToken(shared.NonceStore, shared.InternalServiceKeyring)
 if err != nil {
     return nil, fmt.Errorf("NewAuthServiceToken: %w", err)
 }
@@ -118,7 +118,7 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | 字段 | 说明 |
 |------|------|
 | `JWTDeps` | issuer + verifier（JWT 签发/验证） |
-| `InternalHMACRing` | /internal/v1/* service-token HMAC ring（#1410 起独立字段，原 `internalGuard` 已 dissolve） |
+| `InternalServiceKeyring` | /internal/v1/* service-token per-cell keyring（接口，monolith=master 派生 / split=ProvisionedKeyring），#2153 |
 | `NonceStore` | /internal/v1/* 服务令牌防重放 store；control-plane 校验经 `Kind()` 拒 noop / 多 pod in-memory（#1410） |
 | `PG` | sealed `capability.PGProvider`，由 `cellmodules/percellpg.Resolve` 在 postgres 拓扑下注入；memory 拓扑下为 nil，cell module 走 in-memory 路径 |
 | `ConsumerClaimer` | outbox 消费幂等键声明者；`Kind()` 自报 in_memory/distributed（#1410，CP8 fail-closed） |
@@ -130,7 +130,7 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | 变量 | 说明 | 缺失行为 |
 |------|------|---------|
 | `GOCELL_JWT_ISSUER` | JWT iss claim | fail-fast |
-| `GOCELL_SERVICE_SECRET` | /internal/v1/* HMAC 密钥（≥32 字节） | fail-fast |
+| `GOCELL_SERVICE_SECRET` | /internal/v1/* HMAC master secret（≥32 字节）；**master 模式（monolith）**，与 split provisioned env 互斥（皆设或皆缺均 fail-fast）。split 模式 per-cell env（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` / `GOCELL_SERVICE_VERIFY_KEYS`）见 `docs/ops/env-vars.md` §Service Token | fail-fast |
 | `GOCELL_ACCESSCORE_IP_HASH_SALT` | bootstrap-failed 事件 client-IP keyed-hash salt（≥32 字节，#1488） | real 模式 fail-fast（缺失/demo key/<32B） |
 | `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
 | `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |

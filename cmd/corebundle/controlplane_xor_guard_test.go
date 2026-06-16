@@ -100,6 +100,49 @@ func TestBuildInternalServiceKeyring_XOR_OnlyProvisioned(t *testing.T) {
 	assert.Error(t, err, "signing as a non-own cell must fail (split isolation)")
 }
 
+// TestBuildInternalServiceKeyring_XOR_OnlyProvisioned_ByteConsistency asserts
+// that the wiring layer's buildInternalServiceKeyring produces a keyring whose
+// SigningSecrets(ownCell)[0] is byte-identical to the SigningCurrent produced by
+// DeriveProvisionedKeys for the same master and ownCell. This pins the
+// env-encode → env-decode round-trip: any drift (e.g. a re-encoding bug) would
+// change the key bytes and silently break cross-cell token verification.
+func TestBuildInternalServiceKeyring_XOR_OnlyProvisioned_ByteConsistency(t *testing.T) {
+	master, err := auth.NewHMACKeyRing([]byte("test-master-secret-32-bytes-long!"), nil)
+	require.NoError(t, err)
+
+	const ownCell = "configcore"
+	callers := []string{"accesscore"}
+
+	// Derive the canonical key material using DeriveProvisionedKeys.
+	pk, err := auth.DeriveProvisionedKeys(master, ownCell, callers)
+	require.NoError(t, err)
+
+	// Encode and inject into env — same path the CLI / operator would use.
+	signingHex := hex.EncodeToString(pk.SigningCurrent)
+	verifyEnv := auth.FormatVerifyKeys(pk.VerifyCurrent)
+
+	t.Setenv(auth.EnvServiceSecret, "")
+	t.Setenv(auth.EnvServiceSigningKeyPrevious, "")
+	t.Setenv(auth.EnvServiceOwnCell, ownCell)
+	t.Setenv(auth.EnvServiceSigningKey, signingHex)
+	t.Setenv(auth.EnvServiceVerifyKeys, verifyEnv)
+	t.Setenv(auth.EnvServiceVerifyKeysPrevious, "")
+
+	ring, err := buildInternalServiceKeyring("")
+	require.NoError(t, err)
+	require.NotNil(t, ring)
+
+	// The wiring layer must produce signing keys that exactly match
+	// DeriveProvisionedKeys(master, ownCell).SigningCurrent.
+	signingFromRing, err := ring.SigningSecrets(ownCell)
+	require.NoError(t, err)
+	require.NotEmpty(t, signingFromRing, "SigningSecrets must return at least one key")
+
+	assert.Equal(t, pk.SigningCurrent, signingFromRing[0],
+		"ring.SigningSecrets(ownCell)[0] must be byte-identical to DeriveProvisionedKeys.SigningCurrent; "+
+			"any drift means env encode/decode is broken and cross-cell token verification will fail silently")
+}
+
 // hex32hex returns a 32-byte zero key hex-encoded, suitable as a syntactically
 // valid (though semantically trivial) provisioned subkey in XOR guard tests that
 // are only checking error paths (key length validation is not the test target).

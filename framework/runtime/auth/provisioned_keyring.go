@@ -93,9 +93,12 @@ func (r *ProvisionedKeyring) SigningSecrets(ownCell string) ([][]byte, error) {
 func (r *ProvisionedKeyring) VerifySecrets(callerCell string) ([][]byte, error) {
 	secrets, ok := r.verify[callerCell]
 	if !ok {
+		// callerCell is attacker-controlled (token segment); keep it OUT of the
+		// wire response (WithInternal, server-log only) so a 4xx cannot be used to
+		// enumerate this callee's declared caller set.
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
 			"caller cell is not in this process's provisioned verify set",
-			errcode.WithDetails(errcode.PublicString("callerCell", callerCell)))
+			errcode.WithInternal(errcode.InternalAttr("_", "callerCell="+callerCell)))
 	}
 	return cloneSecrets(secrets), nil
 }
@@ -255,10 +258,13 @@ type ProvisionedKeys struct {
 // would derive — verification across the two modes always agrees.
 func DeriveProvisionedKeys(master *HMACKeyRing, ownCell string, callers []string) (ProvisionedKeys, error) {
 	if master == nil {
-		return ProvisionedKeys{}, fmt.Errorf("master ring must not be nil")
+		return ProvisionedKeys{}, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing,
+			"DeriveProvisionedKeys master ring must not be nil")
 	}
 	if !metadata.MatchCellID(ownCell) {
-		return ProvisionedKeys{}, fmt.Errorf("ownCell %q is not a valid cell id", ownCell)
+		return ProvisionedKeys{}, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+			"DeriveProvisionedKeys ownCell must be a valid cell id",
+			errcode.WithInternal(errcode.InternalAttr("_", "ownCell="+ownCell)))
 	}
 	hasPrev := len(master.previous) > 0
 
@@ -272,7 +278,9 @@ func DeriveProvisionedKeys(master *HMACKeyRing, ownCell string, callers []string
 	}
 	for _, caller := range callers {
 		if !metadata.MatchCellID(caller) {
-			return ProvisionedKeys{}, fmt.Errorf("caller %q is not a valid cell id", caller)
+			return ProvisionedKeys{}, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+				"DeriveProvisionedKeys caller must be a valid cell id",
+				errcode.WithInternal(errcode.InternalAttr("_", "caller="+caller)))
 		}
 		vc, vp, err := master.deriveGenerations(caller, hasPrev)
 		if err != nil {

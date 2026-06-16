@@ -15,11 +15,11 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
-// TestBuildInternalHMACRing_DevMode_MissingSecret_ReturnsError verifies that
+// TestBuildInternalServiceKeyring_DevMode_MissingSecret_ReturnsError verifies that
 // dev mode (empty adapterMode) now requires GOCELL_SERVICE_SECRET — the
 // previous behavior of returning (nil, nil) to silently disable the guard in
 // non-real modes has been removed by the SEC-FAIL-CLOSED change.
-func TestBuildInternalHMACRing_DevMode_MissingSecret_ReturnsError(t *testing.T) {
+func TestBuildInternalServiceKeyring_DevMode_MissingSecret_ReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
 	_, err := buildInternalServiceKeyring("") // dev mode
 	require.Error(t, err)
@@ -27,7 +27,7 @@ func TestBuildInternalHMACRing_DevMode_MissingSecret_ReturnsError(t *testing.T) 
 		"all modes must fail fast when service secret is unset")
 }
 
-func TestBuildInternalHMACRing_RealMode_MissingSecret_Error(t *testing.T) {
+func TestBuildInternalServiceKeyring_RealMode_MissingSecret_Error(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
 	_, err := buildInternalServiceKeyring("real")
 	require.Error(t, err)
@@ -35,18 +35,18 @@ func TestBuildInternalHMACRing_RealMode_MissingSecret_Error(t *testing.T) {
 		"real mode must fail fast when service secret is unset")
 }
 
-func TestBuildInternalHMACRing_WithSecret_ReturnsRing(t *testing.T) {
+func TestBuildInternalServiceKeyring_WithSecret_ReturnsRing(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	ring, err := buildInternalServiceKeyring("")
 	require.NoError(t, err)
 	assert.NotNil(t, ring, "non-empty secret must produce a non-nil ring")
 }
 
-// TestBuildInternalHMACRing_RealMode_DemoServiceSecret_Rejected verifies that
+// TestBuildInternalServiceKeyring_RealMode_DemoServiceSecret_Rejected verifies that
 // buildInternalServiceKeyring returns an error when GOCELL_SERVICE_SECRET is set to
 // the well-known demo value in real adapter mode. Guards against an attacker
 // forging ServiceTokens using the public demo secret shipped in test fixtures.
-func TestBuildInternalHMACRing_RealMode_DemoServiceSecret_Rejected(t *testing.T) {
+func TestBuildInternalServiceKeyring_RealMode_DemoServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
 	_, err := buildInternalServiceKeyring("real")
 	require.Error(t, err)
@@ -56,20 +56,20 @@ func TestBuildInternalHMACRing_RealMode_DemoServiceSecret_Rejected(t *testing.T)
 		"error must indicate the reason")
 }
 
-// TestBuildInternalHMACRing_DevMode_DemoServiceSecret_Allowed verifies that
+// TestBuildInternalServiceKeyring_DevMode_DemoServiceSecret_Allowed verifies that
 // the demo key check is a no-op outside of real adapter mode, preserving
 // the dev/test workflow where demo fixture values are acceptable.
-func TestBuildInternalHMACRing_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
+func TestBuildInternalServiceKeyring_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
 	ring, err := buildInternalServiceKeyring("") // dev mode
 	require.NoError(t, err)
 	assert.NotNil(t, ring, "dev mode must accept demo key and return a ring")
 }
 
-// TestBuildInternalHMACRing_RealMode_DemoPreviousServiceSecret_Rejected verifies
+// TestBuildInternalServiceKeyring_RealMode_DemoPreviousServiceSecret_Rejected verifies
 // that GOCELL_SERVICE_SECRET_PREVIOUS is also checked against the demo blocklist
 // in real adapter mode.
-func TestBuildInternalHMACRing_RealMode_DemoPreviousServiceSecret_Rejected(t *testing.T) {
+func TestBuildInternalServiceKeyring_RealMode_DemoPreviousServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_SERVICE_SECRET_PREVIOUS", "service-secret-32-bytes-xxxxxx!!")
 	_, err := buildInternalServiceKeyring("real")
@@ -80,12 +80,12 @@ func TestBuildInternalHMACRing_RealMode_DemoPreviousServiceSecret_Rejected(t *te
 		"error must indicate the reason")
 }
 
-// TestBuildInternalHMACRing_RealMode_RingInstalledWithSecret pins the S32
+// TestBuildInternalServiceKeyring_RealMode_RingInstalledWithSecret pins the S32
 // invariant: in real adapter mode, presence of GOCELL_SERVICE_SECRET MUST
 // produce a non-nil ring. service-token is currently the sole transport
 // authenticator for /internal/v1/* (no mTLS yet), so a nil ring here
 // silently exposes the control plane.
-func TestBuildInternalHMACRing_RealMode_RingInstalledWithSecret(t *testing.T) {
+func TestBuildInternalServiceKeyring_RealMode_RingInstalledWithSecret(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	ring, err := buildInternalServiceKeyring("real")
 	require.NoError(t, err)
@@ -93,10 +93,10 @@ func TestBuildInternalHMACRing_RealMode_RingInstalledWithSecret(t *testing.T) {
 		"real mode with valid service secret must install a non-nil ring")
 }
 
-// TestBuildInternalHMACRing_RequiresSecretInAllModes verifies that
+// TestBuildInternalServiceKeyring_RequiresSecretInAllModes verifies that
 // buildInternalServiceKeyring returns an error when GOCELL_SERVICE_SECRET is empty,
 // regardless of the adapterMode parameter.
-func TestBuildInternalHMACRing_RequiresSecretInAllModes(t *testing.T) {
+func TestBuildInternalServiceKeyring_RequiresSecretInAllModes(t *testing.T) {
 	// No t.Parallel() here: subtests call t.Setenv which requires sequential execution.
 
 	modes := []string{"", "memory", "postgres", "real"}
@@ -120,9 +120,9 @@ func TestBuildInternalHMACRing_RequiresSecretInAllModes(t *testing.T) {
 	}
 }
 
-// TestBuildInternalHMACRing_ValidSecret_RingUsable verifies the ring returned
+// TestBuildInternalServiceKeyring_ValidSecret_RingUsable verifies the ring returned
 // by buildInternalServiceKeyring can be used as a ServiceKeyring (Validate passes).
-func TestBuildInternalHMACRing_ValidSecret_RingUsable(t *testing.T) {
+func TestBuildInternalServiceKeyring_ValidSecret_RingUsable(t *testing.T) {
 	secret := freshTestServiceSecret(t)
 	t.Setenv("GOCELL_SERVICE_SECRET", secret)
 

@@ -146,6 +146,11 @@ func WithServiceTokenMetrics(m *AuthMetrics) ServiceTokenOption {
 // segment namespaces the scheme so a future derivation change is a distinct,
 // non-colliding key space.
 //
+// BREAKING: changing this constant (even the version segment) re-derives every
+// per-cell subkey → all previously provisioned split cells must re-run
+// `gocell derive-service-keys` and redeploy atomically, or cross-cell verification
+// fails. Treat any edit as a wire-affecting key rotation.
+//
 //nolint:gosec // G101: not a credential — this is a fixed HKDF domain-separation label.
 const serviceTokenHKDFInfo = "gocell/service-token/v1/caller-cell:"
 

@@ -5,8 +5,12 @@ package auth
 // does NOT hold a cell's subkey cannot forge that cell's caller identity.
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -182,14 +187,126 @@ func TestProvisionedKeyring_Validate_RejectsShortAndBadCell(t *testing.T) {
 	require.Error(t, err, "short signing subkey rejected")
 
 	_, err = NewProvisionedKeyring("Bad-Cell", [][]byte{good}, nil)
-	require.Error(t, err, "invalid cell id rejected")
+	require.Error(t, err, "invalid cell id rejected (Bad-Cell contains uppercase)")
 
 	_, err = NewProvisionedKeyring("accesscore", [][]byte{good},
 		map[string][][]byte{"auditcore": {short}})
 	require.Error(t, err, "short verify subkey rejected")
 
+	// Task 4 (F4): invalid caller cell in verify map must also be rejected.
+	_, err = NewProvisionedKeyring("accesscore", [][]byte{good},
+		map[string][][]byte{"Bad-Cell": {good}})
+	require.Error(t, err, "invalid caller cell id in verify map must be rejected")
+
 	r, err := NewProvisionedKeyring("accesscore", [][]byte{good},
 		map[string][][]byte{"auditcore": {good}})
 	require.NoError(t, err)
 	require.NoError(t, r.Validate())
+}
+
+// TestProvisioned_CryptoIsolation_AccesscoreKeyCannotForgeAuditcore is the
+// crypto-isolation assertion for #2153: knowing accesscore's signing subkey is
+// NOT sufficient to forge a token claiming callerCell="auditcore". The existing
+// TestProvisioned_CrossCellForgery_FailsClosed tests key-absence (configcore has
+// no auditcore verify subkey); this test goes further and verifies that even when
+// the *wrong* subkey (accesscore's) is used to HMAC a message with
+// callerCell="auditcore", the MAC fails to verify under auditcore's subkey.
+//
+// Threat model: an attacker who has compromised accesscore's process (and
+// therefore holds HKDF(master,"accesscore")) cannot use it to mint a token that
+// configcore — holding HKDF(master,"auditcore") as its verify subkey for
+// auditcore — will accept. HKDF(master,"accesscore") ≠ HKDF(master,"auditcore")
+// is the cryptographic property; this test exercises it end-to-end.
+func TestProvisioned_CryptoIsolation_AccesscoreKeyCannotForgeAuditcore(t *testing.T) {
+	master := mustTestRing(t, testHMACKey, "")
+
+	// configcore callee: has verify subkeys for both accesscore and auditcore.
+	configcore := buildProvisioned(t, master, "configcore", "accesscore", "auditcore")
+
+	// Obtain accesscore's signing subkey (HKDF(master,"accesscore")) directly
+	// from the master-derived material. The attacker has compromised accesscore
+	// and holds this key.
+	accesscorePK, err := DeriveProvisionedKeys(master, "accesscore", nil)
+	require.NoError(t, err)
+	accesscoreSigningKey := accesscorePK.SigningCurrent // the accesscore-derived signing subkey
+
+	// Craft a forged token: use accesscore's signing subkey to HMAC a message
+	// that claims callerCell="auditcore". This is the exact forgery the attacker
+	// would attempt after compromising accesscore.
+	ts := percellTime
+	tsStr := strconv.FormatInt(ts.Unix(), 10)
+	nonce := "deadbeefdeadbeef" // fixed nonce for determinism
+
+	// The forged callerCell is "auditcore" — not "accesscore".
+	forgedCallerCell := "auditcore"
+	msg := buildServiceTokenMessage(percellMethod, percellPath, "", tsStr, nonce, forgedCallerCell, "", "")
+
+	// Compute HMAC using accesscore's subkey (the attacker's compromised material).
+	mac := hmac.New(sha256.New, accesscoreSigningKey)
+	mac.Write([]byte(msg))
+	forgedSig := hex.EncodeToString(mac.Sum(nil))
+
+	forgedToken := tsStr + ":" + nonce + ":" + forgedCallerCell + ":" + forgedSig
+
+	// configcore must REJECT this token: its verify subkey for "auditcore" is
+	// HKDF(master,"auditcore"), not HKDF(master,"accesscore"). The MACs will
+	// differ — this is the cryptographic isolation guarantee.
+	assert.False(t, verifyTokenWith(t, configcore, forgedToken),
+		"configcore must reject a token for callerCell=auditcore that was signed "+
+			"with accesscore's subkey (HKDF(master,accesscore) ≠ HKDF(master,auditcore))")
+}
+
+// TestProvisioned_ProvisionedMiddlewareE2E validates the full HTTP path:
+// accesscore (ProvisionedKeyring, sign-only for itself) signs an outbound
+// request via SignInternalRequest; configcore (ProvisionedKeyring, verify-only
+// for accesscore) authenticates it via ServiceTokenMiddleware → 200.
+// An undeclared caller (auditcore) is rejected → 401.
+//
+// This test does NOT use an integration build tag; it is a pure in-process
+// unit test using httptest.
+func TestProvisioned_ProvisionedMiddlewareE2E(t *testing.T) {
+	master := mustTestRing(t, testHMACKey, "")
+	now := percellTime
+
+	// accesscore process: provisioned, can sign only as accesscore.
+	accesscoring := buildProvisioned(t, master, "accesscore")
+	// configcore process: provisioned, verifies accesscore tokens.
+	configcoring := buildProvisioned(t, master, "configcore", "accesscore")
+
+	// configcore installs its ProvisionedKeyring in ServiceTokenMiddleware.
+	nonceStore := mustNewInMemoryNonceStore(t)
+	handler := ServiceTokenMiddleware(
+		configcoring,
+		clockmock.New(now),
+		WithServiceTokenNonceStore(nonceStore),
+	)(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	t.Run("declared_caller_accesscore_accepted", func(t *testing.T) {
+		req := httptest.NewRequest(percellMethod, percellPath, nil)
+		err := SignInternalRequest(req.Context(), accesscoring, "accesscore", req,
+			tenant.TenantID(""), clockmock.New(now))
+		require.NoError(t, err)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code,
+			"accesscore (declared caller) must be accepted by configcore middleware")
+	})
+
+	t.Run("undeclared_caller_auditcore_rejected", func(t *testing.T) {
+		// auditcore is not in configcore's declared verify set — any token for
+		// auditcore is rejected fail-closed, regardless of MAC validity.
+		auditcoring := buildProvisioned(t, master, "auditcore")
+		req := httptest.NewRequest(percellMethod, percellPath, nil)
+		err := SignInternalRequest(req.Context(), auditcoring, "auditcore", req,
+			tenant.TenantID(""), clockmock.New(now))
+		require.NoError(t, err)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code,
+			"auditcore (undeclared caller) must be rejected with 401")
+	})
 }

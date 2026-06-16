@@ -12,18 +12,20 @@ package app
 //	GOCELL_SERVICE_SECRET=<master> \
 //	  gocell derive-service-keys --cell <id> [--callers <comma-list>]
 //
-// The --callers flag lists every cell that this cell accepts inbound calls from
-// on the internal listener. It is REQUIRED: automatic inference from contract
-// metadata is intentionally not implemented because the tool is a security
-// provisioning primitive and silent omission of a caller would produce an
-// under-privileged keyring that silently rejects legitimate callers at runtime.
-// Operators must explicitly enumerate callers at deploy time.
+// The --callers flag lists every cell that calls THIS cell's internal endpoints
+// (the callers it must verify). Automatic inference from contract metadata is
+// intentionally NOT implemented — the tool is a security provisioning primitive,
+// so operators enumerate callers explicitly at deploy time. It is optional only
+// for a cell that serves no internal endpoints (accepts no inbound calls): when
+// omitted, the tool prints a notice to stderr (so an accidental omission — which
+// would yield a keyring that rejects every inbound caller — is visible, not silent).
 
 import (
 	"context"
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -36,7 +38,8 @@ func runDeriveServiceKeys(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("derive-service-keys", flag.ContinueOnError)
 	cellID := fs.String("cell", "", "cell id to derive keys for (required)")
 	callers := fs.String("callers", "",
-		"comma-separated caller cell ids this cell verifies on the internal listener (required)")
+		"comma-separated caller cell ids this cell verifies on its internal listener "+
+			"(omit only if this cell serves no internal endpoints)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -54,6 +57,14 @@ func runDeriveServiceKeys(_ context.Context, args []string) error {
 	}
 
 	callerList := parseCallerList(*callers)
+	if len(callerList) == 0 {
+		// Make an empty caller set visible: the resulting keyring verifies NO
+		// inbound caller. Legitimate only for an outbound-only cell; otherwise a
+		// forgotten --callers would silently 401 every internal call at runtime.
+		fmt.Fprintf(os.Stderr,
+			"note: no --callers given; %q will accept NO inbound internal calls "+
+				"(GOCELL_SERVICE_VERIFY_KEYS will be empty)\n", *cellID)
+	}
 
 	pk, err := auth.DeriveProvisionedKeys(master, *cellID, callerList)
 	if err != nil {
@@ -113,7 +124,7 @@ func parseCallerList(callers string) []string {
 //   - GOCELL_SERVICE_SIGNING_KEY_PREVIOUS=<hex>   (only when non-nil)
 //   - GOCELL_SERVICE_VERIFY_KEYS=<callerA:hex,...>
 //   - GOCELL_SERVICE_VERIFY_KEYS_PREVIOUS=<...>   (only when non-nil)
-func emitProvisionedEnv(w *os.File, pk auth.ProvisionedKeys) error {
+func emitProvisionedEnv(w io.Writer, pk auth.ProvisionedKeys) error {
 	lines := []string{
 		fmt.Sprintf("export %s=%s", auth.EnvServiceOwnCell, pk.OwnCell),
 		fmt.Sprintf("export %s=%s", auth.EnvServiceSigningKey, hex.EncodeToString(pk.SigningCurrent)),

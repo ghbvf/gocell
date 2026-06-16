@@ -538,9 +538,12 @@ const (
 
 	// Control-plane startup configuration errors (cmd/corebundle).
 	//
-	// ErrControlplaneServiceSecretMissing signals that the InternalServiceKeyring
-	// field of composition.SharedDeps is nil (or its env keying is mis-configured),
-	// so the /internal/v1/* service-token guard cannot be constructed. Produced by
+	// ErrControlplaneServiceSecretMissing signals that the /internal/v1/*
+	// service-token keyring cannot be constructed. It covers three mis-configurations
+	// (the error message disambiguates which): (1) the InternalServiceKeyring field
+	// of composition.SharedDeps is nil; (2) NEITHER master (GOCELL_SERVICE_SECRET)
+	// nor split provisioned env (GOCELL_SERVICE_SIGNING_KEY) is set; (3) BOTH are set
+	// (ambiguous — a split cell must not also hold the master). Produced by
 	// cmd/corebundle.buildInternalServiceKeyring and
 	// runtime/composition.SharedDeps.validateInternalListenerGuard; fails the
 	// binary at startup before any listener binds. Never reaches the HTTP layer in

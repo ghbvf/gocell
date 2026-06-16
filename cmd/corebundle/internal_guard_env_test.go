@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 )
 
-func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
+func TestBuildInternalServiceKeyring_WarnLogging_TableDriven(t *testing.T) {
 	tests := []struct {
 		name        string
 		adapterMode string
@@ -103,7 +103,7 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 				assert.Equal(t, errcode.ErrControlplaneServiceSecretMissing, ec.Code,
 					"dev_no_secret: error code must be ERR_CONTROLPLANE_SERVICE_SECRET_MISSING")
 			case "real_no_secret":
-				// buildInternalHMACRing must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
+				// buildInternalServiceKeyring must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
 				// when GOCELL_SERVICE_SECRET is empty in adapter mode "real".
 				var ec *errcode.Error
 				require.ErrorAs(t, err, &ec,

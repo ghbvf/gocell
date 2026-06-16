@@ -284,7 +284,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	ring, err := auth.NewHMACKeyRing([]byte(serviceSecret), nil)
 	require.NoError(t, err)
 	// A replay-safe nonce store is mandatory on every prod-equivalent wiring
-	// of ServiceTokenMiddleware; mirrors the buildInternalHMACRing + replaydeps.Resolve default.
+	// of ServiceTokenMiddleware; mirrors the buildInternalServiceKeyring + replaydeps.Resolve default.
 	//
 	// Shared across all subtests below — do NOT add t.Parallel() to the
 	// subtests without isolating the store per subtest, or the replay

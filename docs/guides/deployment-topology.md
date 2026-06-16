@@ -150,8 +150,17 @@ When cells are split across processes, the following infrastructure is required:
   plaintext HTTP; bearer/principal headers are integrity-protected by MAC but not
   confidential. mTLS / SPIFFE-SVID peer authentication is **orthogonal** to the
   token-layer per-cell identity that #2153 landed and is tracked as **#2263** —
-  until then, run `topology.remote` only on a trusted/private network (the
-  plaintext-wire compensation). See ADR §#2153 Amendment §残留.
+  until then, run `topology.remote` only on a trusted/private network. **「trusted
+  network」的具体操作约束**（见 ADR `202606131142-1423` §#1966 review amendment §操作约束）：
+  ① **split cell 进程使用 provisioned 子密钥而非共享 master**（即上方 §Per-cell service-token
+  密钥分发 bullet）：master 不进 cell 进程，被攻陷 cell 无法伪造第三 cell 的 caller 身份；
+  ② **internal listener 绑定到可达地址 + NetworkPolicy/VPC 限制 ingress 至授权 caller**：
+  `/internal/v1/*` 入站仅允许已声明 caller cell 所在 pod/网段，网络层是 caller-cell allowlist
+  之外的纵深防御第一道门（见上方 §Internal listener 绑定与可达性）；
+  ③ **服务端 RequireCallerCell allowlist**：每个 `/internal/v1/*` contract 必须在 contract.yaml
+  声明 `callers` 闭集，框架在令牌验证后校验 `callerCell` claim 是否在 allowlist 内（令牌层，
+  与网络层正交，独立 fail-closed）。这三条合起来构成 mTLS 落地前的「trusted network」最低操作
+  基线；缺任一条均使隔离降级。See ADR `202606131142-1423` §#2153 Amendment §残留.
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
 split topology in production. `topology.remote` is production-reachable as of

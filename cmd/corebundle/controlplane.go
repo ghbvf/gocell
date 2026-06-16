@@ -2,7 +2,6 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
@@ -51,7 +50,8 @@ func buildInternalServiceKeyring(adapterMode string) (kauth.ServiceKeyring, erro
 	case provisionedMode:
 		ring, err := auth.LoadProvisionedKeyringFromEnv()
 		if err != nil {
-			return nil, fmt.Errorf("build provisioned service keyring: %w", err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+				"build provisioned service keyring", err)
 		}
 		// LoadProvisionedKeyringFromEnv succeeded, so EnvServiceOwnCell already
 		// passed metadata.MatchCellID (^[a-z][a-z0-9]{1,31}$ — no newlines/control
@@ -74,7 +74,8 @@ func buildInternalServiceKeyring(adapterMode string) (kauth.ServiceKeyring, erro
 		}
 		ring, err := auth.NewHMACKeyRing([]byte(master), prevBytes)
 		if err != nil {
-			return nil, fmt.Errorf("build service HMAC master keyring: %w", err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+				"build service HMAC master keyring", err)
 		}
 		slog.Info("controlplane: master-derived service keyring built for /internal/v1/*")
 		return ring, nil

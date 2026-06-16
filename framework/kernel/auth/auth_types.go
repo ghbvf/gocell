@@ -190,9 +190,11 @@ type NonceStore interface {
 // SigningSecrets/VerifySecrets return ordered subkeys (current first, then
 // previous) so master/key rotation still verifies in-flight tokens.
 type ServiceKeyring interface {
-	// SigningSecrets returns the subkeys used to sign tokens as ownCell (current
-	// first, then previous). Returns an error if this process is not authorized
-	// to sign as ownCell (split: ownCell != this process's cell identity).
+	// SigningSecrets returns the subkeys used to sign tokens as ownCell. The
+	// returned slice is ordered: index 0 MUST be the current signing key (the one
+	// used to sign new tokens); any previous-generation keys follow at index ≥1.
+	// Returns an error if this process is not authorized to sign as ownCell
+	// (split: ownCell != this process's cell identity).
 	SigningSecrets(ownCell string) ([][]byte, error)
 	// VerifySecrets returns the subkeys used to verify a token claiming
 	// callerCell (current first, then previous). Returns an error if callerCell
