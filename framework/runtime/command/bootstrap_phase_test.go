@@ -37,3 +37,11 @@ func TestDiscoverQueueRegistrars_NilQueue(t *testing.T) {
 	require.Error(t, err)
 	assert.Zero(t, count)
 }
+
+func TestDiscoverQueueRegistrarsInAssembly_NilAssembly(t *testing.T) {
+	// A nil assembly is a wiring error, not an empty-cell no-op: fail fast with a
+	// non-nil queue so the guard (not the queue==nil path) is what trips.
+	count, err := DiscoverQueueRegistrarsInAssembly(nil, commandtest.NewInMemQueue())
+	require.Error(t, err)
+	assert.Zero(t, count)
+}

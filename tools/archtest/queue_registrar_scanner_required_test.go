@@ -38,9 +38,11 @@
 // ## Blind spots and reverse self-checks
 //
 //  1. **Coordinated re-widening**: widening QueueRegistrar.RegisterCommandQueue
-//     back to `Queue` alone would, on its own, break devicecell's
-//     `var _ QueueRegistrar` compile-check (its method took QueueWithScanner).
-//     A contributor who widens BOTH the interface and devicecell in lockstep
+//     back to `Queue` alone would, on its own, break the
+//     `var _ command.QueueRegistrar = (*stubQueueRegistrar)(nil)` compile-check in
+//     registrar_test.go (the stub's method took QueueWithScanner and would no
+//     longer satisfy a Queue-param interface). A contributor who widens the
+//     interface AND every implementer's method (stub + each cell) in lockstep
 //     would compile but silently re-open the hole — TestQueueRegistrarScannerRequired01
 //     catches exactly that by pinning In(0)==QueueWithScanner.
 //  2. **Name-keep, gut the composite**: renaming a Queue-only interface to

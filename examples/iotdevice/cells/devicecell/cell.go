@@ -49,7 +49,9 @@ const (
 	RoleDevice   = dto.RoleDevice
 )
 
-// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
+// Compile-time cell.Cell interface check lives in cell_gen.go (DO NOT EDIT).
+// The QueueRegistrar contract is enforced structurally by RegisterCommandQueue's
+// parameter type (kcommand.QueueWithScanner), not by a var _ assertion here.
 
 // Option configures a DeviceCell.
 type Option func(*DeviceCell)
@@ -420,8 +422,10 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicebootstrap.SliceMetadata()))
 
 	// device-command slice: a Queue + ActiveScanner is required in every mode.
-	// Validation (nil queue + non-ActiveScanner queue) lives in requireCommandQueue
-	// so this function stays within its cyclomatic budget.
+	// The ActiveScanner half is now a compile-time constraint on
+	// RegisterCommandQueue (QUEUE-REGISTRAR-SCANNER-REQUIRED-01); requireCommandQueue
+	// only validates the remaining runtime case (no queue registered = nil),
+	// extracted here so this function stays within its cyclomatic budget.
 	if err := c.requireCommandQueue(); err != nil {
 		return err
 	}
