@@ -6,6 +6,7 @@ import (
 )
 
 // INVARIANT: INPROCESS-TRANSPORT-SEALED-01
+// INVARIANT: REMOTE-TRANSPORT-SEALED-01
 //
 // # INPROCESS-TRANSPORT-SEALED-01 — InProcessTransport is a sealed type (Hard)
 //
@@ -61,5 +62,48 @@ func TestInProcessTransportZeroExportedFields(t *testing.T) {
 	// the seal's subject).
 	if rt.NumField() == 0 {
 		t.Error("INPROCESS-TRANSPORT-SEALED-01: InProcessTransport has no fields — the seal check is vacuous")
+	}
+}
+
+// REMOTE-TRANSPORT-SEALED-01 — RemoteHTTPTransport is a sealed type (Hard)
+//
+// # Rule
+//
+// A RemoteHTTPTransport must have ZERO exported fields, so the only way to
+// obtain a usable value is via NewRemoteHTTP (the sole constructor). If any
+// field were exported, package-external code could forge a transport via a
+// struct literal — bypassing the nil-resolver / nil-client / empty-targetCellID
+// guards that enforce the construction invariants.
+//
+// # Why (upstream Hard half of the remote-transport funnel)
+//
+// This is the upstream Hard counterpart to CELLTRANSPORT-SELECT-FUNNEL-01
+// (Medium, archtest): a transport cannot be FORGED (this rule), and wiring
+// code cannot bypass celltransport.Resolve to construct a NewRemoteHTTP
+// directly (the funnel). Together they form a closed funnel. The seal is
+// enforced by the type system; this reflect freeze pins the field set so a
+// future edit that exports a field trips the test.
+//
+// # AI-robust rating: Hard (sealed construction + reflect field freeze)
+//
+// # Anti-vacuity
+//
+// The NumField()==0 guard fails the test if a future refactor makes the
+// struct fieldless (which would make the exported-field loop vacuously pass).
+func TestRemoteHTTPTransportZeroExportedFields(t *testing.T) {
+	t.Parallel()
+
+	rt := reflect.TypeOf(RemoteHTTPTransport{})
+	for i := 0; i < rt.NumField(); i++ {
+		if f := rt.Field(i); f.IsExported() {
+			t.Errorf("REMOTE-TRANSPORT-SEALED-01: RemoteHTTPTransport has exported field %q (%s) — "+
+				"all fields must be unexported so NewRemoteHTTP is the only construction path; "+
+				"an exported field lets package-external code forge a transport via struct literal",
+				f.Name, f.Type)
+		}
+	}
+
+	if rt.NumField() == 0 {
+		t.Error("REMOTE-TRANSPORT-SEALED-01: RemoteHTTPTransport has no fields — the seal check is vacuous")
 	}
 }

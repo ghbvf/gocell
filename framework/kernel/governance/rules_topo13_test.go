@@ -1,7 +1,6 @@
 // INVARIANT: TOPO-13 broker-mandatory static gate (Epic #1423 US3)
-// Medium, permanent ceiling. Blind-spots: (1) production-shadowed by TOPO-12
-// (interim blanket remote ban) until US5 #1966; proven via synthetic unit tests
-// until then. (2) Cannot verify a broker is wired (runtime concern). See
+// Medium, permanent ceiling. Production-reachable since TOPO-12 was removed in
+// US5 #1966. Blind-spot: cannot verify a broker is wired (runtime concern). See
 // validateTOPO13 godoc and ADR 202606131142-1423.
 
 package governance

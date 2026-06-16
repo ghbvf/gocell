@@ -61,7 +61,7 @@ func TestPhase5BindInProcessTransport_BindsFinalizedAuthChain(t *testing.T) {
 	t.Run("signed request reaches the handler", func(t *testing.T) {
 		reached = false
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, clk.Now())
+		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, "", clk.Now())
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set(auth.HeaderTenantID, tid.String())
 

@@ -71,23 +71,16 @@ const (
 	// by a cell in an assembly must have its provider cell reachable (Local or Remote).
 	// A provider that is Missing (∉ colocated ∪ remote) is a deployment-time error.
 	codeTOPO11 RuleCode = "TOPO-11"
-	// TOPO-12: INTERIM gate — topology.remote is schema-valid but cannot be honored
-	// until US4 #1963 wires cross-process transport; declaring it fails gocell validate
-	// + codegen. US4 REMOVES this rule, its const, and the single codegen call site.
-	// The runtime DeploymentTopology API and ValidateTopologyStructure intentionally
-	// still accept remote (US4-ready shape preserved in schema).
-	codeTOPO12 RuleCode = "TOPO-12"
-	// TOPO-13: broker-mandatory static gate (Epic #1423 US3). For an assembly
-	// with a split topology, an event contract whose publisher cell and a
-	// subscriber cell fall on opposite sides of the process boundary (one Local,
-	// one Remote) requires a real broker — the in-memory EventBus cannot deliver
-	// across processes. Medium, permanent ceiling (Hard unreachable: bus is a
-	// runtime-injected instance, not statically expressible — ADR 1423 §214-219).
-	// Blind-spots: (1) production-shadowed by the interim TOPO-12 (blanket remote
-	// ban) until US5 #1966 removes it; proven via synthetic unit test until then.
-	// (2) Structural-only — asserts cross-process pub/sub, cannot verify a broker
-	// is wired (runtime concern, enforced by the bootstrap runtime gate); thus
-	// fail-closed and over-constrains future broker-backed split (US7 #1967
+	// TOPO-13: broker-mandatory static gate (Epic #1423 US3, production-reachable
+	// since TOPO-12 was removed in US5 #1966). For an assembly with a split
+	// topology, an event contract whose publisher cell and a subscriber cell fall
+	// on opposite sides of the process boundary (one Local, one Remote) requires a
+	// real broker — the in-memory EventBus cannot deliver across processes. Medium,
+	// permanent ceiling (Hard unreachable: bus is a runtime-injected instance, not
+	// statically expressible — ADR 1423 §214-219).
+	// Blind-spot: Structural-only — asserts cross-process pub/sub, cannot verify a
+	// broker is wired (runtime concern, enforced by the bootstrap runtime gate);
+	// thus fail-closed and over-constrains future broker-backed split (US7 #1967
 	// reconciliation tracked separately).
 	codeTOPO13 RuleCode = "TOPO-13"
 

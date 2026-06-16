@@ -28,11 +28,18 @@ package archtest
 // convention-only.
 //
 // This archtest pins the callsite identity of all four principal setters to the
-// three legitimate writers:
+// four legitimate writers:
 //
 //   - runtime/auth/middleware.go — injectPrincipalCtxKeys, the producer-side
 //     bridge (shared by the JWT and service-token paths) that runs AFTER
 //     authentication at the request trust boundary.
+//   - runtime/auth/principal_propagation.go — rebuildPropagatedPrincipal, the
+//     receive-side restore for the sync HTTP cross-cell principal propagation
+//     path (#1966 T042): decodes the MAC-validated X-Gocell-Principal header
+//     and writes actor/subject/session into handler ctx. WithTenantID is NOT
+//     called here — tenant stays on the X-Tenant-ID / middleware path. Only
+//     three of the four setters appear in this file (WithActorID, WithSubjectID,
+//     WithSessionID), so the allowlist for WithTenantID does not include it.
 //   - kernel/outbox/principal.go — PrincipalMetadata.RestoreToContext, the
 //     consumer-side restore that re-hydrates the entry's principal into handler
 //     ctx after the async hop.
@@ -153,18 +160,21 @@ const ctxkeysPkgPath = PlatformFrameworkModulePath + "/pkg/ctxkeys"
 var principalSetterAllowlist = map[string]map[string]struct{}{
 	"WithActorID": {
 		"runtime/auth/middleware.go":            {}, // producer bridge (JWT + service-token)
+		"runtime/auth/principal_propagation.go": {}, // sync HTTP receive-side principal rebuild (#1966 T042)
 		"kernel/outbox/principal.go":            {}, // consumer-side RestoreToContext
 		"kernel/projection/system_principal.go": {}, // saga journal carrier: InstallSystemPrincipal + clearAmbientPrincipal (PR-03 #1627)
 		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity: installSystemProducerIdentity (#1821)
 	},
 	"WithSubjectID": {
 		"runtime/auth/middleware.go":            {},
+		"runtime/auth/principal_propagation.go": {}, // sync HTTP receive-side principal rebuild (#1966 T042)
 		"kernel/outbox/principal.go":            {},
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity (#1821)
 	},
 	"WithSessionID": {
 		"runtime/auth/middleware.go":            {},
+		"runtime/auth/principal_propagation.go": {}, // sync HTTP receive-side principal rebuild (#1966 T042)
 		"kernel/outbox/principal.go":            {},
 		"kernel/projection/system_principal.go": {}, // saga journal carrier (PR-03 #1627)
 		"kernel/reconcile/identity.go":          {}, // reconcile loop system-producer identity (#1821)

@@ -82,11 +82,11 @@ func TestGenerateModulesGen_DeploymentTopology_Colocated(t *testing.T) {
 	assert.NotContains(t, content, "RemoteCellEndpoint")
 }
 
-// TestGenerateModulesGen_DeploymentTopology_Remote_FailClosed is a synthetic-red
-// test (F2/F1): topology.remote is schema-valid but fail-closed at codegen by the
-// INTERIM CheckRemotePlacementSupported gate (US4 #1963 removes it). GenerateModulesGen
-// must return an errcode.ErrMetadataInvalid error for any assembly with non-empty remote.
-func TestGenerateModulesGen_DeploymentTopology_Remote_FailClosed(t *testing.T) {
+// TestGenerateModulesGen_DeploymentTopology_Remote_Rendered verifies that
+// topology.remote is now rendered by codegen (TOPO-12 interim gate removed in
+// US5 #1966). GenerateModulesGen must succeed and emit a Remote block with the
+// expected cell ID and endpoint.
+func TestGenerateModulesGen_DeploymentTopology_Remote_Rendered(t *testing.T) {
 	topo := metadata.TopologyMeta{
 		Colocated: []string{metadatatest.CellIDAccessCore},
 		Remote:    []metadata.TopologyRemoteEntry{{CellID: metadatatest.CellIDAuditCore, Endpoint: "audit.svc:9090"}},
@@ -94,12 +94,17 @@ func TestGenerateModulesGen_DeploymentTopology_Remote_FailClosed(t *testing.T) {
 	project := buildCompositionProjectForTopology(topo)
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
-	_, err := gen.GenerateModulesGen("topobundle")
-	require.Error(t, err, "topology.remote must fail codegen closed (US4 #1963 interim gate)")
+	out, err := gen.GenerateModulesGen("topobundle")
+	require.NoError(t, err, "topology.remote must be rendered by codegen (TOPO-12 interim gate removed)")
 
-	var ec *ecErr.Error
-	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
-	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	// Prove the emitted Go is syntactically valid.
+	formatted, fmtErr := format.Source(out)
+	require.NoError(t, fmtErr, "generated Go must be parseable by go/format.Source")
+
+	content := string(formatted)
+	assert.Contains(t, content, "RemoteCellEndpoint", "remote cell endpoint type must appear in output")
+	assert.Contains(t, content, `"auditcore"`, "remote cell ID must appear in output")
+	assert.Contains(t, content, `"audit.svc:9090"`, "remote endpoint address must appear in output")
 }
 
 // TestGenerateModulesGen_DeploymentTopology_ColocaledOnly_ValidGo verifies that

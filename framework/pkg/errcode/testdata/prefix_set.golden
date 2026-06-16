@@ -57,6 +57,7 @@ ERR_SESSION_	github.com/ghbvf/gocell
 ERR_SETUP_	github.com/ghbvf/gocell
 ERR_SLICE_	github.com/ghbvf/gocell
 ERR_TEST_	github.com/ghbvf/gocell
+ERR_UPSTREAM_CELL_UNAVAILABLE	github.com/ghbvf/gocell
 ERR_VALIDATION_	github.com/ghbvf/gocell
 ERR_VAULT_	github.com/ghbvf/gocell
 ERR_VERSION_CONFLICT	github.com/ghbvf/gocell

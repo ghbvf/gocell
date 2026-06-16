@@ -95,6 +95,19 @@ const MinHMACKeyBytes = kauth.MinHMACKeyBytes
 // servicetoken_tenant_sign_test.go.
 const HeaderTenantID = "X-Tenant-ID"
 
+// HeaderPrincipal is the canonical HTTP header carrying the caller's propagated
+// business principal (base64url compact JSON of outbox.PrincipalMetadata with
+// TenantID cleared). It is integrity-bound into the service-token MAC via the
+// "x-gocell-principal=<value>" segment appended by buildServiceTokenMessage,
+// so tampering with, injecting, or stripping the header invalidates the MAC
+// (same defense-in-depth mechanism as HeaderTenantID).
+//
+// INVARIANT: X-Gocell-Principal is unconditionally part of the service-token
+// MAC material when set by SignInternalRequest; sign and verify share
+// buildServiceTokenMessage. The segment is appended after "x-tenant-id=<value>",
+// so the two signed headers are unambiguously ordered.
+const HeaderPrincipal = "X-Gocell-Principal"
+
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
 	clk        clock.Clock
@@ -347,6 +360,13 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 	// express identity via CallerCellID (Subject is empty), so injectPrincipalCtxKeys
 	// stamps actor_id = CallerCellID; subject_id / session_id stay unset (no source).
 	ctx = injectPrincipalCtxKeys(ctx, p)
+	// Business principal propagation: if the request carried X-Gocell-Principal,
+	// the MAC already validated its integrity. Decode and restore the business
+	// actor/subject/session so downstream handlers see the original user identity,
+	// not just the CallerCellID service actor.
+	if ph := r.Header.Get(HeaderPrincipal); ph != "" {
+		ctx = rebuildPropagatedPrincipal(ctx, ph)
+	}
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -501,25 +521,27 @@ func verifyServiceTokenMAC(ring kauth.HMACKeyring, message string, providedMAC [
 // 4-part token format. The query string is canonicalized (keys sorted) and
 // appended to the path when non-empty. callerCell is included as a segment so
 // tampering with the caller identity invalidates the MAC. tenantID (the
-// X-Tenant-ID signed header) is unconditionally folded as the final
-// "x-tenant-id=<value>" segment — empty for requests that assert no tenant — so
-// tampering with, injecting, or stripping the header invalidates the MAC. The
-// label is lowercased canonical form (SigV4-style signed header). This function
-// is the single source for the MAC message; sign and verify must both call it.
+// X-Tenant-ID signed header) is unconditionally folded as the
+// "x-tenant-id=<value>" segment — empty for requests that assert no tenant.
+// principalHeader (the X-Gocell-Principal signed header) is unconditionally
+// folded as the final "x-gocell-principal=<value>" segment — empty when no
+// business principal is propagated. Both signed-header segments are appended
+// after the callerCell segment so tampering with, injecting, or stripping either
+// header invalidates the MAC (defense-in-depth, AWS SigV4 SignedHeaders style).
+// The label is lowercased canonical form. This function is the single source for
+// the MAC message; sign and verify must both call it.
 //
-// SECURITY: segments are space-delimited and the tenant segment is appended
-// last, so no segment may contain a space. callerCell is validated against
-// ^[a-z][a-z0-9]+$ before this is called, and tenantID is either "" or a
-// canonical UUID (sign side passes the typed tenant.TenantID; verify side folds
-// the raw X-Tenant-ID header, where any space/garbage simply yields a
-// non-matching MAC). The trailing "x-tenant-id=" segment is thus unambiguous.
-func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID string) string {
+// SECURITY: segments are space-delimited. callerCell is validated against
+// ^[a-z][a-z0-9]+$ before this is called; tenantID is either "" or a canonical
+// UUID; principalHeader is either "" or a base64url string (no spaces). The two
+// trailing signed-header segments are unambiguous in ordering and character set.
+func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID, principalHeader string) string {
 	cq := canonicalQuery(rawQuery)
-	tenantSeg := " x-tenant-id=" + tenantID
+	suffix := " x-tenant-id=" + tenantID + " x-gocell-principal=" + principalHeader
 	if cq != "" {
-		return fmt.Sprintf("%s %s?%s %s %s %s", method, path, cq, tsStr, nonce, callerCell) + tenantSeg
+		return fmt.Sprintf("%s %s?%s %s %s %s", method, path, cq, tsStr, nonce, callerCell) + suffix
 	}
-	return fmt.Sprintf("%s %s %s %s %s", method, path, tsStr, nonce, callerCell) + tenantSeg
+	return fmt.Sprintf("%s %s %s %s %s", method, path, tsStr, nonce, callerCell) + suffix
 }
 
 // canonicalQuery returns a deterministic encoding of rawQuery with keys sorted.
@@ -537,24 +559,34 @@ func canonicalQuery(rawQuery string) string {
 }
 
 // GenerateServiceToken creates a service token for the given callerCell, method,
-// path, optional rawQuery, tenantID, and timestamp using the current secret from
-// the key ring. The token format is "{timestamp}:{nonce}:{callerCell}:{hex_hmac}"
-// where nonce is 16 cryptographically random bytes, hex-encoded. It returns an
-// empty string if:
+// path, optional rawQuery, tenantID, principalHeader, and timestamp using the
+// current secret from the key ring. The token format is
+// "{timestamp}:{nonce}:{callerCell}:{hex_hmac}" where nonce is 16
+// cryptographically random bytes, hex-encoded. It returns an empty string if:
 //   - ring is nil
 //   - callerCell is empty (mandatory — identifies the originating cell)
 //   - callerCell contains ':' (would corrupt the 4-part token structure)
 //
-// rawQuery is canonicalized separately from path so the HMAC message remains stable
-// across query parameter ordering. Pass "" when the request has no query parameters.
+// rawQuery is canonicalized separately from path so the HMAC message remains
+// stable across query parameter ordering. Pass "" when the request has no query
+// parameters.
 //
 // tenantID is the X-Tenant-ID assertion folded into the MAC so the tenant is
-// integrity-bound to the caller credential. It is a typed tenant.TenantID (not a
-// raw string) so the signed value is always the canonical form that
-// tenant.TenantID.String() emits — the same value callers set on the X-Tenant-ID
-// header. Pass the zero value (tenant.TenantID("")) when the request asserts no
-// tenant; the MAC then binds an empty tenant segment (see HeaderTenantID).
-func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery string, tenantID tenant.TenantID, ts time.Time) string {
+// integrity-bound to the caller credential. Pass the zero value
+// (tenant.TenantID("")) when the request asserts no tenant.
+//
+// principalHeader is the X-Gocell-Principal value (base64url compact JSON of
+// outbox.PrincipalMetadata, produced by SignInternalRequest). It is folded into
+// the MAC unconditionally so tampering with, injecting, or stripping the
+// X-Gocell-Principal header invalidates the MAC. Pass "" when no business
+// principal is propagated — the MAC then binds an empty principal segment.
+//
+// Production code MUST use SignInternalRequest instead of calling this function
+// directly. The SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest enforces this.
+func GenerateServiceToken(
+	ring *HMACKeyRing, callerCell, method, path, rawQuery string,
+	tenantID tenant.TenantID, principalHeader string, ts time.Time,
+) string {
 	if ring == nil {
 		return ""
 	}
@@ -574,7 +606,7 @@ func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery 
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 
-	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID.String())
+	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID.String(), principalHeader)
 	mac := hmac.New(sha256.New, ring.Current())
 	_, _ = mac.Write([]byte(message))
 	return tsStr + ":" + nonce + ":" + callerCell + ":" + hex.EncodeToString(mac.Sum(nil))

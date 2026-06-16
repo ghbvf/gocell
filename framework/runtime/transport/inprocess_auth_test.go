@@ -49,7 +49,7 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 	t.Run("signed request passes the auth chain", func(t *testing.T) {
 		reached = false
 		req := newReq(t, path)
-		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, clock.Real().Now())
+		token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", tid, "", clock.Real().Now())
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set(auth.HeaderTenantID, tid.String())
 
@@ -102,7 +102,7 @@ func TestInProcessTransport_DoesNotBypassAuthChain(t *testing.T) {
 
 		req := newReq(t, path)
 		// Signed by auditcore — authenticates fine, but not in the {accesscore} allowlist.
-		token := auth.GenerateServiceToken(ring, "auditcore", http.MethodGet, path, "", tid, clock.Real().Now())
+		token := auth.GenerateServiceToken(ring, "auditcore", http.MethodGet, path, "", tid, "", clock.Real().Now())
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set(auth.HeaderTenantID, tid.String())
 

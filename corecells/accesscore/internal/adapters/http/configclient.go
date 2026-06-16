@@ -111,15 +111,12 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, t tenant.TenantID, key 
 	}
 
 	// Sign the request with a service token so the InternalListener middleware accepts it.
-	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0]. The tenant t is
-	// bound into the token MAC (signed X-Tenant-ID) and set on the wire as the same
-	// canonical t.String(), so a tampered/injected/stripped header fails verification.
-	token := auth.GenerateServiceToken(c.ring, "accesscore", http.MethodGet, path, "", t, c.clock.Now())
-	if token == "" {
-		return ports.ConfigEntry{}, errcode.New(errcode.KindInternal, errcode.ErrInternal, "configclient: service token generation failed")
+	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0]. The tenant t and
+	// any propagated business principal are folded into the MAC so tamper/inject/strip of
+	// either signed header fails verification at the receiving end.
+	if err := auth.SignInternalRequest(ctx, c.ring, "accesscore", req, t, c.clock); err != nil {
+		return ports.ConfigEntry{}, err
 	}
-	req.Header.Set("Authorization", "ServiceToken "+token)
-	req.Header.Set(auth.HeaderTenantID, t.String())
 
 	resp, err := c.transport.DoContract(ctx, configInternalGetContractID, req)
 	if err != nil {

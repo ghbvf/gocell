@@ -48,11 +48,11 @@
 
 ### US5 — Sync 远程实现：Resolver + 内部 HTTP 客户端（P1）→ #1966（blocked-by #1962 + #1963；接口与 #303 共享）
 
-- [ ] T040 [US5] `Resolver` 接口 + 静态配置实现（assembly topology.remote 驱动）
-- [ ] T041 [US5] `RemoteHTTPTransport`：service token 出站签名（callerCell 身份，复用 HMAC keyring）、超时/重试预算、`RequiresDistributedReplay` 约束接入
-- [ ] T042 [US5] principal/tenant 跨进程传播：HTTP 头规范 + 被调端 ctx 重建（对称 `kernel/outbox/principal.go` PrincipalMetadata；`CTXKEYS-PRINCIPAL-WRITE-CALLER-01` 扩展到新写入点）
-- [ ] T043 [P] [US5] errcode：新增 `errcode.Code` `ERR_UPSTREAM_CELL_UNAVAILABLE`（用既有 `KindUnavailable` 构造，非新 Kind）+ 前缀注册 + golden（`ERRCODE-PREFIX-OWNERSHIP-01`）；wire 可见区分需重评 5xx public-code 投影（默认折叠 503 + details strip）
-- [ ] T044 [US5] 远端不可达/超时/5xx 错误映射 + 集成测试（testcontainers 双进程）
+- [x] T040 [US5] `Resolver` 接口 + 静态配置实现（`StaticResolver` over cellID→endpoint map；wiring 由 `celltransport.Resolve` 从 sealed topology 派生，避免 transport→bootstrap 反向 import 环）
+- [x] T041 [US5] `RemoteHTTPTransport`：service token 出站签名（callerCell 身份，复用 HMAC keyring）、单预算（caller ctx）无 transport 重试、`RequiresDistributedReplay` 复用既有 callee 闸；`REMOTE-TRANSPORT-SEALED-01` reflect freeze
+- [x] T042 [US5] principal 跨进程传播：`X-Gocell-Principal` 头（actor/subject/session，base64url JSON）**折进 service-token MAC**（防篡改），单一 sealed funnel `auth.SignInternalRequest`（裸 `GenerateServiceToken` 经 `SVCTOKEN-CALLER-CELL-REQUIRED-01` 收口）+ callee `principal_propagation.go` 重建（`CTXKEYS-PRINCIPAL-WRITE-CALLER-01` 扩展）；tenant 单源仍走 `X-Tenant-ID`
+- [x] T043 [P] [US5] errcode：新增 `ERR_UPSTREAM_CELL_UNAVAILABLE`（既有 `KindUnavailable`）+ 前缀注册 + golden（`ERRCODE-PREFIX-OWNERSHIP-01`）；wire 折叠 503，专属码作服务端诊断
+- [x] T044 [US5] 远端不可达/超时/5xx 错误映射 + 集成测试（单进程真实 TCP loopback，覆盖 happy + connection-refused/timeout/5xx/401/403/resolver-miss；真双进程端到端属 US7 journey）。另：解除 interim 门 TOPO-12 + `CheckRemotePlacementSupported`，topology.remote 经 `celltransport.Resolve`（`CELLTRANSPORT-SELECT-FUNNEL-01`）选型生效
 
 ### US6 — Per-cell 基建分区（P2）→ #1964（blocked-by #1960，与 Phase 2 同 wave 并行）
 

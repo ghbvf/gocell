@@ -289,7 +289,7 @@ func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *tes
 	// so it is assignable to both the tenant.TenantID sign param and the string header.
 	const tenantID = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, time.Now())
+		http.MethodGet, "/internal/v1/config/no-such-key", "", tenantID, "", time.Now())
 	require.NotEmpty(t, token, "token generation must succeed for a valid callerCell")
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -315,7 +315,7 @@ func TestInternalRPC_ConfigCoreCallsConfigRead_Denied_403(t *testing.T) {
 	app := startCallerCellApp(t)
 
 	token := auth.GenerateServiceToken(app.ring, "configcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -343,7 +343,7 @@ func TestInternalRPC_WrongEndpointForCaller_403(t *testing.T) {
 	// auditcore is a valid cell ID and passes HMAC + format checks,
 	// but it is not in the configread contract.clients allowlist.
 	token := auth.GenerateServiceToken(app.ring, "auditcore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
@@ -406,7 +406,7 @@ func TestInternalRPC_TamperedCallerCellRejected(t *testing.T) {
 
 	// Generate a legitimate token for "accesscore".
 	original := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/any-key", "", "", time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", "", "", time.Now())
 	require.NotEmpty(t, original)
 
 	// Token format: ts:nonce:callerCell:mac — 4 colon-separated segments.
@@ -446,7 +446,7 @@ func TestInternalRPC_TamperedTenantHeaderRejected(t *testing.T) {
 	// Sign the token binding tenant A.
 	const signedTenant = "00000000-0000-0000-0000-000000000001"
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
-		http.MethodGet, "/internal/v1/config/any-key", "", signedTenant, time.Now())
+		http.MethodGet, "/internal/v1/config/any-key", "", signedTenant, "", time.Now())
 	require.NotEmpty(t, token)
 
 	req, err := http.NewRequest(http.MethodGet,
