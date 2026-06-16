@@ -290,12 +290,16 @@ func wireConfigGetter(shared *composition.SharedDeps, accessOpts []accesscell.Op
 		return nil, fmt.Errorf("accesscore: deployment topology: %w", err)
 	}
 	// celltransport.Resolve is the single topology-gated entry for CellTransport
-	// selection (CELLTRANSPORT-SELECT-FUNNEL-01). metrics and tracer are nil here
-	// because SharedDeps does not yet expose transport-level telemetry handles
-	// (no metric double-registration risk; nil Metrics records nothing, nil tracer
-	// degrades to NoopTracer per NewRemoteHTTP contract).
+	// selection (CELLTRANSPORT-SELECT-FUNNEL-01). The SHARED transport metrics
+	// (minted once by composition.Builder, reused — not re-registered) are threaded
+	// so a split-topology remote call emits cell_transport_requests_total{transport_mode=remote}
+	// per ADR D4 (#1966 review P1.3). The tracer stays nil: the cross-cell span
+	// tracer is late-bound at bootstrap phase5 (InProcessTransport.Bind) and is not
+	// available at module-Provide time, so remote span tracing is a tracked
+	// follow-up (#1966 review P1.3 span half); a nil tracer degrades to NoopTracer
+	// per the NewRemoteHTTP contract.
 	ct, err := celltransport.Resolve(topo, configProviderCell,
-		shared.InProcessTransport, shared.Clock, nil, nil)
+		shared.InProcessTransport, shared.Clock, shared.TransportMetrics, nil)
 	if err != nil {
 		return nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
 	}

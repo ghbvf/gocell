@@ -229,13 +229,16 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 //	ServiceToken {unix_timestamp}:{nonce}:{callerCell}:{hex_hmac}
 //
 // The HMAC is computed over
-// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce} {callerCell} x-tenant-id=<value>"
-// — i.e. the caller cell is a MAC segment, and the X-Tenant-ID signed header is
-// folded unconditionally as the trailing "x-tenant-id=<value>" segment (empty for
-// no-tenant requests). buildServiceTokenMessage is the single source for this
-// material; sign (GenerateServiceToken) and verify (verifyServiceTokenPayload)
-// both call it, so tampering with the caller identity or the tenant header
-// invalidates the MAC (see HeaderTenantID).
+// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce} {callerCell} x-tenant-id=<value> x-gocell-principal=<value>"
+// — i.e. the caller cell is a MAC segment, and both signed headers are
+// unconditionally folded as space-delimited trailing segments: first
+// "x-tenant-id=<value>" (empty for no-tenant requests), then
+// "x-gocell-principal=<value>" (empty when no business principal is propagated).
+// buildServiceTokenMessage is the single source for this material; sign
+// (GenerateServiceToken) and verify (verifyServiceTokenPayload) both call it, so
+// tampering with, injecting, or stripping the caller identity, the tenant header,
+// or the principal header invalidates the MAC (see HeaderTenantID,
+// HeaderPrincipal).
 //
 // Verification tries each secret in the key ring in order (current, then
 // previous). Tokens older than 5 minutes (exclusive boundary) are rejected.

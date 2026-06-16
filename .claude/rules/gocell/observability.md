@@ -44,12 +44,21 @@ gRPC unary 和 stream interceptor 顺序必须保证 cell attribution 在 metric
 ## Cross-cell transport
 
 跨 cell 同步（http）contract 调用经 `runtime/transport.CellTransport` seam 时，必须按
-`transport_mode ∈ {in_proc, remote}` 二值区分——`cell_transport_requests_total{transport_mode}`
+`transport_mode ∈ {in_proc, remote}` 二值区分——`cell_transport_requests_total{transport_mode, outcome}`
 metric label + trace span attribute（ADR `202606131142-1423` D4：「透明」不得变成「不可诊断」）。
 `transport_mode` 是 sealed `transport.TransportMode`（unexported 字段 + `ModeInProc()`/`ModeRemote()`
 唯一构造），值集由类型系统闭合——包外不可 mint 第三值，metric Record 取 typed 参数故裸 string 不可
 表达（Hard）。二值天然低基数，故 metrics **可**按 transport_mode 过滤（非 trace-only）。L0 cell 不经
 此 seam 调用，豁免。新增 mode 须同步 `allTransportModes` 注册表（anti-vacuity）+ 本节。
+
+第二个 label `outcome` 区分分发结局（#1966 review P2.6）：**每次**分发都 Record（成功 + 每条失败
+出口），不只成功路径——否则失败率被低报。`outcome` 是 sealed `transport.TransportOutcome`
+（unexported 字段 + accessor 唯一构造），闭值集 = `{success, dial_error, timeout, canceled,
+resolver_error, rewrite_error}`：success 含任意 HTTP 响应（5xx 在传输层仍是 success，由调用方决定
+重试/熔断）；失败 kind 与 remote transport 的 errcode Kind 同源分类（timeout→504 / canceled→499 /
+dial→503，见 P2.8）。`error.type` 超出该有界 kind 的细节留在 trace span（`span.RecordError`），
+不进 metric label，保持低基数（success + 5 个有界失败 kind × 二值 mode = ≤12 series）。新增 outcome
+须同步 `allTransportOutcomes` 注册表（anti-vacuity，`TestTransportOutcome_FrozenRegistry`）+ 本节。
 
 ## Redis namespace
 

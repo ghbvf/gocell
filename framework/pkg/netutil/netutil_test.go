@@ -18,10 +18,18 @@ func TestIsValidNetworkAddress(t *testing.T) {
 		{name: "loopback IP:port", input: "127.0.0.1:8080", want: true},
 		{name: "IPv6:port", input: "[::1]:9000", want: true},
 
-		// http/https URL forms
-		{name: "https URL with host", input: "https://remote.svc/", want: true},
+		// http/https URL forms (scheme+host[:port] only; optional root "/")
+		{name: "https URL with host + root slash", input: "https://remote.svc/", want: true},
 		{name: "http URL with host", input: "http://cell-d.internal", want: true},
-		{name: "https URL with port", input: "https://host:9443/api", want: true},
+		{name: "https URL with port (no path)", input: "https://host:9443", want: true},
+
+		// path/query/fragment rejected — endpoint must not carry these (#1966 P2.9):
+		// the remote transport keeps only scheme+host, so they would be silently dropped.
+		{name: "https URL with path rejected", input: "https://host:9443/api", want: false},
+		{name: "http URL with deep path rejected", input: "http://cell-d.internal/v1/x", want: false},
+		{name: "https URL with query rejected", input: "https://host:9443/?k=v", want: false},
+		{name: "http URL with fragment rejected", input: "http://host:9443/#frag", want: false},
+		{name: "bare host:port with path rejected", input: "host:8080/foo", want: false},
 
 		// rejected schemes
 		{name: "grpc:// rejected", input: "grpc://h:1", want: false},

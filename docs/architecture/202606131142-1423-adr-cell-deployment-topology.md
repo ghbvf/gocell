@@ -187,7 +187,12 @@ type Resolver interface {
   observability 规范「label 值集必须冻结 / 经 typed enum 入口」（对标 OTel RPC metrics 用受控基数
   attribute 过滤）。故 metrics **可**按 transport_mode 过滤（非 trace-only），既满足「trace/metrics
   区分」又不引入高基数；`cell` label 仍来自 closed set。确切常量名与 enum 入口在 US4 #1963 锁定并
-  更新 observability 规范。
+  更新 observability 规范。**#1966 review P2.6 补第二个 frozen typed-enum label `outcome`**
+  （`cell_transport_requests_total{transport_mode, outcome}`，sealed `transport.TransportOutcome`
+  闭值集 `{success, dial_error, timeout, canceled, resolver_error, rewrite_error}`）：**每次**分发
+  都 Record（成功 + 每条失败出口），不只成功路径——否则远端不可达/超时/取消的失败率被低报。失败 kind
+  与 errcode Kind 同源分类（见下 §review amendment P2.8）；超出有界 kind 的 `error.type` 细节留 span，
+  不进 label（≤12 series，仍低基数）。
 - **L0 cell 显式豁免 transport 判定。** L0（纯计算分区）按宪法 Article I「可被同 Assembly 内兄弟 Cell
   直接导入，但 **MUST 在 `cell.l0Dependencies` 显式声明**」——故 transport 规则（含下游 funnel archtest）
   的 L0 carve-out **仅豁免已在 `cell.l0Dependencies` 声明的合法 L0 import**；未声明的 L0 direct import
@@ -287,6 +292,45 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
 `gocell validate` + codegen；TOPO-13（split + in-memory bus → reject）随之 production-reachable，成为真门。**集成测试**为单进程
 真实 TCP loopback（覆盖 sign→TCP→verify→handler→response + connection refused/timeout/5xx/401/403/resolver-miss 全分支）；
 真双进程端到端属 US7 journey 验收，非本 issue。
+
+### #1966 review Amendment — 门删后威胁矩阵重评 + 远程边界语义/可观测收敛（2026-06-16）
+
+`/pr-review` #2228 R1/R2 提出：本 PR **删除 interim 门**（TOPO-12 + `CheckRemotePlacementSupported`）后，
+`topology.remote` 成 production-reachable，故「共享 HMAC keyring + 自报 `callerCell` + 明文 HTTP」不再是
+理论缺口，而是真实生产路径——质疑 split topology 在 per-cell 身份 / mTLS 落地前是否可合并。按 AI-robust 章程
+「ADR amendment 落地必须同步重评威胁矩阵」，逐项裁定：
+
+- **per-cell keyring 隔离（矩阵行「共享 HMAC keyring」）+ mTLS（行「无 mTLS」）→ 维持 #2153 分阶段 defer
+  （决策 A）**。理由：二者是 epic 级密码学/身份工作流（HKDF 子密钥派生 / 密钥分发 / 轮换 / SPIFFE-SVID 或
+  mTLS 证书），已有 OPEN tracking issue **#2153**（US6 实施）+ 上表登记，**不**塞进本 transport-shape PR。
+  门删**不引入新缺口**——它使**既有登记缺口可达**，故本 amendment 的职责是把**操作边界写明、写响**，而非
+  静默放行。
+- **操作约束（文档化、fail-closed-by-deployment）**：在 #2153 的 TLS/per-cell-key 落地前，`topology.remote`
+  **MUST 仅部署于可信/私有网络**，且 ① 所有 cell 进程共享同一 `GOCELL_SERVICE_SECRET`（跨进程 service token
+  验签前提）；② internal listener 绑定 pod/网络可达地址并由 NetworkPolicy/VPC 限制 ingress 至授权 caller cell；
+  ③ 服务端 `RequireCallerCell` allowlist 仍是当前补偿控制（防跳入预期外 internal endpoint）。该 checklist 落
+  `docs/guides/deployment-topology.md`（#1966 review P2.10），把「明文 + 共享 secret + 自报身份」的适用边界
+  与残留风险对运维显式可见——区别于「悄悄能跑」。残留威胁画像：明文 = wire 无机密性（私网部署补偿，mTLS 归
+  #2153）；shared keyring = 已被攻陷且持 secret 的 cell 可伪造他 cell 身份（per-cell HKDF 归 #2153）。MAC 仍
+  保证 `callerCell` + principal **完整性**（Hard）不变。**`netutil.go` 对 TLS/loopback enforcement 的 US6
+  归属注记保持不动**（不在本 PR 反转该 scope）。
+- **远程错误语义对齐既有 contract（P2.8）**：`RemoteHTTPTransport` 对 `client.Do` 失败按因分类——caller-ctx
+  cancel → `KindClientClosed`(499)；deadline-exceeded / net timeout → `KindDeadlineExceeded`(504，复用既有
+  `pkg/errcode/status.go` 映射)；其余 dial（refused/reset/DNS）→ `KindUnavailable`(503)。errcode Code 恒为
+  `ERR_UPSTREAM_CELL_UNAVAILABLE`（Kind 驱动 HTTP status，Code 作服务端诊断）——不再把 timeout 误折成 503。
+- **失败也进 transport metrics（P2.6）**：`cell_transport_requests_total` 加 sealed `outcome` 第二 label，
+  **每条出口**（成功 + dial/timeout/cancel/resolver/rewrite 失败）Record，失败率不再低报。详见上 §D4 + observability 规范。
+- **端点 path/query/fragment fail-closed（P2.9）**：`netutil.IsValidNetworkAddress`（配置期校验）+
+  `rewriteToAbsolute`（请求期纵深）拒绝携 path/query/fragment 的 endpoint（仅容忍裸根 `/`），不再静默截断。
+- **生产 remote metrics 接线（P1.3）**：composition `SharedDeps.TransportMetrics` 暴露 Build 单例 metrics，
+  accesscore `celltransport.Resolve` 传入（非 nil），split topology remote 调用现发 `transport_mode=remote`
+  指标（关闭 ADR D4 指标缺口）。**span tracer 半残留**：cross-cell span tracer 在 bootstrap phase5
+  late-bind（`InProcessTransport.Bind`），module-Provide 期不可得 → remote span tracing 追踪在独立 follow-up
+  issue（结构性 late-bind blocker，非静默缺口）。
+- **AI-robust 护栏补全（P1.4 / P1.5）**：`SVCTOKEN-CALLER-CELL-REQUIRED-01` 增「auth 包外生产代码禁直调
+  `GenerateServiceToken`（须走 `SignInternalRequest` funnel）」arm + red fixture——把 godoc 已宣称但未 enforce
+  的禁令落为机器可判定（Medium）；`CELLTRANSPORT-SELECT-FUNNEL-01` 扫描根加 `corecells` + red fixture，封死
+  core cell 直构 `transport.NewRemoteHTTP` 绕 topology gate 的未来路径。
 
 ### #1964 Amendment — per-cell 基础设施 seam 落地记录
 

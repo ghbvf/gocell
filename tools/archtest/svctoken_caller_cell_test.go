@@ -3,7 +3,10 @@
 // INVARIANT: SVCTOKEN-CALLER-CELL-REQUIRED-01
 package archtest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01 enforces that every call to
 // auth.GenerateServiceToken passes a valid cell-ID string literal as its
@@ -14,6 +17,61 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	t.Parallel()
 	Report(t, ruleSvctokenCallerCellRequired01,
 		CheckSvctokenCallerCellRequired01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+}
+
+// TestSVCTOKEN_CALLER_CELL_REQUIRED_01_CArm_RedFixture asserts that the C-arm
+// (generateServiceTokenDirectCallBanDiag) fires when a non-auth, non-test
+// production package calls auth.GenerateServiceToken directly — even with a
+// valid callerCell literal that would satisfy the A-arm.
+//
+// Anti-vacuity: the test asserts at least one diagnostic with the C-arm
+// message was emitted; a broken detector (e.g. the guard condition
+// !authOwningPackage was inverted) would emit zero diagnostics and the test
+// would fail.
+//
+// The fixture (tools/archtest/testdata/svctoken_direct_call_ban_fixtures/
+// red_direct_call/caller.go) calls auth.GenerateServiceToken("accesscore", ...)
+// from package reddirectcall — a non-auth, non-test package. The C-arm must
+// flag this call.
+func TestSVCTOKEN_CALLER_CELL_REQUIRED_01_CArm_RedFixture(t *testing.T) {
+	t.Parallel()
+
+	const fixturePattern = "./tools/archtest/testdata/svctoken_direct_call_ban_fixtures/red_direct_call"
+	root := findModuleRoot(t)
+	knownCells := discoverKnownCells(t, root)
+
+	seen := map[string]struct{}{}
+	var diags []Diagnostic
+
+	_ = Run(t, Typed(TypedOpts{Tests: false}, []string{fixturePattern}),
+		func(p *Pass) []Diagnostic {
+			if p.Pkg == nil || p.TypesInfo == nil {
+				return nil
+			}
+			for _, file := range p.Files {
+				rel := p.Rel(file)
+				// Exclude _test.go files — the C-arm only fires on non-test files.
+				if strings.HasSuffix(rel, "_test.go") {
+					continue
+				}
+				collectGenerateServiceTokenDiagsFromFile(p, file, rel, knownCells, seen, &diags)
+			}
+			return nil
+		})
+
+	// Anti-vacuity: the C-arm must have fired at least once.
+	var cArmFired bool
+	for _, d := range diags {
+		if strings.Contains(d.Message, "must not call auth.GenerateServiceToken directly") {
+			cArmFired = true
+			t.Logf("C-arm fired at %s:%d: %s", d.Rel, d.Line, d.Message)
+		}
+	}
+	if !cArmFired {
+		t.Errorf("SVCTOKEN-CALLER-CELL-REQUIRED-01 C-arm RED fixture: expected at least one "+
+			"diagnostic about direct GenerateServiceToken call from non-auth package, got none. "+
+			"Diagnostics: %v", diags)
+	}
 }
 
 // TestSVCTOKEN_CALLER_CELL_REQUIRED_01_BuildTaggedFilesScanned_Wave5_RED is a

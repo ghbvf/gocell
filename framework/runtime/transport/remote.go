@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,10 +41,12 @@ const (
 // by REMOTE-TRANSPORT-SEALED-01.
 //
 // Observability (ADR D4): DoContract opens a trace span with transport_mode=remote
-// and contract.id; on success records cell_transport_requests_total{transport_mode=remote}.
-// A 5xx response marks the span StatusError but is returned as (resp, nil) — the
-// caller decides retry/circuit-break semantics. A dial failure (no response) is
-// returned as (nil, KindUnavailable).
+// and contract.id; EVERY dispatch records cell_transport_requests_total{transport_mode=remote,
+// outcome=…} — success and every failure exit (#1966 review P2.6), so the failure
+// rate is not under-reported. A 5xx response marks the span StatusError but is
+// returned as (resp, nil) with outcome=success — the caller decides retry/circuit-break
+// semantics. A dial failure (no response) is returned as (nil, err) with the Kind
+// classified per the cause (canceled→499 / timeout→504 / other→503; #1966 review P2.8).
 type RemoteHTTPTransport struct {
 	resolver     Resolver
 	targetCellID string
@@ -116,12 +120,14 @@ func NewRemoteHTTP(
 // is reserved for transport-level failures (dial error, ctx cancellation,
 // resolver error, URL rewrite failure).
 //
-// Failure path:
-//   - resolver error → returned directly (resolver sets the Kind).
-//   - URL rewrite failure (malformed endpoint) → KindInternal.
-//   - dial failure (no response from server) → KindUnavailable /
-//     ErrUpstreamCellUnavailable (transient Net classification determines reason
-//     text, not the error Kind).
+// Failure path (every exit records cell_transport_requests_total{outcome=…}):
+//   - resolver error → returned directly (resolver sets the Kind); outcome=resolver_error.
+//   - URL rewrite failure (malformed endpoint) → KindInternal; outcome=rewrite_error.
+//   - dial failure (no response from server) → ErrUpstreamCellUnavailable, with the
+//     Kind classified (#1966 review P2.8): caller-ctx canceled → KindClientClosed
+//     (499); deadline-exceeded / net timeout → KindDeadlineExceeded (504); other
+//     dial errors (refused / reset / DNS) → KindUnavailable (503). outcome is
+//     canceled / timeout / dial_error respectively.
 func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string, req *http.Request) (*http.Response, error) {
 	// Zero-value guard: resolver and client are nil only for a zero-value struct.
 	if validation.IsNilInterface(t.resolver) || t.client == nil {
@@ -136,12 +142,14 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 
 	endpoint, err := t.resolver.Resolve(ctx, t.targetCellID)
 	if err != nil {
+		t.metrics.Record(ctx, modeRemote, outcomeResolverError)
 		span.RecordError(err)
 		span.SetStatus(wrapper.StatusError, "resolver error")
 		return nil, err
 	}
 
 	if err := rewriteToAbsolute(req, endpoint); err != nil {
+		t.metrics.Record(ctx, modeRemote, outcomeRewriteError)
 		span.RecordError(err)
 		span.SetStatus(wrapper.StatusError, "URL rewrite failed")
 		return nil, err
@@ -152,7 +160,8 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 	// This is the intended cross-cell dial, not an SSRF sink.
 	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G704: see rationale above (operator-configured endpoint)
 	if err != nil {
-		dialErr := wrapDialError(contractID, t.targetCellID, err)
+		dialErr := classifyDialError(contractID, t.targetCellID, err)
+		t.metrics.Record(ctx, modeRemote, dialOutcome(err))
 		span.RecordError(dialErr)
 		span.SetStatus(wrapper.StatusError, "dial failed")
 		return nil, dialErr
@@ -160,7 +169,7 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 
 	// Success: record metric and set span attributes. 5xx marks span StatusError
 	// but is returned as (resp, nil) — caller decides retry/circuit-break.
-	t.metrics.Record(ctx, modeRemote)
+	t.metrics.Record(ctx, modeRemote, outcomeSuccess)
 	span.SetAttributes(wrapper.Attr{Key: attrHTTPStatusCode, Value: int64(resp.StatusCode)})
 	if resp.StatusCode >= http.StatusInternalServerError {
 		span.SetStatus(wrapper.StatusError, http.StatusText(resp.StatusCode))
@@ -183,11 +192,22 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 // Returns KindInternal on an unparseable endpoint (a static wiring error, not
 // a transient network condition).
 func rewriteToAbsolute(req *http.Request, endpoint string) error {
+	rewriteErr := func() error {
+		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgRemoteURLRewriteFail,
+			errcode.WithInternal(errcode.InternalAttr("endpoint", endpoint)))
+	}
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
 		u, err := url.Parse(endpoint)
 		if err != nil {
-			return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgRemoteURLRewriteFail,
-				errcode.WithInternal(errcode.InternalAttr("endpoint", endpoint)))
+			return rewriteErr()
+		}
+		// Endpoints are scheme+host[:port] only. A path (beyond an optional root
+		// "/")/query/fragment would be silently dropped here (only Scheme+Host are
+		// copied), so reject it rather than truncate (#1966 review P2.9;
+		// netutil.IsValidNetworkAddress already rejects these at config time — this
+		// is defense-in-depth, aligned on the same root-"/" tolerance).
+		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return rewriteErr()
 		}
 		req.URL.Scheme = u.Scheme
 		req.URL.Host = u.Host
@@ -198,22 +218,26 @@ func rewriteToAbsolute(req *http.Request, endpoint string) error {
 	// so bearer/principal headers are confidential only within a private network.
 	// MAC (X-Gocell-ServiceToken) ensures integrity but NOT confidentiality;
 	// mTLS confidentiality is wired by US6 #1964.
+	// A bare endpoint carrying a path/query/fragment (e.g. "host:port/foo") would
+	// likewise be truncated, so reject it (#1966 review P2.9, defense-in-depth).
+	if strings.ContainsAny(endpoint, "/?#") {
+		return rewriteErr()
+	}
 	req.URL.Scheme = "http"
 	req.URL.Host = endpoint
 	return nil
 }
 
-// wrapDialError wraps a client.Do transport-level error (no HTTP response
-// received) into a KindUnavailable errcode. IsTransientNet determines whether
-// the error is transient for log-level annotation (it does NOT change the Kind
-// — all dial failures are KindUnavailable from the caller's perspective since
-// no response body is available).
-func wrapDialError(contractID, cellID string, err error) error {
-	reason := "connection failed"
-	if errcode.IsTransientNet(err) {
-		reason = "transient network error"
-	}
-	return errcode.New(errcode.KindUnavailable, errcode.ErrUpstreamCellUnavailable,
+// classifyDialError wraps a client.Do transport-level error (no HTTP response
+// received) into an errcode whose Kind reflects the failure cause (#1966 review
+// P2.8): caller-ctx cancellation → KindClientClosed (499); deadline-exceeded /
+// net timeout → KindDeadlineExceeded (504); other dial failures → KindUnavailable
+// (503). The errcode is always ErrUpstreamCellUnavailable (the diagnostic code is
+// about the upstream being unreachable regardless of cause; the Kind drives the
+// HTTP status). reason annotates the cause for server-side logs only.
+func classifyDialError(contractID, cellID string, err error) error {
+	kind, reason := classifyDialCause(err)
+	return errcode.New(kind, errcode.ErrUpstreamCellUnavailable,
 		msgRemoteDialFailed,
 		errcode.WithInternal(
 			errcode.InternalAttr("reason", reason),
@@ -221,6 +245,44 @@ func wrapDialError(contractID, cellID string, err error) error {
 			errcode.InternalAttr("contractID", contractID),
 			errcode.InternalAttr("cause", err.Error()),
 		))
+}
+
+// dialOutcome classifies a client.Do error into the metric outcome, mirroring
+// classifyDialCause so the metric and the errcode Kind agree (#1966 review P2.6).
+func dialOutcome(err error) TransportOutcome {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return outcomeCanceled
+	case isTimeout(err):
+		return outcomeTimeout
+	default:
+		return outcomeDialError
+	}
+}
+
+// classifyDialCause maps a client.Do error to (errcode.Kind, reason). Cancellation
+// is checked before timeout because an http.Client.Timeout-induced deadline also
+// reports Timeout(); a caller-initiated cancel is distinct from a timeout.
+func classifyDialCause(err error) (errcode.Kind, string) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return errcode.KindClientClosed, "request canceled"
+	case isTimeout(err):
+		return errcode.KindDeadlineExceeded, "deadline exceeded"
+	case errcode.IsTransientNet(err):
+		return errcode.KindUnavailable, "transient network error"
+	default:
+		return errcode.KindUnavailable, "connection failed"
+	}
+}
+
+// isTimeout reports whether err is a deadline-exceeded or net-timeout failure.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // compile-time: RemoteHTTPTransport satisfies the seam.

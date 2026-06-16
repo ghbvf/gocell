@@ -219,6 +219,10 @@ func (b *Builder) Build(
 	if err != nil {
 		return nil, fmt.Errorf("composition.Builder.Build: transport metrics: %w", err)
 	}
+	// Share the SAME *transport.Metrics with both the in-process holder and any
+	// remote transport a module resolves via celltransport.Resolve (#1966 P1.3):
+	// reuse, never re-register, the single counter.
+	shared.TransportMetrics = txMetrics
 	shared.InProcessTransport = transport.NewInProcess(txMetrics)
 
 	var cells []cell.Cell

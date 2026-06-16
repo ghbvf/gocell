@@ -12,7 +12,7 @@ package archtest
 //
 // # SVCTOKEN-CALLER-CELL-REQUIRED-01
 //
-// Two invariants guarded jointly:
+// Three invariants guarded jointly:
 //
 // A. Every call expression `auth.GenerateServiceToken(...)` must pass a
 //    non-empty string literal as its second argument (callerCell). The literal
@@ -26,10 +26,15 @@ package archtest
 // B. Every call expression `auth.SignInternalRequest(...)` must pass a
 //    non-empty string literal as its third argument (index 2, callerCell).
 //    The same cell-ID constraints as A apply. SignInternalRequest is the
-//    single sanctioned production funnel for signing internal requests; direct
-//    GenerateServiceToken calls from production code outside runtime/auth are
-//    banned (only auth-package-internal, auth package tests, and integration
-//    test files may call it directly).
+//    single sanctioned production funnel for signing internal requests.
+//
+// C. Production code outside runtime/auth must NOT call auth.GenerateServiceToken
+//    directly. The sole legal direct callers are:
+//      - the runtime/auth package itself (SignInternalRequest is the sanctioned
+//        funnel that wraps it), and
+//      - _test.go files (integration / unit tests may call it for test fixtures).
+//    Any non-test, non-auth production package calling GenerateServiceToken
+//    directly bypasses the SignInternalRequest funnel and is rejected here.
 //
 // Detection: type-aware — resolved via ResolvePackageRef which uniformly
 // handles SelectorExpr (qualified) and Ident (dot-imported). Closes
@@ -167,6 +172,14 @@ func collectGenerateServiceTokenDiagsFromFile(
 		EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 			if !inSignInternalRequestFunnel {
 				appendIfBad(generateServiceTokenCallDiag(p, call, rel, knownCells))
+				// C-arm: ban direct GenerateServiceToken calls from production
+				// code outside runtime/auth (non-test files only; _test.go files
+				// are implicitly exempted by the !authOwningPackage check combined
+				// with the _test.go suffix guard at the file level above, but we
+				// guard explicitly here for clarity).
+				if !authOwningPackage && !strings.HasSuffix(rel, "_test.go") {
+					appendIfBad(generateServiceTokenDirectCallBanDiag(p, call, rel))
+				}
 			}
 			appendIfBad(signInternalRequestCallDiag(p, call, rel, knownCells))
 		})
@@ -224,6 +237,32 @@ func generateServiceTokenCallDiag(p *Pass, call *ast.CallExpr, rel string, known
 		))
 	}
 	return Diagnostic{}, false
+}
+
+// generateServiceTokenDirectCallBanDiag enforces invariant C of
+// SVCTOKEN-CALLER-CELL-REQUIRED-01: production code outside runtime/auth must
+// not call auth.GenerateServiceToken directly. It returns (diag, true) when
+// the call resolves to auth.GenerateServiceToken and the call is in a
+// non-auth, non-test file. Returns (zero, false) for unrelated calls, calls
+// inside runtime/auth, or calls in _test.go files.
+//
+// Callers must only invoke this arm for files where authOwningPackage is false
+// and rel does not end in _test.go (both checked by collectGenerateServiceTokenDiagsFromFile
+// before dispatching here, so this function itself does not re-check to avoid
+// redundancy).
+func generateServiceTokenDirectCallBanDiag(p *Pass, call *ast.CallExpr, rel string) (Diagnostic, bool) {
+	path, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+	if !ok || path != authRuntimeImportPath || name != "GenerateServiceToken" {
+		return Diagnostic{}, false
+	}
+	line := p.Fset.Position(call.Pos()).Line
+	return Diagnostic{
+		Rel:  rel,
+		Line: line,
+		Message: "production code outside runtime/auth must not call auth.GenerateServiceToken " +
+			"directly — use auth.SignInternalRequest (the sanctioned signing funnel) " +
+			"(SVCTOKEN-CALLER-CELL-REQUIRED-01 C-arm)",
+	}, true
 }
 
 // signInternalRequestCallDiag validates a single call expression against

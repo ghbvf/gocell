@@ -62,3 +62,69 @@ func TestTransportMode_ZeroValueFailClosed(t *testing.T) {
 		}
 	}
 }
+
+// TestTransportOutcome_FrozenRegistry pins the closed outcome value set and proves
+// the registry is non-vacuous (anti-vacuity). Adding a new outcome without
+// registering it in allTransportOutcomes — or renaming a wire value — trips this
+// test (#1966 review P2.6).
+func TestTransportOutcome_FrozenRegistry(t *testing.T) {
+	t.Parallel()
+
+	got := make(map[string]int, len(allTransportOutcomes))
+	for _, o := range allTransportOutcomes {
+		got[o.String()]++
+	}
+
+	want := map[string]int{
+		"success": 1, "dial_error": 1, "timeout": 1,
+		"canceled": 1, "resolver_error": 1, "rewrite_error": 1,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("transport outcome value set = %v, want %v", got, want)
+	}
+	for v, n := range want {
+		if got[v] != n {
+			t.Errorf("transport outcome %q count = %d, want %d (registry: %v)", v, got[v], n, got)
+		}
+	}
+}
+
+// TestTransportOutcome_Accessors verifies the package-private singletons render
+// the expected wire strings via their exported accessor functions.
+func TestTransportOutcome_Accessors(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]TransportOutcome{
+		"success":        OutcomeSuccess(),
+		"dial_error":     OutcomeDialError(),
+		"timeout":        OutcomeTimeout(),
+		"canceled":       OutcomeCanceled(),
+		"resolver_error": OutcomeResolverError(),
+		"rewrite_error":  OutcomeRewriteError(),
+	}
+	for want, o := range cases {
+		if got := o.String(); got != want {
+			t.Errorf("outcome accessor String() = %q, want %q", got, want)
+		}
+	}
+}
+
+// TestTransportOutcome_ZeroValueFailClosed asserts a zero-value (forged)
+// TransportOutcome renders as the fail-closed sentinel and is NOT a producible
+// outcome in the frozen registry.
+func TestTransportOutcome_ZeroValueFailClosed(t *testing.T) {
+	t.Parallel()
+
+	var zero TransportOutcome
+	if got := zero.String(); got != TransportOutcomeUnknown {
+		t.Errorf("zero TransportOutcome.String() = %q, want %q (fail-closed sentinel)", got, TransportOutcomeUnknown)
+	}
+	if zero.isRegistered() {
+		t.Error("zero TransportOutcome must not be registered (fail-closed)")
+	}
+	for _, o := range allTransportOutcomes {
+		if o.String() == TransportOutcomeUnknown {
+			t.Errorf("the fail-closed sentinel %q must not be a producible registered outcome", TransportOutcomeUnknown)
+		}
+	}
+}

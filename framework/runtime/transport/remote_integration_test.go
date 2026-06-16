@@ -117,13 +117,14 @@ func signedReq(t *testing.T, method, urlStr string, ring *auth.HMACKeyRing, tid 
 
 // countingMetrics is a minimal metrics helper for integration tests.
 type countingMetrics struct {
-	mu     sync.Mutex
-	counts map[string]int
+	mu            sync.Mutex
+	counts        map[string]int // by transport_mode
+	outcomeCounts map[string]int // by outcome
 }
 
 func newCountingMetrics(t *testing.T) (*transport.Metrics, *countingMetrics) {
 	t.Helper()
-	cm := &countingMetrics{counts: map[string]int{}}
+	cm := &countingMetrics{counts: map[string]int{}, outcomeCounts: map[string]int{}}
 	m, err := transport.NewMetrics(&countingProvider{cm: cm})
 	if err != nil {
 		t.Fatalf("NewMetrics: %v", err)
@@ -135,6 +136,12 @@ func (cm *countingMetrics) count(mode string) int {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	return cm.counts[mode]
+}
+
+func (cm *countingMetrics) outcomeCount(outcome string) int {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.outcomeCounts[outcome]
 }
 
 // countingProvider implements kernelmetrics.Provider for integration tests.
@@ -165,20 +172,22 @@ type countingVec struct {
 }
 
 func (cv *countingVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
-	return &countingCounter{cm: cv.cm, mode: l["transport_mode"]}
+	return &countingCounter{cm: cv.cm, mode: l["transport_mode"], outcome: l["outcome"]}
 }
 
 func (cv *countingVec) Registered() bool { return true }
 
 type countingCounter struct {
-	cm   *countingMetrics
-	mode string
+	cm      *countingMetrics
+	mode    string
+	outcome string
 }
 
 func (c *countingCounter) Inc(_ context.Context) {
 	c.cm.mu.Lock()
 	defer c.cm.mu.Unlock()
 	c.cm.counts[c.mode]++
+	c.cm.outcomeCounts[c.outcome]++
 }
 func (c *countingCounter) Add(_ context.Context, _ float64) {}
 
@@ -217,6 +226,9 @@ func TestRemoteIntegration_T1_Happy(t *testing.T) {
 	}
 	if got := cm.count("remote"); got != 1 {
 		t.Errorf("cell_transport_requests_total{transport_mode=remote} = %d, want 1", got)
+	}
+	if got := cm.outcomeCount("success"); got != 1 {
+		t.Errorf("cell_transport_requests_total{outcome=success} = %d, want 1", got)
 	}
 }
 
@@ -265,7 +277,8 @@ func TestRemoteIntegration_T2_URLRewritePreservesHeaders(t *testing.T) {
 	}
 }
 
-// T3: connection refused → KindUnavailable / ErrUpstreamCellUnavailable, no metric.
+// T3: connection refused → KindUnavailable / ErrUpstreamCellUnavailable, and the
+// failure IS recorded as outcome=dial_error (#1966 review P2.6 — failures count too).
 func TestRemoteIntegration_T3_ConnectionRefused(t *testing.T) {
 	t.Parallel()
 
@@ -295,19 +308,23 @@ func TestRemoteIntegration_T3_ConnectionRefused(t *testing.T) {
 	if ec.Code != errcode.ErrUpstreamCellUnavailable {
 		t.Errorf("Code = %v, want ErrUpstreamCellUnavailable", ec.Code)
 	}
-	if got := cm.count("remote"); got != 0 {
-		t.Errorf("metric must NOT be recorded on dial failure, got count=%d", got)
+	if got := cm.count("remote"); got != 1 {
+		t.Errorf("dial failure must be recorded as a remote attempt, got count=%d, want 1", got)
+	}
+	if got := cm.outcomeCount("dial_error"); got != 1 {
+		t.Errorf("dial failure outcome = %d, want 1 (outcome=dial_error)", got)
 	}
 }
 
-// T4: ctx deadline exceeded → KindUnavailable.
+// T4: caller-ctx cancellation while in-flight → KindClientClosed (499) +
+// outcome=canceled (#1966 review P2.8/P2.6 — distinct from a dial failure 503).
 //
-// The server handler blocks on r.Context().Done() so the timeout fires while
+// The server handler blocks on r.Context().Done() so the cancellation fires while
 // waiting for the response (not in a racy dial window). A controllable cancel
-// is used to ensure the deadline fires only after the connection is established
-// and the server is blocking — making the test deterministic rather than relying
-// on a 1 ms wall-clock race.
-func TestRemoteIntegration_T4_CtxDeadline(t *testing.T) {
+// is used to ensure it fires only after the connection is established and the
+// server is blocking — making the test deterministic rather than relying on a
+// 1 ms wall-clock race.
+func TestRemoteIntegration_T4_CtxCanceled(t *testing.T) {
 	t.Parallel()
 
 	// reqReceived signals that the server handler has been entered — the
@@ -320,8 +337,9 @@ func TestRemoteIntegration_T4_CtxDeadline(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	m, cm := newCountingMetrics(t)
 	resolver := transport.NewStaticResolver(map[string]string{"configcore": srv.URL})
-	tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, srv.Client(), nil, nil)
+	tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, srv.Client(), m, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -350,8 +368,14 @@ func TestRemoteIntegration_T4_CtxDeadline(t *testing.T) {
 	if !errors.As(res.err, &ec) {
 		t.Fatalf("expected *errcode.Error, got %T: %v", res.err, res.err)
 	}
-	if ec.Kind != errcode.KindUnavailable {
-		t.Errorf("Kind = %v, want KindUnavailable", ec.Kind)
+	if ec.Kind != errcode.KindClientClosed {
+		t.Errorf("Kind = %v, want KindClientClosed (canceled ctx → 499)", ec.Kind)
+	}
+	if ec.Code != errcode.ErrUpstreamCellUnavailable {
+		t.Errorf("Code = %v, want ErrUpstreamCellUnavailable", ec.Code)
+	}
+	if got := cm.outcomeCount("canceled"); got != 1 {
+		t.Errorf("canceled outcome = %d, want 1 (outcome=canceled)", got)
 	}
 }
 

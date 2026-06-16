@@ -9,7 +9,7 @@ package archtest
 //
 // transport.NewRemoteHTTP is the sole constructor for the remote
 // CellTransport implementation. Wiring-layer packages (cmd/*, cellmodules/*,
-// examples/*) MUST NOT call it directly: they must route through
+// corecells/*, examples/*) MUST NOT call it directly: they must route through
 // cellmodules/celltransport.Resolve, which gates the selection on the sealed
 // deployment topology and enforces fail-closed invariants for unclassified
 // cells.
@@ -63,7 +63,9 @@ const runtimeTransportModule = PlatformFrameworkModulePath + "/runtime/transport
 // transport.NewRemoteHTTP directly — they must route through
 // cellmodules/celltransport.Resolve. The celltransport package itself is
 // intentionally NOT scanned (it is the sanctioned constructor).
-var celltransportWiringRoots = []string{"cmd", "cellmodules", "examples"}
+// corecells/ is included so that a core cell cannot hard-wire "remote" and
+// bypass the topology gate (the same failure mode as cmd/ or examples/).
+var celltransportWiringRoots = []string{"cmd", "cellmodules", "corecells", "examples"}
 
 // CheckCelltransportSelectFunnel01 scans the wiring-layer roots for direct
 // calls to transport.NewRemoteHTTP and returns one Diagnostic per offending

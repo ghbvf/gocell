@@ -114,7 +114,8 @@ func TestRemoteHTTPTransport_ConnectionRefused(t *testing.T) {
 }
 
 // TestRemoteHTTPTransport_CtxCanceled verifies that a canceled context
-// returns KindUnavailable.
+// returns KindClientClosed (499) — the caller closed the request (#1966 review P2.8),
+// distinct from a dial failure (503) or a timeout (504).
 func TestRemoteHTTPTransport_CtxCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -148,8 +149,11 @@ func TestRemoteHTTPTransport_CtxCanceled(t *testing.T) {
 	if !errors.As(err, &ec) {
 		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
 	}
-	if ec.Kind != errcode.KindUnavailable {
-		t.Errorf("Kind = %v, want KindUnavailable", ec.Kind)
+	if ec.Kind != errcode.KindClientClosed {
+		t.Errorf("Kind = %v, want KindClientClosed (canceled ctx → 499)", ec.Kind)
+	}
+	if ec.Code != errcode.ErrUpstreamCellUnavailable {
+		t.Errorf("Code = %v, want ErrUpstreamCellUnavailable", ec.Code)
 	}
 }
 
@@ -395,6 +399,33 @@ func TestRemoteHTTPTransport_URLRewrite_QueryStringPreserved(t *testing.T) {
 
 	if gotQuery != wantQuery {
 		t.Errorf("RawQuery = %q, want %q", gotQuery, wantQuery)
+	}
+}
+
+// TestRemoteHTTPTransport_EndpointWithPathRejected verifies that an endpoint
+// carrying a path/query/fragment is rejected (KindInternal) rather than having
+// those parts silently dropped during URL rewrite (#1966 review P2.9, defense-in-depth
+// — netutil.IsValidNetworkAddress rejects these at config time too).
+func TestRemoteHTTPTransport_EndpointWithPathRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, ep := range []string{
+		"http://example.com/base/path",
+		"https://example.com/?k=v",
+		"http://example.com/#frag",
+		"example.com:8080/foo",
+	} {
+		resolver := &stubResolver{endpoint: ep}
+		tr := transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, &http.Client{}, nil, nil)
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://ignored/internal/v1/x", nil)
+		resp, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		var ec *errcode.Error
+		if !errors.As(err, &ec) || ec.Kind != errcode.KindInternal {
+			t.Errorf("endpoint %q: got err %v, want KindInternal (rewrite rejection)", ep, err)
+		}
 	}
 }
 

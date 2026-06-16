@@ -77,6 +77,32 @@ func TestCELLTRANSPORT_SELECT_FUNNEL_01_GreenAllowlist_SanctionedCallerNotFlagge
 	}
 }
 
+// TestCELLTRANSPORT_SELECT_FUNNEL_01_RedFixture_Corecells asserts the detector
+// fires when a file under a corecells/-prefixed path calls transport.NewRemoteHTTP
+// directly. This proves that corecells/ is included in celltransportWiringRoots
+// and the scan actually reaches it (anti-vacuity: without corecells/ in the root
+// list the fixture would be invisible and the test would pass vacuously).
+func TestCELLTRANSPORT_SELECT_FUNNEL_01_RedFixture_Corecells(t *testing.T) {
+	t.Parallel()
+
+	// Write the synthetic source into a temp dir structured like a corecells sub-package.
+	// The file is only parsed (never compiled), so it cannot affect the production scan.
+	src := "package corecellsred\n\n" +
+		"import \"" + runtimeTransportModule + "\"\n\n" +
+		"var _ = transport.NewRemoteHTTP\n"
+	path := filepath.Join(t.TempDir(), "corecells_red.go")
+	require.NoError(t, os.WriteFile(path, []byte(src), 0o600))
+
+	line, ok, err := firstQualifiedSelectorLine(path, runtimeTransportModule, "transport", "NewRemoteHTTP")
+	require.NoError(t, err, "parse corecells RED fixture")
+	if !ok {
+		t.Error("CELLTRANSPORT-SELECT-FUNNEL-01 corecells RED fixture: detector found no " +
+			"transport.NewRemoteHTTP — firstQualifiedSelectorLine or the fixture is broken")
+		return
+	}
+	t.Logf("corecells RED fixture: transport.NewRemoteHTTP detected at line %d", line)
+}
+
 // TestCELLTRANSPORT_SELECT_FUNNEL_01_NoDotImportBlindSpot closes the dot-import
 // blind spot: a dot-import of runtime/transport would make NewRemoteHTTP a bare
 // ident the SelectorExpr scan misses. Asserts no production file in the wiring
