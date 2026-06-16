@@ -249,7 +249,7 @@ func TestResolve_RemoteProbe_TCPDial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	probe := remoteReadinessProbe(t, ln.Addr().String())
 
@@ -318,7 +318,7 @@ func (rt *recTracer) hasAttr(key string, val any) bool {
 
 type recSpan struct{ rt *recTracer }
 
-func (s *recSpan) SetAttributes(attrs ...wrapper.Attr) { s.rt.attrs = append(s.rt.attrs, attrs...) }
-func (s *recSpan) RecordError(error)                   {}
+func (s *recSpan) SetAttributes(attrs ...wrapper.Attr)  { s.rt.attrs = append(s.rt.attrs, attrs...) }
+func (s *recSpan) RecordError(error)                    {}
 func (s *recSpan) SetStatus(wrapper.StatusCode, string) {}
-func (s *recSpan) End()                                {}
+func (s *recSpan) End()                                 {}

@@ -235,7 +235,9 @@ func buildAccessBaseOpts(shared *composition.SharedDeps) ([]accesscell.Option, *
 // returns any readiness ManagedResources the config-getter transport contributes
 // (a remote-peer probe in split topology; nil when co-located) so Provide can
 // surface them via ModuleResult.Resources (#2251 P2.7).
-func accessPostgresOptions(shared *composition.SharedDeps, sessionProto *session.Protocol) ([]accesscell.Option, session.Store, []kernellifecycle.ManagedResource, error) {
+func accessPostgresOptions(
+	shared *composition.SharedDeps, sessionProto *session.Protocol,
+) ([]accesscell.Option, session.Store, []kernellifecycle.ManagedResource, error) {
 	if shared.PG == nil {
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
 			"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")

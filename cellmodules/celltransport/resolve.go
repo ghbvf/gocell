@@ -137,6 +137,6 @@ type remoteReadinessResource struct {
 	probe healthz.Probe
 }
 
-func (r remoteReadinessResource) Probes() []healthz.Probe { return []healthz.Probe{r.probe} }
-func (remoteReadinessResource) Worker() worker.Worker     { return nil }
+func (r remoteReadinessResource) Probes() []healthz.Probe   { return []healthz.Probe{r.probe} }
+func (remoteReadinessResource) Worker() worker.Worker       { return nil }
 func (remoteReadinessResource) Close(context.Context) error { return nil }

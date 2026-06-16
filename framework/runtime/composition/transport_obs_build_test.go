@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
-	"github.com/stretchr/testify/require"
 )
 
 // distinctTracer is a non-Noop wrapper.Tracer used to prove Build threads the
