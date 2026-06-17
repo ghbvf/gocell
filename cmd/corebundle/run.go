@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
@@ -131,8 +132,8 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if gcErr != nil {
 			return nil, fmt.Errorf("build grpc metrics collector: %w", gcErr)
 		}
-		grpcAddr := grpcAddrFromEnv()
-		grpcServer, gsErr := newGRPCServerFromEnv(
+		grpcAddr := grpclistener.AddrFromEnv()
+		grpcServer, gsErr := grpclistener.ServerFromEnv(
 			durabilityModeForTopology(compShared.Topology),
 			grpcAddr,
 			interceptor.Deps{

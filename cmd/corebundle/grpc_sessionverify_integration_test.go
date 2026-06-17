@@ -4,7 +4,7 @@ package main
 
 // grpc_sessionverify_integration_test.go — #1154 forced-wiring regression guard:
 // boots a corebundle-style assembly through the PRODUCTION gRPC wiring path
-// (newGRPCServerFromEnv from grpc.go + bootstrap.WithGRPCListener) and dials the
+// (grpclistener.ServerFromEnv + bootstrap.WithGRPCListener) and dials the
 // resulting listener, proving accesscore's grpc.auth.session.verify.v1 service is
 // actually served + the auth gate is active on the wired listener — not just that
 // bootstrap did not fail-fast (checkOrphanGRPCServices).
@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
@@ -91,9 +92,9 @@ func startSessionVerifyGRPCApp(t *testing.T) string {
 	require.NoError(t, err)
 	grpcCollector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
 	require.NoError(t, err)
-	// Production gRPC wiring path: newGRPCServerFromEnv (grpc.go) builds the adapter
+	// Production gRPC wiring path: grpclistener.ServerFromEnv builds the adapter
 	// server from the interceptor.Deps, exactly as run.go does.
-	grpcServer, err := newGRPCServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
 		Verifier:        jwtVerifier,
 		Clock:           clock.Real(),
 		Collector:       grpcCollector,

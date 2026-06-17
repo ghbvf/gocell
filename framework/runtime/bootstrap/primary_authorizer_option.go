@@ -144,6 +144,14 @@ func PrimaryAuthorizerOption(cells []cell.Cell) (Option, error) {
 // instance means the startup ResolveAuthorizer (HTTP router build) resolves it once and the
 // gRPC gate observes the same live PDP. Same fail-fast rules as PrimaryAuthorizerOption:
 // zero matching cells or more than one is a misconfiguration error.
+//
+// Callers SHOULD reuse the single returned value for both the HTTP
+// WithPrimaryAuthorizer and the gRPC interceptor.Deps.Authorizer wiring points.
+// Calling AuthorizerFromCells twice for the same cell list yields two independent
+// lazyAuthorizer instances: each resolves its own copy of the PDP and caches it
+// independently. This is functionally correct but wastes a resolve call at startup
+// and splits the cache — one instance resolved by HTTP router build will not warm
+// the gRPC gate's separate instance.
 func AuthorizerFromCells(cells []cell.Cell) (auth.Authorizer, error) {
 	provider, err := findAuthorizerProvider(cells)
 	if err != nil {

@@ -9,11 +9,15 @@ cells:
 contracts:
   - grpc.auth.session.verify.v1
 passCriteria:
-  - text: 已授权调用方（admin/super-admin，或经租户 policy 授予 session:verify 的服务身份）调用 SessionVerifyService.VerifyToken，对有效 access token 返回 valid=true 及 claims 投影（subject/tenantId/sessionId/roles/expiresAt/passwordResetRequired）# corecells/accesscore grpc gate test + corebundle 集成测试覆盖
+  - text: 已授权调用方（admin/super-admin）调用 SessionVerifyService.VerifyToken，对有效 access token 返回 valid=true 及 claims 投影（subject/tenantId/sessionId/roles/expiresAt/passwordResetRequired）# corecells/accesscore grpc gate test + corebundle 集成测试覆盖
+    mode: manual
+  - text: "[DEFERRED — 未在 PR-11 验证] 纯服务身份（service principal）经租户 policy 授予 session:verify 后可调用 VerifyToken。该路径尚未端到端验证：gRPC listener 挂在 PrimaryListener（JWT），纯服务身份需租户 policy overlay 授权，依赖框架尚未实现的 InternalListener-gRPC + service-token 通道（能力缺口，见 #2290）。"
     mode: manual
   - text: PDP 门禁同构 HTTP — 无 token → Unauthenticated；缺 session:verify 权限 → PermissionDenied（handler 未触达）；由 interceptor PDP gate 而非 handler 谓词执行
     mode: manual
   - text: introspection 语义 — 无效/过期/被撤销/错误 intent 的 token 统一返回 valid=false（不枚举失败原因，防 session 状态枚举）；仅基础设施故障（KindUnavailable）返回 gRPC error
+    mode: manual
+  - text: "[DEFERRED — 依赖 PR-12 #1155] US3 验收条件「内部错误仅返回 public message，不在 wire 上泄露内部上下文」依赖尚未落地的 errcode→codes 映射（PR-12）；当前 internal error 会以 codes.Unknown 透传，不满足该验收标准。"
     mode: manual
   - text: 安全审查签核（首个平台 Cell gRPC 暴露：常驻端口 + TLS 姿态）
     mode: manual

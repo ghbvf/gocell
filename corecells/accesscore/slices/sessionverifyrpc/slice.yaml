@@ -1,7 +1,7 @@
 id: sessionverifyrpc
 belongsToCell: accesscore
 consistencyLevel: L0
-lifecycle: asset
+lifecycle: experimental
 contractUsages:
   - contract: grpc.auth.session.verify.v1
     role: serve

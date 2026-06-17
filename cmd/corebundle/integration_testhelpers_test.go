@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
@@ -56,7 +57,7 @@ func corebundleTestGRPCListenerOption(t *testing.T, cells []cell.Cell, cellIDs [
 	require.NoError(t, err)
 	collector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
 	require.NoError(t, err)
-	grpcServer, err := newGRPCServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
 		Verifier:        corebundleTestNoopVerifier{},
 		Clock:           clock.Real(),
 		Collector:       collector,

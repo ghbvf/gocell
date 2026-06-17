@@ -18,10 +18,15 @@ import (
 	"context"
 	"errors"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	sessionverifyv1 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
+
+const msgInfraUnavailable = "authentication service temporarily unavailable"
 
 // Server implements sessionverifyv1.SessionVerifyServiceServer.
 type Server struct {
@@ -49,13 +54,16 @@ func NewServer(verifier kauth.IntentTokenVerifier) *Server {
 // VerifyToken introspects the submitted access token and returns whether it is
 // currently valid plus its verified claims projection.
 //
-// It is an INTROSPECTION RPC, not a typical request/response: an invalid, expired,
-// or revoked token returns a response with valid=false and NO error — uniform for
-// every failure cause so a caller cannot enumerate WHY a token failed (the same
-// anti-enumeration posture as sessionvalidate's single errMsgAuthFailed). Only an
-// infrastructure outage (session store / key provider unreachable, classified by
-// the verifier as errcode.KindUnavailable) surfaces as a gRPC error: masking an
-// outage as a credential failure would pollute SLO buckets and hide the incident.
+// Unlike typical RPCs, this method does NOT return a gRPC error for invalid/expired/revoked
+// tokens (uniform valid=false); only an infrastructure outage surfaces as a gRPC error
+// (codes.Unavailable).
+//
+// Specifically: an invalid, expired, or revoked token returns a response with valid=false and
+// NO error — uniform for every failure cause so a caller cannot enumerate WHY a token failed
+// (the same anti-enumeration posture as sessionvalidate's single errMsgAuthFailed). Only an
+// infrastructure outage (session store / key provider unreachable, classified by the verifier
+// as errcode.KindUnavailable) surfaces as codes.Unavailable: masking an outage as a credential
+// failure would pollute SLO buckets and hide the incident.
 //
 // Authorization (session:verify) is enforced by the runtime gRPC auth interceptor
 // BEFORE this handler runs (#2008). The token introspected here is the request
@@ -72,10 +80,10 @@ func (s *Server) VerifyToken(
 	if err != nil {
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
-			// Infrastructure outage: propagate as a gRPC error so the caller can
-			// distinguish an outage from a credential failure. Do NOT downgrade to
-			// a uniform valid=false.
-			return nil, err
+			// Infrastructure outage: propagate as codes.Unavailable so the caller
+			// can machine-distinguishably identify an outage vs. a credential failure.
+			// Do NOT downgrade to a uniform valid=false (that would pollute SLO buckets).
+			return nil, status.Error(codes.Unavailable, msgInfraUnavailable)
 		}
 		// Invalid / expired / revoked / wrong-intent: uniform valid=false (no
 		// reason enumeration). The verifier has already logged the cause server-side.

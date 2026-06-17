@@ -24,6 +24,7 @@ import (
 	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -35,6 +36,7 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
 	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
@@ -256,16 +258,39 @@ func buildStarterBootstrapOpts(
 		bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled()),
 	}
 
-	// Wire the ABAC PDP into the primary listener (accesscore provides it). Any
-	// assembly serving the auditquery endpoint must wire it: post #1348 PR-10a the
-	// route gate is permission-based, so an empty-actorId/cross-actor audit read
-	// fails closed without a PDP in context. Shared discovery+lazy logic lives in
-	// bootstrap.PrimaryAuthorizerOption (also used by cmd/corebundle, ssobff).
-	authzOpt, err := bootstrap.PrimaryAuthorizerOption(cells)
+	// Wire the ABAC PDP (accesscore provides it). Any assembly serving the
+	// auditquery endpoint must wire it: post #1348 PR-10a the route gate is
+	// permission-based, so an empty-actorId/cross-actor audit read fails closed
+	// without a PDP in context. One lazy authorizer feeds BOTH the HTTP primary
+	// listener and the gRPC gate (shared discovery in bootstrap.AuthorizerFromCells,
+	// also used by cmd/corebundle, ssobff).
+	authorizer, err := bootstrap.AuthorizerFromCells(cells)
 	if err != nil {
 		return nil, fmt.Errorf("primary authorizer wiring: %w", err)
 	}
-	opts = append(opts, authzOpt)
+	opts = append(opts, bootstrap.WithPrimaryAuthorizer(authorizer))
+
+	// gRPC listener: mandatory because accesscore registers
+	// grpc.auth.session.verify.v1 unconditionally (cell_gen.go, PR-11 #1154); without
+	// a gRPC listener bootstrap fail-fasts (checkOrphanGRPCServices). Demo topology
+	// → plaintext; shared env-driven builder lives in cellmodules/grpclistener.
+	grpcCollector, err := obmetrics.NewGRPCProviderCollector(shared.MetricsProvider, obmetrics.ProviderCollectorConfig{})
+	if err != nil {
+		return nil, fmt.Errorf("grpc metrics collector: %w", err)
+	}
+	grpcAddr := grpclistener.AddrFromEnv()
+	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcAddr, interceptor.Deps{
+		Verifier:        shared.JWTVerifier,
+		Clock:           shared.Clock,
+		Collector:       grpcCollector,
+		Authorizer:      authorizer,
+		MetricsProvider: shared.MetricsProvider,
+		CellIDClosedSet: asm.CellIDs(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("grpc server: %w", err)
+	}
+	opts = append(opts, bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr))
 	return opts, nil
 }
 

@@ -15,7 +15,7 @@ var sliceMeta = &metadata.SliceMeta{
 	ID:               "sessionverifyrpc",
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L0",
-	Lifecycle:        "asset",
+	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "grpc.auth.session.verify.v1", Role: "serve"},
 	},

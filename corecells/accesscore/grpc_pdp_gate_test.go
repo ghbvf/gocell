@@ -45,9 +45,10 @@ import (
 )
 
 const (
-	svGateTenantID = "11111111-1111-1111-1111-111111111111"
-	svTokenAdmin   = "admin"
-	svTokenViewer  = "viewer"
+	svGateTenantID    = "11111111-1111-1111-1111-111111111111"
+	svTokenAdmin      = "admin"
+	svTokenViewer     = "viewer"
+	svTokenSuperAdmin = "superadmin"
 )
 
 // svGateVerifier is a probe IntentTokenVerifier mapping a bearer token to a verified
@@ -62,6 +63,8 @@ func (svGateVerifier) VerifyIntent(_ context.Context, token string, _ kauth.Toke
 		return kauth.Claims{Subject: "admin-1", TenantID: svGateTenantID, Roles: []string{auth.RoleAdmin}, TokenUse: kauth.TokenIntentAccess}, nil
 	case svTokenViewer:
 		return kauth.Claims{Subject: "viewer-1", TenantID: svGateTenantID, Roles: []string{"viewer"}, TokenUse: kauth.TokenIntentAccess}, nil
+	case svTokenSuperAdmin:
+		return kauth.Claims{Subject: "sadmin-1", TenantID: svGateTenantID, Roles: []string{auth.RoleSuperAdmin}, TokenUse: kauth.TokenIntentAccess}, nil
 	default:
 		return kauth.Claims{}, errors.New("unknown token")
 	}
@@ -87,6 +90,14 @@ func (s *svGateProbe) wasReached() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.reached
+}
+
+// reset zeroes the reached flag so each gate assertion is independent of the
+// prior sub-check's state (removes ordering dependency between sub-checks).
+func (s *svGateProbe) reset() {
+	s.mu.Lock()
+	s.reached = false
+	s.mu.Unlock()
 }
 
 // startGatedSessionVerifyServer wires the production gRPC auth chain (REAL accesscore
@@ -145,26 +156,37 @@ func svBearer(ctx context.Context, token string) context.Context {
 
 // TestSessionVerifyGRPC_PDPGate_EndToEnd asserts the session:verify gate: no token →
 // Unauthenticated; non-admin role → PermissionDenied (handler not reached); admin →
-// gate allows → handler reached. Verdicts come from the REAL accesscore baseline PDP
-// over the real interceptor chain.
+// gate allows → handler reached; super-admin → gate allows → handler reached.
+// Verdicts come from the REAL accesscore baseline PDP over the real interceptor chain.
+// Each sub-check calls probe.reset() first to remove ordering dependency.
 func TestSessionVerifyGRPC_PDPGate_EndToEnd(t *testing.T) {
 	t.Parallel()
 	client, probe := startGatedSessionVerifyServer(t)
 	req := &sessionverifyv1.VerifyTokenRequest{Token: "subject-token-to-introspect"}
 
 	// No authorization metadata → gate rejects before the handler (Unauthenticated).
+	probe.reset()
 	_, err := client.VerifyToken(context.Background(), req)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err), "missing token must be Unauthenticated")
 	assert.False(t, probe.wasReached(), "handler must not run for an unauthenticated caller")
 
 	// Authenticated but non-admin (viewer) → baseline denies session:verify.
+	probe.reset()
 	_, err = client.VerifyToken(svBearer(context.Background(), svTokenViewer), req)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "viewer must be PermissionDenied for session:verify")
 	assert.False(t, probe.wasReached(), "handler must not run for a denied caller")
 
 	// Admin → baseline allows → handler reached.
+	probe.reset()
 	resp, err := client.VerifyToken(svBearer(context.Background(), svTokenAdmin), req)
 	require.NoError(t, err, "admin must pass the session:verify gate")
 	assert.True(t, resp.GetValid())
 	assert.True(t, probe.wasReached(), "handler must run for the authorized admin")
+
+	// Super-admin → baseline allows → handler reached (symmetric with admin).
+	probe.reset()
+	resp, err = client.VerifyToken(svBearer(context.Background(), svTokenSuperAdmin), req)
+	require.NoError(t, err, "super-admin must pass the session:verify gate")
+	assert.True(t, resp.GetValid())
+	assert.True(t, probe.wasReached(), "handler must run for the authorized super-admin")
 }

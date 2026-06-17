@@ -178,6 +178,7 @@ func TestAccesscorePermissions_StableIdentity(t *testing.T) {
 		{"PermUserRead", PermUserRead(), permUserRead},
 		{"PermUserWrite", PermUserWrite(), permUserWrite},
 		{"PermRoleRead", PermRoleRead(), permRoleRead},
+		{"PermSessionVerify", PermSessionVerify(), permSessionVerify},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.singleton {

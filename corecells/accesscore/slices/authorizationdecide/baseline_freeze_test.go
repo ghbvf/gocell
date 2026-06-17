@@ -337,6 +337,123 @@ func TestBaselineOwnerRuleTenantFreeze_01_RejectsForbiddenShapes(t *testing.T) {
 	}
 }
 
+// frozenAdminOnlyCondition is the admin/super-admin role condition used to gate
+// session:verify — identical in shape to frozenAdminCondition but spelled
+// independently here so that a drift in either helper is surfaced rather than
+// silently tracked. session:verify is an admin-only action (not owner-scoped), so
+// its frozen allow surface is exactly ONE allow rule carrying this condition and
+// nothing else.
+var frozenAdminOnlyCondition = abac.Condition{
+	Source:   abac.SourceSubject,
+	Key:      "roles",
+	Operator: abac.OpIn,
+	Values:   []string{runtimeauth.RoleAdmin, runtimeauth.RoleSuperAdmin},
+}
+
+// TestBaselineFreeze_SessionVerify_ClosedSet enforces the closed-set invariant for
+// session:verify: the ONLY EffectAllow rule in builtinBaseline that grants
+// session:verify is the single admin/super-admin rule, and exactly that one.
+//
+// session:verify is an admin-scoped action (not owner-scoped), so its frozen grant
+// surface is {1 admin rule, 0 owner rules, 0 other rules}. This test prevents a
+// future silent second allow rule (e.g. a viewer or tenant-matching grant) from
+// widening the session:verify surface without tripping a build-test failure.
+//
+// # AI-robust grade: Medium (value-level closed-set assertion, same-package internal test)
+//
+// The test calls builtinBaselineRules() directly and checks the exact allow-rule set
+// for the session:verify action — stronger than naming the rule ID alone because it
+// catches a NEW allow rule even if that rule has an ID the test never enumerated.
+func TestBaselineFreeze_SessionVerify_ClosedSet(t *testing.T) {
+	action := authz.PermSessionVerify().String()
+	rules := builtinBaselineRules()
+
+	// Confirm the named baseline rule for session:verify is present (anti-vacuity:
+	// a vacuous green from a renamed rule trips this check).
+	const expectedRuleID = "baseline-session-verify-admin"
+	var found bool
+	for _, r := range rules {
+		if r.ID == expectedRuleID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("TestBaselineFreeze_SessionVerify_ClosedSet: rule %q not found in builtinBaselineRules() — "+
+			"removed or renamed without updating this freeze test (anti-vacuity: the freeze must inspect the real rule)", expectedRuleID)
+	}
+
+	// Closed-set check: the ONLY EffectAllow rule granting session:verify must carry
+	// the frozen admin/super-admin condition, and there must be exactly one such rule.
+	var adminCount, otherCount int
+	for _, r := range rules {
+		if r.Effect != authz.EffectAllow || !ruleGrantsAction(r, action) {
+			continue
+		}
+		if len(r.Conditions) == 1 && conditionMatches(r.Conditions[0], frozenAdminOnlyCondition) {
+			adminCount++
+		} else {
+			otherCount++
+		}
+	}
+	if adminCount != 1 || otherCount != 0 {
+		t.Errorf("TestBaselineFreeze_SessionVerify_ClosedSet: action %q allow surface = {admin:%d, other:%d}, "+
+			"want {1, 0} — the only allow rule for session:verify must be the single admin/super-admin rule; "+
+			"any additional allow rule widens the gate surface without a deliberate policy review", action, adminCount, otherCount)
+	}
+}
+
+// TestBaselineFreeze_SessionVerify_ClosedSet_RejectsExtraAllowRule proves the
+// closed-set check above is non-vacuous: injecting a second allow rule on
+// session:verify causes the assertion to fail.
+func TestBaselineFreeze_SessionVerify_ClosedSet_RejectsExtraAllowRule(t *testing.T) {
+	action := authz.PermSessionVerify().String()
+
+	// Real baseline satisfies the closed set.
+	var adminCount, otherCount int
+	for _, r := range builtinBaselineRules() {
+		if r.Effect != authz.EffectAllow || !ruleGrantsAction(r, action) {
+			continue
+		}
+		if len(r.Conditions) == 1 && conditionMatches(r.Conditions[0], frozenAdminOnlyCondition) {
+			adminCount++
+		} else {
+			otherCount++
+		}
+	}
+	if adminCount != 1 || otherCount != 0 {
+		t.Errorf("real baseline must satisfy the session:verify closed set, got admin=%d other=%d", adminCount, otherCount)
+	}
+
+	// Inject a viewer-grant allow rule — the closed-set check must now fail.
+	viewerGrant := abac.Rule{
+		ID:     "synthetic-viewer-session-verify",
+		Effect: authz.EffectAllow,
+		Action: []string{action},
+		Conditions: []abac.Condition{{
+			Source: abac.SourceSubject, Key: "roles", Operator: abac.OpIn,
+			Values: []string{"viewer"},
+		}},
+	}
+	widened := append(append([]abac.Rule{}, builtinBaselineRules()...), viewerGrant)
+	var wAdminCount, wOtherCount int
+	for _, r := range widened {
+		if r.Effect != authz.EffectAllow || !ruleGrantsAction(r, action) {
+			continue
+		}
+		if len(r.Conditions) == 1 && conditionMatches(r.Conditions[0], frozenAdminOnlyCondition) {
+			wAdminCount++
+		} else {
+			wOtherCount++
+		}
+	}
+	if wOtherCount == 0 {
+		t.Errorf("TestBaselineFreeze_SessionVerify_ClosedSet_RejectsExtraAllowRule: the closed-set check must FAIL "+
+			"when a viewer-grant allow rule is injected — otherwise the freeze is vacuous (got admin=%d other=%d)",
+			wAdminCount, wOtherCount)
+	}
+}
+
 // TestBaselineOwnerActionSurface_RejectsExtraAllowRule proves property (2) is non-vacuous:
 // the real baseline satisfies the closed set, but injecting a SEPARATE tenant-matching allow
 // rule on an owner action (the primary widening vector) makes checkOwnerActionSurfaceClosed
