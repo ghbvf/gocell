@@ -16,6 +16,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	cellsecrets "github.com/ghbvf/gocell/cellmodules/cellsecrets"
+	celltls "github.com/ghbvf/gocell/cellmodules/celltls"
 	eventtransport "github.com/ghbvf/gocell/cellmodules/eventtransport"
 	replaydeps "github.com/ghbvf/gocell/cellmodules/replaydeps"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
@@ -269,6 +270,7 @@ func buildSSOBFFBootstrapOptions(
 	primaryAuth kauth.ListenerAuth,
 	authzOpt bootstrap.Option,
 	internalAuthChain []kauth.ListenerAuth,
+	internalTLSOpts []bootstrap.ListenerOption,
 	relayWorker *outboxruntime.Relay,
 	pool *adapterpg.Pool,
 ) []bootstrap.Option {
@@ -302,7 +304,7 @@ func buildSSOBFFBootstrapOptions(
 		// internal defaults to loopback (see defaultSSOBFFAppConfig); the cell→cell
 		// control plane is never all-interfaces. Override GOCELL_SSOBFF_INTERNAL_ADDR
 		// + add a NetworkPolicy for a VPC deployment (docs/ops/listener-topology.md).
-		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
+		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain, internalTLSOpts...),
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
 	)
@@ -368,6 +370,22 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
+	// #2263: layer transport-level mTLS over the service-token chain when split
+	// TLS material is provisioned (operator opt-in via GOCELL_TRANSPORT_TLS_*).
+	// ssobff declares no remote cells; passing an empty spec (all-colocated) means
+	// celltls.Resolve never fires the non-loopback fail-closed gate, so the only
+	// effect of setting TLS material is wiring ServerTLS onto the internal listener
+	// (server-side mTLS only — no client identity is used since ssobff has no
+	// remote peers to dial). No material → chain unchanged (service-token-only).
+	emptyTopo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{})
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: build deployment topology: %w", err)
+	}
+	celltlsDeps, err := celltls.Resolve(emptyTopo, celltls.LoadConfigFromEnv())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: resolve transport TLS material: %w", err)
+	}
+	internalAuthChain, internalTLSOpts := celltls.InternalListenerSecurity(celltlsDeps.ServerTLS, internalAuthChain)
 
 	// Resolve setup/admin bootstrap credentials BEFORE the DB pool (same
 	// fail-fast posture as the internal auth chain): real topology must supply
@@ -433,7 +451,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, infra.transport.Publisher, outboxruntime.DefaultRelayConfig())
 
 	b := bootstrap.New(clk, buildSSOBFFBootstrapOptions(
-		infra, cfg, asm, cb, primaryAuth, authzOpt, internalAuthChain, relayWorker, pool,
+		infra, cfg, asm, cb, primaryAuth, authzOpt, internalAuthChain, internalTLSOpts, relayWorker, pool,
 	)...)
 
 	loaded = true
@@ -985,8 +1003,11 @@ func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *a
 	return jwtIssuer, jwtVerifier, nil
 }
 
-func listenerOption(ref cell.ListenerRef, binding listenerBinding, authChain []kauth.ListenerAuth) bootstrap.Option {
-	var opts []bootstrap.ListenerOption
+func listenerOption(
+	ref cell.ListenerRef, binding listenerBinding, authChain []kauth.ListenerAuth,
+	extra ...bootstrap.ListenerOption,
+) bootstrap.Option {
+	opts := append([]bootstrap.ListenerOption{}, extra...)
 	if binding.ln != nil {
 		opts = append(opts, bootstrap.WithListenerNet(binding.ln))
 	}

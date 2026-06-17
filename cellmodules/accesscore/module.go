@@ -314,8 +314,14 @@ func wireConfigGetter(
 	// returns a TCP-dial readiness ManagedResource for the remote peer so an
 	// unreachable configcore degrades this cell's /readyz (#2251 P2.7); it is
 	// surfaced via ModuleResult.Resources by the Provide caller.
+	//
+	// shared.RemoteClientTLS (resolved once by cellmodules/celltls.Resolve, #2263)
+	// carries this cell's client mTLS identity: for an https configcore peer
+	// Resolve mints a per-target *tls.Config that authenticates configcore by its
+	// SPIFFE cell ID, and fails closed for a non-loopback plaintext peer. The zero
+	// identity (demo / loopback) keeps the dial plaintext.
 	ct, resources, err := celltransport.Resolve(topo, configProviderCell,
-		shared.InProcessTransport, shared.Clock, shared.TransportObs)
+		shared.InProcessTransport, shared.Clock, shared.TransportObs, shared.RemoteClientTLS)
 	if err != nil {
 		return nil, nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
 	}
