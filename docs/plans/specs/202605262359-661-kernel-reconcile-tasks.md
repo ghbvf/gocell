@@ -49,7 +49,7 @@ examples/iotdevice 消费方与文档治理已闭环；后续新增业务 cell �
   - §1 问题陈述（kernel/command Sweeper 域绑定 → 4 个真消费方需要泛化）
   - §2 对标 controller-runtime（含 5 个 raw.githubusercontent.com URL + 关键代码片段 + GoCell 适配建议）
   - §3 接口设计（Reconciler / Request / Result / Trigger / LeaderElector / Builder）
-  - §4 leader-elect 设计（Redis SETNX + PG advisory lock 两种 adapter，lease/token 模型）
+  - §4 leader-elect 设计（Redis SETNX + PG `reconcile_leases` row-TTL UPSERT CAS 两种 adapter，lease/token 模型）
   - §5 与 saga (#969) / projection harness (#1079) 边界
   - §6 trigger 满足条件 + 激活流程
   - §7 威胁矩阵（接口被错误泛化 / leader 流转失败 / panic 隔离失败 / 多 cell 并发）
@@ -236,7 +236,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
   - 用 miniredis 跑 SETNX 实现的 leader 接口契约（同 conformance test 集）
   - 估算：150 LoC
 - [x] **T23** [P] [PR-A6] `adapters/postgres/reconcile_leader_test.go`：
-  - 用真 PG（integration tag）跑 advisory lock 实现的 leader 接口契约
+  - 用真 PG（integration tag）跑 `reconcile_leases` row-TTL UPSERT CAS 实现的 leader 接口契约
   - 估算：150 LoC
 
 #### Implementation for PR-A6
@@ -255,7 +255,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
   - 复用 adapters/redis Cache 命名空间约定（cell-namespaced key）
   - 估算：250 LoC
 - [x] **T26** [PR-A6] `adapters/postgres/reconcile_leader.go`：
-  - pg_try_advisory_lock 实现
+  - `reconcile_leases` row-TTL UPSERT CAS 实现
   - 续约通过 transaction-scoped lock + heartbeat goroutine
   - 估算：250 LoC
 - [x] **T27** [PR-A6] `tools/archtest/reconcile_leader_interface_frozen_test.go`：

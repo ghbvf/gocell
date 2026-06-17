@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${GOCELL_RECONCILE_STATUS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "${ROOT}"
 
 adr="docs/architecture/202605291600-661-adr-kernel-reconcile-design.md"
@@ -44,11 +44,19 @@ reject 'docs-only|尚未合入 develop|develop 上没有任何 .*kernel/reconcil
 for file in "$adr" "$spec" "$plan" "$tasks"; do
   reject 'PARKED-ON-TRIGGER' "$file" "PARKED-ON-TRIGGER status"
   reject 'pkicell\.rotation' "$file" "retired pkicell.rotation trigger"
+  reject '未落地|trigger gate 封存|不今天建|A6 未落地' "$file" "unlanded/parked historical wording"
 done
 
 require 'IMPLEMENTED-HISTORICAL|已落地历史规格' "$spec" "implemented historical spec status"
 require 'IMPLEMENTED-HISTORICAL|已落地历史计划' "$plan" "implemented historical plan status"
 require 'IMPLEMENTED-HISTORICAL|已落地历史任务' "$tasks" "implemented historical tasks status"
+
+for file in "$spec" "$plan" "$tasks"; do
+  require 'ADR-1895' "$file" "ADR-1895 alignment"
+  require 'runtime/certlifecycle' "$file" "runtime/certlifecycle alignment"
+  require 'row-TTL UPSERT CAS' "$file" "Postgres row-TTL UPSERT CAS leader alignment"
+  reject 'pg_try_advisory_lock|PG advisory lock|advisory lock' "$file" "Postgres advisory-lock leader wording"
+done
 
 reject 'WSTEP 协议支持（pkicell）' "$prd" "pre-ADR-1895 WSTEP P0 wording"
 require '框架证书底座' "$prd" "framework certificate foundation P0 wording"

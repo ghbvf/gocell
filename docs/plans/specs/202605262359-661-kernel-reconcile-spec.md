@@ -114,7 +114,7 @@ ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启�
 - **Reconcile panic**：框架 recover → 转 transient error → 走退避路径；不让单个 entity 的 panic 影响其他 entity
 - **Loop 关闭中 Reconcile 在跑**：StopTimeout 内等待，超时强制 cancel ctx；reconciler 必须响应 ctx.Done()
 - **Reconcile 阻塞超长（> 单 tick interval）**：单 entity 串行（不并发同 ID）；多 entity 按 MaxConcurrentReconciles 并发；超长被 ctx deadline 切断
-- **leader 流转期的双扫描/双写**：lease lock（Redis SETNX / PG advisory lock）只 best-effort 收窄并发窗口——leader election **非 fencing**（client-go 明示）。正确性由 monotonic-epoch 写路径 CAS（拒 `incoming_epoch < 已见最高` 的 stale 写）+ reconciler 幂等兜底（见 ADR §4.3/§4.4）；Loop 须在 lease 丢失瞬间 cancel lease-scoped ctx 收窄窗口
+- **leader 流转期的双扫描/双写**：lease lock（Redis SETNX / PG `reconcile_leases` row-TTL UPSERT CAS）只 best-effort 收窄并发窗口——leader election **非 fencing**（client-go 明示）。正确性由 monotonic-epoch 写路径 CAS（拒 `incoming_epoch < 已见最高` 的 stale 写）+ reconciler 幂等兜底（见 ADR §4.3/§4.4）；Loop 须在 lease 丢失瞬间 cancel lease-scoped ctx 收窄窗口
 - **空非终态集合**：scan 返回 0 行 → 跳过本轮，不触发 RequeueAfter（避免无意义自循环）
 - **RequeueAfter = 0**：等价于"按 default tick interval"重入，不立即重试
 - **死信 entity 复活**：reconciler 内部可重置状态把 PermanentError 实体重新激活，由消费方负责（框架不提供 unmark API）
@@ -135,9 +135,9 @@ ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启�
 
 **FR-005 (Trigger 抽象)**: 框架 MUST 提供 `Trigger` 接口（`Start(ctx, chan<- Request) error`，替代 controller-runtime `Source`），最小实现 `TickerTrigger(clk clock.Clock, interval time.Duration)`（发零值 `Request{}` resync 脉冲，节拍走注入 clock——clock 为强制位置参 per `CLOCK-POSITIONAL-INJECTION-01`，原草图 `TickerTrigger(interval)` 与 TDD「注入时钟、不依赖 wall-clock」冲突，A4 落地裁决为注入 clock，详见 ADR §3.2 F4 amendment）；选配 `ChannelTrigger(<-chan Request)` 用于 outbox 事件唤醒。
 
-**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG advisory lock 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
+**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG `reconcile_leases` row-TTL UPSERT CAS 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
 
-**FR-006b (FencedRepository 写路径 CAS)**: 框架 MUST 提供 `FencedRepository`/`FencedWriter` seam——`Loop` 给每次 `Reconcile` 注入 epoch-bound 写句柄，reconciler 唯一写面经此 handle，写路径 CAS 拒绝 `incoming_epoch < 资源已见最高 epoch` 的 stale 写（Kleppmann monotonic fencing，**非** `kernel/outbox` 的 UUID identity-fencing）。绕过在 type system 不可表达（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite）。受 §6 trigger gate 封存（A6 设计，不今天建）。
+**FR-006b (FencedRepository 写路径 CAS)**: 框架 MUST 提供 `FencedRepository`/`FencedWriter` seam——`Loop` 给每次 `Reconcile` 注入 epoch-bound 写句柄，reconciler 唯一写面经此 handle，写路径 CAS 拒绝 `incoming_epoch < 资源已见最高 epoch` 的 stale 写（Kleppmann monotonic fencing，**非** `kernel/outbox` 的 UUID identity-fencing）。绕过在 type system 不可表达（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite）。已由 A6 落地，当前实现口径见 ADR-661 §4。
 
 **FR-007 (并发度控制)**: 框架 MUST 支持 `MaxConcurrentReconciles int` 选项；同一 EntityID 串行（防止重入），不同 EntityID 按上限并发。default = 1。
 
@@ -164,7 +164,7 @@ ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启�
 - **Result**: reconciler 返回给框架的调度提示；仅包含 RequeueAfter time.Duration（不带 Requeue bool 或 Priority）
 - **Loop**: 框架的调度环；持有 reconciler + trigger + leader + backoff 配置；生命周期挂在 cell registrar
 - **Trigger**: 触发源；最小实现 TickerTrigger；选配 ChannelTrigger
-- **LeaderElector**: best-effort 单 leader 选举接口（**非 fencing**，含单调 `Epoch` token）；adapter 层有 Redis / PG advisory lock 实现
+- **LeaderElector**: best-effort 单 leader 选举接口（**非 fencing**，含单调 `Epoch` token）；adapter 层有 Redis / PG `reconcile_leases` row-TTL UPSERT CAS 实现
 - **FencedWriter**: epoch-bound 写句柄；reconciler 唯一写面，写路径 CAS 拒 stale-epoch（跨副本正确性闭环，见 ADR §4.3）
 - **PermanentError**: 错误 marker，告诉框架"不要重试，记录到死信 metric"
 
@@ -200,7 +200,7 @@ ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启�
 
 - **A1**：本规格已进入历史 provenance 状态；当前真值以 ADR-661、ADR-1895 与 develop 代码为准
 - **A2**：`runtime/command.SweeperLifecycle` 已在 A8 删除并迁入 `kernel/reconcile.Loop`，不再作为未来 baseline 假设
-- **A3**：`adapters/redis` 与 `adapters/postgres` 已具备 advisory lock / SETNX 原语，可承载 LeaderElector 实现；无需额外引入 etcd / zookeeper
+- **A3**：`adapters/redis` 与 `adapters/postgres` 已具备 SETNX / `reconcile_leases` row-TTL UPSERT CAS 原语，可承载 LeaderElector 实现；无需额外引入 etcd / zookeeper
 - **A4**：消费方边界已由 ADR-1895 调整：证书生命周期属 `runtime/certlifecycle` 框架能力；mdmcell / devicelifecycle / zerotrust 仍按 PRD 时间表作为后续业务 cell 接入
 - **A5**：`saga` (#969) 与 `projection harness` (#1079) 已 ship，边界明确：saga 解 L3 step orchestration，projection 解 CQRS read side；reconcile 仅承担 L4 desired-state 收敛，三者不重叠
 - **A6**：`kernel/reconcile` 不依赖 `runtime/` / `adapters/` / `cells/`（满足 CLAUDE.md 分层约束）；LeaderElector 接口在 kernel 层声明，实现在 adapters 层

@@ -13,3 +13,4 @@ bash "${REPO_ROOT}/hack/automation/pr-meta-emit-derive-selftest.sh"
 bash "${REPO_ROOT}/hack/automation/codex-pr-app-dispatcher/selftest.sh"
 bash "${REPO_ROOT}/hack/automation/issue-labels.sh" selftest
 bash "${REPO_ROOT}/hack/automation/bucket-coverage-selftest.sh"
+bash "${REPO_ROOT}/hack/automation/docs-reconcile-status-selftest.sh"

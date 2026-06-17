@@ -2,7 +2,7 @@
 
 **Feature ID**: `661-kernel-reconcile`
 **Date**: 2026-05-26
-**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史计划；A1-A10 已由 ADR-661 amendments + develop 代码闭环）
+**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史计划；A1-A10 已由 ADR-661 / ADR-1895 amendments + develop 代码闭环）
 **Spec**: [202605262359-661-kernel-reconcile-spec.md](./202605262359-661-kernel-reconcile-spec.md)
 **Issue**: [#661](https://github.com/ghbvf/gocell/issues/661)
 
@@ -18,7 +18,7 @@
 **Primary Dependencies**: 标准库 + `pkg/errcode` + `pkg/validation` + `kernel/metautil`（kernel 层依赖收口）
 **Storage**:
 - Reconciler 状态：消费方自管（`runtime/certlifecycle` / mdmcell 等各自持久化 schema）
-- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（pg_try_advisory_lock）；lease store 维护单调 `Epoch`（fencing token）
+- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（`reconcile_leases` row-TTL UPSERT CAS）；lease store 维护单调 `Epoch`（fencing token）
 - Fencing：消费方写经 epoch-bound `FencedWriter`，资源行记「已见最高 epoch」+ CAS 拒 stale（leader election 非 fencing，见 ADR §4.3）
 **Testing**:
 - table-driven test 覆盖率 kernel/ ≥ 90% / 其余 ≥ 80%（CLAUDE.md）
@@ -92,7 +92,7 @@ adapters/
 ├── redis/
 │   └── reconcile_leader.go              # 新增：SETNX-based LeaderElector
 └── postgres/
-    └── reconcile_leader.go              # 新增：pg_try_advisory_lock-based LeaderElector
+    └── reconcile_leader.go              # 新增：reconcile_leases row-TTL UPSERT CAS LeaderElector
 
 runtime/
 └── command/

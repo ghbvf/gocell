@@ -422,7 +422,8 @@ not guarantee that only one client is acting as a leader (a.k.a. fencing)."* STW
 
 因此单实例正确性**不能**靠 lease 本身，必须靠 **monotonic fencing token + 写路径 CAS**（§4.3）
 + **消费方幂等**（§4.4）兜底。本节 §4.1–§4.2 是 lease 机制（best-effort 收窄窗口），§4.3–§4.4
-是正确性闭环（结构性兜底）。**以下 §4 全节是 PR-A6 设计**（未落地，受 §6 trigger gate 封存）。
+是正确性闭环（结构性兜底）。**以下 §4 全节由 PR-A6 设计并落地**；后续 amendments 记录
+as-built 修正与 review 收敛。
 
 ### 4.1 两 adapter
 
@@ -601,7 +602,7 @@ Builder / command 迁移，A9 被 A8 吸收并以 #1170 spec-reconcile 关闭，
 >   为「lease 收窄 + epoch fencing 结构兜底」。
 > - **新增 T-FENCE 行**：覆盖「旧 leader 迟到写」这一原矩阵漏掉的威胁；评级 **设计**（A6 落地
 >   FencedWriter funnel 后定级）。
-> - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 未落地），本次只是把
+> - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 当时待交付），本次只是把
 >   *保证来源* 从 lease（错）改为 epoch fencing + 幂等（对），并把 A6 验收门槛写死，使 A6 实现者
 >   无法回退到「信 lease」的旧错。fencing 设计是 docs（不建代码），不违反 §6 trigger gate。
 
@@ -768,8 +769,8 @@ A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/co
 - A8 同步迁移 `clock_invariants_test.go`：runtime/command 的 controlPlaneClock carve-out 随
   `lifecycle.go` 删除而退场（reconcile 的 carve-out 已在本 PR/A3 加入 `controlPlaneClockHosts`）。
 
-> 当前 PR（A1–A3）**不**删除 SweeperLifecycle——它仍是 runtime/command 的活跃路径；§8 是 A8
-> 的设计声明，A8 受 §6 trigger gate 封存。
+> A1–A3 当时**不**删除 SweeperLifecycle——它仍是 runtime/command 的活跃路径；§8 是 A8
+> 的设计声明。当前 trunk 已由 A8 删除旧路径并迁入 `kernel/reconcile.Loop`。
 
 ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 ref: kubernetes-sigs/controller-runtime pkg/internal/controller/controller.go
