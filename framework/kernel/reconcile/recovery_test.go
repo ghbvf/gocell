@@ -3,10 +3,13 @@ package reconcile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
+
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +20,12 @@ type panicReconciler struct{ payload any }
 
 func (p panicReconciler) Reconcile(_ context.Context, _ Request) (Result, error) {
 	panic(p.payload)
+}
+
+type panicMarshaler struct{}
+
+func (panicMarshaler) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
 }
 
 // successReconciler always returns a fixed Result and nil error.
@@ -100,6 +109,102 @@ func TestRecovery_PanicLogsAtErrorLevel(t *testing.T) {
 	assert.Contains(t, logOutput, `"level":"ERROR"`, "panic must be logged at Error level")
 	assert.Contains(t, logOutput, "panicking-entity", "log must include entity ID")
 	assert.Contains(t, logOutput, "my_reconciler", "log must include reconciler ID")
+}
+
+// TestRecovery_PanicLogsStructuredPanicValue verifies that structured panic
+// payloads remain inspectable in logs instead of being flattened only into the
+// synthesized error string.
+func TestRecovery_PanicLogsStructuredPanicValue(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	type panicPayload struct {
+		Code string `json:"code"`
+		ID   int    `json:"id"`
+	}
+
+	rec := panicReconciler{payload: panicPayload{Code: "bad-state", ID: 42}}
+	req := Request{EntityID: "structured-panic-entity"}
+
+	_, err := recoverReconcile(context.Background(), rec, req, logger, "my_reconciler")
+	require.Error(t, err)
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry), "panic log must be valid JSON")
+	panicValue, ok := entry["panic_value"].(map[string]any)
+	require.True(t, ok, "panic log must include a structured panic_value object")
+	assert.Equal(t, "bad-state", panicValue["code"])
+	assert.Equal(t, float64(42), panicValue["id"])
+}
+
+func TestRecovery_PanicValueRedactsSensitiveFields(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	type panicPayload struct {
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+
+	rec := panicReconciler{payload: panicPayload{Code: "bad-state", Password: "hunter2"}}
+	req := Request{EntityID: "sensitive-panic-entity"}
+
+	_, err := recoverReconcile(context.Background(), rec, req, logger, "my_reconciler")
+	require.Error(t, err)
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry), "panic log must be valid JSON")
+	panicValue, ok := entry["panic_value"].(map[string]any)
+	require.True(t, ok, "panic log must include a structured panic_value object")
+	assert.Equal(t, "bad-state", panicValue["code"])
+	assert.Equal(t, redaction.Mask, panicValue["password"])
+	assert.NotContains(t, buf.String(), "hunter2")
+}
+
+func TestRecovery_PanicValueMarshalPanicStillConvertsToError(t *testing.T) {
+	t.Parallel()
+	rec := panicReconciler{payload: panicMarshaler{}}
+	req := Request{EntityID: "marshal-panic-entity"}
+
+	require.NotPanics(t, func() {
+		res, err := recoverReconcile(context.Background(), rec, req, slog.Default(), "test_reconciler")
+		require.Error(t, err)
+		assert.Equal(t, Result{}, res)
+		assert.Equal(t, resultTransient, classify(err))
+	})
+}
+
+func TestStructuredPanicValue_RedactsNestedArraysAndStrings(t *testing.T) {
+	t.Parallel()
+
+	got, ok := structuredPanicValue(map[string]any{
+		"code": "bad-state",
+		"items": []any{
+			map[string]any{"token": "secret-token"},
+			"password=hunter2",
+		},
+	}).(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "bad-state", got["code"])
+
+	items, ok := got["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 2)
+
+	first, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, redaction.Mask, first["token"])
+	assert.Equal(t, "password="+redaction.Mask, items[1])
+}
+
+func TestStructuredPanicValue_Fallbacks(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, structuredPanicValue(nil))
+	assert.Equal(t, "token="+redaction.Mask, structuredPanicValue("token=secret-token"))
+	assert.Contains(t, structuredPanicValue(make(chan int)), "0x")
 }
 
 // TestClassify verifies the classify helper's full table:

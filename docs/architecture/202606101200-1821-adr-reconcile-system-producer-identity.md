@@ -88,6 +88,22 @@ D **does not widen** that threat surface:
 - The actual ctxkeys writes are added to the existing
   CTXKEYS-PRINCIPAL-WRITE-CALLER-01 allowlist as a sanctioned writer file.
 
+### #1955 amendment (function-level callsite guard)
+
+#1955 upgrades the downstream grain from the original file-level
+`CTXKEYS-PRINCIPAL-WRITE-CALLER-01` admission to a reconcile-specific callsite
+invariant: `RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01`. The ctxkeys allowlist
+still identifies `kernel/reconcile/identity.go` as a sanctioned writer file, but
+the new invariant closes the same-file blind spot by requiring:
+
+- every principal ctx-key setter reference in package `kernel/reconcile` to live
+  inside `installSystemProducerIdentity`; and
+- every reference to `installSystemProducerIdentity` to originate from
+  `(*reconcile.Loop).process`.
+
+Threat matrix delta: no new surface. This is a pure enforcement-grain upgrade
+over the same identity boundary defined in this ADR.
+
 Threat matrix delta vs. before this change: **none added.** A reconcile producer
 previously emitted under an empty/ambient identity (a latent inheritance risk); it now
 emits under a fixed, recognizable, auditable `"system"` identity. The change reduces
@@ -127,18 +143,13 @@ and the pre-existing cross-tenant key-collision threat is downgraded, not widene
   There is no exported surface to gate.
 - **Downstream Hard**: the ctxkeys writes are caller-allowlisted by
   CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (go/types object resolution; alias/dot-import safe).
-  **Granularity note**: that allowlist is **file-level** (key
-  `kernel/reconcile/identity.go`), NOT the **function/callsite-level** lock of
-  PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01. The two are both Hard, but not
-  identical in grain — a second function added to `identity.go` could call the
-  setters without tripping the archtest. That is the accepted same-file residual
-  blind spot below, not an equivalence with the projection funnel.
-- **Residual blind spot (honest)**: a different function inside `kernel/reconcile`
-  (or a second function in `identity.go` writing the setters directly) could install a
-  system identity without the archtest firing. Accepted — the package is small trusted
-  framework code and the threat model is external producers, not in-package framework
-  code; a same-package / function-level caller-allowlist would be disproportionate
-  machinery here.
+  #1955 adds `RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01`, which pins the
+  reconcile-specific grain to function/callsite level: only
+  `installSystemProducerIdentity` may reference the setters inside
+  `kernel/reconcile`, and only `Loop.process` may reference the installer.
+- **Residual blind spot (honest)**: build-tag-gated production files under
+  non-default tags are outside the default production archtest scan. No such
+  reconcile system-identity writer exists today.
 
 ## Consequences
 
