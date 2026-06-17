@@ -5,5 +5,6 @@ export * as httpSampleBootstrapV1 from './contracts/http/sample/bootstrap/v1/typ
 export * as httpSampleClientsonlyV1 from './contracts/http/sample/clientsonly/v1/types';
 export * as httpSampleIdempotencyexemptV1 from './contracts/http/sample/idempotencyexempt/v1/types';
 export * as httpSamplePasswordresetexemptV1 from './contracts/http/sample/passwordresetexempt/v1/types';
+export * as httpSamplePermissionV1 from './contracts/http/sample/permission/v1/types';
 export * as httpSamplePublicV1 from './contracts/http/sample/public/v1/types';
 export * as httpSampleServiceownedV1 from './contracts/http/sample/serviceowned/v1/types';

@@ -137,6 +137,9 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/contractspec"
+{{- if ne .Endpoint.Permission ""}}
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+{{- end}}
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
@@ -251,6 +254,34 @@ func NewHandler(svc Service) *Handler {
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
 		panic(panicregister.Approved("{{.PanicReasonServiceOwnedSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+	}
+	h.requestValidator = v
+{{- end}}
+	return h
+}
+{{- else if ne .Endpoint.Permission ""}}
+// NewHandler creates a Handler for {{.ContractID}}.
+//
+// Authorization is contract-derived (#2205): endpoints.http.permission is
+// {{.Endpoint.Permission}}. NewHandler takes the cell-level
+// authz.MethodPolicyResolver (built by cellgen from the cell's served-contract
+// permission overlays) and constructs the route gate via
+// auth.RequirePermissionByName(contractSpec.ID, resolver) — the HTTP sibling of
+// the gRPC interceptor's resolver lookup, replacing a hand-wired
+// auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
+// construction (composition root must inject the cell resolver).
+func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
+	if resolver == nil {
+		// B-class assertion: argument-contract violation. errcode.Assertion routes
+		// through the kernel recover middleware (500 + log) instead of a bare panic
+		// so PANIC-REGISTERED-01 stays clean.
+		panic(panicregister.Approved("{{.PanicReasonResolverNil}}", errcode.Assertion("generated handler {{.ContractID}}: resolver must not be nil (endpoints.http.permission contracts require the cell authz.MethodPolicyResolver; composition root must inject the cellgen-built resolver)")))
+	}
+	h := &Handler{svc: svc, policy: auth.RequirePermissionByName(contractSpec.ID, resolver)}
+{{- if .RequestSchemaJSON}}
+	v, err := schemavalidate.NewValidator(requestSchemaJSON)
+	if err != nil {
+		panic(panicregister.Approved("{{.PanicReasonStandardSchemaCompileFailed}}", errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 {{- end}}

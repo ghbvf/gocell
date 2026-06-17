@@ -720,6 +720,13 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		{"http.sample.passwordresetexempt.v1", "synth_http_auth_modes_passwordresetexempt"},
 		{"http.sample.clientsonly.v1", "synth_http_auth_modes_clientsonly"},
 		{"http.sample.serviceowned.v1", "synth_http_auth_modes_serviceowned"},
+		// permission (#2205): byte-locks the contract-derived gate branch. A standard
+		// route declaring endpoints.http.permission renders NewHandler(svc, resolver
+		// authz.MethodPolicyResolver) + Policy: h.policy built via
+		// auth.RequirePermissionByName(contractSpec.ID, resolver) (not the legacy
+		// policy-arg path), and adds the framework/pkg/authz import. A regression that
+		// drops the resolver branch (re-exposing NewHandler(svc, policy)) trips the golden.
+		{"http.sample.permission.v1", "synth_http_auth_modes_permission"},
 		// idempotencyexempt: passwordResetExempt+idempotencyExempt proves ADDITIVE emission.
 		// The generated RegisterRoutes must emit BOTH PasswordResetExempt:true and
 		// IdempotencyExempt:true (additive, not alternative) — golden byte-locks this.

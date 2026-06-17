@@ -189,6 +189,12 @@ func BuildCellSpec(
 	}
 	spec.GrpcServices = grpcServices
 
+	httpPerms, err := buildHTTPMethodPermissions(p, cellID, fieldIndex)
+	if err != nil {
+		return nil, err
+	}
+	spec.HTTPMethodPermissions = httpPerms
+
 	return spec, nil
 }
 
@@ -906,6 +912,29 @@ func buildGrpcServicesFromSlices(p *metadata.ProjectMeta, cellID string, fieldIn
 		func(cu metadata.ContractUsage) bool {
 			c := p.Contracts[cu.Contract]
 			return c != nil && c.Kind != "grpc"
+		})
+}
+
+// buildHTTPMethodPermissions scans all slices of cellID and collects the
+// (contractID → ABAC action) pair for every served HTTP contract that declares
+// endpoints.http.permission (#2205), sorted by contract id. The result drives
+// cell.tmpl's package-level `<cell>HTTPResolver` var — the HTTP transport's
+// authz.MethodPolicyResolver, the sibling of the gRPC registrar's per-method map.
+// A served HTTP contract WITHOUT a permission overlay is skipped (sparse migration
+// overlay): its generated handler keeps the legacy policy-arg path, so it must not
+// enroll in the resolver. MethodPermission.FullMethod carries the contract id here.
+func buildHTTPMethodPermissions(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex) ([]MethodPermission, error) {
+	return buildSpecsFromSlices(p, cellID, roleServe, fieldIndex,
+		func(p *metadata.ProjectMeta, _, _ string, cu metadata.ContractUsage, _ *CellFieldIndex) (MethodPermission, error) {
+			// skip guarantees: c non-nil, kind http, HTTP block present, permission non-empty.
+			c := p.Contracts[cu.Contract]
+			return MethodPermission{FullMethod: cu.Contract, Permission: c.Endpoints.HTTP.Permission}, nil
+		},
+		func(m MethodPermission) string { return m.FullMethod },
+		func(m MethodPermission) string { return m.FullMethod },
+		func(cu metadata.ContractUsage) bool {
+			c := p.Contracts[cu.Contract]
+			return c == nil || c.Kind != "http" || c.Endpoints.HTTP == nil || c.Endpoints.HTTP.Permission == ""
 		})
 }
 
