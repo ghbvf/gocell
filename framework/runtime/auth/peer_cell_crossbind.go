@@ -15,16 +15,29 @@ import (
 const (
 	msgCrossBindNoPeer      = "mTLS peer certificate required for cross-cell identity binding"
 	msgCrossBindNoCertCell  = "mTLS peer certificate carries no cell SPIFFE ID (spiffe://<td>/cell/<cell>)"
+	msgCrossBindAmbiguous   = "mTLS peer certificate carries more than one distinct cell SPIFFE ID (ambiguous identity)"
 	msgCrossBindNoPrincipal = "service-token caller principal required for cross-cell identity binding"
+	msgCrossBindBadExpected = "cross-cell identity binding: service-token caller cell is not a valid SPIFFE cell token"
 	msgCrossBindMismatch    = "mTLS peer cell identity does not match the service-token caller cell"
 )
 
 // PeerCellCrossBindMiddleware binds the transport-layer mTLS identity to the
 // message-layer service-token identity (#2263): it requires the client
-// certificate's SPIFFE cell ID (URI SAN spiffe://<td>/cell/<cell>) to equal the
-// authenticated service-token caller cell ([Principal.CallerCellID]). On any
-// mismatch — or a missing peer cert / cell SPIFFE ID / service principal — it
-// fails closed (403, except a missing peer cert which is 401).
+// certificate's FULL cell SPIFFE ID — spiffe://<expectedTrustDomain>/cell/<cell>
+// — to [spiffeid.CellID.Equal] the ID built from expectedTrustDomain +
+// the authenticated service-token caller cell ([Principal.CallerCellID]). Both
+// the trust domain AND the cell are checked (not the cell name alone): a peer
+// presenting a same-named cell from a DIFFERENT trust domain is rejected, even if
+// (via a misissuing CA) its cert chained to the trust pool. On any mismatch — or
+// a missing peer cert / cell SPIFFE ID / ambiguous cert / service principal —
+// it fails closed (403, except a missing peer cert which is 401).
+//
+// expectedTrustDomain is this listener's own SPIFFE trust domain; bootstrap
+// derives it from the listener's server certificate SAN at wiring time (see
+// applyListenerAuthChain → serverCertTrustDomain), so peers are required to share
+// the server's trust domain without any extra configuration. It must be non-empty
+// (a valid trust domain); an empty value makes the expected-ID construction fail
+// and every request is rejected (fail-closed).
 //
 // This is the core of "peer authentication": #2153 (per-cell ProvisionedKeyring)
 // already authenticates WHICH cell sent the message at the token layer, and mTLS
@@ -38,39 +51,56 @@ const (
 // Principal). Bootstrap installs it last on the internal listener whenever the
 // auth chain contains BOTH AuthMTLS and AuthServiceToken (see
 // applyListenerAuthChain), so the ordering holds by construction.
-func PeerCellCrossBindMiddleware() func(http.Handler) http.Handler {
+func PeerCellCrossBindMiddleware(expectedTrustDomain string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			peer, ok := ctxkeys.PeerIdentityFrom(r.Context())
-			if !ok {
-				denyCrossBind(w, r,
-					errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgCrossBindNoPeer))
-				return
-			}
-			certCell, ok, err := spiffeid.FromURIs(peer.URIs)
-			if err != nil || !ok {
-				denyCrossBind(w, r,
-					errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindNoCertCell))
-				return
-			}
-			p, ok := FromContext(r.Context())
-			if !ok || p.CallerCellID == "" {
-				denyCrossBind(w, r,
-					errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindNoPrincipal))
-				return
-			}
-			if certCell.Cell() != p.CallerCellID {
-				denyCrossBind(w, r,
-					errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindMismatch,
-						errcode.WithInternal(
-							errcode.InternalAttr("cert_cell", certCell.Cell()),
-							errcode.InternalAttr("caller_cell", p.CallerCellID),
-						)))
+			if err := verifyCrossBind(r, expectedTrustDomain); err != nil {
+				denyCrossBind(w, r, err)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// verifyCrossBind returns the fail-closed errcode for a request that does not
+// satisfy the cross-bind, or nil when the peer cert's full cell SPIFFE ID equals
+// spiffe://<expectedTrustDomain>/cell/<callerCell>. Extracted from the middleware
+// closure to keep cognitive complexity ≤15.
+func verifyCrossBind(r *http.Request, expectedTrustDomain string) error {
+	peer, ok := ctxkeys.PeerIdentityFrom(r.Context())
+	if !ok {
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgCrossBindNoPeer)
+	}
+	certCell, ok, err := spiffeid.FromURIs(peer.URIs)
+	if err != nil {
+		// Ambiguous: the cert carries ≥2 distinct cell SPIFFE IDs. Distinct from
+		// "no cell id" so a security audit can flag a possibly-tampered cert.
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindAmbiguous)
+	}
+	if !ok {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindNoCertCell)
+	}
+	p, ok := FromContext(r.Context())
+	if !ok || p.CallerCellID == "" {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindNoPrincipal)
+	}
+	// Expected = the caller cell in THIS listener's trust domain. Compare the full
+	// CellID (trust domain + cell) via Equal — never the bare cell string
+	// (spiffeid funnel invariant).
+	expected, err := spiffeid.ForCell(expectedTrustDomain, p.CallerCellID)
+	if err != nil {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindBadExpected,
+			errcode.WithInternal(errcode.InternalAttr("caller_cell", p.CallerCellID)))
+	}
+	if !certCell.Equal(expected) {
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindMismatch,
+			errcode.WithInternal(
+				errcode.InternalAttr("cert_id", certCell.String()),
+				errcode.InternalAttr("expected_id", expected.String()),
+			))
+	}
+	return nil
 }
 
 // denyCrossBind logs (sanitized, structured) and writes the fail-closed error.

@@ -188,6 +188,13 @@ func remoteClientTLSConfig(cellID, endpoint string, clientTLS tlsutil.ClientIden
 // of surfacing only on the first real request. The handshake is still
 // cascade-safe (it completes at TLS layer, before any HTTP). When tlsCfg is nil
 // (plaintext loopback/demo peer) a plain TCP dial proves reachability (#2251 F1).
+//
+// Total probe time is bounded by the caller ctx deadline (typically the /readyz
+// aggregator deadline set by bootstrap.WithReadyzDeadline). The 3 s dial backstop
+// (remoteReadinessDialTimeout) only guards a caller that passes a deadline-less
+// ctx, preventing a SYN-blackhole peer from stalling the probe until the kernel
+// TCP timeout. It does NOT add a second, independent budget — the handshake
+// (when mTLS) runs inside the same ctx that constrained the TCP dial.
 func remoteReadiness(cellID, endpoint string, tlsCfg *tls.Config) (lifecycle.ManagedResource, error) {
 	target, err := transport.EndpointDialTarget(endpoint)
 	if err != nil {
@@ -204,8 +211,15 @@ func remoteReadiness(cellID, endpoint string, tlsCfg *tls.Config) (lifecycle.Man
 }
 
 // dialPeerReadiness dials target and (for an mTLS peer) completes a TLS
-// handshake. A Close error is a local cleanup concern unrelated to peer health,
-// so it must NOT degrade readiness (#2251 review F1).
+// handshake within the SAME ctx budget. A Close error is a local cleanup concern
+// unrelated to peer health, so it must NOT degrade readiness (#2251 review F1).
+//
+// The total probe time is bounded by the caller ctx deadline (the /readyz
+// aggregator deadline) OR the 3 s dial backstop (remoteReadinessDialTimeout) when
+// the ctx has no deadline — whichever fires first. The handshake does NOT add a
+// fresh remoteReadinessDialTimeout on top of the TCP dial: doing so (F6 fix)
+// would create a ~6 s worst case that can exceed the ~5 s /readyz aggregator
+// budget and surface a ctx-timeout instead of the real handshake failure.
 func dialPeerReadiness(ctx context.Context, target string, tlsCfg *tls.Config) error {
 	conn, err := (&net.Dialer{Timeout: remoteReadinessDialTimeout}).DialContext(ctx, "tcp", target)
 	if err != nil {
@@ -217,9 +231,7 @@ func dialPeerReadiness(ctx context.Context, target string, tlsCfg *tls.Config) e
 	}
 	tlsConn := tls.Client(conn, tlsCfg)
 	defer func() { _ = tlsConn.Close() }()
-	hctx, cancel := context.WithTimeout(ctx, remoteReadinessDialTimeout)
-	defer cancel()
-	return tlsConn.HandshakeContext(hctx)
+	return tlsConn.HandshakeContext(ctx)
 }
 
 // remoteReadinessResource adapts a single readiness probe to the ManagedResource

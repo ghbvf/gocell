@@ -54,6 +54,12 @@ func TestPeerCellCrossBindMiddleware(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "mismatch: cert trust domain != expected -> 403",
+			certURI:    "spiffe://other.org/cell/accesscore", // wrong trust domain, same cell name
+			callerCell: "accesscore",
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "no peer identity -> 401",
 			certURI:    "",
 			callerCell: "accesscore",
@@ -77,7 +83,7 @@ func TestPeerCellCrossBindMiddleware(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			nextCalled := false
-			h := PeerCellCrossBindMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			h := PeerCellCrossBindMiddleware("example.org")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				nextCalled = true
 				w.WriteHeader(http.StatusOK)
 			}))
@@ -87,4 +93,30 @@ func TestPeerCellCrossBindMiddleware(t *testing.T) {
 			assert.Equal(t, tc.wantNext, nextCalled, "next handler invocation")
 		})
 	}
+}
+
+// TestPeerCellCrossBindMiddleware_AmbiguousCert covers the distinct "two cell
+// SPIFFE IDs" branch (spiffeid.FromURIs error) — a possibly-tampered/multi-identity
+// cert must fail closed (403), separate from the no-cell-id path.
+func TestPeerCellCrossBindMiddleware_AmbiguousCert(t *testing.T) {
+	t.Parallel()
+	a, err := url.Parse("spiffe://example.org/cell/accesscore")
+	require.NoError(t, err)
+	b, err := url.Parse("spiffe://example.org/cell/configcore")
+	require.NoError(t, err)
+
+	r := httptest.NewRequest(http.MethodGet, "/internal/v1/config/k", nil)
+	ctx := ctxkeys.WithPeerIdentity(r.Context(), ctxkeys.PeerIdentity{URIs: []*url.URL{a, b}})
+	ctx = WithPrincipal(ctx, &Principal{Kind: PrincipalService, CallerCellID: "accesscore"})
+	r = r.WithContext(ctx)
+
+	nextCalled := false
+	h := PeerCellCrossBindMiddleware("example.org")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "ambiguous (two distinct cell SPIFFE ids) must 403")
+	assert.False(t, nextCalled)
 }

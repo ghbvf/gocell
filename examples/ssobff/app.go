@@ -372,10 +372,16 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 	// #2263: layer transport-level mTLS over the service-token chain when split
 	// TLS material is provisioned (operator opt-in via GOCELL_TRANSPORT_TLS_*).
-	// ssobff declares no remote cells, so this is the server side only (no client
-	// identity is threaded); celltls.InternalListenerSecurity is the same chain-shape
-	// source corebundle uses. No material → chain unchanged (service-token-only).
-	celltlsDeps, err := celltls.Resolve(bootstrap.DeploymentTopology{}, celltls.LoadConfigFromEnv())
+	// ssobff declares no remote cells; passing an empty spec (all-colocated) means
+	// celltls.Resolve never fires the non-loopback fail-closed gate, so the only
+	// effect of setting TLS material is wiring ServerTLS onto the internal listener
+	// (server-side mTLS only — no client identity is used since ssobff has no
+	// remote peers to dial). No material → chain unchanged (service-token-only).
+	emptyTopo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{})
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: build deployment topology: %w", err)
+	}
+	celltlsDeps, err := celltls.Resolve(emptyTopo, celltls.LoadConfigFromEnv())
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: resolve transport TLS material: %w", err)
 	}

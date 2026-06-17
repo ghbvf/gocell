@@ -602,24 +602,65 @@ probe **per remote peer**, named `<peerCellID>_remote_ready` (e.g. accesscore �
 remote configcore produces `configcore_remote_ready`). It appears in the
 `/readyz?verbose` `dependencies` map exactly like adapter probes (#2251 P2.7).
 
-- **Semantics: TCP dial only, NOT an HTTP `/readyz` call.** The probe opens a TCP
-  connection to the peer's resolved endpoint (`host:port`) and closes it
-  immediately. It proves the peer's listener is reachable — it does **not** call
-  the peer's `/readyz`, deliberately, to avoid an A↔B readiness cascade
-  (mutual `/readyz` probing can deadlock both endpoints). So a peer whose TCP
-  listener is up but whose own dependencies are down still reports `healthy` here;
-  deeper peer-health is a tracked EPIC follow-up.
-- **Failure impact: readiness degrade, never liveness kill.** Peer unreachable →
-  this cell's `/readyz` goes 503 (kubelet/LB sheds traffic). The probe joins the
-  readiness aggregator only; it never trips a liveness gate, so the pod is not
-  restarted (avoids a dependency-cycle restart storm).
+### Probe semantics — mTLS vs plaintext peer
+
+The depth of the probe depends on how the peer endpoint is configured (#2263):
+
+- **mTLS / `https` peer (non-loopback, production split topology):** The probe
+  performs a **full TLS handshake** — it dials, completes the TLS negotiation, and
+  validates the peer's certificate chain + SPIFFE-ID before closing the connection.
+  This confirms both reachability *and* that the peer's cert is valid and trusted by
+  this cell's CA bundle. A TLS handshake failure (chain validation error, SPIFFE-ID
+  mismatch, expired cert) causes the probe to report `unhealthy`. The handshake is
+  still cascade-safe: it does **not** call the peer's `/readyz` endpoint, so A↔B
+  mutual probing cannot deadlock.
+- **Plaintext / loopback peer (local multi-process dev, `localhost` / `127.x.x.x` /
+  `::1` endpoints):** The probe opens a **TCP dial only** — it connects and closes
+  immediately, proving the listener is up. No TLS is negotiated (loopback peers may
+  use bare `host:port` or `http` scheme).
+
+In both cases, a peer whose listener is up but whose own internal dependencies are
+degraded still reports `healthy` here; deeper peer-health diagnostics are a tracked
+EPIC follow-up.
+
+> **Note on timing:** The TLS handshake adds latency relative to a bare TCP dial.
+> The backstop dial+handshake timeout is 3 s (`remoteReadinessDialTimeout`), bounded
+> further by the `/readyz` aggregator deadline (`-readyz-deadline`, default 5 s) when
+> tighter. Set `timeoutSeconds` in your Kubernetes `readinessProbe` to at least
+> `readyz-deadline + 1 s` (see §Kubernetes probes).
+
+- **Failure impact: readiness degrade, never liveness kill.** Peer unreachable or
+  handshake failed → this cell's `/readyz` goes 503 (kubelet/LB sheds traffic). The
+  probe joins the readiness aggregator only; it never trips a liveness gate, so the
+  pod is not restarted (avoids a dependency-cycle restart storm).
 - **Only present in split topology.** Co-located peers (same process) register no
   such probe — absence of `<cell>_remote_ready` means the peer is in-process.
-- **Backstop dial timeout 3s** (`remoteReadinessDialTimeout`), bounded further by
-  the `/readyz` aggregator deadline (`-readyz-deadline`) when tighter.
 - Alert authors: this probe family is split-topology-only; do not hard-require it
   in single-process deployments. The probe name is a typed funnel
   (`healthz.RemoteCellReadyProbeName`); renames sync here + dashboards/alerts.
+
+### Diagnosing TLS handshake failures
+
+A TLS handshake failure (cert chain validation error, SPIFFE-ID mismatch) is
+surfaced at the metric level as
+`cell_transport_requests_total{outcome="dial_error"}` — the `outcome` label is kept
+low-cardinality and does not distinguish TLS-specific causes from TCP unreachability.
+For the specific TLS error, inspect the **trace span**: the transport records
+`span.RecordError(err)` on every dial failure, carrying the Go TLS error string.
+Operators distinguishing a cert-trust failure from a plain unreachable host should
+look at the trace (`error.type` attribute), not the metric label.
+
+The relevant environment variables that change probe semantics (and whose absence or
+misconfiguration can cause TLS handshake probe failures) are:
+
+| Variable | Effect on probe |
+|----------|----------------|
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | Leaf cert presented during handshake |
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | Private key paired with the leaf cert |
+| `GOCELL_TRANSPORT_TLS_CA_FILE`   | CA bundle used to validate the peer's cert chain |
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | Trust domain used to validate peer SPIFFE-ID |
+
+See `docs/ops/env-vars.md` §Split 拓扑 mTLS 传输层安全 for full semantics.
 
 ## Concurrent probe storms
 
@@ -636,5 +677,14 @@ throttled.
 | `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `?verbose` | Required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` |
 | `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the verbose endpoint | Optional; rejected in adapter mode `real` |
 | `GOCELL_METRICS_TOKEN` | Bearer token for `/metrics` | Required in adapter mode `real` |
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | Leaf cert PEM path — enables mTLS on the internal listener and upgrades remote-peer probes from TCP-dial to TLS-handshake | Required when topology has non-loopback remote cells (all-or-nothing with the three vars below) |
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | Private key PEM path paired with the leaf cert | Same as above |
+| `GOCELL_TRANSPORT_TLS_CA_FILE`   | CA bundle PEM path — used to validate peer cert chains in both client and server directions | Same as above |
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain (no `spiffe://` prefix) — controls which SPIFFE-IDs are accepted during TLS handshake | Same as above |
+
+Setting any of the four `GOCELL_TRANSPORT_TLS_*` / `GOCELL_SPIFFE_TRUST_DOMAIN`
+variables changes the remote-peer probe semantics from TCP-dial to a full TLS
+handshake. See §Cross-cell remote-peer readiness probes for details, and
+`docs/ops/env-vars.md` §Split 拓扑 mTLS 传输层安全 for full variable semantics.
 
 Refer to `docs/ops/env-vars.md` for the full environment-variable index.

@@ -190,16 +190,23 @@ fail-closed — see §Split mTLS 配置 checklist below).
 4. **TLS 1.3 兼容**：框架强制 `tls.VersionTLS13`，确保 leaf cert / CA cert 的签名算法
    和密钥长度满足 TLS 1.3 要求（RSA 2048+ 或 ECDSA P-256+）。
 
-> 生成自签 CA + leaf cert 的工具示例（本地测试）：
-> ```bash
-> # 生成 CA
-> openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 >   -keyout ca.key -out ca.crt -subj "/CN=gocell-test-ca" -nodes
-> # 生成 accesscore leaf cert（带 SPIFFE URI SAN + 双 EKU）
-> openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout accesscore.key >   -out accesscore.csr -subj "/CN=spiffe://gocell.internal/cell/accesscore" -nodes
-> openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial >   -days 365 -out accesscore.crt >   -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/accesscore
-extendedKeyUsage=serverAuth,clientAuth")
-> ```
-> 生产环境请使用正式 PKI / cert-manager / SPIRE 签发。
+生成自签 CA + leaf cert 的工具示例（本地测试）：
+
+```bash
+# 生成 CA
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 \
+  -keyout ca.key -out ca.crt -subj "/CN=gocell-test-ca" -nodes
+
+# 生成 accesscore leaf cert（带 SPIFFE URI SAN + 双 EKU）
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout accesscore.key \
+  -out accesscore.csr -subj "/CN=spiffe://gocell.internal/cell/accesscore" -nodes
+
+openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 365 -out accesscore.crt \
+  -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/accesscore\nextendedKeyUsage=serverAuth,clientAuth")
+```
+
+生产环境请使用正式 PKI / cert-manager / SPIRE 签发。
 
 ### 四个必填环境变量（all-or-nothing）
 
@@ -212,6 +219,15 @@ extendedKeyUsage=serverAuth,clientAuth")
 
 **All-or-nothing 语义**：四个变量必须同时设置或同时不设。只设部分视同全部未设——
 `celltls.Resolve` 在此情况下启动 fail-fast（含非 loopback remote cell 时）。
+
+> **Warning — loopback remote cell 配置了 TLS 变量仍会强制 mTLS（反直觉行为）：**
+> `celltls.Resolve` 在四个 TLS 变量全部设置时 **无论 remote endpoint 是否为 loopback**，都会
+> 强制使用 mTLS 材料。这意味着即便 remote peer 是 `localhost:9090`，只要这四个变量已设，
+> 就必须提供有效的 cert/key/CA，否则 TLS 握手失败。
+>
+> **demo / dev 环境如需 loopback 明文通信，请勿设置这四个变量。**
+> 只在真正需要 mTLS 的生产或测试场景才配置它们，并确保提供合法的 cert/key/CA（可使用下方
+> openssl 自签示例）。
 
 **Fail-closed 行为**：
 - topology 含非 loopback remote cell + TLS material 缺失 → **启动 fail-fast**（不降级明文）。
@@ -253,6 +269,24 @@ mTLS 是传输层安全，以下纵深防御层与之正交，**仍然必须配�
   SPIRE agent sidecar。本 PR 的静态 PEM 与 SPIRE 签发的 cert 在 wire 上完全兼容（相同
   SPIFFE URI SAN 格式），ZT-4 落地时只需替换证书供给方式。
 - **hot-reload**：cert 文件变更后需重启（文件 watcher 是 follow-up）。
+- **静态 PEM 的证书轮换操作流程（无 rolling path）：** 当前 mTLS 使用静态 PEM 文件，进程启动
+  时一次性读入内存，运行期不重新加载。cert 轮换没有零停机 rolling 路径，操作员必须按以下顺序
+  执行以最小化服务中断：
+
+  1. **信任包扩展（trust-bundle overlap）：** 在将 leaf cert 切换到新 CA 签发之前，先把新 CA
+     cert **追加**到现有 CA bundle 文件（`GOCELL_TRANSPORT_TLS_CA_FILE`），使 CA bundle 同时
+     包含旧 CA 和新 CA。把更新后的 CA bundle 分发到所有 cell 进程并重启，完成后每个 cell 同时
+     信任旧 CA 和新 CA 签发的 leaf cert。
+  2. **Leaf cert 滚动（coordinator）：** 依次为每个 cell 进程生成新 CA 签发的 leaf cert，
+     替换 `GOCELL_TRANSPORT_TLS_CERT_FILE` / `GOCELL_TRANSPORT_TLS_KEY_FILE`，重启该进程。
+     因其他 cell 仍信任新旧两个 CA，期间 TLS 握手不会中断。
+  3. **全进程重启窗口：** 完成所有 leaf cert 替换后，视情况收缩 CA bundle（移除旧 CA 并再次
+     重启）。期间 `<peer>_remote_ready` probe 会在每次重启时短暂降级（`unhealthy`）并在进程
+     重新上线后恢复；kubelet 会据此短暂摘除 pod 流量，这是预期行为。
+  4. **监控 `<peer>_remote_ready` probe：** 整个轮换窗口期间持续观察各 peer 的
+     `_remote_ready` probe，确认每次重启后都恢复 `healthy` 再继续下一步。
+
+  热重载（文件 watcher 驱动的无重启轮换）是 follow-up（hot-reload roadmap）。
 
 
 **Diagnosing broker status via `/readyz?verbose`**: the framework-level

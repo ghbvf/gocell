@@ -2,7 +2,6 @@ package celltls
 
 import (
 	"crypto/tls"
-	"fmt"
 	"os"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
@@ -23,7 +22,13 @@ const (
 const (
 	msgFailClosed = "celltls: deployment topology has a non-loopback remote cell but no transport TLS material is configured; " +
 		"set GOCELL_TRANSPORT_TLS_CERT_FILE/KEY_FILE/CA_FILE + GOCELL_SPIFFE_TRUST_DOMAIN (split mTLS is mandatory for non-loopback peers)"
-	msgPartialConfig = "celltls: transport TLS material partially configured; cert/key/CA file + SPIFFE trust domain are all-or-nothing"
+	msgPartialConfig   = "celltls: transport TLS material partially configured; cert/key/CA file + SPIFFE trust domain are all-or-nothing"
+	msgReadCertFile    = "celltls: read cert file"
+	msgReadKeyFile     = "celltls: read key file"
+	msgReadCAFile      = "celltls: read CA file"
+	msgBuildCAPool     = "celltls: build trust-root pool"
+	msgBuildClientID   = "celltls: build client identity"
+	msgBuildServerMTLS = "celltls: build server mTLS config"
 )
 
 // Config carries the operator-provided transport mTLS material locations. The
@@ -80,41 +85,60 @@ func Resolve(topo bootstrap.DeploymentTopology, cfg Config) (Deps, error) {
 	case 0:
 		// Not configured. Mandatory only when a non-loopback peer will be dialed.
 		if topo.HasNonLoopbackRemoteCells() {
-			return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgFailClosed)
+			return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgFailClosed,
+				errcode.WithInternal(
+					errcode.InternalAttr("hint", "set env vars: "+EnvCertFile+", "+EnvKeyFile+", "+EnvCAFile+", "+EnvTrustDomain),
+				))
 		}
 		return Deps{}, nil
 	case 4:
 		// Fully configured — build below (honored regardless of topology).
 	default:
-		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPartialConfig)
+		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPartialConfig,
+			errcode.WithInternal(
+				errcode.InternalAttr("configured_count", cfg.configuredCount()),
+			))
 	}
 
 	certPEM, err := os.ReadFile(cfg.CertFile)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: read cert file %q: %w", cfg.CertFile, err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgReadCertFile, err,
+			errcode.WithInternal(errcode.InternalAttr("file", cfg.CertFile)))
 	}
 	keyPEM, err := os.ReadFile(cfg.KeyFile)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: read key file %q: %w", cfg.KeyFile, err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgReadKeyFile, err,
+			errcode.WithInternal(errcode.InternalAttr("file", cfg.KeyFile)))
 	}
 	caPEM, err := os.ReadFile(cfg.CAFile)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: read CA file %q: %w", cfg.CAFile, err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgReadCAFile, err,
+			errcode.WithInternal(errcode.InternalAttr("file", cfg.CAFile)))
 	}
 
 	rootCAs, err := tlsutil.NewClientCAPool(caPEM)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: build trust-root pool: %w", err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgBuildCAPool, err,
+			errcode.WithInternal(errcode.InternalAttr("ca_file", cfg.CAFile)))
 	}
 	clientID, err := tlsutil.NewClientIdentity(certPEM, keyPEM, rootCAs, cfg.TrustDomain)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: build client identity: %w", err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgBuildClientID, err,
+			errcode.WithInternal(
+				errcode.InternalAttr("cert_file", cfg.CertFile),
+				errcode.InternalAttr("key_file", cfg.KeyFile),
+				errcode.InternalAttr("trust_domain", cfg.TrustDomain),
+			))
 	}
 	// Server side uses the SAME root pool as ClientCAs (single root signs every
 	// cell cert) and presents the same leaf cert/key.
 	serverTLS, err := tlsutil.NewServerMTLSConfig(certPEM, keyPEM, rootCAs)
 	if err != nil {
-		return Deps{}, fmt.Errorf("celltls: build server mTLS config: %w", err)
+		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgBuildServerMTLS, err,
+			errcode.WithInternal(
+				errcode.InternalAttr("cert_file", cfg.CertFile),
+				errcode.InternalAttr("key_file", cfg.KeyFile),
+			))
 	}
 	return Deps{ClientIdentity: clientID, ServerTLS: serverTLS}, nil
 }

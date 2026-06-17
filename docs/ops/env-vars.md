@@ -223,10 +223,38 @@ remote cell 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
 - cert chain 验证失败 / SPIFFE cell ID 不匹配目标 cell → TLS 握手拒绝（client 侧 `VerifyConnection` 报错）。
 - client cert SPIFFE cell ID 与 service-token callerCell 不一致 → **401**（server 侧 cross-bind middleware）。
 
+> **Warning — loopback remote 亦强制 mTLS（反直觉行为）：**
+> 即使 remote peer 端点是 loopback 地址（`localhost` / `127.x.x.x` / `::1`），只要四个 TLS
+> 环境变量已设置，`celltls.Resolve` 就会 honor 该 TLS 材料并强制 mTLS。这意味着：
+>
+> **demo / dev 环境不应设置这四个变量，除非已准备好有效的证书。**
+>
+> 错误后果：在本地 Docker Compose 多进程 dev 中同时配置了 loopback remote peer 和 TLS 变量
+> 但未提供有效 cert/key/CA → TLS 握手失败，peer 不可达，`<peer>_remote_ready` probe 报
+> `unhealthy`，进程 `/readyz` 503。解决方法：dev 不设置这四个变量（plaintext loopback），
+> 或提供真实的自签 CA + leaf cert（参见 `docs/guides/deployment-topology.md` §Split mTLS
+> 配置 checklist）。
+
 **轮换注意**：本 PR 使用静态文件，轮换需替换文件 + 重启进程（hot-reload 是 follow-up）。
 证书自动颁发/续期追踪在 `runtime/certlifecycle` reconciler 独立 roadmap；SPIFFE Workload API
 集成（ZT-4）是另一独立 roadmap。完整说明见 ADR
 `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项。
+
+**TLS 握手失败的可观测性（metrics vs trace）：**
+TLS 握手失败（cert chain 验证错误、SPIFFE-ID 不匹配、证书过期）与普通 TCP 不可达，在 metric
+层面都记为 `cell_transport_requests_total{outcome="dial_error"}`——`outcome` label 是有界低基数
+闭值集，不细分 TLS 内部原因。
+
+需要区分"cert 信任链错误"与"host 不可达"时，应查**链路追踪 span**：每次 dial 失败后
+transport 均调用 `span.RecordError(err)`，携带完整的 Go TLS 错误字符串（`error.type` 属性）。
+这是有意为之——保持 metric label 低基数（避免证书 CN/SAN 等高 cardinality 信息进 label），
+同时在 trace 侧保留完整诊断上下文。
+
+操作员排查流程：
+1. 看 `/readyz?verbose` 确认 `<peer>_remote_ready` probe 状态。
+2. 用 Grafana/Prometheus 查 `cell_transport_requests_total{outcome="dial_error"}` 确认失败量级。
+3. 用 Jaeger/Zipkin 按 trace 的 `error.type` 属性过滤，定位是 TLS 握手错误还是连接拒绝。
+4. 对照四个 `GOCELL_TRANSPORT_TLS_*` / `GOCELL_SPIFFE_TRUST_DOMAIN` 变量及 cert 内容排查根因。
 
 ## HTTP Listeners (three-listener topology)
 

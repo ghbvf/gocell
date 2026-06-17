@@ -133,6 +133,46 @@ func TestEqual(t *testing.T) {
 	if a.IsZero() {
 		t.Fatal("constructed must not be zero")
 	}
+	// Zero-value boundary: Equal against a zero CellID must return false in both
+	// directions (the zero value is invalid and must never compare equal to any
+	// constructed ID).
+	if zero.Equal(a) {
+		t.Fatal("zero.Equal(constructed) must be false")
+	}
+	if a.Equal(zero) {
+		t.Fatal("constructed.Equal(zero) must be false")
+	}
+}
+
+// TestValidateTrustDomain exercises the exported ValidateTrustDomain helper
+// directly — table-driven, covering the empty / valid / uppercase / colon /
+// slash cases that gocell-validate and composition-root resolvers depend on.
+func TestValidateTrustDomain(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		td      string
+		wantErr bool
+	}{
+		{name: "empty", td: "", wantErr: true},
+		{name: "valid lowercase+digits+dots+hyphen+underscore", td: "gocell-prod_1.internal", wantErr: false},
+		{name: "valid simple", td: "example.org", wantErr: false},
+		{name: "uppercase rejected", td: "Example.ORG", wantErr: true},
+		{name: "contains colon rejected", td: "example.org:443", wantErr: true},
+		{name: "contains slash rejected", td: "example.org/path", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := spiffeid.ValidateTrustDomain(tc.td)
+			if tc.wantErr && err == nil {
+				t.Fatalf("ValidateTrustDomain(%q) = nil, want error", tc.td)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("ValidateTrustDomain(%q) unexpected error: %v", tc.td, err)
+			}
+		})
+	}
 }
 
 func mustURL(t *testing.T, raw string) *url.URL {

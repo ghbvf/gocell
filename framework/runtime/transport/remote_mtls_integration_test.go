@@ -129,7 +129,7 @@ func startMTLSServer(t *testing.T, ca mtlsCA, ring *auth.HMACKeyRing, ns auth.No
 	})
 	guarded := middleware.MTLS()(
 		auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(ns))(
-			auth.PeerCellCrossBindMiddleware()(biz),
+			auth.PeerCellCrossBindMiddleware(mtlsTrustDomain)(biz),
 		),
 	)
 

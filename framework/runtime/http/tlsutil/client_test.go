@@ -245,6 +245,25 @@ func TestVerifyConnection(t *testing.T) {
 		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{clientOnly.leaf}})
 		assert.Error(t, err)
 	})
+
+	// F9.1: exercises the spiffeid.FromURIs err != nil branch in verifyPeerCellIdentity.
+	// A leaf that presents TWO distinct cell SPIFFE URIs is ambiguous — VerifyConnection
+	// must reject it regardless of whether either URI matches the expected peer.
+	t.Run("reject: ambiguous cell SPIFFE id (two distinct cell URIs)", func(t *testing.T) {
+		t.Parallel()
+		ambiguous := genCellChain(t,
+			[]*url.URL{
+				mustURI(t, "spiffe://example.org/cell/accesscore"),
+				mustURI(t, "spiffe://example.org/cell/auditcore"),
+			},
+			bothAuth(), time.Now().Add(time.Hour))
+		// Use the outer `expected` (configcore) as the expected peer identity: the
+		// ambiguity check fires before the identity comparison, so the expected peer
+		// does not matter for the error path.
+		cfg := build(ambiguous.rootPool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{ambiguous.leaf}})
+		assert.Error(t, err, "ambiguous SPIFFE id must be rejected")
+	})
 }
 
 func TestClientIdentity(t *testing.T) {

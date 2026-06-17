@@ -439,6 +439,59 @@ func genClientIdentity(t *testing.T) tlsutil.ClientIdentity {
 	return id
 }
 
+// --- F9.3: scheme-branch tests for remoteClientTLSConfig ---
+
+// TestResolve_HTTPSLoopback_RequiresIdentity asserts that an https:// endpoint
+// always requires a provisioned client mTLS identity, even for a loopback
+// address. The loopback plaintext exemption only applies to bare host:port or
+// http:// endpoints — not https://.
+func TestResolve_HTTPSLoopback_RequiresIdentity(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "https://localhost:8443")
+	inProc := transport.NewInProcess(nil)
+	_, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if err == nil {
+		t.Fatal("expected error: https endpoint requires client identity even for loopback, got nil")
+	}
+	assertKindInternal(t, err)
+}
+
+// TestResolve_HTTPSLoopback_WithIdentity_OK asserts that an https:// loopback
+// endpoint with a valid client mTLS identity resolves successfully to a
+// *transport.RemoteHTTPTransport (the TLS dial is exercised end-to-end by
+// remote_mtls_integration_test.go's happy-path test).
+func TestResolve_HTTPSLoopback_WithIdentity_OK(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "https://localhost:8443")
+	inProc := transport.NewInProcess(nil)
+	ct, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, genClientIdentity(t))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, ok := ct.(*transport.RemoteHTTPTransport); !ok {
+		t.Errorf("Resolve returned %T, want *transport.RemoteHTTPTransport", ct)
+	}
+}
+
+// TestResolve_HTTPNonLoopback_FailsClosed asserts that an explicit http://
+// non-loopback endpoint is rejected with KindInternal — plaintext across a real
+// network boundary is forbidden regardless of whether the scheme is explicit or
+// implicit (gocell validate TOPO gate also rejects this at build time; this is
+// the runtime defense-in-depth).
+func TestResolve_HTTPNonLoopback_FailsClosed(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "http://configcore.svc:9090") // explicit http://, non-loopback
+	inProc := transport.NewInProcess(nil)
+	_, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if err == nil {
+		t.Fatal("expected fail-closed for explicit http:// non-loopback peer, got nil")
+	}
+	assertKindInternal(t, err)
+}
+
 // --- local test tracer (celltransport_test cannot reach transport's internal one) ---
 
 type recTracer struct {
