@@ -191,6 +191,24 @@ func (t DeploymentTopology) HasRemoteCells() bool {
 	return len(t.remote) > 0
 }
 
+// HasNonLoopbackRemoteCells reports whether the topology declares at least one
+// remote cell whose endpoint is NOT a loopback address (per
+// netutil.IsLoopbackEndpoint). This is the split-topology mTLS trigger (#2263):
+// a non-loopback remote peer crosses a real network boundary, so the cross-cell
+// transport MUST use mTLS — cellmodules/celltls.Resolve fails closed when this is
+// true but no TLS material is configured. A loopback-only split (local
+// multi-process dev) returns false and stays plaintext-eligible.
+//
+// Zero value (all-colocated) returns false.
+func (t DeploymentTopology) HasNonLoopbackRemoteCells() bool {
+	for _, ep := range t.remote {
+		if !netutil.IsLoopbackEndpoint(ep) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsColocated reports whether cellID is co-located in the same process.
 // For a zero-value (no explicit topology), always returns true — all cells
 // are treated as colocated (single-process default).

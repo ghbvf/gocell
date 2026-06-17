@@ -581,6 +581,56 @@ func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 	}
 }
 
+func TestDeploymentTopologyHasNonLoopbackRemoteCells(t *testing.T) {
+	cases := []struct {
+		name string
+		spec DeploymentTopologySpec
+		want bool
+	}{
+		{name: "zero value → false", spec: DeploymentTopologySpec{}, want: false},
+		{
+			name: "only colocated → false",
+			spec: DeploymentTopologySpec{Colocated: []string{"cellA"}},
+			want: false,
+		},
+		{
+			name: "loopback ipv4 remote → false (local dev split)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "127.0.0.1:9090"}}},
+			want: false,
+		},
+		{
+			name: "loopback localhost URL remote → false",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "https://localhost:8443"}}},
+			want: false,
+		},
+		{
+			name: "non-loopback dns remote → true (network boundary)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "https://cell-b.svc:8443"}}},
+			want: true,
+		},
+		{
+			name: "mixed loopback + non-loopback → true (any non-loopback triggers)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "127.0.0.1:9090"},
+				{CellID: "cellC", Endpoint: "cell-c:9090"},
+			}},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dt, err := newDeploymentTopology(tc.spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: unexpected error: %v", err)
+			}
+			if got := dt.HasNonLoopbackRemoteCells(); got != tc.want {
+				t.Errorf("HasNonLoopbackRemoteCells() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // validateSplitTopologyBroker — phase0 broker-mandatory gate
 // ---------------------------------------------------------------------------
