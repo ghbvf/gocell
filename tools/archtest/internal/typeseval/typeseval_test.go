@@ -8,7 +8,6 @@ import (
 	"go/types"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -171,24 +170,6 @@ func init() { fmt.Println(Topic) }
 	assert.False(t, ok, "nil TypesInfo should not panic")
 }
 
-// cacheKey rebuilds the SharedResolver cache key for test cleanup. Tests in
-// this file all pass nil tags, so the cache key collapses to the simpler
-// shape (mode + root + tests-flag + empty + patterns).
-func cacheKey(root string, tests bool, patterns ...string) string {
-	testsFlag := "0"
-	if tests {
-		testsFlag = "1"
-	}
-	out := "0" + "\x00" + root + "\x00" + testsFlag + "\x00" + "\x00"
-	for i, p := range patterns {
-		if i > 0 {
-			out += "\x00"
-		}
-		out += p
-	}
-	return out
-}
-
 func TestLoadPackages_HappyPath(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	pkgs, errs, err := LoadPackages(root, false, nil, "./tools/archtest/internal/typeseval/...")
@@ -286,167 +267,42 @@ func TestLoadPackages_TestsFlagIncludesTestFiles(t *testing.T) {
 	assert.True(t, hasTestFile, "tests=true must load typeseval_test.go via test variant")
 }
 
-func TestSharedResolver_Singleton(t *testing.T) {
+// TestSharedResolver_DelegatesToCache verifies SharedResolver is backed by the
+// process-wide packagesload cache (#2165): a repeated call with the same key
+// reuses the loaded packages (identical underlying *packages.Package pointers),
+// even though each call mints a fresh *Resolver wrapper. The cache mechanics
+// (singleflight dedup, failure-not-cached, key isolation) are covered directly
+// in tools/packagesload/cache_test.go; this guards the typeseval delegation.
+func TestSharedResolver_DelegatesToCache(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	pattern := "./tools/archtest/internal/typeseval/..."
-	t.Cleanup(func() {
-		sharedMu.Lock()
-		delete(sharedCache, cacheKey(root, false, pattern))
-		sharedMu.Unlock()
-	})
 
 	r1, err := SharedResolver(root, false, nil, pattern)
 	require.NoError(t, err)
 	r2, err := SharedResolver(root, false, nil, pattern)
 	require.NoError(t, err)
-	assert.Same(t, r1, r2, "SharedResolver should return cached singleton for same key")
+
+	require.NotEmpty(t, r1.Packages())
+	require.Same(t, r1.Packages()[0], r2.Packages()[0],
+		"SharedResolver must reuse the packagesload cache; a repeat call re-loaded packages")
+
+	// A distinct pattern loads an independent package set.
+	rOther, err := SharedResolver(root, false, nil, "./framework/pkg/...")
+	require.NoError(t, err)
+	namesTypeseval := packageNames(r1)
+	assert.Contains(t, namesTypeseval, "typeseval")
+	assert.NotEqual(t, namesTypeseval, packageNames(rOther),
+		"distinct patterns must load distinct package sets")
 }
 
-// TestSharedResolver_ConcurrentInit verifies that concurrent callers with a
-// cache-miss key all receive the same *Resolver and the race detector stays
-// clean. Each goroutine uses the same unique pattern so only one Load occurs.
-//
-// This is also the regression guard for singleflight deduplication: if the
-// loader were called once per goroutine (no singleflight) each call would
-// build its own *Resolver and the assert.Same would fail — N distinct
-// pointers would race-write to sharedCache, and the goroutines that
-// already returned would never see the "winning" Resolver. The current
-// SharedResolver releases sharedMu during LoadPackages and lets
-// singleflight collapse the in-flight calls; this test panics-out under
-// `-race` if either property regresses.
-func TestSharedResolver_ConcurrentInit(t *testing.T) {
+// TestSharedResolver_BadPatternErrors verifies resolverFrom maps a load that
+// surfaces packages.Error into a fail-fast error (a partial load is a scan
+// failure), returning a nil *Resolver.
+func TestSharedResolver_BadPatternErrors(t *testing.T) {
 	root := findArchTestModuleRoot(t)
-	pattern := "./tools/archtest/internal/typeseval/..."
-	key := cacheKey(root, false, pattern)
-
-	// Pre-clean so this test always exercises the miss path.
-	sharedMu.Lock()
-	delete(sharedCache, key)
-	sharedMu.Unlock()
-
-	t.Cleanup(func() {
-		sharedMu.Lock()
-		delete(sharedCache, key)
-		sharedMu.Unlock()
-	})
-
-	const N = 8
-	results := make([]*Resolver, N)
-	errs := make([]error, N)
-	var wg sync.WaitGroup
-	wg.Add(N)
-	for i := range N {
-		go func() {
-			defer wg.Done()
-			results[i], errs[i] = SharedResolver(root, false, nil, pattern)
-		}()
-	}
-	wg.Wait()
-
-	for i, err := range errs {
-		require.NoError(t, err, "goroutine %d got error", i)
-	}
-	for i := 1; i < N; i++ {
-		assert.Same(t, results[0], results[i], "goroutine %d got different *Resolver", i)
-	}
-}
-
-// TestSharedResolver_DifferentKeysIsolated verifies that two calls to
-// SharedResolver with distinct pattern sets return different *Resolver
-// instances backed by independently loaded package sets.
-func TestSharedResolver_DifferentKeysIsolated(t *testing.T) {
-	root := findArchTestModuleRoot(t)
-	patternA := "./tools/archtest/internal/typeseval/..."
-	patternB := "./framework/pkg/..."
-	keyA := cacheKey(root, false, patternA)
-	keyB := cacheKey(root, false, patternB)
-
-	// Pre-clean to avoid cross-test pollution from the Singleton test.
-	sharedMu.Lock()
-	delete(sharedCache, keyA)
-	delete(sharedCache, keyB)
-	sharedMu.Unlock()
-	t.Cleanup(func() {
-		sharedMu.Lock()
-		delete(sharedCache, keyA)
-		delete(sharedCache, keyB)
-		sharedMu.Unlock()
-	})
-
-	rA, err := SharedResolver(root, false, nil, patternA)
-	require.NoError(t, err)
-	rB, err := SharedResolver(root, false, nil, patternB)
-	require.NoError(t, err)
-
-	assert.NotSame(t, rA, rB, "different patterns must return distinct *Resolver instances")
-
-	namesA := packageNames(rA)
-	namesB := packageNames(rB)
-	assert.Contains(t, namesA, "typeseval", "rA should contain typeseval package")
-	assert.NotEqual(t, namesA, namesB, "resolvers with different patterns should have different package sets")
-}
-
-// TestSharedResolver_TestsFlagDistinctCacheKey verifies that toggling the
-// tests flag yields a distinct cache entry, so a tests=false load does not
-// inadvertently serve a tests=true caller (or vice versa).
-func TestSharedResolver_TestsFlagDistinctCacheKey(t *testing.T) {
-	root := findArchTestModuleRoot(t)
-	pattern := "./tools/archtest/internal/typeseval/..."
-	keyOff := cacheKey(root, false, pattern)
-	keyOn := cacheKey(root, true, pattern)
-
-	sharedMu.Lock()
-	delete(sharedCache, keyOff)
-	delete(sharedCache, keyOn)
-	sharedMu.Unlock()
-	t.Cleanup(func() {
-		sharedMu.Lock()
-		delete(sharedCache, keyOff)
-		delete(sharedCache, keyOn)
-		sharedMu.Unlock()
-	})
-
-	rOff, err := SharedResolver(root, false, nil, pattern)
-	require.NoError(t, err)
-	rOn, err := SharedResolver(root, true, nil, pattern)
-	require.NoError(t, err)
-	assert.NotSame(t, rOff, rOn, "tests=false and tests=true must produce distinct cache entries")
-}
-
-// TestSharedResolver_FailureNotCached verifies that a failed SharedResolver
-// call does not poison the cache: a subsequent call with the same key must
-// also attempt to load (and fail again), not return a nil *Resolver silently.
-func TestSharedResolver_FailureNotCached(t *testing.T) {
-	root := findArchTestModuleRoot(t)
-	// A pattern that will never match any package in the module.
-	badPattern := "./tools/archtest/testdata/nonexistent/..."
-	key := cacheKey(root, false, badPattern)
-
-	// Pre-clean so this test always exercises the miss path.
-	sharedMu.Lock()
-	delete(sharedCache, key)
-	sharedMu.Unlock()
-	t.Cleanup(func() {
-		sharedMu.Lock()
-		delete(sharedCache, key)
-		sharedMu.Unlock()
-	})
-
-	// First call: must fail.
-	r1, err1 := SharedResolver(root, false, nil, badPattern)
-	assert.Nil(t, r1, "first call with bad pattern should return nil resolver")
-	assert.Error(t, err1, "first call with bad pattern should return an error")
-
-	// Cache must not have been populated.
-	sharedMu.Lock()
-	_, cached := sharedCache[key]
-	sharedMu.Unlock()
-	assert.False(t, cached, "failed SharedResolver must not write to sharedCache")
-
-	// Second call with same key: must also fail (not return a silent nil).
-	r2, err2 := SharedResolver(root, false, nil, badPattern)
-	assert.Nil(t, r2, "second call with bad pattern should still return nil resolver")
-	assert.Error(t, err2, "failure result must not be cached — second call must also return an error")
+	r, err := SharedResolver(root, false, nil, "./tools/archtest/testdata/nonexistent/...")
+	assert.Nil(t, r, "a load with packages.Error must return a nil resolver")
+	assert.Error(t, err, "a load with packages.Error must map to a fail-fast error")
 }
 
 // packageNames returns the set of package names from the resolver's loaded packages.
