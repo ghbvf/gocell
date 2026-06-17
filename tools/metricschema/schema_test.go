@@ -173,6 +173,35 @@ func TestPrometheusConstructor_RecognizesPromwrapFunnel(t *testing.T) {
 		"expected promwrap to export constructor functions; package path / loader regression?")
 }
 
+// TestLoadPackages_CachesRepeatLoads guards #2165: loadPackages routes through
+// the process-wide packagesload cache, so repeating the same (root, patterns)
+// load in one process reuses the loaded packages instead of re-running
+// packages.Load. Two loads of the same pattern must hand back the SAME
+// *packages.Package pointer for a given import path (cache hit, no re-load).
+func TestLoadPackages_CachesRepeatLoads(t *testing.T) {
+	root := repoRoot(t)
+	pkgs1, err := loadPackages(t.Context(), root, promwrapPkg)
+	require.NoError(t, err)
+	pkgs2, err := loadPackages(t.Context(), root, promwrapPkg)
+	require.NoError(t, err)
+
+	var p1, p2 any
+	for _, p := range pkgs1 {
+		if p.PkgPath == promwrapPkg {
+			p1 = p
+		}
+	}
+	for _, p := range pkgs2 {
+		if p.PkgPath == promwrapPkg {
+			p2 = p
+		}
+	}
+	require.NotNil(t, p1, "promwrap package missing from first load")
+	require.NotNil(t, p2, "promwrap package missing from second load")
+	require.Same(t, p1, p2,
+		"loadPackages must reuse the process-wide cache (#2165); repeat load re-ran packages.Load")
+}
+
 func TestMarshalOmitsLineNumbers(t *testing.T) {
 	schema := &Schema{
 		AssemblyID: "fixture",

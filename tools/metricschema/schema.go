@@ -259,17 +259,19 @@ func Marshal(schema *Schema) ([]byte, error) {
 }
 
 // loadPackages loads the OBS-01 production scan patterns through the shared
-// satellite-aware loader packagesload.LoadWorkspace, which resolves the satellite
-// prefixes obs01ProductionPatterns emits — the multi-member parents ("./cmd/...",
-// "./adapters/...", "./examples/...", #2147) expanded to their members, and the
-// top-level single-module roots ("./corecells/...", "./cellmodules/...", #2164)
-// resolved as workspace members — so OBS-01 scans that production code. It keeps only
-// this project's packages
+// satellite-aware loader (packagesload.LoadWorkspaceCached), which resolves the
+// satellite prefixes obs01ProductionPatterns emits — the multi-member parents
+// ("./cmd/...", "./adapters/...", "./examples/...", #2147) expanded to their
+// members, and the top-level single-module roots ("./corecells/...",
+// "./cellmodules/...", #2164) resolved as workspace members — so OBS-01 scans
+// that production code. It keeps only this project's packages
 // (packageHasProjectFile), deduped by import path (preferring the syntax-rich copy),
-// and fails closed on any load error.
+// and fails closed on any load error. The load is memoized in the process-wide
+// packagesload cache (#2165), so a repeated scan of the same (root, patterns)
+// reuses the loaded packages.
 func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
 	cfg := packages.Config{Context: ctx, Mode: packageLoadMode(false)}
-	pkgs, loadErrs, err := packagesload.LoadWorkspace(root, cfg, patterns...)
+	pkgs, loadErrs, err := packagesload.LoadWorkspaceCached(root, cfg, patterns...)
 	if err != nil {
 		return nil, err
 	}
