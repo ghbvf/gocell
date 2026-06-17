@@ -122,6 +122,28 @@ type handlerConfig struct {
 	brokerDelaySchedule []time.Duration // #1458: per-attempt webhook retry delays (empty for ordinary subscriptions).
 }
 
+// handlerKey identifies a subscription by its broker-level identity:
+// (topic, consumerGroup). This mirrors the runtime/eventbus keying
+// (ConsumerGroup|Topic) — two handlers on one key would be competing consumers
+// splitting a single stream, so the key is the duplicate-detection unit.
+// cellID/sliceID are observability metadata and intentionally excluded.
+type handlerKey struct {
+	topic         string
+	consumerGroup string
+}
+
+// runningHandler is the per-handler container unit stored in Router.handlers.
+// US9 holds only cfg; runtime lifecycle fields (per-handler cancel, started,
+// done) land in US10 when runtime add/remove subscriptions are wired
+// (specs/070-runtime-contract-registry US10). The pointer value gives US10 a
+// stable, mutable per-handler home and self-removal from the map.
+//
+// ref: ThreeDotsLabs/watermill message/router.go@master — map[string]*handler
+// container + delete-on-exit.
+type runningHandler struct {
+	cfg handlerConfig
+}
+
 // Router manages event subscription lifecycle. It is populated from
 // RegistrySnapshot.Subscriptions drained by bootstrap phase6, and provides
 // Run/Close for the execution phase.
@@ -140,7 +162,7 @@ type handlerConfig struct {
 // not a generic middleware list: the router owns the composition.
 type Router struct {
 	subscriber   *outbox.SubscriberWithMiddleware
-	handlers     []handlerConfig
+	handlers     map[handlerKey]*runningHandler
 	validators   []cell.SubscriptionValidator
 	mu           sync.Mutex
 	readyTimeout time.Duration
@@ -173,6 +195,7 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 	clock.MustHaveClock(clk, "eventrouter.New")
 	r := &Router{
 		subscriber:   sub,
+		handlers:     make(map[handlerKey]*runningHandler),
 		readyTimeout: DefaultReadyTimeout,
 		running:      make(chan struct{}),
 		clock:        clk,
@@ -203,8 +226,19 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 // metadata at codegen time (HARD contract).
 //
 // Returns a non-nil error when handler is nil, consumerGroup is empty,
-// ownerCellID is empty, or the spec is malformed; callers should propagate
-// the error to the bootstrap phase6 subscription walker.
+// ownerCellID is empty, the spec is malformed, or a handler for the same
+// (topic, consumerGroup) — the broker subscription identity — is already
+// registered; callers should propagate the error to the bootstrap phase6
+// subscription walker.
+//
+// Lifecycle boundary: Run snapshots the handler set once at entry, so a handler
+// registered after Run has started is stored in the map but is NOT picked up by
+// the in-flight Run. This is the reserved seam for US10 runtime add/remove
+// (specs/070-runtime-contract-registry); today bootstrap completes all
+// registration before Run, so the case does not arise. Validators run outside
+// the store lock, so two concurrent registrations of the same key may both
+// validate before either inserts — the duplicate check under the final lock
+// still fails the loser closed.
 //
 // ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 // ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
@@ -269,7 +303,11 @@ func (r *Router) AddContractHandler(
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.handlers = append(r.handlers, handlerConfig{
+	key := handlerKey{topic: spec.Topic, consumerGroup: consumerGroup}
+	if _, exists := r.handlers[key]; exists {
+		return fmt.Errorf("eventrouter: duplicate handler for topic %q consumerGroup %q", spec.Topic, consumerGroup)
+	}
+	r.handlers[key] = &runningHandler{cfg: handlerConfig{
 		topic:               spec.Topic,
 		handler:             handler,
 		consumerGroup:       consumerGroup,
@@ -277,7 +315,7 @@ func (r *Router) AddContractHandler(
 		sliceID:             req.SliceID,
 		contract:            spec,
 		brokerDelaySchedule: req.BrokerDelaySchedule,
-	})
+	}}
 	return nil
 }
 
@@ -295,7 +333,7 @@ func (r *Router) AddSubscriptionValidator(v cell.SubscriptionValidator) {
 }
 
 // errAlreadyRunning is returned if Run is called more than once.
-var errAlreadyRunning = fmt.Errorf("eventrouter: Run called more than once")
+var errAlreadyRunning = errors.New("eventrouter: Run called more than once")
 
 // Run starts all registered subscriptions and blocks until ctx is canceled
 // or an unrecoverable subscription error occurs.
@@ -319,9 +357,15 @@ func (r *Router) Run(ctx context.Context) error {
 		return errAlreadyRunning
 	}
 
+	// Snapshot the registered handlers into a slice under the lock. The map is
+	// the storage (dedup + US10 runtime add/remove prerequisite); the 4-phase
+	// startup below is a one-shot batch over this snapshot, so iteration order
+	// is irrelevant (each Setup/Subscribe/Ready is per independent subscription).
 	r.mu.Lock()
-	handlers := make([]handlerConfig, len(r.handlers))
-	copy(handlers, r.handlers)
+	handlers := make([]handlerConfig, 0, len(r.handlers))
+	for _, rh := range r.handlers {
+		handlers = append(handlers, rh.cfg)
+	}
 	r.mu.Unlock()
 
 	runCtx, cancel := context.WithCancel(ctx)
