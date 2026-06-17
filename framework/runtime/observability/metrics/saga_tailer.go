@@ -33,9 +33,9 @@ import (
 //   - saga_journal_tailer_last_success_timestamp_seconds{cell,projection}: unix
 //     time of the last fully-completed tick (drives the stalled-tailer alert).
 //
-// Cardinality discipline: cell × projection × (≤3 reason/result values). Both
-// cell and projection are assembly-enumerated static sets; per-event identities
-// (event id, owner token) are never label dimensions.
+// Cardinality discipline: cell × projection × (bounded reason/result enum
+// values). Both cell and projection are assembly-enumerated static sets;
+// per-event identities (event id, owner token) are never label dimensions.
 type SagaTailerCollector struct {
 	cellID string
 
