@@ -21,6 +21,9 @@ endpoints:
       403:
         description: "Forbidden — the PDP cannot evaluate the request (e.g. missing tenant scope), or the access:decide self gate fails closed (no Authorizer wired). Any authenticated user may query their OWN decisions via the access:decide baseline self rule (subject.sub == resource.id, #1863) — a conditioned grant, not an unconditional allow. A policy deny for the queried action is NOT a 403: it is a successful 200 with data.allowed=false."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit (emitted by the generated body-decode path)."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       503:
         description: "Service Unavailable — the ABAC policy store is unreachable; the PDP fails closed (ERR_SERVICE_UNAVAILABLE) rather than emit an allow or deny."
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

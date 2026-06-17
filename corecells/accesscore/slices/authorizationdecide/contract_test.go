@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	decidegen "github.com/ghbvf/gocell/generated/contracts/http/auth/decide/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
@@ -144,6 +145,39 @@ func TestHttpAuthDecideV1_AllowSelfResource(t *testing.T) {
 	}
 }
 
+// TestHttpAuthDecideV1_SelfResource_NonCanonicalUUID is the F1 regression (#1863
+// review): a self query whose resource is a non-canonical UUID — uppercase-dashed
+// or 32-char compact — must still match the ownership rule, because the handler
+// canonicalizes req.Resource via httputil.ParseCanonicalUUID before forwarding to
+// the PDP (mirroring the gate's own canonicalization in RequirePermissionForSelf).
+// Pre-fix the raw non-canonical resource never equals the canonical lowercase
+// subject, so the user:read self rule (subject.sub == resource.id) misfires and the
+// API wrongly returns allowed=false for a route that would in fact allow.
+func TestHttpAuthDecideV1_SelfResource_NonCanonicalUUID(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.auth.decide.v1")
+	h, svc := newDecideMux(t, mem.NewPolicyRepository())
+
+	// A canonical lowercase subject WITH hex letters so the uppercase form differs.
+	const canonicalSubject = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	ctx := auth.WithAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(canonicalSubject, []string{"user"}), testTenantIDStr), svc)
+
+	for name, resource := range map[string]string{
+		"uppercase dashed": strings.ToUpper(canonicalSubject),
+		"compact":          strings.ReplaceAll(canonicalSubject, "-", ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"action":"user:read","resource":"` + resource + `"}`
+			rec := postDecide(t, h, ctx, body)
+			c.ValidateHTTPResponseRecorder(t, rec)
+			if got := decodeDecide(t, rec); !got.Data.Allowed {
+				t.Fatalf("self user:read (resource=%q, %s): expected allowed=true, got false", resource, name)
+			}
+		})
+	}
+}
+
 // TestHttpAuthDecideV1_UnknownAction: an action that is not a registered
 // permission fails closed with 400 before reaching the PDP.
 func TestHttpAuthDecideV1_UnknownAction(t *testing.T) {
@@ -245,11 +279,62 @@ func TestHttpAuthDecideV1_Forbidden(t *testing.T) {
 	})
 }
 
+// TestDecideAdapter_Decide_Direct covers the two DecideAdapter.Decide branches the
+// RequirePermissionForSelf gate makes unreachable through the mounted mux (the gate
+// rejects a missing principal / a failed PDP before the handler runs) but which stay
+// load-bearing defense-in-depth: the handler is the decision subject's last fail-
+// closed line. Exercised by invoking the adapter directly, without the route gate.
+func TestDecideAdapter_Decide_Direct(t *testing.T) {
+	newSvc := func(t *testing.T, repo ports.PolicyRepository) *Service {
+		t.Helper()
+		svc, err := NewService(clock.Real(), repo, mem.NewResourceAttributeProvider(), slog.Default(),
+			WithTxManager(outbox.DemoCellTxManager()))
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		return svc
+	}
+
+	t.Run("missing principal fails closed 401", func(t *testing.T) {
+		// Tenant present but NO principal in ctx → the handler's defense-in-depth 401
+		// (the subject is the decision subject; absent → fail closed, not a PDP query).
+		ctx := ctxkeys.WithTenantID(context.Background(), testTenantIDStr)
+		resp, err := DecideAdapter{newSvc(t, mem.NewPolicyRepository())}.Decide(ctx, &decidegen.Request{Action: "audit:read"})
+		if err != nil {
+			t.Fatalf("expected typed 401 response, got err: %v", err)
+		}
+		if _, ok := resp.(decidegen.Decide401ErrorResponse); !ok {
+			t.Fatalf("expected Decide401ErrorResponse, got %T", resp)
+		}
+	})
+
+	t.Run("Authorize error flows through as (nil, err)", func(t *testing.T) {
+		// Principal + tenant present so we pass the principal + action gates and reach
+		// Authorize, whose policy store fails (KindUnavailable) → the handler returns
+		// (nil, err) for httputil.WriteError to map by errcode.Kind.
+		ctx := ctxkeys.WithTenantID(auth.TestContext(decideTestSubject, []string{auth.RoleAdmin}), testTenantIDStr)
+		svc := newSvc(t, failingPolicyRepo{mem.NewPolicyRepository()})
+		resp, err := DecideAdapter{svc}.Decide(ctx, &decidegen.Request{Action: "audit:read"})
+		if err == nil {
+			t.Fatalf("expected Authorize error to flow through, got resp %T", resp)
+		}
+		if resp != nil {
+			t.Fatalf("expected nil response on the error path, got %T", resp)
+		}
+	})
+}
+
 // TestHttpAuthDecideV1_ResponseSchema locks the response shape: a wrong-shaped
-// body must be rejected by the contract response schema.
+// body must be rejected by the contract response schema. The additionalProperties:
+// false guards (F4, #1863 review) machine-lock the "only return allowed" boundary —
+// a leaked Decision.Reason() under data, or any extra top-level field, is rejected.
 func TestHttpAuthDecideV1_ResponseSchema(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.decide.v1")
 	c.MustRejectResponse(t, []byte(`{"data":{"wrong":"shape"}}`))
 	c.MustRejectResponse(t, []byte(`{"data":{}}`))
+	// additionalProperties:false on data — a smuggled deny reason must be rejected.
+	c.MustRejectResponse(t, []byte(`{"data":{"allowed":true,"reason":"insufficient permissions"}}`))
+	// additionalProperties:false on root — no extra top-level field allowed.
+	c.MustRejectResponse(t, []byte(`{"data":{"allowed":true},"reason":"x"}`))
 }

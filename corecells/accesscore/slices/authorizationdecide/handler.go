@@ -6,6 +6,7 @@ import (
 	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	decidegen "github.com/ghbvf/gocell/generated/contracts/http/auth/decide/v1"
 )
@@ -58,7 +59,17 @@ func (a DecideAdapter) Decide(ctx context.Context, req *decidegen.Request) (deci
 		)}, nil
 	}
 
-	dec, err := a.S.Authorize(ctx, p.Subject, req.Resource, req.Action)
+	// Canonicalize the request-body resource the same way the route gates do
+	// (runtime/auth RequirePermissionForResource / RequirePermissionForSelf): a UUID
+	// resource is normalized to canonical dashed-lowercase before the PDP sees it, so
+	// an uppercase or compact self-id still satisfies the ownership rule
+	// (subject.sub == resource.id) — the subject from ctx is already canonical. A
+	// non-UUID resource is forwarded unchanged (coarse action checks carry none).
+	resource := req.Resource
+	if canonical, ok := httputil.ParseCanonicalUUID(resource); ok {
+		resource = canonical
+	}
+	dec, err := a.S.Authorize(ctx, p.Subject, resource, req.Action)
 	if err != nil {
 		// Undeclared-status framework path: Authorize wraps infra/identity faults
 		// (KindUnavailable→503, KindPermissionDenied→403, KindUnauthenticated→401);
