@@ -1113,7 +1113,8 @@ func (v *Validator) validateFMT42ForContract(c *metadata.ContractMeta, h *metada
 	if !authz.IsKnownPermissionString(h.Permission) {
 		results = append(results, v.newError(
 			codeFMT42, IssueInvalid, file, fieldEndpointsHTTPPermission,
-			fmt.Sprintf("http contract %q has endpoints.http.permission %q, which is not a member of the closed authz permission registry", c.ID, h.Permission),
+			fmt.Sprintf("http contract %q has endpoints.http.permission %q, which is not a member of the "+
+				"closed authz permission registry", c.ID, h.Permission),
 			"use a registered authz action string (e.g. config:read); add a new Perm* to framework/pkg/authz if needed",
 		))
 	}

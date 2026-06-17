@@ -43,12 +43,6 @@ func TestNewStaticMethodPolicyResolver_UnknownAction_Panics(t *testing.T) {
 	}, "unknown action string must fail-fast at construction")
 }
 
-// TestNewStaticMethodPolicyResolver_SatisfiesInterface compile-time pins that the
-// returned concrete value satisfies the transport-neutral authz.MethodPolicyResolver.
-func TestNewStaticMethodPolicyResolver_SatisfiesInterface(t *testing.T) {
-	var _ authz.MethodPolicyResolver = NewStaticMethodPolicyResolver(map[string]string{})
-}
-
 // TestRequirePermissionByName_Allow: the contract-derived HTTP gate resolves the
 // permission through the resolver and then behaves exactly like RequirePermission
 // — a PDP allow returns nil.

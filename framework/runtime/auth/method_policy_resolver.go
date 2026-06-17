@@ -14,6 +14,11 @@ type staticMethodPolicyResolver struct {
 	byKey map[string]authz.Permission
 }
 
+// Compile-time assertion that the concrete static resolver satisfies the
+// transport-neutral seam (the HTTP-side sibling of registrar.go's
+// `var _ authz.MethodPolicyResolver = (*ServiceRegistrar)(nil)`).
+var _ authz.MethodPolicyResolver = staticMethodPolicyResolver{}
+
 // PermissionForMethod resolves a contract id to its sealed Permission. Unmapped
 // keys fail closed (ok=false) per the MethodPolicyResolver contract.
 func (r staticMethodPolicyResolver) PermissionForMethod(methodKey string) (authz.Permission, bool) {
@@ -41,7 +46,9 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 		p, ok := authz.PermissionByName(action)
 		if !ok {
 			panic(panicregister.Approved("authz-unknown-method-permission",
-				errcode.Assertion("NewStaticMethodPolicyResolver: action %q for key %q is not a registered authz.Permission (codegen/registry drift; regenerate via gocell generate cell or reconcile the authz registry)", action, key)))
+				errcode.Assertion("NewStaticMethodPolicyResolver: action %q for key %q is not a registered "+
+					"authz.Permission (codegen/registry drift; regenerate via gocell generate cell or "+
+					"reconcile the authz registry)", action, key)))
 		}
 		byKey[key] = p
 	}
@@ -73,7 +80,9 @@ func RequirePermissionByName(contractID string, resolver authz.MethodPolicyResol
 	perm, ok := resolver.PermissionForMethod(contractID)
 	if !ok {
 		panic(panicregister.Approved("http-permission-unmapped",
-			errcode.Assertion("RequirePermissionByName: contract %q has no permission mapping in the cell MethodPolicyResolver (codegen drift — the contract must declare endpoints.http.permission and cellgen must enroll it; regenerate via gocell generate cell)", contractID)))
+			errcode.Assertion("RequirePermissionByName: contract %q has no permission mapping in the cell "+
+				"MethodPolicyResolver (codegen drift — the contract must declare endpoints.http.permission and "+
+				"cellgen must enroll it; regenerate via gocell generate cell)", contractID)))
 	}
 	return RequirePermission(perm)
 }
