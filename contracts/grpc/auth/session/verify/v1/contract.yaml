@@ -9,12 +9,18 @@ endpoints:
   grpc:
     service: auth.session.verify.v1.SessionVerifyService
     proto: contracts/grpc/auth/session/verify/v1/session_verify.proto
-    # Per-method ABAC permission overlay (#2008). VerifyToken is an authed,
-    # service-to-service introspection RPC gated on session:verify (admin/super-admin
-    # baseline; non-admin service callers granted via tenant policy overlay). The
-    # interceptor PDP gate enforces this before the handler runs; the handler does
-    # not hand-authorize. Strict fail-closed: every non-public RPC must appear here
+    # Per-method ABAC permission overlay (#2008). VerifyToken is an authed
+    # admin/super-admin JWT token-introspection RPC gated on session:verify (baseline
+    # grants it to admin/super-admin). The handler additionally binds the introspected
+    # token to the CALLER's tenant (no cross-tenant introspection). The interceptor PDP
+    # gate enforces the permission before the handler runs; the handler does not
+    # hand-authorize. Strict fail-closed: every non-public RPC must appear here
     # (completeness pre-pass), else it is a dead 403.
+    #
+    # NOTE: PR-11 delivers admin/super-admin JWT introspection on the PrimaryListener.
+    # A true service-to-service path (pure service principal on an InternalListener-gRPC
+    # + service-token/mTLS, granted session:verify via tenant policy overlay) is a
+    # separate framework capability tracked at #2290 — not promised by this contract yet.
     methods:
       - name: VerifyToken
         permission: session:verify

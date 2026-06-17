@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/cellmodules/grpclistener"
@@ -50,7 +51,7 @@ import (
 // wired through the production grpc.go helper (newGRPCServerFromEnv) and returns the
 // gRPC listen address. It mirrors the production run.go wiring: one authorizer feeds
 // both the HTTP primary listener and the gRPC gate.
-func startSessionVerifyGRPCApp(t *testing.T) string {
+func startSessionVerifyGRPCApp(t *testing.T) (string, *auth.JWTIssuer) {
 	t.Helper()
 
 	primaryLn := newCorebundleLocalListener(t)
@@ -135,7 +136,7 @@ func startSessionVerifyGRPCApp(t *testing.T) string {
 	})
 
 	waitForHealthy(t, healthLn.Addr().String())
-	return grpcLn.Addr().String()
+	return grpcLn.Addr().String(), jwtIssuer
 }
 
 // TestSessionVerifyGRPC_Corebundle_ListenerServed proves the forced gRPC wiring is
@@ -144,7 +145,7 @@ func startSessionVerifyGRPCApp(t *testing.T) string {
 // booting at all (waitForHealthy) already proves the orphan-grpc fail-fast did not
 // trip; this additionally proves the listener serves and is gated.
 func TestSessionVerifyGRPC_Corebundle_ListenerServed(t *testing.T) {
-	grpcAddr := startSessionVerifyGRPCApp(t)
+	grpcAddr, _ := startSessionVerifyGRPCApp(t)
 
 	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -154,4 +155,37 @@ func TestSessionVerifyGRPC_Corebundle_ListenerServed(t *testing.T) {
 	_, err = client.VerifyToken(context.Background(), &sessionverifyv1.VerifyTokenRequest{Token: "any-subject-token"})
 	assert.Equal(t, codes.Unauthenticated, status.Code(err),
 		"a gated call with no bearer must be Unauthenticated — proving the wired listener serves + the auth gate is active")
+}
+
+// TestSessionVerifyGRPC_Corebundle_AdminBearer_ReachesHandler proves the POSITIVE
+// corebundle wiring path (#1154 review F6): an admin JWT passes the session:verify
+// PDP gate and reaches the real sessionverifyrpc handler + accesscore validateSvc
+// wiring — distinguishable from the negative gate (no Unauthenticated / no
+// PermissionDenied). The introspected token has no live session (no login), so the
+// handler returns valid=false with NO error: that the RPC succeeds at all proves the
+// gate allowed the admin and the real handler/service ran. (The valid=true claims
+// projection is covered by the handler unit tests; a full login→valid=true flow is
+// out of scope for this wiring guard.)
+func TestSessionVerifyGRPC_Corebundle_AdminBearer_ReachesHandler(t *testing.T) {
+	grpcAddr, issuer := startSessionVerifyGRPCApp(t)
+
+	adminTok, err := issuer.Issue(auth.TokenIntentAccess, "admin-1", auth.IssueOptions{
+		Roles:    []string{auth.RoleAdmin},
+		TenantID: "11111111-1111-1111-1111-111111111111",
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	client := sessionverifyv1.NewSessionVerifyServiceClient(conn)
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+adminTok)
+	resp, err := client.VerifyToken(ctx, &sessionverifyv1.VerifyTokenRequest{Token: "some-subject-token"})
+	require.NoError(t, err, "admin must pass the session:verify gate and reach the handler (got %v)", status.Code(err))
+	assert.NotEqual(t, codes.PermissionDenied, status.Code(err), "admin must not be PermissionDenied")
+	// No live session for the introspected token → valid=false, but the RPC itself
+	// succeeded, proving the gate allowed admin and the real handler/service executed.
+	assert.False(t, resp.GetValid(), "introspected token has no session → valid=false (handler+service ran)")
 }

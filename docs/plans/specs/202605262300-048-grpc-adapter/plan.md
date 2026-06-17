@@ -389,7 +389,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 11 — cells/accesscore platform RPC slice
 
-- **Scope**: `cells/accesscore/slices/sessionrpc/` exposes session-token verification as an internal gRPC service for service-to-service calls; validates that a platform cell (not just example) integrates cleanly.
+- **Scope**: `cells/accesscore/slices/sessionrpc/` exposes session-token verification as a gRPC service for admin/super-admin JWT token introspection (PrimaryListener, JWT-gated); validates that a platform cell (not just example) integrates cleanly. True service-to-service (service-principal + InternalListener-gRPC + service-token) is a separate capability gap tracked as #2290.
 - **Files**:
   - `contracts/grpc/access/session/verify/v1/contract.yaml` ~40
   - `contracts/grpc/access/session/verify/v1/session_verify.proto` ~30
@@ -442,7 +442,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **PR 4 complete**: framework grpc transport runtime functional in isolation (no codegen integration yet)
 - **PR 8 complete**: ⚡ FIRST USABLE gRPC HANDLER end-to-end (spec User Story 1 **scenario 1** acceptance: cell author can ship a unary RPC — client dial → interceptor chain → handler → ack). US1 **scenario 2** (observability shape parity: metric/log/trace) defers to PR-9; **scenario 3** (errcode redaction layers / codes.Code mapping) defers to PR-12. Until then a returned `*errcode.Error` surfaces as `codes.Unknown` and grpc metrics are not exported.
 - **PR 9 complete**: spec User Story 2 acceptance (operator observability parity)
-- **PR 11 complete**: spec User Story 3 acceptance (platform-cell service-to-service)
+- **PR 11 complete**: spec User Story 3 acceptance (platform-cell admin/super-admin JWT token introspection via gRPC; service-principal path is backlog #2290)
 - **PR 10 complete**: spec User Story 4 acceptance (streaming patterns)
 - **PR 12 complete**: ⚡ FULL CAPABILITY PARITY closure (all 12 axes aligned)
 

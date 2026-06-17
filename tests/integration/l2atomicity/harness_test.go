@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	"github.com/ghbvf/gocell/corecells/accesscore/accesscoretest"
 	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
@@ -31,7 +32,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
-	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/query"
@@ -43,6 +44,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
@@ -128,6 +131,44 @@ type l2Harness struct {
 	// this harness; the relay+consumer link is the only mechanism by which
 	// audit chain entries advance.
 	auditStore ledger.Store
+}
+
+// l2TestNoopGRPCVerifier is a stub gRPC bearer verifier for harnesses that wire
+// the mandatory gRPC listener but never call it. accesscore registers
+// grpc.auth.session.verify.v1 unconditionally (cell_gen.go, PR-11 #1154), so
+// every assembly that boots accesscore MUST wire a gRPC listener or bootstrap
+// fail-fasts (checkOrphanGRPCServices). HTTP-focused harnesses don't exercise
+// gRPC, so a verifier that rejects every token suffices.
+type l2TestNoopGRPCVerifier struct{}
+
+func (l2TestNoopGRPCVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{}, errors.New("grpc bearer auth not exercised in this harness")
+}
+
+// buildGRPCListenerOption builds a WithGRPCListener bootstrap option backed by
+// an ephemeral pre-bound socket. Mirrors corebundleTestGRPCListenerOption in
+// cmd/corebundle. Required because accesscore registers
+// grpc.auth.session.verify.v1 unconditionally.
+func buildGRPCListenerOption(t *testing.T, cells []cell.Cell, asm *assembly.CoreAssembly) bootstrap.Option {
+	t.Helper()
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = grpcLn.Close() })
+
+	authorizer, err := bootstrap.AuthorizerFromCells(cells)
+	require.NoError(t, err)
+	collector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
+	require.NoError(t, err)
+	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+		Verifier:        l2TestNoopGRPCVerifier{},
+		Clock:           clock.Real(),
+		Collector:       collector,
+		Authorizer:      authorizer,
+		MetricsProvider: kernelmetrics.NopProvider{},
+		CellIDClosedSet: asm.CellIDs(),
+	})
+	require.NoError(t, err)
+	return bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcLn.Addr().String(), bootstrap.WithGRPCListenerNet(grpcLn))
 }
 
 // noopTxRunner executes fn directly without a real transaction.
@@ -403,7 +444,7 @@ func buildCells(
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(pgOutboxWriter)),
 		accesscore.WithJWTIssuer(a.jwtIssuer),
 		accesscore.WithJWTVerifier(a.jwtVerifier),
-		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithBootstrapAuth(a.bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
 		// Low-cost hasher so seedAdmin + login don't pay bcrypt cost-12 per test.
@@ -415,7 +456,7 @@ func buildCells(
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
+		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
 	auditHMACKey := mustRandom32Bytes()
@@ -424,7 +465,7 @@ func buildCells(
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(noopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, auditLedgerOpts...)...)
 
 	return ac, cc, auc, auditStore
@@ -470,6 +511,11 @@ func runBootstrap(
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
 		bootstrap.WithRelay(relayWorker),
+		// accesscore registers grpc.auth.session.verify.v1 unconditionally
+		// (cell_gen.go, PR-11 #1154). A gRPC listener must be wired or bootstrap
+		// fail-fasts with checkOrphanGRPCServices. HTTP-focused tests don't call
+		// gRPC, so a no-op verifier that rejects every token suffices.
+		buildGRPCListenerOption(t, authorizerCells, asm),
 		// Invariant: ShutdownTimeout ≥ httpClient.Timeout. The last in-flight
 		// request must be allowed to finish (or its own timeout fire) before
 		// bootstrap forces a close, otherwise we get spurious EOF mid-request

@@ -1,12 +1,14 @@
 package sessionverifyrpc
 
 // These tests cover the gRPC session-verify handler's DOMAIN behavior only
-// (token introspection + claims projection + error classification).
-// Authorization (session:verify) is NOT a handler concern: the runtime gRPC auth
-// interceptor runs the ABAC PDP gate before the handler is invoked (declared in
-// endpoints.grpc.methods[].permission, #2008). The gate's allow/deny behavior is
-// covered at the assembly level (corecells/accesscore/grpc_pdp_gate_test.go), so
-// these tests assume an already-authorized caller and inject no principal.
+// (token introspection + claims projection + error classification + tenant
+// binding). The session:verify PDP gate is NOT a handler concern: the runtime gRPC
+// auth interceptor runs it before the handler (declared in
+// endpoints.grpc.methods[].permission, #2008) and is covered at the assembly level
+// (corecells/accesscore/grpc_pdp_gate_test.go). These tests DO inject a caller
+// principal (via ctxWithCaller / a bufconn interceptor) because the handler binds
+// the introspected token to the caller's tenant (#1154 review F2) — the principal
+// is what the interceptor sets in production.
 
 import (
 	"context"
@@ -23,8 +25,18 @@ import (
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sessionverifyv1 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
+
+// ctxWithCaller returns a context carrying an authenticated caller principal in the
+// given tenant — what the gRPC auth interceptor sets before the handler runs. The
+// handler reads it to bind the introspected token to the caller's tenant (F2).
+func ctxWithCaller(tenantID string) context.Context {
+	return auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "caller-1", TenantID: tenantID,
+	})
+}
 
 // stubVerifier is a probe kauth.IntentTokenVerifier returning a fixed
 // claims/error pair, letting the handler tests exercise every branch (valid /
@@ -60,7 +72,8 @@ func TestServer_VerifyToken_Valid(t *testing.T) {
 	v := &stubVerifier{claims: validClaims}
 	srv := NewServer(v)
 
-	resp, err := srv.VerifyToken(context.Background(), &sessionverifyv1.VerifyTokenRequest{Token: "good-token"})
+	// Caller in the SAME tenant as the introspected token → valid (F2 same-tenant bind).
+	resp, err := srv.VerifyToken(ctxWithCaller(validClaims.TenantID), &sessionverifyv1.VerifyTokenRequest{Token: "good-token"})
 	if err != nil {
 		t.Fatalf("VerifyToken returned error: %v", err)
 	}
@@ -84,6 +97,41 @@ func TestServer_VerifyToken_Valid(t *testing.T) {
 	}
 	if !resp.GetPasswordResetRequired() {
 		t.Errorf("PasswordResetRequired = false, want true")
+	}
+}
+
+func TestServer_VerifyToken_CrossTenant_Denied(t *testing.T) {
+	t.Parallel()
+	// F2: a caller in tenant B introspecting a tenant-A token must get valid=false
+	// (no cross-tenant session-state leak), uniform with a bad token — no subject /
+	// tenant / roles leaked.
+	srv := NewServer(&stubVerifier{claims: validClaims}) // token tenant = validClaims.TenantID (A)
+	otherTenant := "22222222-2222-2222-2222-222222222222"
+
+	resp, err := srv.VerifyToken(ctxWithCaller(otherTenant), &sessionverifyv1.VerifyTokenRequest{Token: "good-token"})
+	if err != nil {
+		t.Fatalf("cross-tenant must not error, got: %v", err)
+	}
+	if resp.GetValid() {
+		t.Fatalf("cross-tenant introspection: GetValid() = true, want false")
+	}
+	if resp.GetSubject() != "" || resp.GetTenantId() != "" || len(resp.GetRoles()) != 0 {
+		t.Errorf("cross-tenant must not leak claims, got subject=%q tenant=%q roles=%v",
+			resp.GetSubject(), resp.GetTenantId(), resp.GetRoles())
+	}
+}
+
+func TestServer_VerifyToken_NoCallerPrincipal_Denied(t *testing.T) {
+	t.Parallel()
+	// Defense-in-depth: a verified token with NO caller principal in ctx (interceptor
+	// not run, or a wiring bug) fails closed — valid=false, no claims leaked.
+	srv := NewServer(&stubVerifier{claims: validClaims})
+	resp, err := srv.VerifyToken(context.Background(), &sessionverifyv1.VerifyTokenRequest{Token: "good-token"})
+	if err != nil {
+		t.Fatalf("no-principal must not error, got: %v", err)
+	}
+	if resp.GetValid() {
+		t.Fatalf("no caller principal: GetValid() = true, want false (fail-closed)")
 	}
 }
 
@@ -191,11 +239,19 @@ func assertClaimsProjection(t *testing.T, resp *sessionverifyv1.VerifyTokenRespo
 }
 
 // newBufconnClient creates a bufconn gRPC server with the given handler and
-// returns a connected client + cleanup. Used by multiple bufconn round-trip tests.
-func newBufconnClient(t *testing.T, handler sessionverifyv1.SessionVerifyServiceServer) sessionverifyv1.SessionVerifyServiceClient {
+// returns a connected client + cleanup. A server-side unary interceptor injects a
+// caller principal in callerTenant — standing in for the production auth
+// interceptor — so the handler's F2 tenant bind has a caller to compare against.
+// Used by multiple bufconn round-trip tests.
+func newBufconnClient(
+	t *testing.T, handler sessionverifyv1.SessionVerifyServiceServer, callerTenant string,
+) sessionverifyv1.SessionVerifyServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+	injectCaller := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+		return h(auth.WithPrincipal(ctx, &auth.Principal{Kind: auth.PrincipalUser, Subject: "bufconn-caller", TenantID: callerTenant}), req)
+	})
+	grpcServer := grpc.NewServer(injectCaller)
 	sessionverifyv1.RegisterSessionVerifyServiceServer(grpcServer, handler)
 	go func() { _ = grpcServer.Serve(lis) }()
 	t.Cleanup(grpcServer.Stop)
@@ -217,7 +273,7 @@ func newBufconnClient(t *testing.T, handler sessionverifyv1.SessionVerifyService
 // The PDP gate is covered separately at the assembly level.
 func TestServer_VerifyToken_OverGRPC(t *testing.T) {
 	t.Parallel()
-	client := newBufconnClient(t, NewServer(&stubVerifier{claims: validClaims}))
+	client := newBufconnClient(t, NewServer(&stubVerifier{claims: validClaims}), validClaims.TenantID)
 
 	resp, err := client.VerifyToken(context.Background(), &sessionverifyv1.VerifyTokenRequest{Token: "good-token"})
 	if err != nil {
@@ -234,7 +290,7 @@ func TestServer_VerifyToken_OverGRPC(t *testing.T) {
 func TestServer_VerifyToken_InfraUnavailable_OverGRPC(t *testing.T) {
 	t.Parallel()
 	infraErr := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "authentication service unavailable")
-	client := newBufconnClient(t, NewServer(&stubVerifier{err: infraErr}))
+	client := newBufconnClient(t, NewServer(&stubVerifier{err: infraErr}), validClaims.TenantID)
 
 	_, err := client.VerifyToken(context.Background(), &sessionverifyv1.VerifyTokenRequest{Token: "any-token"})
 	if err == nil {

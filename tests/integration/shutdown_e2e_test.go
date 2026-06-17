@@ -189,7 +189,7 @@ func publishMessages(ctx context.Context, pub *rabbitmq.Publisher, topic string,
 // ---------------------------------------------------------------------------
 
 // TestE2E_ShutdownBarrier_NoMessageLoss validates the core shutdown-barrier
-// invariant: when the external context is cancelled while messages are in
+// invariant: when the external context is canceled while messages are in
 // flight, every published message is accounted for. It must either have been
 // processed by the handler (processed counter) or remain in the broker queue
 // (getQueueDepth). Zero messages may be silently discarded.
@@ -289,7 +289,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 
 	// Accounting: processed + messages remaining in broker queue must equal total.
 	// Management API is eventually consistent (~2-5s polling interval), so we
-	// poll until the sum stabilises at 100 or until the timeout.
+	// poll until the sum stabilizes at 100 or until the timeout.
 	var queueDepth int
 	processedFinal := processed.Load()
 	testwait.External(t, "shutdown-accounting-sum-stable", func() bool {

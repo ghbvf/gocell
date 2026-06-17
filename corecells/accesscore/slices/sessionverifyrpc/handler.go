@@ -23,6 +23,7 @@ import (
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sessionverifyv1 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
 
@@ -87,6 +88,19 @@ func (s *Server) VerifyToken(
 		}
 		// Invalid / expired / revoked / wrong-intent: uniform valid=false (no
 		// reason enumeration). The verifier has already logged the cause server-side.
+		return &sessionverifyv1.VerifyTokenResponse{Valid: false}, nil
+	}
+	// Tenant binding (#1154 review F2): an introspection caller must not learn the
+	// session state of a DIFFERENT tenant's token. The interceptor authenticated the
+	// caller and put its principal (with the caller's tenant) in ctx; bind the
+	// introspected token to that tenant. A cross-tenant introspection (caller tenant
+	// != token tenant) or a caller with no principal collapses to the uniform
+	// valid=false — same anti-enumeration posture as a bad token, no leak of the
+	// other tenant's subject/roles. super-admin cross-tenant introspection (with
+	// explicit permission + FR-007 audit) is a deferred enhancement (#2290); it
+	// fails closed here.
+	caller, ok := auth.FromContext(ctx)
+	if !ok || caller.TenantID != claims.TenantID {
 		return &sessionverifyv1.VerifyTokenResponse{Valid: false}, nil
 	}
 	return &sessionverifyv1.VerifyTokenResponse{

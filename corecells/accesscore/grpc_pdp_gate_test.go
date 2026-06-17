@@ -57,14 +57,18 @@ const (
 // path without JWT key plumbing.
 type svGateVerifier struct{}
 
+func svGateClaims(subject, role string) kauth.Claims {
+	return kauth.Claims{Subject: subject, TenantID: svGateTenantID, Roles: []string{role}, TokenUse: kauth.TokenIntentAccess}
+}
+
 func (svGateVerifier) VerifyIntent(_ context.Context, token string, _ kauth.TokenIntent) (kauth.Claims, error) {
 	switch token {
 	case svTokenAdmin:
-		return kauth.Claims{Subject: "admin-1", TenantID: svGateTenantID, Roles: []string{auth.RoleAdmin}, TokenUse: kauth.TokenIntentAccess}, nil
+		return svGateClaims("admin-1", auth.RoleAdmin), nil
 	case svTokenViewer:
-		return kauth.Claims{Subject: "viewer-1", TenantID: svGateTenantID, Roles: []string{"viewer"}, TokenUse: kauth.TokenIntentAccess}, nil
+		return svGateClaims("viewer-1", "viewer"), nil
 	case svTokenSuperAdmin:
-		return kauth.Claims{Subject: "sadmin-1", TenantID: svGateTenantID, Roles: []string{auth.RoleSuperAdmin}, TokenUse: kauth.TokenIntentAccess}, nil
+		return svGateClaims("sadmin-1", auth.RoleSuperAdmin), nil
 	default:
 		return kauth.Claims{}, errors.New("unknown token")
 	}

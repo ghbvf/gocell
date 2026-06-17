@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -36,6 +37,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	accessmem "github.com/ghbvf/gocell/corecells/accesscore/mem"
 	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
@@ -43,7 +45,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
-	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/query"
@@ -56,6 +58,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
@@ -88,6 +92,17 @@ func freshCallerCellSecret(t *testing.T) string {
 	_, err := rand.Read(b)
 	require.NoError(t, err)
 	return "ts-" + hex.EncodeToString(b)
+}
+
+// callerCellNoopGRPCVerifier is a stub gRPC bearer verifier for harnesses that
+// wire the mandatory gRPC listener but never call it. accesscore registers
+// grpc.auth.session.verify.v1 unconditionally (cell_gen.go, PR-11 #1154), so
+// every assembly that boots accesscore MUST wire a gRPC listener or bootstrap
+// fail-fasts (checkOrphanGRPCServices).
+type callerCellNoopGRPCVerifier struct{}
+
+func (callerCellNoopGRPCVerifier) VerifyIntent(_ context.Context, _ string, _ kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{}, errors.New("grpc bearer auth not exercised in this harness")
 }
 
 // callerCellApp holds the running test app state for caller-cell E2E tests.
@@ -170,7 +185,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		accesscore.WithCursorCodec(accessCursorCodec),
 		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithCASProtocol(mustNewCASProtocol(t, accesscore.PasswordVersionField)),
@@ -181,7 +196,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		configcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		configcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
+		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 
 		configcore.WithCASProtocol(mustNewCASProtocol(t, configcore.VersionField)),
 	)
@@ -203,7 +218,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		auditcore.WithOutboxDeps(outbox.WrapPublisherForCell(eb), outbox.WrapWriterForCell(nw)),
 		auditcore.WithTxManager(persistence.WrapForCell(callerCellNoopTxRunner{})),
 		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 
 	asm := assembly.New(clock.Real(), assembly.Config{
@@ -213,6 +228,26 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
+
+	// accesscore registers grpc.auth.session.verify.v1 unconditionally (cell_gen.go,
+	// PR-11 #1154). A gRPC listener must be wired or bootstrap fail-fasts with
+	// checkOrphanGRPCServices. This harness never calls gRPC; the no-op verifier suffices.
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = grpcLn.Close() })
+	callerCellAuthorizer, err := bootstrap.AuthorizerFromCells([]cell.Cell{ac, cc, auc})
+	require.NoError(t, err)
+	callerCellCollector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
+	require.NoError(t, err)
+	callerCellGRPCServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+		Verifier:        callerCellNoopGRPCVerifier{},
+		Clock:           clock.Real(),
+		Collector:       callerCellCollector,
+		Authorizer:      callerCellAuthorizer,
+		MetricsProvider: kernelmetrics.NopProvider{},
+		CellIDClosedSet: asm.CellIDs(),
+	})
+	require.NoError(t, err)
 
 	app := bootstrap.New(
 		clock.Real(),
@@ -235,6 +270,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 			[]kauth.ListenerAuth{kauth.AuthNone{}},
 			bootstrap.WithListenerNet(healthLn),
 		),
+		bootstrap.WithGRPCListener(cell.PrimaryListener, callerCellGRPCServer, grpcLn.Addr().String(), bootstrap.WithGRPCListenerNet(grpcLn)),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newIntegrationTestConsumerBase(t, clock.Real())),

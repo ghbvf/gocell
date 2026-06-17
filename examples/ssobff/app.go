@@ -853,14 +853,17 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	}
 	// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1
 	// unconditionally (cell_gen.go, PR-11 #1154); without it bootstrap fail-fasts
-	// (checkOrphanGRPCServices). ssobff is a demo example (plaintext HTTP), so its gRPC
-	// uses the demo TLS posture (plaintext default; set GOCELL_GRPC_TLS_* for TLS).
+	// (checkOrphanGRPCServices). Durability mode is topology-derived: real/postgres
+	// topology passes DurabilityDurable (TLS enforced by grpclistener.ServerFromEnv),
+	// demo/dev topology passes DurabilityDemo (plaintext default; set GOCELL_GRPC_TLS_*
+	// for TLS in demo). This mirrors the assembly's own DurabilityDurable posture and
+	// ensures real-mode TLS fail-closed gate is not bypassed.
 	grpcCollector, err := obmetrics.NewGRPCProviderCollector(metrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: grpc metrics collector: %w", err)
 	}
 	grpcAddr := grpclistener.AddrFromEnv()
-	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcAddr, interceptor.Deps{
+	grpcServer, err := grpclistener.ServerFromEnv(ssobffGRPCDurability(p.adapterMode), grpcAddr, interceptor.Deps{
 		Verifier:        p.jwtVerifier,
 		Clock:           clk,
 		Collector:       grpcCollector,
@@ -983,6 +986,18 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 		internal:              listenerBinding{addr: envOr("GOCELL_SSOBFF_INTERNAL_ADDR", "127.0.0.1:9081")},
 		health:                listenerBinding{addr: envOr("GOCELL_SSOBFF_HEALTH_ADDR", "127.0.0.1:9091")},
 	}
+}
+
+// ssobffGRPCDurability derives the gRPC listener durability mode from adapterMode.
+// Real topology (cellsecrets.RealAdapterMode) uses DurabilityDurable so that
+// grpclistener.ServerFromEnv enforces TLS fail-closed. Demo/dev uses DurabilityDemo
+// (plaintext default). This mirrors the assembly's own DurabilityDurable posture and
+// prevents real-mode gRPC from silently running plaintext (F3 security fix).
+func ssobffGRPCDurability(adapterMode string) outbox.DurabilityMode {
+	if adapterMode == cellsecrets.RealAdapterMode {
+		return outbox.DurabilityDurable
+	}
+	return outbox.DurabilityDemo
 }
 
 // newSSOBFFJWT builds the JWT issuer and verifier from a topology-gated key set.
