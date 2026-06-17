@@ -2,9 +2,11 @@ package celltransport
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -12,7 +14,9 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
 	"github.com/ghbvf/gocell/framework/kernel/worker"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/netutil"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
@@ -40,6 +44,16 @@ const (
 	// this at static-analysis time; this is defense-in-depth).
 	msgUnclassifiedCell = "celltransport.Resolve: cellID not classified in deployment topology" +
 		" (neither co-located nor remote); gocell validate TOPO-11 prevents this at build time"
+	// msgPlaintextNonLoopback rejects a non-loopback peer reached over plaintext
+	// (#2263): mTLS is mandatory across a real network boundary. The gocell
+	// validate TOPO gate also rejects this at build time; this is the runtime
+	// defense-in-depth (and removes the old private-network plaintext fallback).
+	msgPlaintextNonLoopback = "celltransport.Resolve: non-loopback remote peer must use an https endpoint (mTLS);" +
+		" plaintext across a network boundary is forbidden (gocell validate rejects this at build time)"
+	// msgMissingClientTLS rejects an https peer when no client mTLS identity was
+	// provisioned — fail-closed rather than silently dial without a client cert.
+	msgMissingClientTLS = "celltransport.Resolve: https remote peer requires a client mTLS identity, but none was provisioned;" +
+		" set GOCELL_TRANSPORT_TLS_* + GOCELL_SPIFFE_TRUST_DOMAIN (see cellmodules/celltls)"
 )
 
 // Resolve selects the [transport.CellTransport] for cellID based on the sealed
@@ -58,24 +72,33 @@ const (
 //     metrics + tracer args) makes "wired metrics but forgot the tracer"
 //     unrepresentable at this boundary (#2251 P1.3). A zero-value bundle = no
 //     observability (nil metrics, NoopTracer).
+//   - clientTLS: the cell's client mTLS identity (cellmodules/celltls.Resolve).
+//     The zero value means "no client mTLS" (demo / loopback). For an https peer
+//     endpoint a per-target *tls.Config is minted (peer authenticated by SPIFFE
+//     cell ID); see [remoteClientTLSConfig] for the fail-closed gate (#2263).
 //
 // Returns the selected transport plus the readiness ManagedResources it
 // contributes:
 //
 //   - co-located → (inProc, nil, nil): the in-process peer shares this process,
 //     so there is no remote endpoint to health-check.
-//   - remote → (RemoteHTTPTransport, [remote-readiness probe], nil): a TCP-dial
-//     readiness probe for the declared endpoint so an unreachable peer degrades
-//     this cell's /readyz (lets ops shed traffic) without killing liveness
-//     (#2251 P2.7).
+//   - remote → (RemoteHTTPTransport, [remote-readiness probe], nil): a readiness
+//     probe for the declared endpoint so an unreachable peer degrades this cell's
+//     /readyz (lets ops shed traffic) without killing liveness (#2251 P2.7). For
+//     an mTLS (https) peer the probe completes a TLS handshake (validates chain +
+//     peer SPIFFE-ID), otherwise a plain TCP dial; both are cascade-safe (no peer
+//     /readyz call).
 //   - un-classified → (nil, nil, KindInternal): defense-in-depth (TOPO-11
 //     normally prevents this at static-analysis time).
+//   - non-loopback plaintext / https-without-identity → (nil, nil, KindInternal):
+//     the #2263 fail-closed mTLS gate.
 func Resolve(
 	topo bootstrap.DeploymentTopology,
 	cellID string,
 	inProc *transport.InProcessTransport,
 	clk clock.Clock,
 	obs transport.CrossCellObs,
+	clientTLS tlsutil.ClientIdentity,
 ) (transport.CellTransport, []lifecycle.ManagedResource, error) {
 	clock.MustHaveClock(clk, "celltransport.Resolve")
 
@@ -95,29 +118,74 @@ func Resolve(
 			errcode.WithInternal(errcode.InternalAttr("cellID", cellID)))
 	}
 
-	readiness, err := remoteReadiness(cellID, endpoint)
+	tlsCfg, err := remoteClientTLSConfig(cellID, endpoint, clientTLS)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	readiness, err := remoteReadiness(cellID, endpoint, tlsCfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	httpClient := &http.Client{Timeout: remoteHTTPClientTimeout}
+	if tlsCfg != nil {
+		httpClient.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
 	resolver := transport.NewStaticResolver(map[string]string{cellID: endpoint})
-	ct := transport.NewRemoteHTTP(clk, cellID, resolver,
-		&http.Client{Timeout: remoteHTTPClientTimeout}, obs.Metrics(), obs.Tracer())
+	ct := transport.NewRemoteHTTP(clk, cellID, resolver, httpClient, obs.Metrics(), obs.Tracer())
 	return ct, []lifecycle.ManagedResource{readiness}, nil
 }
 
-// remoteReadiness builds the TCP-dial readiness ManagedResource for a remote
-// peer endpoint. The dial target and typed probe name are resolved eagerly so an
+// remoteClientTLSConfig decides the client TLS config for a remote peer from the
+// endpoint scheme — the #2263 fail-closed mTLS gate:
+//
+//   - https endpoint → mTLS required: returns a per-peer *tls.Config that
+//     authenticates the server by its SPIFFE cell ID. Fails closed if clientTLS
+//     is the zero identity (no material provisioned).
+//   - non-loopback, non-https endpoint → fails closed: plaintext across a network
+//     boundary is forbidden (the gocell validate TOPO gate also rejects this at
+//     build time; this is the runtime defense-in-depth).
+//   - loopback, non-https endpoint → nil: plaintext is allowed for local
+//     multi-process dev / demo.
+func remoteClientTLSConfig(cellID, endpoint string, clientTLS tlsutil.ClientIdentity) (*tls.Config, error) {
+	if !strings.HasPrefix(endpoint, "https://") {
+		if !netutil.IsLoopbackEndpoint(endpoint) {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPlaintextNonLoopback,
+				errcode.WithInternal(errcode.InternalAttr("cellID", cellID), errcode.InternalAttr("endpoint", endpoint)))
+		}
+		return nil, nil // loopback plaintext (local dev) — no client TLS
+	}
+	if clientTLS.IsZero() {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgMissingClientTLS,
+			errcode.WithInternal(errcode.InternalAttr("cellID", cellID)))
+	}
+	cfg, err := clientTLS.ConfigForPeer(cellID)
+	if err != nil {
+		return nil, fmt.Errorf("celltransport: build client mTLS config for cell %q: %w", cellID, err)
+	}
+	return cfg, nil
+}
+
+// remoteReadiness builds the readiness ManagedResource for a remote peer
+// endpoint. The dial target and typed probe name are resolved eagerly so an
 // invalid endpoint / cellID fails fast at Resolve time rather than per /readyz
 // invocation.
 //
-// The probe TCP-dials the peer's resolved host:port ONLY — it never issues an
-// HTTP /readyz — so it reports reachability without recursively importing the
-// peer's own readiness (cascade-safe: a peer that depends on this cell cannot
-// deadlock both /readyz endpoints). A failed dial degrades readiness (this cell
-// returns /readyz 503) but never kills liveness (the probe joins the readiness
-// aggregator, not a liveness gate).
-func remoteReadiness(cellID, endpoint string) (lifecycle.ManagedResource, error) {
+// The probe never issues an HTTP /readyz to the peer — so it reports reachability
+// without recursively importing the peer's own readiness (cascade-safe: a peer
+// that depends on this cell cannot deadlock both /readyz endpoints). A failed
+// probe degrades readiness (this cell returns /readyz 503) but never kills
+// liveness (the probe joins the readiness aggregator, not a liveness gate).
+//
+// When tlsCfg is non-nil (an mTLS https peer) the probe completes a TLS handshake
+// rather than a bare TCP dial: this validates the full mTLS path (server chain +
+// peer SPIFFE-ID via tlsCfg.VerifyConnection AND that the server accepts this
+// cell's client cert) so a cert/trust misconfiguration degrades readiness instead
+// of surfacing only on the first real request. The handshake is still
+// cascade-safe (it completes at TLS layer, before any HTTP). When tlsCfg is nil
+// (plaintext loopback/demo peer) a plain TCP dial proves reachability (#2251 F1).
+func remoteReadiness(cellID, endpoint string, tlsCfg *tls.Config) (lifecycle.ManagedResource, error) {
 	target, err := transport.EndpointDialTarget(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("celltransport: remote readiness dial target for cell %q: %w", cellID, err)
@@ -127,17 +195,28 @@ func remoteReadiness(cellID, endpoint string) (lifecycle.ManagedResource, error)
 		return nil, fmt.Errorf("celltransport: remote readiness probe name for cell %q: %w", cellID, err)
 	}
 	probe := healthz.NewProbe(name, func(ctx context.Context) error {
-		conn, dialErr := (&net.Dialer{Timeout: remoteReadinessDialTimeout}).DialContext(ctx, "tcp", target)
-		if dialErr != nil {
-			return dialErr
-		}
-		// A successful dial alone proves TCP reachability; a Close error is a
-		// local cleanup concern unrelated to peer health, so it must NOT degrade
-		// readiness (#2251 review F1).
-		_ = conn.Close()
-		return nil
+		return dialPeerReadiness(ctx, target, tlsCfg)
 	})
 	return remoteReadinessResource{probe: probe}, nil
+}
+
+// dialPeerReadiness dials target and (for an mTLS peer) completes a TLS
+// handshake. A Close error is a local cleanup concern unrelated to peer health,
+// so it must NOT degrade readiness (#2251 review F1).
+func dialPeerReadiness(ctx context.Context, target string, tlsCfg *tls.Config) error {
+	conn, err := (&net.Dialer{Timeout: remoteReadinessDialTimeout}).DialContext(ctx, "tcp", target)
+	if err != nil {
+		return err
+	}
+	if tlsCfg == nil {
+		_ = conn.Close() // plaintext: TCP reachability is the readiness signal.
+		return nil
+	}
+	tlsConn := tls.Client(conn, tlsCfg)
+	defer func() { _ = tlsConn.Close() }()
+	hctx, cancel := context.WithTimeout(ctx, remoteReadinessDialTimeout)
+	defer cancel()
+	return tlsConn.HandshakeContext(hctx)
 }
 
 // remoteReadinessResource adapts a single readiness probe to the ManagedResource

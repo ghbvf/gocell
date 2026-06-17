@@ -2,17 +2,27 @@ package celltransport_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/cellmodules/celltransport"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
@@ -50,7 +60,7 @@ func TestResolve_Colocated(t *testing.T) {
 	}
 
 	inProc := transport.NewInProcess(nil)
-	got, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	got, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -70,7 +80,7 @@ func TestResolve_Remote(t *testing.T) {
 
 	topo := remoteTopo(t, "127.0.0.1:9090")
 	inProc := transport.NewInProcess(nil)
-	got, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	got, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -104,7 +114,7 @@ func TestResolve_NilClockPanics(t *testing.T) {
 	}
 
 	inProc := transport.NewInProcess(nil)
-	_, _, _ = celltransport.Resolve(topo, "configcore", inProc, nil, transport.CrossCellObs{})
+	_, _, _ = celltransport.Resolve(topo, "configcore", inProc, nil, transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 }
 
 // TestResolve_UnclassifiedCellReturnsKindInternal verifies defense-in-depth for
@@ -120,7 +130,7 @@ func TestResolve_UnclassifiedCellReturnsKindInternal(t *testing.T) {
 	}
 
 	inProc := transport.NewInProcess(nil)
-	_, _, resolveErr := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	_, _, resolveErr := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if resolveErr == nil {
 		t.Fatal("expected error for unclassified cell, got nil")
 	}
@@ -139,7 +149,7 @@ func TestResolve_ColocatedNilInProcReturnsError(t *testing.T) {
 		t.Fatalf("NewDeploymentTopology: %v", err)
 	}
 
-	_, _, resolveErr := celltransport.Resolve(topo, "configcore", nil, clock.Real(), transport.CrossCellObs{})
+	_, _, resolveErr := celltransport.Resolve(topo, "configcore", nil, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if resolveErr == nil {
 		t.Fatal("expected error for nil inProc, got nil")
 	}
@@ -157,7 +167,7 @@ func TestResolve_ZeroTopoIsColocated(t *testing.T) {
 	}
 
 	inProc := transport.NewInProcess(nil)
-	got, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	got, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -184,7 +194,7 @@ func TestResolve_Remote_PropagatesTracer(t *testing.T) {
 	inProc := transport.NewInProcess(nil)
 
 	ct, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
-		transport.NewCrossCellObs(nil, rec))
+		transport.NewCrossCellObs(nil, rec), tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -217,7 +227,7 @@ func TestResolve_Remote_ContributesReadinessProbe(t *testing.T) {
 	topo := remoteTopo(t, "127.0.0.1:9090")
 	inProc := transport.NewInProcess(nil)
 
-	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -289,7 +299,7 @@ func remoteReadinessProbe(t *testing.T, endpoint string) interface {
 	t.Helper()
 	topo := remoteTopo(t, endpoint)
 	inProc := transport.NewInProcess(nil)
-	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{})
+	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -297,6 +307,136 @@ func remoteReadinessProbe(t *testing.T, endpoint string) interface {
 		t.Fatalf("expected 1 readiness probe, got resources=%d", len(res))
 	}
 	return res[0].Probes()[0]
+}
+
+// --- #2263: client mTLS gate ---
+
+// TestResolve_NonLoopbackPlaintext_FailsClosed asserts a non-loopback peer
+// reached over a plaintext (bare host:port) endpoint is rejected: mTLS is
+// mandatory across a network boundary (no private-network plaintext fallback).
+func TestResolve_NonLoopbackPlaintext_FailsClosed(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "configcore.svc:9090") // non-loopback, plaintext
+	inProc := transport.NewInProcess(nil)
+	_, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if err == nil {
+		t.Fatal("expected fail-closed for non-loopback plaintext peer, got nil")
+	}
+	assertKindInternal(t, err)
+}
+
+// TestResolve_HTTPSWithoutClientIdentity_FailsClosed asserts an https peer with
+// no provisioned client mTLS identity is rejected (never silently dialed without
+// a client cert).
+func TestResolve_HTTPSWithoutClientIdentity_FailsClosed(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "https://configcore.svc:8443")
+	inProc := transport.NewInProcess(nil)
+	_, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if err == nil {
+		t.Fatal("expected fail-closed for https peer without client identity, got nil")
+	}
+	assertKindInternal(t, err)
+}
+
+// TestResolve_HTTPSWithClientIdentity_BuildsMTLSTransport asserts that an https
+// peer + a provisioned client identity builds a RemoteHTTPTransport plus a
+// readiness probe (the TLS dial path is exercised end-to-end in the integration
+// test).
+func TestResolve_HTTPSWithClientIdentity_BuildsMTLSTransport(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "https://configcore.svc:8443")
+	inProc := transport.NewInProcess(nil)
+	ct, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, genClientIdentity(t))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if _, ok := ct.(*transport.RemoteHTTPTransport); !ok {
+		t.Errorf("Resolve returned %T, want *transport.RemoteHTTPTransport", ct)
+	}
+	if len(res) != 1 {
+		t.Fatalf("https remote Resolve returned %d resources, want 1", len(res))
+	}
+}
+
+// TestResolve_MTLSReadiness_CompletesHandshake asserts the mTLS readiness probe
+// goes beyond a TCP dial: against a raw TCP listener that never speaks TLS the
+// probe FAILS (handshake cannot complete) — proving cert/trust misconfiguration
+// degrades readiness rather than surfacing only on the first real request, and
+// distinguishing it from the plaintext TCP-only probe (TestResolve_RemoteProbe_TCPDial).
+func TestResolve_MTLSReadiness_CompletesHandshake(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	topo := remoteTopo(t, "https://"+ln.Addr().String())
+	inProc := transport.NewInProcess(nil)
+	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, genClientIdentity(t))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	probe := res[0].Probes()[0]
+	// Short deadline so the handshake against a silent raw-TCP peer fails fast.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := probe.Check(ctx); err == nil {
+		t.Error("mTLS readiness probe against a non-TLS peer = nil, want error (handshake must complete)")
+	}
+}
+
+// genClientIdentity builds a CA + this-cell leaf (SPIFFE URI SAN) and returns the
+// resulting client mTLS identity for trust domain "example.org".
+func genClientIdentity(t *testing.T) tlsutil.ClientIdentity {
+	t.Helper()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(err)
+	caTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ca"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(2 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	must(err)
+	caCert, err := x509.ParseCertificate(caDER)
+	must(err)
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(err)
+	uri, err := url.Parse("spiffe://example.org/cell/accesscore")
+	must(err)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "accesscore"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		URIs:        []*url.URL{uri},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	must(err)
+	leafKeyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	must(err)
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER})
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	pool, err := tlsutil.NewClientCAPool(caPEM)
+	must(err)
+	id, err := tlsutil.NewClientIdentity(certPEM, keyPEM, pool, "example.org")
+	must(err)
+	return id
 }
 
 // --- local test tracer (celltransport_test cannot reach transport's internal one) ---
