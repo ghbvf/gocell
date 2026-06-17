@@ -517,7 +517,7 @@ github.com/ghbvf/gocell/                     单仓库（MIT）
 |---|---|---|
 | 1 | go workspace 多 module 切换（PR A1.1）| 方案 D 实施 |
 | 2 | `adapters/mdmprotocol/windows`（替代原 Apple/Android 优先） | MDM 路线 §3.4 |
-| 3 | WSTEP 协议支持（pkicell）| MDM 路线 §3.3 |
+| 3 | 框架证书底座（`runtime/certsigning` + `runtime/certlifecycle` + `adapters/softca` + EST；#1895/ADR-1895）| core v1.0 P0；winmdm WSTEP/SCEP 前端归后续业务 cell |
 | 4 | JWT 完整生命周期（accesscore 扩 slice）| core 演进 |
 | 5 | `runtime/circuitbreaker`（熔断三态 + 重试退避 + 幂等键） | core 演进 |
 | 6 | RBAC 提前到 winmdm Stage 1（不再延后到 Phase 3）| MDM 路线调整 |
