@@ -31,9 +31,7 @@ import (
 	"go/constant"
 	"go/types"
 	"strings"
-	"sync"
 
-	"golang.org/x/sync/singleflight"
 	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/tools/packagesload"
@@ -111,131 +109,53 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 // the second value so callers can fail fast on type-check errors without
 // re-walking.
 //
-// The cross-module workspace scan ([LoadProductionPackages]) uses the ModeWorkspace
-// variant ([loadPackagesMode]); this ModeModule form is the one the Typed / Fixture /
-// StandaloneModule scopes route through. Its ModeModule path delegates to the shared
-// packagesload.LoadWorkspace, so a satellite parent prefix ("./cmd/...", "./adapters/...",
-// "./examples/...") is expanded to its go.work members and loaded in workspace mode —
-// the single-module name refers to the GOWORK mode requested, not a guarantee that
-// only one module loads. The signature is held stable so the pass / production funnel
-// meta-archtests keep matching it.
+// This is the UNCACHED form, delegating to the shared satellite-aware loader
+// packagesload.LoadWorkspace, so a satellite parent prefix ("./cmd/...",
+// "./adapters/...", "./examples/...") is expanded to its go.work members and
+// loaded in workspace mode — the single-module name refers to the GOWORK mode
+// requested, not a guarantee that only one module loads. [SharedResolver] is the
+// cached counterpart (#2165). The signature is held stable so the pass /
+// production funnel meta-archtests keep matching it.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
-	return loadPackagesMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
+	return packagesload.LoadWorkspace(modRoot, typesevalCfg(tests, tags), patterns...)
 }
 
-// loadPackagesMode is the shared body of LoadPackages; mode selects the GOWORK
-// semantics (see tools/packagesload). The ModeModule path routes through the shared
-// satellite-aware loader packagesload.LoadWorkspace, which expands multi-member
-// satellite parent-prefixes ("./cmd/...", "./adapters/...", "./examples/...") to
-// their go.work members so they are actually scanned (the grouping logic this used
-// to carry inline, consolidated into the single sanctioned loader — #2147).
-// ModeWorkspace is the cross-module production scan, loaded flat from the root
-// without parent-prefix expansion.
-func loadPackagesMode(
-	mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string,
-) ([]*packages.Package, []packages.Error, error) {
+// typesevalCfg builds the packages.Config shared by every archtest typed scope:
+// the #1499 no-NeedDeps loadMode plus the tests flag and optional -tags. Those
+// fields (Mode/Tests/BuildFlags) are exactly the ones the packagesload cache
+// keys on, so two loads with the same (tests, tags, patterns) share a cache entry.
+func typesevalCfg(tests bool, tags []string) packages.Config {
 	cfg := packages.Config{Mode: loadMode, Tests: tests}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
 	}
-	if mode == packagesload.ModeModule {
-		return packagesload.LoadWorkspace(dir, cfg, patterns...)
-	}
-	// Explicit ModeWorkspace: the cross-module workspace production scan loads flat
-	// from the root (no satellite parent-prefix expansion).
-	cfg.Dir = dir
-	pkgs, err := packagesload.Load(mode, &cfg, patterns...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("packages.Load: %w", err)
-	}
-	var errs []packages.Error
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i := range p.Errors {
-			p.Errors[i].Msg = dir + ": " + p.Errors[i].Msg
-		}
-		errs = append(errs, p.Errors...)
-	})
-	return pkgs, errs, nil
+	return cfg
 }
 
-var (
-	sharedMu    sync.Mutex
-	sharedCache = map[string]*Resolver{}
-	sharedGroup singleflight.Group
-)
-
-// SharedResolver returns a process-wide cached Resolver keyed on
-// (modRoot, tests, tags, patterns). Successive callers with the same key
-// reuse the loaded packages. Errors are not cached — a transient failure
-// does not poison subsequent calls.
+// SharedResolver returns a Resolver backed by the process-wide packagesload
+// cache (#2165), keyed on (modRoot, tests, tags, patterns). Successive callers
+// with the same key reuse the satellite-aware cached load instead of re-running
+// packages.Load. Errors are not cached, so a transient failure does not poison
+// subsequent calls. The returned *Resolver is a thin wrapper minted per call;
+// two calls share the same underlying packages on a cache hit (the property
+// that matters: no re-load), not the same wrapper.
 //
-// Cache keys are formed by joining modRoot, the tests flag, the tag list,
-// and each pattern with NUL bytes. NUL is illegal in POSIX paths and Go
-// import patterns, so collisions are impossible even when patterns
-// themselves contain "|" or ",".
-//
-// Concurrency: the cache is read and written under sharedMu, but the
-// expensive LoadPackages call runs without the lock. singleflight
-// deduplicates concurrent loads of the same key so only one packages.Load
-// is in flight per key, while loads for different keys run in parallel.
-//
-// 为什么 cacheKey 保留 patterns 维度而不剥离：archtest 调用方实测分布显示
-// 主模块 subpath patterns（./cells/.../, ./cmd/.../, ./runtime/.../ 等）
-// 占 83.5%，"./..." 仅占 16.5%。每个 subpath patterns 加载不同 package 集
-// 合，必须区分 cacheKey。"./..." 形态的 cacheKey 合并已由
-// LoadProductionPackages typed wrapper 完成（固定 patterns="./..."）。
+// The cache lives in tools/packagesload (the single sanctioned package-load
+// cache); typeseval holds no cache state of its own.
 // ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
 func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
-	return sharedResolverMode(packagesload.ModeModule, modRoot, tests, tags, patterns...)
+	return resolverFrom(packagesload.LoadWorkspaceCached(modRoot, typesevalCfg(tests, tags), patterns...))
 }
 
-// sharedResolverMode is the mode-parameterized body of SharedResolver. The cache
-// key includes mode so a ModeModule load and a ModeWorkspace load of the same
-// (dir, tests, tags, patterns) never alias. SharedResolver fixes ModeModule
-// (the only public form, kept stable for the funnel meta-archtests); the
-// ModeWorkspace path is reached solely via LoadProductionPackages for the
-// cross-module workspace production scan.
-func sharedResolverMode(mode packagesload.Mode, dir string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
-	testsFlag := "0"
-	if tests {
-		testsFlag = "1"
-	}
-	key := fmt.Sprintf("%d", mode) + "\x00" + dir + "\x00" + testsFlag + "\x00" +
-		strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
-
-	sharedMu.Lock()
-	if r, ok := sharedCache[key]; ok {
-		sharedMu.Unlock()
-		return r, nil
-	}
-	sharedMu.Unlock()
-
-	v, err, _ := sharedGroup.Do(key, func() (any, error) {
-		// Re-check inside the singleflight group: another caller may have
-		// populated the cache between our miss and entering Do.
-		sharedMu.Lock()
-		if r, ok := sharedCache[key]; ok {
-			sharedMu.Unlock()
-			return r, nil
-		}
-		sharedMu.Unlock()
-
-		pkgs, errs, err := loadPackagesMode(mode, dir, tests, tags, patterns...)
-		if err != nil {
-			return nil, err
-		}
-		if len(errs) > 0 {
-			return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(errs), errs[0])
-		}
-		r := &Resolver{pkgs: pkgs}
-
-		sharedMu.Lock()
-		sharedCache[key] = r
-		sharedMu.Unlock()
-		return r, nil
-	})
+// resolverFrom wraps a (cached) load result into a *Resolver, mapping a Go load
+// error or any non-empty packages.Error into a fail-fast error (a partial load
+// is a scan failure). Shared by SharedResolver and LoadProductionPackages.
+func resolverFrom(pkgs []*packages.Package, errs []packages.Error, err error) (*Resolver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return v.(*Resolver), nil
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(errs), errs[0])
+	}
+	return &Resolver{pkgs: pkgs}, nil
 }

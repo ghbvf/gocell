@@ -64,7 +64,7 @@ func TestWorkspaceCache_Key(t *testing.T) {
 }
 
 func withMode(cfg packages.Config, m packages.LoadMode) packages.Config { cfg.Mode = m; return cfg }
-func withTests(cfg packages.Config, v bool) packages.Config            { cfg.Tests = v; return cfg }
+func withTests(cfg packages.Config, v bool) packages.Config             { cfg.Tests = v; return cfg }
 func withFlags(cfg packages.Config, f string) packages.Config {
 	cfg.BuildFlags = []string{f}
 	return cfg
