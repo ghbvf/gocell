@@ -60,13 +60,41 @@
 - [ ] T051 [US6] broker 连接 per-cell 注入点（与 #1940 funnel 对齐）
 - [ ] T052 [US6] per-cell HMAC keyring / cell 身份颁发的安全模型评估（mTLS 缺口登记，threat matrix 进 US1 ADR amendment）
 
-## Phase 4: 验收收口
+## Phase 4: 「彻底拆分」能力 + 验收收口（ADR §#1967 Amendment）
 
-### US7 — 双拓扑 journey 验收基建（P2）→ #1967（blocked-by #1965 + #1966）
+> **模型缺口（#1967 探索结论）**：US2-US6/US8 的拆分 seam 全 ship，但**无端到端「以子集运行 + 把对端当
+> remote」的接线**——生产 `corebundle` `generatedCellModules()` 挂全部 cell、`generatedDeploymentTopology()`
+> 恒空。US7 验收「可执行化」需先补该能力（US9），再做双拓扑验收（US7）。能力做进生产（groups/role 单制品，
+> Akka 模型），非另造测试 harness（平行结构）。机制/评级/对标见 ADR §#1967 Amendment。
 
-- [ ] T060 [US7] 拆分拓扑 fixture：compose（多 cell-进程 + broker + PG）+ split assembly 双形态声明
-- [ ] T061 [US7] 同一 journey 参数化双形态运行（run-journey 接入），结果一致性断言
-- [ ] T062 [US7] CI integration job 接入（`.github/workflows/_build-lint.yml`）
+### US9 — 「彻底拆分」生产能力：groups/role 子集挂载（P2）→ #2278（blocked-by #1962 + #1963 + #1966 + #2153，均已 ship）
+
+> 拆为 3 个独立 review 的 PR（PR-1/2/3）。
+
+- [ ] T090 [US9·PR-1] `topology.groups` schema（`kernel/metadata/assembly_topology.go` + `schemas/assembly.schema.json`）
+  **取代** 单进程 `colocated/remote` authoring：重写 `ValidateTopologyStructure`（穷尽+互斥分区 / role 唯一 /
+  endpoint 合法）；删 `ClassifyCell` 单视图分支（生产零使用，pre-GA 原地删，无双 schema）。codegen
+  `generatedDeploymentTopology()` → `generatedTopologyGroups()` + golden（Hard）。synthetic red case（非法 groups）。
+- [ ] T091 [US9·PR-2] 启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生 `DeploymentTopologySpec`
+  （未设+多 group→fail-fast / 未设+单/无 group→全 colocated / role∉声明集→fail-fast）；`composition.NewForRole(topo,
+  role, allModules...)` 单 sealed 入口（filter+New+With+封 spec）；`cmd/corebundle/{run,shared_deps}.go` 改走之。
+- [ ] T092 [US9·PR-2] **新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`（mounted==colocated ∧ remote∉mounted，
+  违反 fail-fast，Medium）；M12a（New==With，#1093）代码不动、语义精化为「本进程 host 的 cell」（ADR D4 amendment）。
+  双子集 boot 集成测试（accesscore+auditcore host、configcore remote 调通）+ 守卫 red/green fixture + anti-vacuity。
+- [ ] T093 [US9·PR-3] 缺失依赖启动期闸：消费 contract provider ∉ colocated ∪ remote → fail-fast（**补全 US2 T011 未落地
+  的 sync 维静态检查** + 加运行期闸；event 维已由 US3 #1965 覆盖）+ `gocell validate` arm + archtest red/green（Medium）。
+
+### US7 — 双拓扑 journey 验收（P2）→ #1967（blocked-by US9）
+
+> 对标 Service Weaver `weavertest.Local`/`.Multi` 双 runner：同一 journey 跑单进程 ∧ split 两形态，断言一致。
+
+- [ ] T060 [US7·PR-4] `corebundle` assembly.yaml 加 `topology.groups`（accesstier=accesscore+auditcore /
+  configtier=configcore+syscore）+ `tests/e2e/` split compose（**同一 corebundle image 跑 2 进程**，
+  `GOCELL_CELL_ROLE=accesstier`/`configtier` + RabbitMQ + PG，沿用既有 compose/Dockerfile 形态）
+- [ ] T061 [US7·PR-4] 同一 journey 参数化双形态运行（**Go 集成测试 `t.Run` 双形态，沿用 `gocell verify journey`
+  → checkRef 模式，不新建 run-journey CLI**），结果一致性断言（事件经 broker / sync 经 remote；断言 `transport_mode=remote`）
+- [ ] T062 [US7·PR-4] CI integration/e2e job 接入（`.github/workflows/_build-lint.yml`，testcontainers/compose 惯例）
+- [ ] T063 [US7·backlog] 外部 cell（ssobff 等）双拓扑覆盖（epic 验收第二条「内部+外部同等」）→ #2279，非本轮
 
 ### US8 — 跨 cell 直连禁制 archtest 收口（P2）→ #1961（无 blocker，no-regret 可立即开工）
 
@@ -76,10 +104,10 @@
 ## Dependencies & Execution Order
 
 ```
-US8 ──────────────────────────────┐（无依赖，立即可做）
-US1(ADR) ─┬─ US2 ─┬─ US3 ←─ #1940 │
-          │       └─ US5 ←─ US4   ├─→ US7（收口）
-          ├─ US4 ─────┘           │
+US8 ──────────────────────────────────────────┐（无依赖，立即可做）
+US1(ADR) ─┬─ US2 ─┬─ US3 ←─ #1940 │             │
+          │       └─ US5 ←─ US4   ├─ US9 ─→ US7（收口）
+          ├─ US4 ─────┘           │（子集挂载能力）
           └─ US6 ─────────────────┘
 ```
 
@@ -87,11 +115,14 @@ US1(ADR) ─┬─ US2 ─┬─ US3 ←─ #1940 │
 |------|-------|------|
 | 1 | US1 #1960、US8 #1961、#1940 | 裁决 + no-regret，立即并行（先 #1960） |
 | 2 | US2 #1962、US4 #1963、US6 #1964 | seam 主干，ADR 后并行（先 #1962，拓扑判定是消费源） |
-| 3 | US3 #1965、US5 #1966 | 拆分形态，依赖 Wave 2 |
-| 4 | US7 #1967 | epic 验收收口 |
+| 3 | US3 #1965、US5 #1966、US6 #2153 | 拆分形态 + per-cell 身份，依赖 Wave 2 |
+| 4a | **US9（新）= PR-1/2/3** | 「彻底拆分」生产能力：groups/role 子集挂载（ADR §#1967 Amendment 暴露的模型缺口收口） |
+| 4b | US7 #1967 = PR-4 | epic 验收收口（双拓扑 journey，blocked-by US9） |
+| — | PR-0（本 PR） | ADR amendment + 本 tasks 细化 + sibling issues（docs-only） |
 
 ## Notes
 
 - 每 story 一个 issue、一个（或一簇）PR，各自走 `/ship`（worktree + TDD + 内置 review）。
 - event broker funnel 不建新单：由 #1940 承载（US3 blocked-by）。
-- 运行时动态 placement / sidecar / mTLS 全链 out of scope（归 #303 / 后续 threat-matrix 裁决）。
+- 运行时动态 placement / sidecar out of scope（归 #303）；mTLS 对等认证 → **#2263**（与 token 层 per-cell 身份正交，#2153 已落 token 层隔离）。
+- **US9（新）拆 3 个独立 review PR**（PR-1 schema/codegen、PR-2 role 选择器+子集挂载+`MOUNTED-EQUALS-COLOCATED`、PR-3 缺失依赖闸）；US7 #1967 = PR-4 验收，blocked-by US9。PR-0（ADR + 本 tasks + sibling issues）docs-only、先行。各 feature PR 内 TDD RED→GREEN（PR-0 不携 RED stub）。
