@@ -1,16 +1,18 @@
 # Tasks: kernel/reconcile L4 Desired-State 收敛控制环
 
 **Feature ID**: `661-kernel-reconcile`
-**Status**: **PARKED-ON-TRIGGER**（tasks 冻结，等触发后激活）
+**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史任务；A1-A10 已闭环）
 **Input**: [spec.md](./202605262359-661-kernel-reconcile-spec.md) + [plan.md](./202605262359-661-kernel-reconcile-plan.md)
 **Issue**: [#661](https://github.com/ghbvf/gocell/issues/661)
-**Prerequisites**: trigger T1/T2/T3 ≥ 2 个生产 cell 落地（详见 spec.md "Trigger Gate" 段）
+**Prerequisites**: 历史前置已被 ADR-661 amendments + ADR-1895 重定义；当前后续消费方引用 ADR-661 / ADR-1895 / `kernel/reconcile/doc.go`
 
 ---
 
-## ⚠️ 激活前必读
+## 历史任务清单使用说明
 
-本 tasks 列表在 trigger 满足前是 **冻结设计**。任何修改本文件以"start work"的尝试均视为违反 `flag-cond` 约束。激活方式：开新 implementation plan 文档（`docs/plans/<timestamp>-661-kernel-reconcile-active.md`）引用本文件，然后逐 PR 执行。
+本 tasks 列表保留 A1-A10 的历史 PR 切分与 provenance。`kernel/reconcile` 基建、command 迁移、
+examples/iotdevice 消费方与文档治理已闭环；后续新增业务 cell 消费方不再通过修改本文件启动，
+而是引用当前 ADR / godoc invariants 独立立项。
 
 ---
 
@@ -407,7 +409,7 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
 
 #### Tasks
 
-- [ ] **T46** [PR-A10] 新建 `.claude/rules/gocell/reconcile.md`：
+- [x] **T46** [PR-A10] 新建 `.claude/rules/gocell/reconcile.md` — **delivered**：
   - § 适用范围（cell 治理 / 设备收敛，不做业务编排）
   - § Reconciler 实现要点（PermanentError 何时用 / RequeueAfter 计算 / panic 处理）
   - § Builder 强制约束（消费方禁止裸构造 Loop）
@@ -415,18 +417,18 @@ PR-A5 issue body scope supplement: F5（dirty/processing dedup — in-flight ent
   - § 与 saga / projection 边界
   - § 现有 archtest invariants 引用（5+ 条）
   - 估算：350 LoC（markdown）
-- [ ] **T47** [PR-A10] 现有 ADR amendment：
+- [x] **T47** [PR-A10] 现有 ADR amendment — **delivered across later ADR amendments**：
   - `docs/architecture/202605120000-adr-archtest-process-isolation.md` 加 §Amendment：reconcile 新 archtest 加入 shard matrix
   - `docs/architecture/202605170000-*` 加 §Amendment：reconcile.Loop 共用 control-plane ticker carve-out
   - 估算：100 LoC（diff）
-- [ ] **T48** [PR-A10] CLAUDE.md 章程引用更新：
+- [x] **T48** [PR-A10] CLAUDE.md 章程引用更新 — **superseded by instruction-surface boundary**：
   - 第 "AI-robust 治理章程" 段补充 reconcile 规则链接
   - 估算：30 LoC（diff）
-- [ ] **T49** [PR-A10] `docs/references/framework-comparison.md` 加 reconcile 对标行：
+- [x] **T49** [PR-A10] `docs/references/framework-comparison.md` 加 reconcile 对标行 — **delivered**：
   - 表加一行：`L4 控制环 | controller-runtime Reconciler`
   - 估算：20 LoC（diff）
 
-**Checkpoint A10**: 文档闭环；本计划满足"激活前 checklist"全部勾选；issue #661 关闭
+**Checkpoint A10**: ✅ 文档闭环；历史激活 checklist 已完成；后续状态漂移由 ADR amendment 维护
 
 ---
 
@@ -483,7 +485,7 @@ worktrees/661-05-backoff     ← developer B: PR-A5 任务集（T17-T20）
 ### MVP First (PR-A1 → PR-A7)
 
 1. 完成 Phase 1-5（B1-B6）= PR-A1 → PR-A7
-2. **STOP and VALIDATE**: kernel/reconcile 公开 API 与 conformance harness 就绪；可被新消费方（pkicell.rotation 等）开始 wiring
+2. **STOP and VALIDATE**: kernel/reconcile 公开 API 与 conformance harness 就绪；可被新消费方（runtime/certlifecycle / mdmcell.command 等）开始 wiring
 3. 此时 kernel/command 仍走 SweeperLifecycle 路径（旧路径），不破坏现有
 
 ### Incremental Migration (PR-A8 + PR-A9)

@@ -2,42 +2,49 @@
 
 **Feature ID**: `661-kernel-reconcile`
 **Created**: 2026-05-26
-**Status**: **PARKED-ON-TRIGGER**（trigger 未满足；本文档冻结设计，等触发后激活）
+**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史规格；原 trigger gate 已被 ADR-661 amendments + ADR-1895 重定义）
 **Issue**: [#661](https://github.com/ghbvf/gocell/issues/661) KERNEL-RECONCILE-01
 **Priority**: P3
 **Labels**: `cap-08`, `flag-cond`, `type-feat`, `backlog`
 
 ---
 
-## ⚠️ Trigger Gate（必须先满足才能进入实施）
+## Trigger Gate（历史口径；已被 ADR-661 §6 与 ADR-1895 重定义）
 
-本规格是 **trigger-gated 设计**，本文档冻结技术决策与 PR 切分，但 **不立项实施**，直到下列触发条件至少满足两条：
+本规格最初是 **trigger-gated 设计**，用于冻结技术决策与 PR 切分。后续 ADR-661 amendments 已显式
+un-park `kernel/reconcile` 基建，ADR-1895 又将证书生命周期下移为框架能力
+`runtime/certlifecycle`。因此本节保留历史 provenance，不再阻塞 `kernel/reconcile` 代码或框架
+runtime 证书能力；后续仅作为真实业务 cell 接入质量门参考。
 
-| # | 触发条件 | 来源 | 预计满足时间 |
-|---|---------|------|------------|
-| T1 | `pkicell.rotation` slice 落地（证书续期 L4 控制环） | `docs/plans/product-roadmap/202604301030-winmdm-prd-on-gocell.md` §2.1 | winmdm Stage 1，2027 Q1 |
-| T2 | `mdmcell.command` 重发逻辑落地（命令超时主动驱动） | 同上 §2.2 + §4.2 | winmdm Stage 2，2027 Q2-Q3 |
-| T3 | `devicelifecycle.cronsweep` slice 落地（设备墓碑状态机） | 同上 §4.4 | winmdm Stage 4，2027 Q4 |
+| # | 触发条件 | 来源 | 当前口径 |
+|---|---------|------|----------|
+| T1' | `runtime/certlifecycle` 框架证书生命周期 reconciler | ADR-1895 D2/D5 | v1.0 P0；证明 runtime 消费面，不计入业务 cell 数 |
+| T2 | `mdmcell.command` 重发逻辑落地（命令超时主动驱动） | winmdm PRD §2.2 + §4.2 | winmdm Stage 2，2027 Q2-Q3 |
+| T3 | `devicelifecycle.cronsweep` slice 落地（设备墓碑状态机） | winmdm PRD §4.4 | winmdm Stage 4，2027 Q4 |
 | T4 | `zerotrust.trustscore` 周期重评落地 | `docs/plans/product-roadmap/202604301100-zt-extensibility-and-mdm-decoupling.md` §2.1 | zt Phase 5，2029 Q1 |
 
-**满足判定规则**：T1/T2/T3 中至少 **两个**生产 cell 落地（不包括 example），或 T1/T2/T3 任一 + T4 同时落地。`examples/iotdevice` 不计入消费方计数。
+**满足判定规则（后续业务 cell 质量门）**：T2/T3 中至少 **两个**生产 cell 落地（不包括
+example 与 framework runtime 能力），或 T2/T3 任一 + T4 同时落地。`examples/iotdevice`
+不计入消费方计数。
 
-**激活流程**：触发满足时，开新 PR 系列引用本规格，把 plan.md / tasks.md 的 PR 序列付诸实施。本文档自身不再修改。
+**激活流程**：A1-A10 已按 ADR-661 与本规格 landed/闭环。后续新增业务 cell 消费方时引用
+ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启本历史 PR 序列。
 
-**违反此 gate 的后果**：参见 issue body「plan-D §10 禁止预建 mdm/」；在 trigger 满足前合并任何 `kernel/reconcile/*.go` 代码均视为违章。
+**历史约束处置**：原「禁止预建 mdm/」约束仍适用于业务 module / 业务 cell 预建；不适用于
+已显式 un-park 的 `kernel/reconcile` 基建与 `runtime/certlifecycle` 框架能力。
 
 ---
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - 证书续期周期收敛（Priority: P1，对应 T1）
+### User Story 1 - 证书续期周期收敛（Priority: P1，对应 T1'）
 
-**Actor**: `pkicell.rotation` slice 维护者（winmdm Stage 1, 2027 Q1）
+**Actor**: `runtime/certlifecycle` 框架能力维护者（ADR-1895 D2/D5；v1.0 P0）
 
 **Plain Language**:
-作为 `pkicell` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己跑 leader election；但我**必须**保证 `Reconcile` 幂等——leader election 不是 fencing 保证，跨副本残余并发由框架 epoch fencing CAS + 我的幂等兜底（见 ADR §4.3/§4.4）。
+作为 `runtime/certlifecycle` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己跑 leader election；但我**必须**保证 `Reconcile` 幂等——leader election 不是 fencing 保证，跨副本残余并发由框架 epoch fencing CAS + 我的幂等兜底（见 ADR §4.3/§4.4）。
 
-**Why this priority**: 证书过期等同生产中断。L4 收敛是 winmdm 上线的必要前提，pkicell 是最先落地的消费方。
+**Why this priority**: 证书过期等同生产中断。ADR-1895 已将证书生命周期定义为框架 v1.0 P0 能力；winmdm 后续协议前端消费该底座，不再自建续期原语。
 
 **Independent Test**: 在 `examples/iotdevice` 用 fake `Reconciler` 验证：注入 100 条非终态实体 + ticker=1s + reconciler 返回 `RequeueAfter=5s`；observable：第 1 秒扫描 100 次，后续每秒只扫描到点的（按 RequeueAfter 排程），永不重入运行中的 entity。
 
@@ -191,11 +198,11 @@
 
 ## Assumptions
 
-- **A1**：trigger 满足时 GoCell v1.0 已 GA（按 #1051 gate "v1.0 GA + P0 5 项就绪"），kernel 公开 API 进入「v2 升级期」（按 `api-versioning.md`），新 kernel package 引入不需 deprecation 期
-- **A2**：`runtime/command.SweeperLifecycle` 在 trigger 满足前不会有不兼容重构（确保迁移 baseline 稳定）；如发生大重构（如 PROD-CLOCK-INJECTION-01 上游 Hard 化），本规格需先 amend 后再激活
+- **A1**：本规格已进入历史 provenance 状态；当前真值以 ADR-661、ADR-1895 与 develop 代码为准
+- **A2**：`runtime/command.SweeperLifecycle` 已在 A8 删除并迁入 `kernel/reconcile.Loop`，不再作为未来 baseline 假设
 - **A3**：`adapters/redis` 与 `adapters/postgres` 已具备 advisory lock / SETNX 原语，可承载 LeaderElector 实现；无需额外引入 etcd / zookeeper
-- **A4**：消费方 cell（pkicell / mdmcell / devicelifecycle / zerotrust）按 PRD 时间表落地；如出现取消或 cell 边界调整，trigger 条件需重新评估
-- **A5**：`saga` (#969) 与 `projection harness` (#1079) 在 trigger 满足前已 ship，边界明确：saga 解 L3 step orchestration，projection 解 CQRS read side；reconcile 仅承担 L4 desired-state 收敛，三者不重叠
+- **A4**：消费方边界已由 ADR-1895 调整：证书生命周期属 `runtime/certlifecycle` 框架能力；mdmcell / devicelifecycle / zerotrust 仍按 PRD 时间表作为后续业务 cell 接入
+- **A5**：`saga` (#969) 与 `projection harness` (#1079) 已 ship，边界明确：saga 解 L3 step orchestration，projection 解 CQRS read side；reconcile 仅承担 L4 desired-state 收敛，三者不重叠
 - **A6**：`kernel/reconcile` 不依赖 `runtime/` / `adapters/` / `cells/`（满足 CLAUDE.md 分层约束）；LeaderElector 接口在 kernel 层声明，实现在 adapters 层
 
 ---
