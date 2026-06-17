@@ -19,12 +19,14 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	auditget "github.com/ghbvf/gocell/generated/contracts/http/audit/get/v1"
+	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 )
 
 const bootstrapAuditEntryOffset = 2 * time.Hour
@@ -2463,4 +2465,14 @@ func TestGetAdapter_Get_Unauthenticated_Typed401(t *testing.T) {
 	require.NoError(t, err, "declared 401 must be a typed response, not a Go error")
 	_, ok := resp.(auditget.Get401ErrorResponse)
 	assert.True(t, ok, "unauthenticated GET must map to Get401ErrorResponse, got %T", resp)
+}
+
+func TestListAdapter_List_Unauthenticated_ReturnsErrcode(t *testing.T) {
+	svc, _ := newTestService()
+	a := ListAdapter{S: svc}
+
+	resp, err := a.List(context.Background(), &auditlist.Request{})
+
+	require.Nil(t, resp)
+	errcodetest.AssertCode(t, err, errcode.ErrAuthUnauthorized)
 }

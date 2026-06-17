@@ -22,6 +22,11 @@ import (
 	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 )
 
+// msgAuthRequired is the const-literal message (MESSAGE-CONST-LITERAL-01) the audit
+// read paths return when the request carries no authenticated principal — shared by
+// the list route policy, the ListAdapter, and the GetAdapter.
+const msgAuthRequired = "authentication required"
+
 // auditQueryPolicy permits the request when:
 //   - actorId query param EQUALS the authenticated subject (explicit self-read).
 //     This is a request-shape check: it answers "is the caller asking only for its
@@ -62,7 +67,7 @@ func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 	}
 	// Only an explicit self-read (actorId names the caller) is exempt. Empty
 	// actorId is a permissioned ledger read, not an implicit self-read (F1).
@@ -160,7 +165,7 @@ type ListAdapter struct {
 func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (auditlist.ListResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 	}
 	// Tenant isolation fail-closed (epic #1337 PR-2a, F1): a tenant-scoped audit
 	// read REQUIRES a concrete tenant. An authenticated principal with an empty
@@ -581,7 +586,7 @@ func mapGetError(err error) auditget.GetResponseObject {
 func (a GetAdapter) get(ctx context.Context, req *auditget.Request) (auditget.GetResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgAuthRequired)
 	}
 	// Tenant isolation fail-closed (epic #1337 PR-2a, F1), mirrors ListAdapter: a
 	// tenant-scoped audit read REQUIRES a concrete tenant.

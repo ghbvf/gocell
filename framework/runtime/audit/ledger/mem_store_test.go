@@ -322,6 +322,36 @@ func TestMemStore_GetBySeq_NotFound(t *testing.T) {
 	errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
 }
 
+func TestMemStore_GetBySeq_VisibilityDeniedCollapsesToNotFound(t *testing.T) {
+	t.Parallel()
+	fc := clockmock.New(time.Now())
+	p := newTestProtocol(t)
+	store, err := ledger.NewMemStore(p, fc)
+	if err != nil {
+		t.Fatalf("NewMemStore: %v", err)
+	}
+	if err := store.Append(context.Background(), &ledger.Entry{
+		EventID:   "seq-visibility-denied",
+		EventType: "audit.visibility.test",
+		ActorID:   "alice",
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	vis, err := tenant.NewRowVisibility(tenant.RowScopeSelf, "bob")
+	if err != nil {
+		t.Fatalf("NewRowVisibility: %v", err)
+	}
+
+	got, err := store.GetBySeq(context.Background(), vis, 1)
+
+	if got != nil {
+		t.Fatalf("GetBySeq visibility denied returned entry: %+v", got)
+	}
+	errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
+}
+
 // TestMemStore_Idempotency_DuplicateContent: appending the same payload twice
 // returns ErrAlreadyExists on the second call (content fingerprint check).
 func TestMemStore_Idempotency_DuplicateContent(t *testing.T) {
