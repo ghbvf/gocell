@@ -569,7 +569,7 @@ metrics:
       fqName: gocell_saga_journal_tailer_drain_total
       namespace: gocell
       type: counter
-      help: Total saga-journal tailer drains that made progress or failed, labeled by result (ok = ≥1 event applied; store_error = checkpoint load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.
+      help: Total saga-journal tailer drains that made progress or failed, labeled by result (ok = ≥1 event applied; head_error = head-bound fetch failed; store_error = checkpoint load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.
       labels:
         - cell
         - projection
