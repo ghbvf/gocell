@@ -34,9 +34,9 @@ type Observer interface {
 	// (the leader gate skips this tick). reason is one of LockAcquireResult.
 	ObserveLockAcquire(ctx context.Context, projectionID string, reason LockAcquireResult)
 	// ObserveDrain is called once per drain that makes progress or fails: ok (≥1
-	// event applied), store_error (checkpoint load failed), or apply_error (a
-	// non-stale replay/apply failure). An idle caught-up tick (0 events, no error)
-	// is not reported.
+	// event applied), head_error (head-bound fetch failed), store_error (checkpoint
+	// load failed), or apply_error (a non-stale replay/apply failure). An idle
+	// caught-up tick (0 events, no error) is not reported.
 	ObserveDrain(ctx context.Context, projectionID string, result DrainResult)
 	// ObserveCheckpointAdvance is called once per AdvanceIfOwner attempt: ok,
 	// stale_owner (fenced deposed leader — benign), or error (other advance fault).
@@ -75,6 +75,11 @@ type DrainResult string
 const (
 	// DrainOK means the drain applied ≥1 event and advanced the checkpoint cleanly.
 	DrainOK DrainResult = "ok"
+	// DrainHeadError means the head-bound fetch (replay.Head) failed, so the tick's
+	// replay upper bound is unknown and the drain aborts before any replay — no
+	// event applied, checkpoint untouched. Distinct from DrainStoreError (which is
+	// specifically a checkpoint LoadOffset fault).
+	DrainHeadError DrainResult = "head_error"
 	// DrainStoreError means the checkpoint LoadOffset failed (storage fault).
 	DrainStoreError DrainResult = "store_error"
 	// DrainApplyError means a non-stale replay/apply failure surfaced from the
