@@ -3,7 +3,7 @@ module github.com/ghbvf/gocell/adapters/websocket
 go 1.25.11
 
 require (
-	github.com/coder/websocket v1.8.14
+	github.com/coder/websocket v1.8.15
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/goleak v1.3.0
