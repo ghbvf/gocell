@@ -230,7 +230,7 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 	if chain == nil || seq < 1 || int(seq) > len(chain.entries) {
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
@@ -239,12 +239,17 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 		// IDOR-safe collapse: do not reveal that the entry exists.
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
 	return copyEntry(e), nil
 }
+
+// msgAuditEntryNotFound is the const-literal not-found message
+// (MESSAGE-CONST-LITERAL-01) shared by every MemStore not-found path (GetBySeq +
+// the id-keyed auditEntryNotFoundByID).
+const msgAuditEntryNotFound = "audit ledger: entry not found"
 
 // auditEntryNotFoundByID is the IDOR-safe not-found sentinel for the single-entry
 // reads that key on an opaque id (MemStore.GetByID / MemCrossTenantStore.
@@ -254,7 +259,7 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 // is returned for "absent", "another tenant's row", and "outside owner scope".
 func auditEntryNotFoundByID() error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-		"audit ledger: entry not found")
+		msgAuditEntryNotFound)
 }
 
 // GetByID returns a defensive copy of the entry with the given opaque id within
