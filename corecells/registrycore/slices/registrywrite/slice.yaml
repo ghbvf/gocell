@@ -1,0 +1,15 @@
+id: registrywrite
+belongsToCell: registrycore
+consistencyLevel: L1
+lifecycle: asset
+contractUsages:
+  - contract: http.registry.contract.submit.v1
+    role: serve
+verify:
+  unit:
+    - unit.registrywrite.service
+  contract:
+    - contract.http.registry.contract.submit.v1.serve
+  waivers: []
+allowedFiles:
+  - corecells/registrycore/slices/registrywrite/**
