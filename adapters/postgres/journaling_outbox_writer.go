@@ -61,7 +61,8 @@ var (
 // clock.MustHaveClock).
 func NewJournalingOutboxWriter(inner *OutboxWriter, projectionTopics []string) outbox.Writer {
 	if inner == nil {
-		panic(panicregister.Approved("journaling-outbox-writer-nil-inner", nil))
+		panic(panicregister.Approved("journaling-outbox-writer-nil-inner",
+			errcode.Assertion("NewJournalingOutboxWriter: inner OutboxWriter is required (nil rejected)")))
 	}
 	set := make(map[string]struct{}, len(projectionTopics))
 	for _, t := range projectionTopics {

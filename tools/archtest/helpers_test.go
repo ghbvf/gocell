@@ -57,6 +57,35 @@ func findArchTestDir(t *testing.T) string {
 	return filepath.Join(root, "tools", "archtest")
 }
 
+// assertScopeVisits fails t for any required module-relative path that `scope`
+// does not load. It is the shared anti-vacuity body for the satellite-coverage
+// tests of the workspace-scoped governance gates (panic / errcode / clock):
+// each proves its scan scope actually reaches the satellite and examples
+// modules, so the gate is not silently vacuous there. `rule` labels the gate in
+// the failure message. Single-sourced here so the (previously triplicated)
+// scan+assert block is not flagged as duplicated code (#2252).
+func assertScopeVisits(t *testing.T, rule string, scope RunScope, paths ...string) {
+	t.Helper()
+	required := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		required[p] = false
+	}
+	_ = Run(t, scope, func(p *Pass) []Diagnostic {
+		for _, f := range p.Files {
+			rel := filepath.ToSlash(p.Rel(f))
+			if _, ok := required[rel]; ok {
+				required[rel] = true
+			}
+		}
+		return nil
+	})
+	for rel, seen := range required {
+		if !seen {
+			t.Errorf("%s scan scope did not visit %s; satellite coverage would be vacuous", rule, rel)
+		}
+	}
+}
+
 // TestFindCellProductionGoFiles_IncludesExamples is a Wave 1 RED test for
 // Part B scanning-root unification. It asserts the metadata-rooted helper
 // returns at least one cell file under examples/. Pre-refactor the helper

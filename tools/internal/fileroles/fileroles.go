@@ -15,7 +15,9 @@
 // file under a top-level Go directory (cmd/, kernel/, runtime/, adapters/,
 // cells/, examples/, pkg/, tests/, tools/) that is NOT test code, NOT
 // vendored, NOT generated, NOT under any testdata/ tree, and NOT inside
-// the archtest tooling itself.
+// the archtest tooling itself. examples/ production code (main.go, cell.go,
+// …) is in scope: example projects are real binaries the platform gates must
+// hold to the same production discipline (#2149).
 //
 // Both predicates take module-relative paths in forward-slash form
 // ("kernel/outbox/consumer.go", not absolute paths or backslashes). The
@@ -109,10 +111,12 @@ func IsTestCode(rel string) bool {
 //   - vendor/, generated/ — third-party / generated content
 //   - any path containing testdata/ — Go's reserved fixture directory
 //   - any /conformance.go — driver-conformance suites are test code
-//   - examples/ — example projects ship documentation, not production binaries
 //
 // Inclusions: any other Go file under cmd/, kernel/, runtime/, adapters/,
-// cells/, pkg/, tests/, tools/ that is not caught by IsTestCode.
+// cells/, examples/, pkg/, tests/, tools/ that is not caught by IsTestCode.
+// examples/ production code is in scope (#2149): example binaries are held to
+// the same production governance (errcode / clock / panic / duration) as the
+// rest of the platform.
 func IsProductionCode(rel string) bool {
 	if rel == "" {
 		return false
@@ -125,8 +129,6 @@ func IsProductionCode(rel string) bool {
 	case strings.HasPrefix(rel, "generated/"):
 		return false
 	case strings.HasPrefix(rel, "testdata/"), strings.Contains(rel, "/testdata/"):
-		return false
-	case strings.HasPrefix(rel, "examples/"):
 		return false
 	}
 	return !IsTestCode(rel)

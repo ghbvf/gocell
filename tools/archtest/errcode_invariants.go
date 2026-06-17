@@ -311,8 +311,11 @@ func buildCarvedRangeChecker(f *ast.File, rel string, carveOuts map[carveOut]str
 // file present under both configs is scanned once and multiple violations on a
 // single line are preserved. GoCell's dogfood passes FlatNonDefaultTags(); an
 // external repo passes whatever tags gate its production files — neither is
-// baked in. The scan SCOPE is the running module's prodscan patterns (resolved
-// by findModuleRoot from its go.mod), never the platform module.
+// baked in. The scan SCOPE is the running module's satellite-inclusive prodscan
+// patterns (PatternsWithSatellites: base + tests/ + tools/ + go.work satellite
+// parents + top-level module roots, #2148) — errcode stays on prodscan patterns
+// rather than Production() because it must also cover tools/ and tests/
+// production files, which Production() excludes.
 //
 // skip excludes a rule's allowlisted relative paths (e.g. pkg/errcode/ itself,
 // the migration destination); perFile is the rule's per-file AST/types scanner.
@@ -328,7 +331,7 @@ func runErrcodeTypedScan(
 	}
 
 	root := findModuleRoot(t)
-	patterns := prodscan.PatternsExtended(root)
+	patterns := prodscan.PatternsWithSatellites(root)
 
 	visited := map[string]bool{}
 	var out []Diagnostic

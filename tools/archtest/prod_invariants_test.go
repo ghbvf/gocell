@@ -55,11 +55,11 @@ func TestProdDurationConst(t *testing.T) {
 	}
 
 	root := findModuleRoot(t)
-	// PatternsWithSatellites adds the cmd/adapters satellite parents the typed
-	// loader expands to real members — #2136. (examples/ production files are
-	// filtered out below by fileroles.IsProductionCode, so its production duration
-	// literals stay demo-exempt; the satellite increment is shared, the filter
-	// handles the examples/ asymmetry.)
+	// PatternsWithSatellites adds the cmd/adapters/examples satellite parents the
+	// typed loader expands to real members — #2136. examples/ production files are
+	// IN scope: fileroles.IsProductionCode now RETAINS them (#2149 removed the
+	// examples/ demo-exemption), so their production duration literals are gated
+	// like the rest of the platform — not filtered out below.
 	patterns := prodscan.PatternsWithSatellites(root)
 
 	var violations []string

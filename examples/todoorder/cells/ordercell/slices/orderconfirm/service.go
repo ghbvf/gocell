@@ -143,7 +143,7 @@ func (s *Service) Confirm(ctx context.Context, req *confirmv1.Request) (confirmv
 	}
 
 	// Build outbox entry before tx (marshal errors should not roll back)
-	changedAt := time.Now().UTC()
+	changedAt := s.clk.Now().UTC()
 	entry, err := s.buildStatusChangedEntry(ctx, order.ID, oldStatus, order.Status, changedAt)
 	if err != nil {
 		return nil, err
