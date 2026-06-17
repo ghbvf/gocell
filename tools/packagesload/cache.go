@@ -67,8 +67,7 @@ func NewWorkspaceCache() *WorkspaceCache {
 func (c *WorkspaceCache) LoadWorkspace(
 	root string, cfg packages.Config, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
-	key := cacheKeyFor(cacheKindWorkspace, cfg, root, patterns)
-	return c.loadKeyed(key, func() ([]*packages.Package, []packages.Error, error) {
+	return c.loadKeyed(cacheKindWorkspace, root, cfg, patterns, func() ([]*packages.Package, []packages.Error, error) {
 		return LoadWorkspace(root, cfg, patterns...)
 	})
 }
@@ -83,8 +82,7 @@ func (c *WorkspaceCache) LoadWorkspace(
 func (c *WorkspaceCache) LoadFlat(
 	root string, cfg packages.Config, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
-	key := cacheKeyFor(cacheKindFlat, cfg, root, patterns)
-	return c.loadKeyed(key, func() ([]*packages.Package, []packages.Error, error) {
+	return c.loadKeyed(cacheKindFlat, root, cfg, patterns, func() ([]*packages.Package, []packages.Error, error) {
 		return loadFlat(root, cfg, patterns...)
 	})
 }
@@ -109,21 +107,57 @@ func loadFlat(root string, cfg packages.Config, patterns ...string) ([]*packages
 	return pkgs, errs, nil
 }
 
-// loadKeyed returns the cached packages for key, or runs loader once —
-// collapsing concurrent identical loads via singleflight — and caches only a
-// CLEAN result. A Go error or any non-empty packages.Error is NOT persisted:
-// both are fail-closed failures for callers (metricschema / typeseval both treat
-// non-empty errs as a scan failure), so the NEXT independent call re-loads
-// rather than serving a poisoned entry. Concurrent co-flight waiters of a failed
-// load share that one failure result; only persistence is suppressed.
+// validateCacheable fails fast when cfg sets a field that affects the load
+// RESULT but is NOT part of the cache key — otherwise two calls with identical
+// keyed fields (Mode / Tests / BuildFlags / root / patterns) but different
+// Env / Overlay / ParseFile / Fset would alias, and the second would be served a
+// stale package graph (wrong build env, file contents, AST, or positions).
+// Context (per-call) and Dir (loader-owned) are intentionally unkeyed and thus
+// allowed; Logf is diagnostic-only. The uncached package-level [LoadWorkspace] /
+// [Load] impose no such restriction — a caller needing these fields uses them.
+func validateCacheable(cfg packages.Config) error {
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"Env", cfg.Env != nil},
+		{"Overlay", cfg.Overlay != nil},
+		{"ParseFile", cfg.ParseFile != nil},
+		{"Fset", cfg.Fset != nil},
+	} {
+		if f.set {
+			return fmt.Errorf("packagesload: cached load cannot key on cfg.%s "+
+				"(it affects the load result but is not in the cache key); "+
+				"leave it nil or use the uncached loader", f.name)
+		}
+	}
+	return nil
+}
+
+// loadKeyed is the single funnel for every cached load: it validates cfg
+// ([validateCacheable]), computes the key ([cacheKeyFor]), then returns the
+// cached packages or runs loader once — collapsing concurrent identical loads
+// via singleflight — and caches only a CLEAN result. Routing both validation and
+// keying through here makes them unavoidable for any cached entrypoint.
+//
+// A Go error or any non-empty packages.Error is NOT persisted: both are
+// fail-closed failures for callers (metricschema / typeseval both treat non-empty
+// errs as a scan failure), so the NEXT independent call re-loads rather than
+// serving a poisoned entry. Concurrent co-flight waiters of a failed load share
+// that one failure result; only persistence is suppressed.
 //
 // On a cache HIT no load runs, so the caller's cfg.Context is irrelevant — a
 // canceled ctx does not interrupt a hit; ctx only governs the first real load.
 // The singleflight "shared" bool is intentionally discarded: a build-time batch
 // tool has no need to distinguish a self-load from a collapsed one.
 func (c *WorkspaceCache) loadKeyed(
-	key string, loader func() ([]*packages.Package, []packages.Error, error),
+	kind, root string, cfg packages.Config, patterns []string,
+	loader func() ([]*packages.Package, []packages.Error, error),
 ) ([]*packages.Package, []packages.Error, error) {
+	if err := validateCacheable(cfg); err != nil {
+		return nil, nil, err
+	}
+	key := cacheKeyFor(kind, cfg, root, patterns)
 	if pkgs, ok := c.get(key); ok {
 		return pkgs, nil, nil
 	}
