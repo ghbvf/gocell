@@ -932,10 +932,9 @@ func (l *Loop) process(runCtx context.Context, req Request, dispatcher reconcile
 	// fencing). runCtx is the lease-scoped ctx in leader-elect mode, so a lost
 	// lease cancels this Reconcile's ctx mid-write.
 	//
-	// Note: single-process mode binds Epoch 0 (always-accept, no fencing). A store
-	// seeded from a prior leader-elect run (lastEpoch≥1) would reject epoch-0
-	// writes. Do NOT point a single-process Loop at a store shared with a
-	// leader-elect deployment — use distinct stores or a fresh store.
+	// Build() rejects WithFencedRepo without WithLeader, so a FencedRepository
+	// user cannot accidentally bind Epoch 0 in single-process mode. The nil-leader
+	// / nil-fencedRepo path remains the explicit single-process, no-fencing mode.
 	reconcileCtx := runCtx
 	if l.fencedRepo != nil {
 		reconcileCtx = withFencedWriter(runCtx, newFencedWriter(l.fencedRepo, l.currentEpoch()))

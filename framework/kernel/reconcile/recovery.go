@@ -65,6 +65,7 @@ func recoverReconcile(ctx context.Context, rec Reconciler, req Request, logger *
 			logger.ErrorContext(ctx, "reconcile: reconciler panicked (BUG); entity requeued as transient",
 				slog.String("reconciler", reconcilerID),
 				slog.String("entity", req.EntityID),
+				redaction.RedactSlogAttr(slog.Any("panic_value", r)),
 				slog.Any("error", err))
 		}
 	}()

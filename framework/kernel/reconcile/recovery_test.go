@@ -3,6 +3,7 @@ package reconcile
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -100,6 +101,33 @@ func TestRecovery_PanicLogsAtErrorLevel(t *testing.T) {
 	assert.Contains(t, logOutput, `"level":"ERROR"`, "panic must be logged at Error level")
 	assert.Contains(t, logOutput, "panicking-entity", "log must include entity ID")
 	assert.Contains(t, logOutput, "my_reconciler", "log must include reconciler ID")
+}
+
+// TestRecovery_PanicLogsStructuredPanicValue verifies that structured panic
+// payloads remain inspectable in logs instead of being flattened only into the
+// synthesized error string.
+func TestRecovery_PanicLogsStructuredPanicValue(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	type panicPayload struct {
+		Code string `json:"code"`
+		ID   int    `json:"id"`
+	}
+
+	rec := panicReconciler{payload: panicPayload{Code: "bad-state", ID: 42}}
+	req := Request{EntityID: "structured-panic-entity"}
+
+	_, err := recoverReconcile(context.Background(), rec, req, logger, "my_reconciler")
+	require.Error(t, err)
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry), "panic log must be valid JSON")
+	panicValue, ok := entry["panic_value"].(map[string]any)
+	require.True(t, ok, "panic log must include a structured panic_value object")
+	assert.Equal(t, "bad-state", panicValue["code"])
+	assert.Equal(t, float64(42), panicValue["id"])
 }
 
 // TestClassify verifies the classify helper's full table:
