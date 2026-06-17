@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
@@ -138,7 +139,7 @@ func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	if len(body.Data) != 1 || body.Data[0].ID != "http.example.foo.v1" {
 		t.Fatalf("list = %+v, want the submitted contract http.example.foo.v1", body.Data)
 	}
-	if body.Data[0].State != "submitted" {
-		t.Fatalf("submitted contract state = %q, want submitted", body.Data[0].State)
+	if body.Data[0].State != registry.StateSubmitted().String() {
+		t.Fatalf("submitted contract state = %q, want %q (sealed)", body.Data[0].State, registry.StateSubmitted().String())
 	}
 }

@@ -19,3 +19,5 @@ passCriteria:
     mode: manual
   - text: 缺 registry:submit 权限的提交、缺 registry:read 权限的列表分别被路由门禁拒绝（未认证 401 / 拒绝 403）
     mode: manual
+  - text: 非法参数返回 400 + shared error envelope：submit malformed JSON body / 缺 id·kind；list limit 越界（0 或 501）或超长 cursor
+    mode: manual

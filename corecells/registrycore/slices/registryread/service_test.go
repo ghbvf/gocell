@@ -103,6 +103,19 @@ func TestList_Pagination(t *testing.T) {
 	}
 }
 
+// TestList_CursorAtEnd: a cursor equal to the last id yields an empty final page
+// (sort.Search lands past the end), not an error or a wrapped page.
+func TestList_CursorAtEnd(t *testing.T) {
+	svc, err := NewService(seed(t, "c1", "c2", "c3"))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	got := mustList(t, svc, &list.Request{Cursor: "c3"})
+	if len(got.Data) != 0 || got.HasMore || got.NextCursor != "" {
+		t.Fatalf("cursor-at-end page = %+v, want empty / no more", got)
+	}
+}
+
 // TestEffectiveLimit pins the default + 500 ceiling (go-standards §列表分页 limit≤500)
 // without seeding 500 rows.
 func TestEffectiveLimit(t *testing.T) {

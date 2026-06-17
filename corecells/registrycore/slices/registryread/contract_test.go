@@ -130,3 +130,18 @@ func TestContractListServe_Forbidden(t *testing.T) {
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }
+
+// TestContractListServe_BadRequest: an out-of-range limit (below the minimum 1 /
+// above the maximum 500) ⇒ 400 from the handler's ParsePageParams, with a shared
+// error envelope. Complements the schema-level MustRejectQueryParam cases with the
+// real HTTP path the contract declares.
+func TestContractListServe_BadRequest(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	for _, q := range []string{"limit=0", "limit=501"} {
+		rec := getList(t, newMuxOver(t, emptyRegistrar()), adminCtx(allowAuthorizer()), q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: status = %d, want 400; body=%s", q, rec.Code, rec.Body.String())
+		}
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	}
+}

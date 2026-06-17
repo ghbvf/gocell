@@ -10,6 +10,7 @@ package registrywrite
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -48,6 +49,12 @@ func (s *Service) Submit(ctx context.Context, req *submit.Request) (submit.Submi
 	submitter := ""
 	if p, ok := auth.FromContext(ctx); ok && p != nil {
 		submitter = p.Subject
+	} else {
+		// Defensive: the registry:submit gate guarantees a principal, so reaching
+		// here means an upstream auth-wiring anomaly. Surface it (registrar then
+		// fail-closes the empty submitter to 400) rather than registering anonymously.
+		slog.WarnContext(ctx, "registrywrite: submit reached without an authenticated principal",
+			"contract", "http.registry.contract.submit.v1")
 	}
 	reg, err := s.registrar.Submit(registry.SubmitInput{
 		ID:            req.ID,
