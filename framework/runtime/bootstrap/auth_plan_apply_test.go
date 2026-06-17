@@ -195,12 +195,15 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			wantDescribe:      "operator",
 		},
 		{
+			// #2263: AuthMTLS + AuthServiceToken auto-appends the peer-cell
+			// cross-bind guard LAST → 3 middlewares (MTLS, service-token, cross-bind),
+			// not 2. The cross-bind is not a chain plan, so describe is unchanged.
 			name: "MultiPlan_MTLSAndServiceToken",
 			chain: []kauth.ListenerAuth{
 				kauth.AuthMTLS{},
 				authtest.MustAuthServiceToken(store, ring),
 			},
-			wantMWCount:       2,
+			wantMWCount:       3,
 			wantAuthInstalled: false,
 			wantDescribe:      "mtls+service-token",
 		},

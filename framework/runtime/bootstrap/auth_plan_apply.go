@@ -100,8 +100,28 @@ func (b *Bootstrap) applyListenerAuthChain(
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q type=%T", ref.String(), plan))))
 		}
 	}
+	// #2263: when a listener combines AuthMTLS (transport peer auth) with a
+	// service-token plan (message-layer caller identity), automatically install
+	// the cross-bind guard LAST so it runs after both middlewares — binding the
+	// client cert's SPIFFE cell to the service-token caller cell. Auto-appending
+	// here (the single AuthPlan→middleware assembly point) means an internal
+	// listener cannot enable mTLS+service-token yet forget the cross-bind.
+	if chainContainsAuthMTLS(chain) && chainContainsServiceToken(chain) {
+		mws = append(mws, auth.PeerCellCrossBindMiddleware())
+	}
 	describe = describeAuthChain(chain)
 	return mws, routerOpts, describe, nil
+}
+
+// chainContainsServiceToken reports whether any plan in the chain is
+// AuthServiceToken (companion to chainContainsAuthMTLS).
+func chainContainsServiceToken(chain []kauth.ListenerAuth) bool {
+	for _, p := range chain {
+		if _, ok := p.(kauth.AuthServiceToken); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // runAuthPlanValidateHooks iterates over all listener chains and, for any
