@@ -18,6 +18,10 @@ import (
 
 var testEpoch = time.Date(2026, 6, 17, 0, 0, 0, 0, time.UTC)
 
+// advanceClockStep is the clock advance between transitions in timestamp tests
+// (TEST-TIME-LITERAL-01: site-specific test durations are package-level consts).
+const advanceClockStep = 5 * time.Minute
+
 func newRegistrar(t *testing.T) (*registry.ContractRegistrar, *clockmock.FakeClock) {
 	t.Helper()
 	clk := clockmock.New(testEpoch)
@@ -184,7 +188,7 @@ func TestAdvance_StampsUpdatedAt(t *testing.T) {
 	reg := mustSubmit(t, r, "reg-1")
 	created := reg.CreatedAt
 
-	clk.Advance(5 * time.Minute)
+	clk.Advance(advanceClockStep)
 	advanced, err := advance(r, "reg-1", registry.StateProbing(), "system", "")
 	require.NoError(t, err)
 	assert.Equal(t, created, advanced.CreatedAt, "CreatedAt must not change on advance")
@@ -293,11 +297,11 @@ func TestEvents_DeepCopy(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestGet_NotFound(t *testing.T) {
+func TestGet_Missing(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
 	_, ok := r.Get("missing")
-	assert.False(t, ok)
+	assert.False(t, ok, "Get returns (zero, false) for an unknown id — no error, by design")
 }
 
 func TestAllIDs_Sorted(t *testing.T) {
