@@ -51,6 +51,36 @@ const (
 	EnvServiceVerifyKeysPrevious = "GOCELL_SERVICE_VERIFY_KEYS_PREVIOUS"
 )
 
+// splitProvisioningEnvVars is the COMPLETE set of split-mode (per-cell,
+// master-absent) provisioning env vars. It is the single source for "is this
+// process configured for split mode": AnySplitEnvSet derives that from this list
+// and the composition-root XOR guard consumes AnySplitEnvSet — so adding a new
+// split env var here updates the guard too. This closes the #2153 F1 gap where
+// mode was inferred from the signing-key sentinel alone, letting a PARTIAL split
+// config (e.g. only EnvServiceOwnCell) combined with the master secret slip past
+// the guard and silently boot master mode while still holding the master.
+var splitProvisioningEnvVars = []string{
+	EnvServiceOwnCell,
+	EnvServiceSigningKey,
+	EnvServiceSigningKeyPrevious,
+	EnvServiceVerifyKeys,
+	EnvServiceVerifyKeysPrevious,
+}
+
+// AnySplitEnvSet reports whether ANY split-mode provisioning env var is set. The
+// composition root uses this to detect split-mode intent: a process holding the
+// master secret AND any split env var is the ambiguous both-modes case and must
+// fail closed, rather than booting master mode while silently ignoring the split
+// vars (a split cell must never also hold the master, #2153).
+func AnySplitEnvSet() bool {
+	for _, name := range splitProvisioningEnvVars {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // ProvisionedKeyring is the split (per-cell) ServiceKeyring: master-absent, it
 // holds only this cell's signing subkey(s) and its declared callers' verify
 // subkey(s). See the file header for the security rationale.
@@ -165,6 +195,19 @@ func LoadProvisionedKeyringFromEnv() (*ProvisionedKeyring, error) {
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
 			"parse "+EnvServiceVerifyKeysPrevious, err)
+	}
+
+	// Closed-set check (#2153 F2): the current map is the set of accepted callers.
+	// A previous-generation verify key naming a caller absent from the current set
+	// is a rotation misconfiguration — it would otherwise be silently dropped and
+	// surface only as a runtime 401. Fail-fast at load instead.
+	for caller := range verifyPrev {
+		if _, ok := verifyCur[caller]; !ok {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+				"previous verify key names a caller absent from the current verify set",
+				errcode.WithInternal(errcode.InternalAttr("_",
+					fmt.Sprintf("env=%s caller=%q", EnvServiceVerifyKeysPrevious, caller))))
+		}
 	}
 
 	verify := make(map[string][][]byte, len(verifyCur))

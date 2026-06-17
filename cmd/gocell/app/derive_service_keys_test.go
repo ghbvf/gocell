@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
@@ -294,12 +296,37 @@ func TestRunDeriveServiceKeys_MissingMasterEnv(t *testing.T) {
 	require.Error(t, err, "missing master secret env must return an error")
 }
 
-// TestRunDeriveServiceKeys_InvalidCell verifies that an invalid cell id is
-// rejected (DeriveProvisionedKeys validates the cell id format).
+// TestRunDeriveServiceKeys_InvalidCell verifies that an invalid --cell id is
+// rejected AS OPERATOR INPUT (KindInvalid / ERR_AUTH_INVALID_INPUT), not wrapped
+// as an internal key-material error (#2153 F4). The CLI validates operator input
+// at its boundary so scripts/automation can route usage errors apart from genuine
+// internal key failures.
 func TestRunDeriveServiceKeys_InvalidCell(t *testing.T) {
 	t.Setenv(auth.EnvServiceSecret, testMasterSecret)
 	err := runDeriveServiceKeys(context.Background(), []string{"--cell", "Bad-Cell-ID"})
 	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind,
+		"invalid --cell is operator input, must classify as a 4xx-class input error")
+	assert.Equal(t, errcode.ErrAuthInvalidInput, ecErr.Code)
+}
+
+// TestRunDeriveServiceKeys_InvalidCaller verifies that an invalid --callers entry
+// is rejected as operator input (KindInvalid / ERR_AUTH_INVALID_INPUT), the same
+// classification as an invalid --cell (#2153 F4).
+func TestRunDeriveServiceKeys_InvalidCaller(t *testing.T) {
+	t.Setenv(auth.EnvServiceSecret, testMasterSecret)
+	err := runDeriveServiceKeys(context.Background(),
+		[]string{"--cell", "accesscore", "--callers", "auditcore,Bad-Caller"})
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.KindInvalid, ecErr.Kind,
+		"invalid --callers entry is operator input, must classify as a 4xx-class input error")
+	assert.Equal(t, errcode.ErrAuthInvalidInput, ecErr.Code)
 }
 
 // TestRunDeriveServiceKeys_NoCallers_Succeeds covers the outbound-only cell path:

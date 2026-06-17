@@ -120,9 +120,12 @@ When cells are split across processes, the following infrastructure is required:
 - **Per-cell service-token 密钥分发**（#2153，split 推荐 / Hard）：split cell 进程
   **不应共享 master**（`GOCELL_SERVICE_SECRET`）—— 持 master 的任一进程被攻陷即可派生**任意** cell
   子密钥、伪造任意 `callerCell`。推荐：每个 split cell 进程**只持自身子密钥**，由 operator 在部署时用
-  `gocell derive-service-keys --cell <id>` 从 master 派生该 cell 的签名子密钥 + 其声明 caller 的验签
-  子密钥，注入为 env（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` / `GOCELL_SERVICE_VERIFY_KEYS`
-  [+ `_PREVIOUS`]）。此模式下 master **不出现在** cell 进程中——被攻陷 cell 只暴露自身子密钥 + 其声明
+  `gocell derive-service-keys --cell <id> --callers <caller-list>` 从 master 派生该 cell 的签名子密钥 +
+  其声明 caller 的验签子密钥，注入为 env（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` /
+  `GOCELL_SERVICE_VERIFY_KEYS` [+ `_PREVIOUS`]）。`--callers` 枚举**调用本 cell** `/internal/v1/*` 的每个
+  caller cell（本 cell 须验签的入站调用方），如 `--cell configcore --callers accesscore,auditcore`；**省略
+  `--callers` 仅对无入站 internal 端点的纯出站 cell 合法**——否则生成空 `GOCELL_SERVICE_VERIFY_KEYS`，
+  该 cell 将拒绝一切入站 internal 调用（运行期 401），CLI 会在 stderr 显式提示这一空集。此模式下 master **不出现在** cell 进程中——被攻陷 cell 只暴露自身子密钥 + 其声明
   caller 的验签子密钥，**无法伪造第三 cell**（密码学 fail-closed）。composition root 经 env 层互斥守卫
   强制：master 与 provisioned env **二选一**（皆设或皆缺 → 启动 fail-closed）。
   - 轮换：`master rotation` → 重跑 `derive-service-keys` 重新分发 → 验签 try current 后 previous，

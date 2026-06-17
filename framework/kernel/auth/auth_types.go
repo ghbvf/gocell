@@ -175,7 +175,7 @@ type NonceStore interface {
 }
 
 // ServiceKeyring supplies per-cell HMAC subkeys for service-token sign/verify.
-// This is the kernel projection of the runtime/auth keyrings: MasterDerivedKeyring
+// This is the kernel projection of the runtime/auth keyrings: HMACKeyRing
 // (monolith — one master, per-cell subkeys derived in-process) and
 // ProvisionedKeyring (split — master-absent, only this process's own signing
 // subkey + its declared callers' verify subkeys). Both satisfy it structurally.

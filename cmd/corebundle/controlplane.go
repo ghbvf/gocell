@@ -37,16 +37,20 @@ import (
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
 func buildInternalServiceKeyring(adapterMode string) (kauth.ServiceKeyring, error) {
 	master := os.Getenv(auth.EnvServiceSecret)
-	signing := os.Getenv(auth.EnvServiceSigningKey)
 	masterMode := master != ""
-	provisionedMode := signing != ""
+	// Detect provisioned (split) mode from the FULL split env family, not just the
+	// signing-key sentinel: a partial split config (e.g. only GOCELL_SERVICE_CELL)
+	// alongside the master must be caught as the ambiguous both-modes case, never
+	// silently boot master mode holding the master (#2153 F1).
+	provisionedMode := auth.AnySplitEnvSet()
 
 	switch {
 	case masterMode && provisionedMode:
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-			"service-token keyring config is ambiguous: both master ("+auth.EnvServiceSecret+") and "+
-				"provisioned ("+auth.EnvServiceSigningKey+") modes are set; a split cell must hold only its "+
-				"per-cell subkeys, never the master")
+			"service-token keyring config is ambiguous: the master secret ("+auth.EnvServiceSecret+") and one "+
+				"or more split per-cell provisioning vars ("+auth.EnvServiceOwnCell+" / "+auth.EnvServiceSigningKey+
+				" / "+auth.EnvServiceVerifyKeys+") are both set; a split cell must hold only its per-cell subkeys, "+
+				"never the master")
 	case provisionedMode:
 		ring, err := auth.LoadProvisionedKeyringFromEnv()
 		if err != nil {

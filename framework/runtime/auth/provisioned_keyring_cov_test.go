@@ -8,10 +8,13 @@ package auth
 
 import (
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 func TestLoadProvisionedKeyringFromEnv_RoundTrip(t *testing.T) {
@@ -70,6 +73,58 @@ func TestLoadProvisionedKeyringFromEnv_Errors(t *testing.T) {
 			t.Setenv(EnvServiceVerifyKeysPrevious, tc.verifyPrev)
 			_, err := LoadProvisionedKeyringFromEnv()
 			require.Error(t, err)
+		})
+	}
+}
+
+// TestLoadProvisionedKeyringFromEnv_PreviousVerifyCallerAbsentFromCurrent verifies
+// that a GOCELL_SERVICE_VERIFY_KEYS_PREVIOUS entry naming a caller absent from the
+// current verify set is rejected at load (#2153 F2). The current map is the set of
+// accepted callers, so a stray previous entry would otherwise be silently dropped
+// and only surface as a runtime 401 — a rotation misconfiguration must fail-fast at
+// startup instead.
+func TestLoadProvisionedKeyringFromEnv_PreviousVerifyCallerAbsentFromCurrent(t *testing.T) {
+	master := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
+	pk, err := DeriveProvisionedKeys(master, "configcore", []string{"accesscore", "auditcore"})
+	require.NoError(t, err)
+
+	t.Setenv(EnvServiceOwnCell, "configcore")
+	t.Setenv(EnvServiceSigningKey, hex.EncodeToString(pk.SigningCurrent))
+	t.Setenv(EnvServiceSigningKeyPrevious, hex.EncodeToString(pk.SigningPrevious))
+	// Current verify covers only accesscore; previous names auditcore — absent from
+	// the current set, so it would be silently dropped without the closed-set guard.
+	t.Setenv(EnvServiceVerifyKeys, FormatVerifyKeys(map[string][]byte{"accesscore": pk.VerifyCurrent["accesscore"]}))
+	t.Setenv(EnvServiceVerifyKeysPrevious, FormatVerifyKeys(map[string][]byte{"auditcore": pk.VerifyPrevious["auditcore"]}))
+
+	_, err = LoadProvisionedKeyringFromEnv()
+	require.Error(t, err, "previous verify key naming a caller absent from current must fail-fast, not silently drop")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
+}
+
+// TestAnySplitEnvSet verifies that AnySplitEnvSet reports true when ANY single
+// split-mode provisioning env var is set, and false when none are (#2153 F1). The
+// composition-root XOR guard relies on this to detect a partial split config that
+// must not coexist with the master secret.
+func TestAnySplitEnvSet(t *testing.T) {
+	clearSplitEnv := func(t *testing.T) {
+		t.Helper()
+		for _, name := range splitProvisioningEnvVars {
+			t.Setenv(name, "")
+		}
+	}
+
+	t.Run("none set", func(t *testing.T) {
+		clearSplitEnv(t)
+		assert.False(t, AnySplitEnvSet(), "no split env set → false")
+	})
+
+	for _, name := range splitProvisioningEnvVars {
+		t.Run("only "+name, func(t *testing.T) {
+			clearSplitEnv(t)
+			t.Setenv(name, "x")
+			assert.True(t, AnySplitEnvSet(), "%s set → true", name)
 		})
 	}
 }

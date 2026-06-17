@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
@@ -51,12 +52,18 @@ func runDeriveServiceKeys(_ context.Context, args []string) error {
 			"  Run 'gocell derive-service-keys -h' for help")
 	}
 
+	callerList := parseCallerList(*callers)
+	// Validate operator input at the CLI boundary BEFORE touching the master
+	// secret, so malformed --cell/--callers classify as input errors (#2153 F4).
+	if err := validateDeriveInput(*cellID, callerList); err != nil {
+		return err
+	}
+
 	master, err := loadMasterKeyRing()
 	if err != nil {
 		return err
 	}
 
-	callerList := parseCallerList(*callers)
 	if len(callerList) == 0 {
 		// Make an empty caller set visible: the resulting keyring verifies NO
 		// inbound caller. Legitimate only for an outbound-only cell; otherwise a
@@ -73,6 +80,30 @@ func runDeriveServiceKeys(_ context.Context, args []string) error {
 	}
 
 	return emitProvisionedEnv(os.Stdout, pk)
+}
+
+// validateDeriveInput validates operator-supplied CLI input (the --cell id and
+// each --callers entry) at the CLI boundary. A malformed value is classified as
+// KindInvalid / ERR_AUTH_INVALID_INPUT — a 4xx-class operator input error,
+// distinct from the KindInternal / ERR_AUTH_KEY_INVALID that signals corrupt key
+// material (#2153 F4). This lets scripts and automation route usage errors apart
+// from genuine internal key failures. The offending value is carried as a public
+// detail so it surfaces to the operator (these are operator-typed CLI args, not
+// secrets).
+func validateDeriveInput(cellID string, callers []string) error {
+	if !metadata.MatchCellID(cellID) {
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
+			"derive-service-keys: --cell is not a valid cell id",
+			errcode.WithDetails(errcode.PublicString("cell", cellID)))
+	}
+	for _, c := range callers {
+		if !metadata.MatchCellID(c) {
+			return errcode.New(errcode.KindInvalid, errcode.ErrAuthInvalidInput,
+				"derive-service-keys: --callers contains an invalid cell id",
+				errcode.WithDetails(errcode.PublicString("caller", c)))
+		}
+	}
+	return nil
 }
 
 // loadMasterKeyRing reads GOCELL_SERVICE_SECRET (required) and

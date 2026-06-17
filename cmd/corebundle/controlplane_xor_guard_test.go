@@ -143,6 +143,45 @@ func TestBuildInternalServiceKeyring_XOR_OnlyProvisioned_ByteConsistency(t *test
 			"any drift means env encode/decode is broken and cross-cell token verification will fail silently")
 }
 
+// TestBuildInternalServiceKeyring_XOR_MasterPlusPartialSplitEnv verifies that the
+// XOR guard detects the ambiguous both-modes case even when the split config is
+// PARTIAL — e.g. the master secret plus only GOCELL_SERVICE_CELL (no signing key).
+// Deriving provisioned mode from the signing-key sentinel alone (the #2153 F1 bug)
+// let such a config slip past the guard and silently boot master mode while still
+// holding the master — exactly what a split cell must never do. provisionedMode
+// must derive from the FULL split env family, so the master secret plus ANY split
+// env var fails closed.
+func TestBuildInternalServiceKeyring_XOR_MasterPlusPartialSplitEnv(t *testing.T) {
+	// Each split env var, on its own, must be enough to make "master also set"
+	// ambiguous. The signing key is covered by _XOR_BothSet; this pins the rest.
+	partialSplitVars := []string{
+		auth.EnvServiceOwnCell,
+		auth.EnvServiceSigningKeyPrevious,
+		auth.EnvServiceVerifyKeys,
+		auth.EnvServiceVerifyKeysPrevious,
+	}
+	for _, v := range partialSplitVars {
+		t.Run(v, func(t *testing.T) {
+			// Master present; signing-key sentinel explicitly absent; only ONE
+			// partial split var set. The guard fires before any key parsing, so the
+			// value shape is irrelevant — only presence matters.
+			t.Setenv(auth.EnvServiceSecret, freshTestServiceSecret(t))
+			t.Setenv(auth.EnvServiceOwnCell, "")
+			t.Setenv(auth.EnvServiceSigningKey, "")
+			t.Setenv(auth.EnvServiceSigningKeyPrevious, "")
+			t.Setenv(auth.EnvServiceVerifyKeys, "")
+			t.Setenv(auth.EnvServiceVerifyKeysPrevious, "")
+			t.Setenv(v, "configcore")
+
+			_, err := buildInternalServiceKeyring("")
+			require.Error(t, err,
+				"master + partial split env (%s) must be rejected as ambiguous, not silently boot master mode", v)
+			assert.Contains(t, err.Error(), auth.EnvServiceSecret,
+				"conflict error must name the master env var so the operator can diagnose it")
+		})
+	}
+}
+
 // hex32hex returns a 32-byte zero key hex-encoded, suitable as a syntactically
 // valid (though semantically trivial) provisioned subkey in XOR guard tests that
 // are only checking error paths (key length validation is not the test target).
