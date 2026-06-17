@@ -155,6 +155,16 @@ services:
       # 0.0.0.0 required for CI host-side WaitForReady; production must bind to 127.0.0.1
       GOCELL_HTTP_HEALTH_ADDR: "0.0.0.0:9091"
 
+      # gRPC session-verify listener (PR-11 #1154 — always-on once accesscore
+      # registers grpc.auth.session.verify.v1; bootstrap fail-fasts if unwired).
+      # Service-to-service introspection, so bind loopback like the internal
+      # listener above. corebundle runs durable mode here (real + postgres), which
+      # forces gRPC TLS unless an explicit plaintext opt-in — this e2e fixture is
+      # loopback-only plaintext (matching sslmode=disable PG / plaintext Redis +
+      # AMQP), so opt in. Production mounts GOCELL_GRPC_TLS_CERT_FILE/KEY instead.
+      GOCELL_GRPC_ADDR: "127.0.0.1:9095"
+      GOCELL_GRPC_ALLOW_INSECURE: "true"
+
       # Admin provisioning: operator calls POST /setup/admin protected by HTTP
       # Basic Auth using the bootstrap credentials in env_file below.
       # The bootstrap-admin.sh step calls that endpoint immediately after
