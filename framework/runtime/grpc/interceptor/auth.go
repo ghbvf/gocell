@@ -250,10 +250,12 @@ func WithPermissionResolver(r PermissionResolver) AuthOption {
 // uses to extract the per-message resource for owner-scoped authz (#2207). When a
 // method resolves to a field name, the interceptor extracts that field from the
 // first received request message (unary: the only message; streaming: first RecvMsg)
-// via protoreflect, canonicalizes it via ParseCanonicalUUID, and forwards it as the
-// PDP resource instead of fullMethod. F3 fail-closed: if extraction fails for any
-// reason (not proto.Message, field absent, wrong kind, empty/non-canonical value) the
-// gate DENIES — it never falls back to fullMethod. In production the SOLE installer
+// via protoreflect, canonicalizes it via ParseCanonicalUUID (UUID → canonical, else
+// forwarded raw — exact HTTP RequirePermissionForResource parity), and forwards it as
+// the PDP resource instead of fullMethod. F3 fail-closed: a STRUCTURAL extraction
+// failure (not proto.Message, declared field absent, wrong kind) DENIES — it never
+// falls back to fullMethod. A value-level case (empty / non-UUID) is forwarded to the
+// PDP, not denied (so admin/operator who ignore the resource still pass). The SOLE installer
 // is chain.go (GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01). A nil resolver is a no-op;
 // the default (no resolver) is the coarse fallback (fullMethod as resource).
 // LAST-WINS: like password-reset exemption, the resource map has a single source.

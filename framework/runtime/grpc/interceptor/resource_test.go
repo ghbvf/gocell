@@ -79,22 +79,26 @@ func TestExtractResourceFieldValue_FieldNotFound(t *testing.T) {
 	assert.False(t, ok, "absent field must return false")
 }
 
-// TestExtractResourceFieldValue_EmptyValue verifies an empty string field
-// returns ("", false).
+// TestExtractResourceFieldValue_EmptyValue verifies an empty string field is
+// FORWARDED as "" (HTTP parity — the value is not a gate-level deny; the PDP rejects
+// it for an owner but admin/operator still pass). Only structural failures deny.
 func TestExtractResourceFieldValue_EmptyValue(t *testing.T) {
 	t.Parallel()
 	req := healthCheckReqWith("") // proto default = ""
-	_, ok := extractResourceFieldValue(req, "service")
-	assert.False(t, ok, "empty field value must return false")
+	got, ok := extractResourceFieldValue(req, "service")
+	require.True(t, ok, "empty field value is forwarded, not a structural failure")
+	assert.Equal(t, "", got)
 }
 
 // TestExtractResourceFieldValue_NonCanonicalUUID verifies a non-UUID string is
-// rejected by ParseCanonicalUUID.
+// FORWARDED raw (HTTP parity — ParseCanonicalUUID only normalizes UUIDs; non-UUID ids
+// pass through unchanged for the PDP to compare). Denying here would block admin.
 func TestExtractResourceFieldValue_NonCanonicalUUID(t *testing.T) {
 	t.Parallel()
-	req := healthCheckReqWith("not-a-uuid")
-	_, ok := extractResourceFieldValue(req, "service")
-	assert.False(t, ok, "non-canonical UUID must return false")
+	req := healthCheckReqWith("device-1")
+	got, ok := extractResourceFieldValue(req, "service")
+	require.True(t, ok, "non-UUID value is forwarded raw, not a structural failure")
+	assert.Equal(t, "device-1", got)
 }
 
 // TestExtractResourceFieldValue_UppercaseUUID verifies that uppercase UUIDs are
@@ -150,10 +154,12 @@ func TestExtractResourceForUnary_SuccessfulExtraction(t *testing.T) {
 // extraction failure → ("", RESOURCE_UNRESOLVED deny error).
 func TestExtractResourceForUnary_ExtractionFailure(t *testing.T) {
 	t.Parallel()
+	// Structural failure: the declared resource field does not exist on the message.
+	// (A non-UUID VALUE is forwarded, not denied — see extractResourceFieldValue.)
 	cfg := authConfig{
-		resourceFor: func(string) (string, bool) { return "service", true },
+		resourceFor: func(string) (string, bool) { return "nonexistent_field", true },
 	}
-	req := healthCheckReqWith("not-a-uuid")
+	req := healthCheckReqWith(testDeviceUUID)
 	res, denyErr := extractResourceForUnary(context.Background(), cfg, nil, "/svc/Method", req)
 	assert.Equal(t, "", res)
 	require.Error(t, denyErr)
@@ -163,10 +169,10 @@ func TestExtractResourceForUnary_ExtractionFailure(t *testing.T) {
 	assert.Equal(t, msgGRPCResourceUnresolved, st.Message())
 	ei := errorInfoOf(t, denyErr)
 	assert.Equal(t, "RESOURCE_UNRESOLVED", ei.GetReason())
-	// PII check: extracted value must NOT appear in metadata.
+	// PII check: no resource value appears in metadata (only method + permission).
 	assert.Equal(t, "/svc/Method", ei.GetMetadata()["method"])
 	for _, v := range ei.GetMetadata() {
-		assert.NotEqual(t, "not-a-uuid", v, "extracted non-UUID must not appear in ErrorInfo.Metadata")
+		assert.NotEqual(t, testDeviceUUID, v, "extracted value must not appear in ErrorInfo.Metadata")
 	}
 }
 
@@ -212,11 +218,12 @@ func TestUnaryAuth_ResourceExtraction_Failure(t *testing.T) {
 			return authz.PermDeviceConsume(), true
 		}),
 		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
-		WithResourceResolver(func(string) (string, bool) { return "service", true }),
+		// Structural failure: declared resource field absent from the message.
+		WithResourceResolver(func(string) (string, bool) { return "nonexistent_field", true }),
 	}
 	called := false
 	handler := func(_ context.Context, _ any) (any, error) { called = true; return "ok", nil }
-	req := healthCheckReqWith("not-a-uuid")
+	req := healthCheckReqWith(testDeviceUUID)
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Watch"}
 
 	iv := UnaryAuth(stubVerifier{claims: kauth.Claims{Subject: "sub-1"}}, opts...)
@@ -313,15 +320,17 @@ func TestResourceGatedStream_FirstRecvMsg_ExtractionFailure(t *testing.T) {
 	t.Parallel()
 
 	p := &auth.Principal{Subject: "user-1"}
+	// Structural failure: declared resource field absent from the message (a non-UUID
+	// VALUE would be forwarded, not denied — see extractResourceFieldValue).
 	cfg := authConfig{
 		permissionFor: func(string) (authz.Permission, bool) { return authz.PermDeviceConsume(), true },
 		authorizer:    stubAuthorizer{dec: mustAllow()},
-		resourceFor:   func(string) (string, bool) { return "service", true },
+		resourceFor:   func(string) (string, bool) { return "nonexistent_field", true },
 	}
 
 	inner := &stubServerStream{
 		ctx:      bearerCtx(),
-		messages: []any{healthCheckReqWith("not-a-uuid")},
+		messages: []any{healthCheckReqWith(testDeviceUUID)},
 	}
 	rgs := &resourceGatedStream{
 		ServerStream: inner,
@@ -329,7 +338,7 @@ func TestResourceGatedStream_FirstRecvMsg_ExtractionFailure(t *testing.T) {
 		cfg:          cfg,
 		p:            p,
 		fullMethod:   "/pkg.Svc/Watch",
-		fieldName:    "service",
+		fieldName:    "nonexistent_field",
 	}
 
 	msg := &grpc_health_v1.HealthCheckRequest{}

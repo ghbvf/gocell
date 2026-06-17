@@ -25,24 +25,29 @@ import (
 )
 
 // extractResourceFieldValue extracts the string value of fieldName from msg using
-// protoreflect. It is the inner extraction primitive shared by unary and streaming
-// paths. It returns (canonicalUUID, true) on success, ("", false) on any failure:
+// protoreflect, then applies the SAME canonicalization HTTP RequirePermissionForResource
+// uses (ParseCanonicalUUID: canonical form when the value is a UUID, raw value otherwise).
+// It returns (resource, true) for ANY value the field holds — including empty and
+// non-UUID strings — and ("", false) ONLY on a STRUCTURAL failure:
 //
 //   - msg is not a proto.Message (req is `any` in gRPC interceptors).
-//   - The field is not found in the message descriptor.
+//   - The declared field is not found in the message descriptor (misconfiguration).
 //   - The field's kind is not a string (wrong type in the proto schema).
-//   - The extracted string value is empty.
-//   - The string is not a canonical UUID (ParseCanonicalUUID rejects it).
 //
-// Callers treat ("", false) as a hard denial (F3 fail-closed) — they MUST NOT fall
-// back to fullMethod.
+// The VALUE is never a gate-level deny: an empty or non-UUID value is FORWARDED to the
+// PDP, which decides — a coarse grant (admin/operator) ignores the resource and still
+// passes; an owner match needs subject == resource, so an empty/foreign value simply
+// fails the ownership rule. This is exact HTTP parity: denying on a non-UUID value here
+// would WRONGLY block admin/operator (who never consult the resource) for any
+// owner-scoped method whose id is not a UUID. Callers treat ("", false) as a hard denial
+// (F3 fail-closed — a structural failure means the resource selector itself is broken)
+// and MUST NOT fall back to fullMethod.
 func extractResourceFieldValue(msg any, fieldName string) (string, bool) {
 	pm, ok := msg.(proto.Message)
 	if !ok {
 		return "", false
 	}
-	md := pm.ProtoReflect().Descriptor()
-	fd := md.Fields().ByName(protoreflect.Name(fieldName))
+	fd := pm.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(fieldName))
 	if fd == nil {
 		return "", false
 	}
@@ -50,14 +55,10 @@ func extractResourceFieldValue(msg any, fieldName string) (string, bool) {
 		return "", false
 	}
 	raw := pm.ProtoReflect().Get(fd).String()
-	if raw == "" {
-		return "", false
+	if canonical, ok := httputil.ParseCanonicalUUID(raw); ok {
+		return canonical, true
 	}
-	canonical, ok := httputil.ParseCanonicalUUID(raw)
-	if !ok {
-		return "", false
-	}
-	return canonical, true
+	return raw, true
 }
 
 // extractResourceForUnary resolves the PDP resource for a unary interceptor call.
