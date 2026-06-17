@@ -219,6 +219,24 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 All three addresses must be non-empty and distinct; startup fails fast otherwise.
 
+## gRPC Listener (PR-11 #1154)
+
+`cmd/corebundle` binds **one always-on gRPC listener** on `cell.PrimaryListener` (the same
+listener ROLE as the HTTP primary listener — independent sockets, not one socket serving both
+protocols). It is required because accesscore serves the `grpc.auth.session.verify.v1`
+service-to-service token-introspection contract there (the first platform-cell gRPC service);
+the cell registers the service unconditionally, so bootstrap fails fast if no gRPC listener is
+wired. There is no per-slice toggle — only the bind address and transport security are
+configurable.
+
+| Variable | Purpose | Default | Accepted Values |
+|---|---|---|---|
+| `GOCELL_GRPC_ADDR` | gRPC listener bind address (service-to-service RPC) | `:9095` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use a specific interface in production. |
+| `GOCELL_GRPC_TLS_CERT_FILE` | PEM server certificate path (enables server TLS) | unset | Must be set together with `GOCELL_GRPC_TLS_KEY_FILE`. |
+| `GOCELL_GRPC_TLS_KEY_FILE` | PEM server private-key path (enables server TLS) | unset | Must be set together with `GOCELL_GRPC_TLS_CERT_FILE`. |
+| `GOCELL_GRPC_TLS_CLIENT_CA_FILE` | PEM client-CA path (enables mTLS — verifies client certs) | unset | Optional; only consumed when cert+key are set. |
+| `GOCELL_GRPC_ALLOW_INSECURE` | Explicit opt-in to run plaintext gRPC in durable/real mode | unset | Set to `true` only behind a TLS-terminating sidecar. In durable mode, startup **fails fast** if no TLS material is set and this is not `true` (demo mode runs plaintext by default; the adapter logs a Warn on a non-loopback plaintext bind). |
+
 ## Observability / Monitoring
 
 | Variable | Purpose | Default | Required |

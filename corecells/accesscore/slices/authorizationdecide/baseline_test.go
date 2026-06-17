@@ -138,6 +138,64 @@ func TestBuiltinBaseline_SystemRead(t *testing.T) {
 	}
 }
 
+// TestBuiltinBaseline_SessionVerify proves the #1154 baseline rule: admin and
+// super-admin are granted session:verify (the accesscore sessionverifyrpc gRPC
+// gate), while ordinary users / role-less principals are denied — action-scoped,
+// role-literal-free, the same shape as the system:read rule. The grant surface is
+// what the gRPC PDP gate (#2008) enforces for grpc.auth.session.verify.v1.
+func TestBuiltinBaseline_SessionVerify(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	sessionVerifyAction := authz.PermSessionVerify().String()
+
+	tests := []struct {
+		name      string
+		principal *auth.Principal
+		wantAllow bool
+	}{
+		{
+			name: "admin + session:verify → Allow (baseline grants)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "admin-1", TenantID: testTenantIDStr,
+				Roles: []string{auth.RoleAdmin},
+			},
+			wantAllow: true,
+		},
+		{
+			name: "super-admin + session:verify → Allow (baseline grants)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "sadmin-1", TenantID: testTenantIDStr,
+				Roles: []string{auth.RoleSuperAdmin},
+			},
+			wantAllow: true,
+		},
+		{
+			name: "ordinary user + session:verify → Deny (default-deny)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "user-1", TenantID: testTenantIDStr,
+				Roles: []string{"viewer"},
+			},
+			wantAllow: false,
+		},
+		{
+			name: "no roles + session:verify → Deny (default-deny)",
+			principal: &auth.Principal{
+				Kind: auth.PrincipalUser, Subject: "user-2", TenantID: testTenantIDStr,
+				Roles: nil,
+			},
+			wantAllow: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := attributeResolver{principal: tt.principal}
+			dec, _ := svc.evaluate(nil, resolver, sessionVerifyAction)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow())
+		})
+	}
+}
+
 // TestBuiltinBaseline_ConfigcorePerms proves the PR-10b configcore baseline
 // rules reproduce the existing admin gate: admin/super-admin → Allow, ordinary
 // user / no-roles → Deny, for each of the 5 migrated configcore permissions.

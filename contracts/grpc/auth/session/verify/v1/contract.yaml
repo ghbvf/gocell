@@ -1,0 +1,20 @@
+id: grpc.auth.session.verify.v1
+kind: grpc
+ownerCell: accesscore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients: []
+  grpc:
+    service: auth.session.verify.v1.SessionVerifyService
+    proto: contracts/grpc/auth/session/verify/v1/session_verify.proto
+    # Per-method ABAC permission overlay (#2008). VerifyToken is an authed,
+    # service-to-service introspection RPC gated on session:verify (admin/super-admin
+    # baseline; non-admin service callers granted via tenant policy overlay). The
+    # interceptor PDP gate enforces this before the handler runs; the handler does
+    # not hand-authorize. Strict fail-closed: every non-public RPC must appear here
+    # (completeness pre-pass), else it is a dead 403.
+    methods:
+      - name: VerifyToken
+        permission: session:verify

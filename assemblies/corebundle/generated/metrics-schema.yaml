@@ -272,6 +272,38 @@ metrics:
         - cell
         - slice
       file: framework/runtime/observability/metrics/eventbus_cache.go
+    - name: grpc_server_request_duration_seconds
+      fqName: gocell_grpc_server_request_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: gRPC unary server request duration in seconds.
+      labels:
+        - method
+        - code
+        - cell
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: cmd/corebundle/run.go
+    - name: grpc_server_requests_total
+      fqName: gocell_grpc_server_requests_total
+      namespace: gocell
+      type: counter
+      help: Total number of gRPC unary server requests.
+      labels:
+        - method
+        - code
+        - cell
+      file: cmd/corebundle/run.go
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell

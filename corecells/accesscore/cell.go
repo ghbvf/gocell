@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogout"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionverifyrpc"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -420,6 +421,13 @@ type AccessCore struct {
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
 	validateSvc *sessionvalidate.Service
 	authzSvc    *authorizationdecide.Service
+
+	// verifyRPCServer serves the grpc.auth.session.verify.v1 contract (first
+	// platform-cell grpc service, PR-11 #1154). It carries no +slice:route marker —
+	// grpc serve is derived by cellgen from slice.yaml contractUsages[role=serve]
+	// (#1601), which resolves this field by "pointer-type package == sliceID"
+	// (sessionverifyrpc) and emits the reg.GRPCService(...) call into cell_gen.go.
+	verifyRPCServer *sessionverifyrpc.Server
 
 	// +slice:route:slice=rbaccheck,subPath=/roles
 	rbacHandler *rbaccheck.Handler

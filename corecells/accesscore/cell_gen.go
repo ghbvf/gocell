@@ -7,12 +7,15 @@ import (
 	"context"
 	"fmt"
 
+	"google.golang.org/grpc"
+
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 	sub2 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
 	sub3 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
+	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
 
 var _ cell.Cell = (*AccessCore)(nil)
@@ -113,6 +116,20 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
 
 	if err := sub3.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "accesscore", "sessionlogout").Mount(reg); err != nil {
 		return fmt.Errorf("accesscore: subscribe event.role.revoked.v1: %w", err)
+	}
+
+	if err := reg.GRPCService(cell.GRPCServiceSpec{
+		ContractID: "grpc.auth.session.verify.v1",
+		CellID:     "accesscore",
+		Listener:   cell.PrimaryListener,
+		MethodPermissions: map[string]string{
+			"/auth.session.verify.v1.SessionVerifyService/VerifyToken": "session:verify",
+		},
+		Register: func(r grpc.ServiceRegistrar) {
+			grpc0.RegisterSessionVerifyServiceServer(r, c.verifyRPCServer)
+		},
+	}); err != nil {
+		return fmt.Errorf("accesscore: grpc-serve grpc.auth.session.verify.v1: %w", err)
 	}
 
 	return nil

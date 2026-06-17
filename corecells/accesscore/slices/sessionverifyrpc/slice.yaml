@@ -1,0 +1,14 @@
+id: sessionverifyrpc
+belongsToCell: accesscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages:
+  - contract: grpc.auth.session.verify.v1
+    role: serve
+verify:
+  unit:
+    - unit.sessionverifyrpc.server
+  contract:
+    - contract.grpc.auth.session.verify.v1.serve
+allowedFiles:
+  - corecells/accesscore/slices/sessionverifyrpc/**

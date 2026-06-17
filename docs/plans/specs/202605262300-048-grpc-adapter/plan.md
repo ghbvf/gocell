@@ -402,6 +402,13 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **Est.**: 400 lines
 - **Risk**: real platform cell tests the `adapters/` decoupling more aggressively than examples; any leakage surfaces here.
 
+> **As-built (PR-11 #1154)** — corrections to the sketch above:
+> 1. **Paths use the `auth/` domain** (accesscore's contract namespace), not `access/`: contract `grpc.auth.session.verify.v1` at `contracts/grpc/auth/session/verify/v1/`, slice `corecells/accesscore/slices/sessionverifyrpc/` (repo uses `corecells/`, not `cells/`).
+> 2. **Forced corebundle gRPC wiring** (beyond the 5-file sketch): a cell registering a gRPC service makes `cmd/corebundle` bootstrap fail-fast (`checkOrphanGRPCServices`) without a `WithGRPCListener`, so PR-11 also wires an always-on gRPC listener (`:9095`, TLS fail-closed in durable mode) into corebundle + a shared-authorizer seam `bootstrap.AuthorizerFromCells` (corebundle can't import `corecells/`). Listener-topology + env-vars docs updated.
+> 3. **New `session:verify` permission** minted + accesscore PDP baseline grant (admin/super-admin) — the gate keys on a fine-grained permission per the repo's per-concern convention, not a reused one.
+> 4. **Introspection response shape** (`{valid, ...claims}` uniform for success+failure; gRPC error only for infra-unavailable) — decouples PR-11 from the unshipped errcode→codes mapping (PR-12 #1155), and prevents session-state enumeration.
+> 5. **`GRPC-CELL-REGISTRAR-LAYER-01` scope-extension is already satisfied** by the existing `cells-isolation` strict-allow-list depguard (scope includes `**/corecells/**`; `adapters/` is not allow-listed, so `corecells/ → adapters/grpc` is already denied) — no new archtest added.
+
 ### PR 12 — closure: errcode mapping + remaining middleware + governance + docs ⚡
 
 - **Scope**: explicit `errcode.Kind → codes.Code` mapping (ADR-fixed table); RateLimit + CircuitBreaker interceptors; governance rule FMT extension for `kind: grpc`; closure docs.

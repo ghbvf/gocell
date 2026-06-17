@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionlogout"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/corecells/accesscore/slices/sessionverifyrpc"
 	"github.com/ghbvf/gocell/corecells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/healthz"
@@ -276,6 +277,14 @@ func (c *AccessCore) initSlices() error {
 	}
 	c.validateSvc = validateSvc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionvalidate.SliceMetadata()))
+
+	// session-verify gRPC slice (grpc.auth.session.verify.v1, PR-11 #1154 — first
+	// platform-cell gRPC service): exposes the session-validate verifier as an
+	// internal service-to-service introspection RPC, reusing c.validateSvc (no
+	// duplicated JWT/session logic). cellgen derives the reg.GRPCService(...) call
+	// into cell_gen.go from slice.yaml contractUsages[role=serve].
+	c.verifyRPCServer = sessionverifyrpc.NewServer(c.validateSvc)
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(sessionverifyrpc.SliceMetadata()))
 
 	// session-refresh uses refresh.Store for token state validation and
 	// rotation. No JWT verifier is needed — the opaque wire format is

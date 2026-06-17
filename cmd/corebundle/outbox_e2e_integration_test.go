@@ -287,6 +287,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
 		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{accessCell}, asm.CellIDs()),
 	}
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
 	// buildConfigCoreCellFromShared so its Worker/Close/Checkers lifecycle is independently
@@ -622,6 +624,8 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{accessCell}, asm.CellIDs()),
 	}
 	app := newBootstrapFromOptions(asm.Clock(), append(append(baseOpts, authzOpt), relayBootstrapOpts...))
 

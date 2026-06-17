@@ -47,6 +47,17 @@ Kubelet / Prometheus    │              health  :9091                │
 | internal | `127.0.0.1:9090`    | `GOCELL_HTTP_INTERNAL_ADDR` |
 | health   | `127.0.0.1:9091` local/dev default; use `:9091` for PodIP/Service probes | `GOCELL_HTTP_HEALTH_ADDR` |
 | admin    | `127.0.0.1:9093` (loopback; operator control-plane, optional — declared only when an admin endpoint is wired) | composition-root supplied (e.g. `127.0.0.1:9093` in the todoorder demo) |
+| grpc     | `:9095` (always-on; service-to-service RPC on `cell.PrimaryListener`, PR-11 #1154) | `GOCELL_GRPC_ADDR` |
+
+`cmd/corebundle` also binds **one always-on gRPC listener** (`:9095`) on the
+`cell.PrimaryListener` ROLE — an independent TCP socket from the HTTP primary listener, in a
+separate bootstrap namespace (the shared ref is a role, not a port). It is required because
+accesscore serves the `grpc.auth.session.verify.v1` token-introspection contract there (first
+platform-cell gRPC service); the cell registers the service unconditionally, so bootstrap fails
+fast if no gRPC listener is wired. Transport security mirrors the HTTP fail-closed posture:
+durable/real mode requires `GOCELL_GRPC_TLS_CERT_FILE` + `GOCELL_GRPC_TLS_KEY_FILE` (optionally
+`GOCELL_GRPC_TLS_CLIENT_CA_FILE` for mTLS), or an explicit `GOCELL_GRPC_ALLOW_INSECURE=true` to
+run plaintext behind a TLS-terminating sidecar. See `docs/ops/env-vars.md` § gRPC Listener.
 
 For full variable reference see `docs/ops/env-vars.md`.
 

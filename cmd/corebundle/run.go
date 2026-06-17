@@ -35,7 +35,9 @@ import (
 
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
 	"github.com/ghbvf/gocell/framework/runtime/lifecycle"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // runCorebundle is the handwritten runtime half behind the generated
@@ -103,11 +105,49 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if rtErr != nil {
 			return nil, fmt.Errorf("default runtime options: %w", rtErr)
 		}
-		authzOpt, authzErr := bootstrap.PrimaryAuthorizerOption(cells)
+		// Resolve the single ABAC PDP (accesscore) ONCE from the cell list and feed
+		// the SAME lazy authorizer to BOTH the HTTP primary listener and the gRPC
+		// per-method gate, so the startup ResolveAuthorizer (HTTP router build)
+		// resolves it once and gRPC observes the identical live PDP. corebundle cannot
+		// import corecells/ (corebundle-no-cells depguard), so discovery goes through
+		// the structural authorizerProvider duck-type in bootstrap.
+		authorizer, authzErr := bootstrap.AuthorizerFromCells(cells)
 		if authzErr != nil {
 			return nil, fmt.Errorf("primary authorizer wiring: %w", authzErr)
 		}
-		opts = append(opts, authzOpt)
+		opts = append(opts, bootstrap.WithPrimaryAuthorizer(authorizer))
+
+		// gRPC listener (PR-11 #1154 — first platform-cell gRPC service): accesscore
+		// serves grpc.auth.session.verify.v1 on cell.PrimaryListener (cell_gen.go
+		// reg.GRPCService), so a gRPC listener with that ref MUST be wired or bootstrap
+		// phase7b fails fast (checkOrphanGRPCServices). It is always-on: the cell
+		// registers the service unconditionally, so there is no per-slice toggle — only
+		// the listen address is env-configurable (grpc.go). The interceptor PDP gate
+		// uses the SAME authorizer as HTTP; with a real metrics provider it lands gRPC
+		// PDP-decision metrics at HTTP parity (#2008 F8). cell.PrimaryListener is shared
+		// by the HTTP and gRPC listeners as a ROLE (ref); they are independent sockets
+		// in separate bootstrap namespaces, not one socket serving both protocols.
+		grpcCollector, gcErr := obmetrics.NewGRPCProviderCollector(compShared.MetricsProvider, obmetrics.ProviderCollectorConfig{})
+		if gcErr != nil {
+			return nil, fmt.Errorf("build grpc metrics collector: %w", gcErr)
+		}
+		grpcAddr := grpcAddrFromEnv()
+		grpcServer, gsErr := newGRPCServerFromEnv(
+			durabilityModeForTopology(compShared.Topology),
+			grpcAddr,
+			interceptor.Deps{
+				Verifier:        compShared.JWTVerifier,
+				Clock:           compShared.Clock,
+				Collector:       grpcCollector,
+				Authorizer:      authorizer,
+				MetricsProvider: compShared.MetricsProvider,
+				CellIDClosedSet: asm.CellIDs(),
+			},
+		)
+		if gsErr != nil {
+			return nil, fmt.Errorf("build grpc server: %w", gsErr)
+		}
+		opts = append(opts, bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr))
 		return opts, nil
 	}
 
