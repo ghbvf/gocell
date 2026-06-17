@@ -1,0 +1,101 @@
+package registry
+
+import "testing"
+
+// TestRegistrationState_FrozenRegistry pins the closed RegistrationState value
+// set to exactly the 8 documented states and proves the registry is non-vacuous
+// (anti-vacuity for the sealed-type value closure). Adding a new state without
+// registering it in allRegistrationStates — or renaming a wire value — trips
+// this test. Mirrors transport.TestTransportMode_FrozenRegistry.
+func TestRegistrationState_FrozenRegistry(t *testing.T) {
+	t.Parallel()
+
+	got := make(map[string]int, len(allRegistrationStates))
+	for _, s := range allRegistrationStates {
+		got[s.String()]++
+	}
+
+	want := map[string]int{
+		"submitted":        1,
+		"probing":          1,
+		"conformant":       1,
+		"pending-approval": 1,
+		"approved":         1,
+		"rejected":         1,
+		"active":           1,
+		"retired":          1,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("registration state value set = %v, want %v", got, want)
+	}
+	for v, n := range want {
+		if got[v] != n {
+			t.Errorf("registration state %q count = %d, want %d (registry: %v)", v, got[v], n, got)
+		}
+	}
+}
+
+// TestRegistrationState_Accessors verifies each package-private singleton renders
+// the expected wire string via its exported accessor (the sole way an external
+// package can name a state — reassigning a func is a compile error).
+func TestRegistrationState_Accessors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		got  RegistrationState
+		want string
+	}{
+		{StateSubmitted(), "submitted"},
+		{StateProbing(), "probing"},
+		{StateConformant(), "conformant"},
+		{StatePendingApproval(), "pending-approval"},
+		{StateApproved(), "approved"},
+		{StateRejected(), "rejected"},
+		{StateActive(), "active"},
+		{StateRetired(), "retired"},
+	}
+	for _, tc := range cases {
+		if got := tc.got.String(); got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
+		if tc.got.IsZero() {
+			t.Errorf("%q reported IsZero", tc.want)
+		}
+		if !tc.got.isRegistered() {
+			t.Errorf("%q not registered", tc.want)
+		}
+	}
+}
+
+// TestRegistrationState_ZeroValueFailClosed verifies a forged zero value renders
+// fail-closed ("unknown"), reports IsZero, and is NOT registered.
+func TestRegistrationState_ZeroValueFailClosed(t *testing.T) {
+	t.Parallel()
+	var zero RegistrationState
+	if got := zero.String(); got != RegistrationStateUnknown {
+		t.Errorf("zero String() = %q, want %q", got, RegistrationStateUnknown)
+	}
+	if !zero.IsZero() {
+		t.Error("zero value should report IsZero")
+	}
+	if zero.isRegistered() {
+		t.Error("zero value must not be registered")
+	}
+	if zero.IsTerminal() {
+		t.Error("zero value must not be terminal")
+	}
+}
+
+// TestRegistrationState_IsTerminal verifies only rejected and retired are
+// terminal (no outgoing transitions).
+func TestRegistrationState_IsTerminal(t *testing.T) {
+	t.Parallel()
+	terminal := map[RegistrationState]bool{
+		StateRejected(): true,
+		StateRetired():  true,
+	}
+	for _, s := range allRegistrationStates {
+		if got, want := s.IsTerminal(), terminal[s]; got != want {
+			t.Errorf("%q IsTerminal() = %v, want %v", s, got, want)
+		}
+	}
+}
