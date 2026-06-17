@@ -88,7 +88,7 @@
 ## pr-review 评论（`<!-- pm:pr-review -->`，独立 review 留痕）
 
 > 评论 = 阶段 5 的五块**完整**写入（不浓缩）：summary + 根因簇 + Finding 列表（带 file:line）+ 详表 details + 修复分流 + 结论。
-> **`--check` 变体**（验证上一轮 findings，见 pr-review 模式 B）：Finding 列表每条用 `✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分` 替代「→ 簇 C{m}」；summary 用 `已修复 N / 未修复 M / 回归 K / 部分 J`；详表 `<details>` 记每条验证证据；结论给流转建议（全 ✅ → ready / 有遗留 → 回 /fix）。
+> **`--check` 变体**（验证上一轮 findings，见 pr-review 模式 B）：Finding 列表每条用 `✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分 / 🔲范围外(合理)` 替代「→ 簇 C{m}」；summary 用 `已修复 N / 未修复 M / 回归 K / 部分 J / 范围外合理 R（🔲）/ 误判OSS S`；详表 `<details>` 记每条验证证据；结论给流转建议（无触发 → ready / 有遗留含误判OSS → 回 /fix）。
 
 ```markdown
 <!-- pm:pr-review -->
