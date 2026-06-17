@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -12,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -153,6 +155,20 @@ func TestContractSubmitServe_Duplicate(t *testing.T) {
 	rec := postSubmit(t, mux, ctx, validBody)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate submit status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractSubmitServe_PayloadTooLarge: a body exceeding the JSON decode limit
+// ⇒ 413, the contract's declared payload-too-large response (the generated
+// handler's io.LimitReader(DefaultDecodeJSONLimit+1)+DecodeJSONStrict path).
+func TestContractSubmitServe_PayloadTooLarge(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	// A huge id string pushes the body past httputil.DefaultDecodeJSONLimit (1 MiB).
+	huge := strings.Repeat("a", int(httputil.DefaultDecodeJSONLimit)+1024)
+	rec := postSubmit(t, newMux(t), adminCtx(allowAuthorizer()), `{"id":"`+huge+`","kind":"http"}`)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }

@@ -72,5 +72,12 @@ func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
 	}
 	c.writeHandler = registrywrite.NewHandler(writeSvc)
 	c.readHandler = registryread.NewHandler(readSvc)
+
+	// Register the slices into the BaseCell inventory (OwnedSlices), mirroring
+	// configcore/auditcore/accesscore: the generated slice_gen.go SliceMetadata()
+	// is wired into runtime inventory rather than left dangling, so the declared
+	// slice set and the cell's runtime inventory stay in sync.
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(registrywrite.SliceMetadata()))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(registryread.SliceMetadata()))
 	return nil
 }

@@ -52,6 +52,17 @@ func TestInitInternal_WiresHandlers(t *testing.T) {
 	if c.writeHandler == nil || c.readHandler == nil {
 		t.Fatal("slice handlers nil after initInternal — generated route group would nil-deref")
 	}
+	// Both slices must be registered into the BaseCell inventory (OwnedSlices),
+	// mirroring configcore/auditcore/accesscore — declared slice set ↔ runtime
+	// inventory stay in sync.
+	owned := c.OwnedSlices()
+	ids := map[string]bool{}
+	for _, s := range owned {
+		ids[s.ID()] = true
+	}
+	if len(owned) != 2 || !ids["registrywrite"] || !ids["registryread"] {
+		t.Fatalf("OwnedSlices() = %d %v, want 2 (registrywrite + registryread)", len(owned), ids)
+	}
 }
 
 // TestInit_RegistersRegistryRouteGroup pins that the cell registers exactly one
