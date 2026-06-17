@@ -6,7 +6,7 @@
 - 关联：`docs/plans/framework-capability-gaps/202605131500-004-capability-gap-analysis.md` 缺口 4 / `…/202605162100-005-framework-capability-roadmap-plan.md` W3
 - 对标：Watermill `components/cqrs/{command_bus,command_processor}.go`（ref 见 §6）
 
-> **真值边界**：本 ADR 是 command-bus 设计决策的概念单源。各 enforcement 的符号清单 / 盲区 / 反向自检活在对应 archtest 的 package godoc（`tools/archtest/command_dispatch_funnel_test.go`）与 governance 实现（`kernel/governance/rules_command.go`），本文件只汇总决策 + 评级矩阵，不复制。PR-1 只交付**同步核心**；④ async outbox 桥 / ⑤ idempotency 桥落地时 **amend 本 ADR**（§5 演进路径 + §4 评级矩阵逐行重评）。
+> **真值边界**：本 ADR 是 command-bus 设计决策的概念单源。各 enforcement 的符号清单 / 盲区 / 反向自检活在对应 archtest 的 package godoc（`tools/archtest/command_dispatch_funnel_test.go`）与 governance 实现（`kernel/governance/rules_command.go`），本文件只汇总决策 + 评级矩阵，不复制。PR-1 最初只交付**同步核心**；后续 amendment 已把 ④ async outbox 桥、⑤ idempotency / Claimer 桥、command-entry value validation、consistencyLevel governance、真实 async producer / relay wiring、HTTP async bridge 和 generated producer wrapper 纳入本 ADR，并在对应 amendment 中逐行重评 §4 评级矩阵。
 
 ---
 
@@ -59,9 +59,9 @@ issue 立项门要「上游 Hard + 下游 Hard」。**闭环 funnel 由两条 in
 
 ---
 
-## 5. 演进路径（④/⑤ 落地时 amend 本 ADR）
+## 5. 演进路径与落地状态
 
-PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 funnel 为后续保持**前向兼容的 seam**（不预设字段，需要时加）：
+PR-1 同步核心是 W3 的第一片。`Registry` map signature 与生成码 funnel 为后续保持**前向兼容的 seam**（不预设字段，需要时加）。截至 2026-06-15，④/⑤ 及其必要 follow-up 已在下列 amendment 中落地；仍未覆盖的后续 archetype（如 saga step→command）按各自 issue 独立交付：
 
 - **④ async outbox 桥（#1667，已落地——见 §Amendment 2026-06-06）**：codegen 派生单态 `DispatchAsync(ctx, reg, entry)`（从 `entry.Payload()` JSON unmarshal 回 typed `*Request` → `LookupHandler` → 复用同一 `Handler`，丢弃 `*Response` 回 `error`）；relay 按 routing-topic 在 composition-root 注入的 dispatcher-map 中匹配 command → 在进程内触发 `DispatchAsync`，否则发 broker。JSON marshal 在 outbox 边界发生（D4 同步 type-assert 路径不变）。**判别器 = routing-topic + dispatcher-map 成员，未改 sealed `Entry` wire envelope、未引入 metadata 约定 → 未触发 contract-fanout 5 载体**（原文「携带 command kind——触及 sealed Entry wire envelope 或 topic 约定，触发 contract-fanout」+「relay 消费按 command id LookupHandler」实现为：command entry 即 `eventType = command id` 的普通 entry，`LookupHandler` 留在生成 `DispatchAsync` 体内、relay 不直接调）。
 - **⑤ idempotency 桥（#1669 映射半 + #1698 消费半，已落地）**：HTTP Idempotency-Key ↔ command_id 映射（复用 `runtime/http/idempotency` 派生 key + `kernel/idempotency.Claimer` 两阶段）。**映射原语半已落地（#1669 PR-A）**：`runtime/http/idempotency` sealed funnel 扩第二构造器 `DeriveCommandKey(tenant, subject, command_id)`——纯编译期形态，产同一 sealed `IdempotencyKey`、流同一 `Store.Claim` sink（详见 ADR-1449 §Amendment 2026-06-07）；#1610 cross-cell 同槽路由消费它。**Claimer-wrap 消费半已落地（#1698 PR-B，见 §Amendment 2026-06-08）**：`kernel/idempotency.Claimer` 两阶段包裹 relay 命令分发 + 三态生命周期；sealed-key→Claimer string-key 经新增 `IdempotencyKey.Flat()` 扁平化（node-agnostic）；per-instance 身份经 `outbox.Entry` 的 `AggregateID(subject)` + business-metadata（command_id）承载，随真实 devicecell 异步 command producer 一并落地。**§4 评级矩阵新增「命令幂等身份双向锁 funnel」行（见 §Amendment 2026-06-08）**，无 ✅→⚠️/❌ 降格。
@@ -111,7 +111,7 @@ amend 时须回到 §4 矩阵逐行重评（ai-robust.md ADR amendment 必查）
    - **可信边界**：sync `Dispatch` 的调用方是 **in-process 第一方 Go 代码**（派发 cell），非不可信 wire 输入。JSON-schema 值约束是 untrusted-JSON 的 wire 卫生规则；在 in-process typed 调用上重复执行是对编程错误的 defense-in-depth，非安全/正确性边界。
    - **D4 = 零序列化 fast-path**：`schemavalidate.Validator.Validate(ctx, body []byte)` 是 **JSON-bytes 校验器**；在 **sync** 路径复用它必须先把 typed `*Request` marshal 回 JSON——正是 D4 拒绝的 round-trip，故 sync `Dispatch` **不**复用 validator。**注意此论据只约束 sync 路径**：async `DispatchAsync` 的输入 `entry.Payload()` 本就是入站 JSON bytes，对它直接 `Validate` 不产生任何 marshal round-trip，故 async 边界复用同一 validator 与 D4 不矛盾（见 §Amendment 2026-06-08）。
 
-3. **value-validation 归属不可信 command-entry 边界**（= §5 演进路径的 ④/⑤）：HTTP→command（handler 在入 cell 前已校验 untrusted JSON）、async outbox→command（D4 已注明 JSON marshal 在 outbox 边界发生）。这些边界落地时，request schema 的值约束在**该处**执行——schemaRef 因此最终*被*执行，只是不在 in-process fast-path 上冗余重检。command-entry validation funnel 设计与 ④ async 共同落地，跟踪为 **#1588**（`Discovered via /fix #1578 F5`）——**async outbox→command 边界已交付（见 §Amendment 2026-06-08）**；HTTP→command 边界今日无 wiring，落地时复用 HTTP handler 既有 validator（sync `Dispatch` 前已校验 untrusted body）。
+3. **value-validation 归属不可信 command-entry 边界**（= §5 演进路径的 ④/⑤）：HTTP→command（handler 在入 cell 前已校验 untrusted JSON）、async outbox→command（D4 已注明 JSON marshal 在 outbox 边界发生）。这些边界落地时，request schema 的值约束在**该处**执行——schemaRef 因此最终*被*执行，只是不在 in-process fast-path 上冗余重检。command-entry validation funnel 设计与 ④ async 共同落地，跟踪为 **#1588**（`Discovered via /fix #1578 F5`）——**async outbox→command 边界已交付（见 §Amendment 2026-06-08）**；HTTP async bridge 已通过 `http.device.command.enqueue-async.v1` → generated HTTP validation → `Service.EnqueueAsync` → generated `EmitAsyncFromIdempotencyKey` → relay `DispatchAsync` 落地（见 §Amendment 2026-06-15 / #1610）。
 
 **§4 评级矩阵逐行重评（ai-robust.md ADR amendment 必查）**：本 amendment **不改 §4 任一格**。§4 双向锁矩阵约束的是 *dispatch/register funnel*（typed Handler/Register/Dispatch 仅由 codegen 派生 + raw `RegisterHandler`/`LookupHandler` 调用方收口），与 *request value-validation* 正交——后者既不放宽前者的上游/下游 Hard，也不新增伪造面。D4（golden 锁 sync 形态）、D6（codegen fail-closed 上游 Hard + governance Medium）评级不变；无 ✅→⚠️/❌ 降格，无需补偿措施。
 
