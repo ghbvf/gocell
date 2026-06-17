@@ -380,6 +380,76 @@ func TestTailer_DrainStoreError(t *testing.T) {
 	}
 }
 
+func TestTailer_DrainHeadError(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	headErr := errors.New("saga journal head unavailable")
+	src := &fakeSource{events: events(1, 2, 3), headErr: headErr}
+	store := projection.NewMemOwnerCheckpointStore()
+	applied := 0
+	apply := func(context.Context, projection.ProjectionEvent) error { applied++; return nil }
+	obs := &recordingObserver{}
+	tl := newTestTailer(t, src, store, apply, obs, newTestLocker(t, clk), clk)
+
+	err := tl.pollOnce(context.Background())
+	if !errors.Is(err, headErr) {
+		t.Fatalf("pollOnce err = %v, want wraps headErr", err)
+	}
+	// The head-bound fetch fails before replay starts: nothing applied, checkpoint
+	// untouched, no success stamp. Distinct from a checkpoint LoadOffset fault
+	// (DrainStoreError) — head failure is its own classification.
+	if applied != 0 {
+		t.Errorf("applied = %d, want 0 (head failed before replay)", applied)
+	}
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 0 {
+		t.Errorf("checkpoint = %d, want 0 (not advanced)", off)
+	}
+	_, drains, advances, _, lastOK := obs.snapshot()
+	if len(drains) != 1 || drains[0] != DrainHeadError {
+		t.Errorf("drains = %v, want [head_error]", drains)
+	}
+	if len(advances) != 0 {
+		t.Errorf("advances = %v, want none (no event reached commit)", advances)
+	}
+	if lastOK != 0 {
+		t.Errorf("lastSuccess = %d, want 0 (failed tick)", lastOK)
+	}
+}
+
+// TestTailer_NilDepErrRedaction verifies the required-dependency constructor
+// error keeps the internal dependency name off the wire (#1884): the dep name
+// flows only through the server-only InternalDetails channel, never into the
+// public Details that a 4xx response surfaces.
+func TestTailer_NilDepErrRedaction(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{}
+	store := projection.NewMemOwnerCheckpointStore()
+	apply := func(context.Context, projection.ProjectionEvent) error { return nil }
+	// nil replay dependency triggers nilDepErr("replay").
+	_, err := NewTailer(clk, nil, src, store, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("NewTailer err = %v, want *errcode.Error", err)
+	}
+	// Public wire surface must not carry the internal dependency name. FindAttr
+	// searches only e.Details (public); ok==false proves no leak.
+	if _, ok := ec.FindAttr("dependency"); ok {
+		t.Errorf("dependency name leaked to public Details: %+v", ec.Details)
+	}
+	// The dep name remains available server-side for diagnosis.
+	var internalDep string
+	for _, d := range ec.InternalDetails {
+		if d.Key() == "dependency" {
+			if s, ok := d.Value().(string); ok {
+				internalDep = s
+			}
+		}
+	}
+	if internalDep != "replay" {
+		t.Errorf("internal dependency attr = %q, want %q", internalDep, "replay")
+	}
+}
+
 func TestTailer_ApplyErrorStopsAndReports(t *testing.T) {
 	clk := clockmock.New(time.Unix(1000, 0))
 	src := &fakeSource{events: events(1, 2, 3)}
