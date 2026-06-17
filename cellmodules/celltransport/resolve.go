@@ -154,7 +154,10 @@ func remoteClientTLSConfig(cellID, endpoint string, clientTLS tlsutil.ClientIden
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPlaintextNonLoopback,
 				errcode.WithInternal(errcode.InternalAttr("cellID", cellID), errcode.InternalAttr("endpoint", endpoint)))
 		}
-		return nil, nil // loopback plaintext (local dev) — no client TLS
+		// nil config + nil error is intentional: a loopback peer (local dev) is
+		// plaintext-eligible, so there is no client TLS config to build — distinct
+		// from an error. Callers branch on the returned *tls.Config being nil.
+		return nil, nil //nolint:nilnil // nil cfg + nil err = "loopback plaintext, no client TLS"; see comment above
 	}
 	if clientTLS.IsZero() {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgMissingClientTLS,
