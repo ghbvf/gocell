@@ -130,6 +130,11 @@ func (m *reconcileMockCmdable) readEpoch(epochKey string) int64 {
 // integration-tagged file can share it without a duplicate declaration.
 const reconcileTestLeaseTTL = 30 * time.Second
 
+const (
+	reconcileTestSubsecondEpochTTL  = 500 * time.Millisecond
+	reconcileTestFractionalEpochTTL = 1500 * time.Millisecond
+)
+
 // mustLease builds the shared test LeaseTTL from the package-level literal const
 // (electors now take a validated reconcile.LeaseTTL, not a raw time.Duration —
 // sub-ms truncation is foreclosed at NewLeaseTTL, see kernel/reconcile/leasettl.go).
@@ -295,7 +300,7 @@ func TestReconcileEpochKeyTTLSecondsFor(t *testing.T) {
 	t.Parallel()
 
 	t.Run("rejects_subsecond_ttl", func(t *testing.T) {
-		_, err := reconcileEpochKeyTTLSecondsFor(500 * time.Millisecond)
+		_, err := reconcileEpochKeyTTLSecondsFor(reconcileTestSubsecondEpochTTL)
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -303,7 +308,7 @@ func TestReconcileEpochKeyTTLSecondsFor(t *testing.T) {
 	})
 
 	t.Run("truncates_to_whole_seconds", func(t *testing.T) {
-		got, err := reconcileEpochKeyTTLSecondsFor(1500 * time.Millisecond)
+		got, err := reconcileEpochKeyTTLSecondsFor(reconcileTestFractionalEpochTTL)
 		require.NoError(t, err)
 		require.Equal(t, int64(1), got)
 	})
