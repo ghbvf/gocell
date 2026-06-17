@@ -123,9 +123,12 @@ func toWatchResponse(e command.Entry) *commandv1.WatchCommandsResponse {
 // after that point. Best-effort delivery: if a subscriber's buffer is full the
 // Notifier drops — the device must reconnect to resync.
 //
-// Authorization (device:command) is enforced by the runtime gRPC auth interceptor
-// at stream-open, BEFORE this handler runs (#2008) — the same gate as IssueCommand,
-// declared once in endpoints.grpc.methods[].permission.
+// Authorization (device:consume, owner-scoped) is enforced by the runtime gRPC auth
+// interceptor BEFORE this handler runs (#2008/#2207). The contract declares
+// resource: device_id, so the interceptor extracts the per-message device_id and
+// forwards it to the PDP: admin/operator pass coarsely, and the device itself passes
+// when subject == device_id (the gRPC analog of the HTTP dequeue device:consume gate,
+// letting a device watch its OWN queue). The handler does not hand-authorize.
 //
 // Drain discipline: the snapshot loop checks stream.Context().Err() between
 // sends and the tail select includes ctx.Done(), so the framework drain signal

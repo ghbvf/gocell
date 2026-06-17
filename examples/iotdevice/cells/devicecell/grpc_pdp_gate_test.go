@@ -46,6 +46,12 @@ import (
 const (
 	tokenOperator = "operator"
 	tokenViewer   = "viewer"
+	// tokenDeviceSelf authenticates as the device "device-1" itself (subject ==
+	// device-1, non-privileged role) — the #2207 device-self watch path.
+	tokenDeviceSelf = "device-self"
+	// watchedDeviceID is the device_id the WatchCommands requests target; the
+	// device-self token's subject equals it so the owner-scoped gate matches.
+	watchedDeviceID = "device-1"
 )
 
 // rolesVerifier is a probe IntentTokenVerifier mapping a bearer token to a verified
@@ -59,6 +65,10 @@ func (rolesVerifier) VerifyIntent(_ context.Context, token string, _ kauth.Token
 		return kauth.Claims{Subject: "operator-1", Roles: []string{dto.RoleOperator}, TokenUse: kauth.TokenIntentAccess}, nil
 	case tokenViewer:
 		return kauth.Claims{Subject: "viewer-1", Roles: []string{"role:viewer"}, TokenUse: kauth.TokenIntentAccess}, nil
+	case tokenDeviceSelf:
+		// The device itself: subject == watchedDeviceID, non-privileged role. Passes
+		// device:consume only via the ownership rule (subject == resource), not opOrAdmin.
+		return kauth.Claims{Subject: watchedDeviceID, Roles: []string{"role:device"}, TokenUse: kauth.TokenIntentAccess}, nil
 	default:
 		return kauth.Claims{}, errors.New("unknown token")
 	}
@@ -88,11 +98,19 @@ func (s *gateProbeServer) reached() bool {
 }
 
 // methodPermissionsFixture mirrors the overlay cell_gen.go derives for the
-// DeviceCommandService — both RPCs gated on device:command. Kept as the same wire
-// strings the generator emits so this e2e exercises the identical mapping.
+// DeviceCommandService (#2207): IssueCommand stays device:command (coarse);
+// WatchCommands is device:consume (owner-scoped). Kept as the same wire strings the
+// generator emits so this e2e exercises the identical mapping.
 var methodPermissionsFixture = map[string]string{
 	"/device.command.v1.DeviceCommandService/IssueCommand":  "device:command",
-	"/device.command.v1.DeviceCommandService/WatchCommands": "device:command",
+	"/device.command.v1.DeviceCommandService/WatchCommands": "device:consume",
+}
+
+// methodResourcesFixture mirrors the GRPCServiceSpec.MethodResources cell_gen.go
+// derives from endpoints.grpc.methods[].resource (#2207): WatchCommands extracts the
+// per-message device_id field as the PDP resource so a device can watch its own queue.
+var methodResourcesFixture = map[string]string{
+	"/device.command.v1.DeviceCommandService/WatchCommands": "device_id",
 }
 
 // startGatedDeviceCommandServer wires the production gRPC auth chain (real PDP, real
@@ -117,6 +135,7 @@ func startGatedDeviceCommandServer(t *testing.T) (commandv1.DeviceCommandService
 		CellID:            "devicecell",
 		Listener:          cell.PrimaryListener,
 		MethodPermissions: methodPermissionsFixture,
+		MethodResources:   methodResourcesFixture,
 		Register: func(r grpc.ServiceRegistrar) {
 			commandv1.RegisterDeviceCommandServiceServer(r, probe)
 		},
@@ -163,26 +182,42 @@ func TestDeviceCommandGRPC_PDPGate_Unary_EndToEnd(t *testing.T) {
 	assert.True(t, probe.reached(), "handler must run for the authorized operator")
 }
 
-// TestDeviceCommandGRPC_PDPGate_Stream_EndToEnd asserts the streaming WatchCommands
-// gate: a non-privileged caller is denied at stream open (PermissionDenied), while an
-// operator passes the gate and reaches the handler (Unimplemented here — the point is
-// the gate let it through, distinguishable from a denial).
+// TestDeviceCommandGRPC_PDPGate_Stream_EndToEnd asserts the owner-scoped WatchCommands
+// gate (#2207). WatchCommands is device:consume with resource=device_id: the gate
+// defers to the first RecvMsg, extracts device_id, and forwards it as the PDP resource.
+// An allowed call reaches the (Unimplemented) handler; a denial surfaces on Recv.
 func TestDeviceCommandGRPC_PDPGate_Stream_EndToEnd(t *testing.T) {
 	t.Parallel()
 	client, _ := startGatedDeviceCommandServer(t)
-	req := &commandv1.WatchCommandsRequest{DeviceId: "device-1"}
+	req := &commandv1.WatchCommandsRequest{DeviceId: watchedDeviceID}
 
-	// Viewer → denied at the stream gate.
+	// Viewer → neither admin/operator nor the device itself → PermissionDenied.
 	stream, err := client.WatchCommands(bearer(context.Background(), tokenViewer), req)
 	require.NoError(t, err, "stream open RPC itself returns; the gate verdict surfaces on Recv")
 	_, err = stream.Recv()
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "viewer must be PermissionDenied for WatchCommands")
 
-	// Operator → gate allows; the probe leaves WatchCommands Unimplemented, so reaching
-	// codes.Unimplemented (not PermissionDenied) proves the gate permitted the stream.
+	// Operator → opOrAdmin passes device:consume regardless of resource → reaches handler.
 	stream, err = client.WatchCommands(bearer(context.Background(), tokenOperator), req)
 	require.NoError(t, err)
 	_, err = stream.Recv()
 	assert.Equal(t, codes.Unimplemented, status.Code(err),
 		"operator must pass the gate (reaching the unimplemented handler, not a denial)")
+
+	// #2207 device-self: the device watching its OWN queue (subject == device_id) passes
+	// the owner-scoped gate — the consume-semantics parity this issue closes.
+	stream, err = client.WatchCommands(bearer(context.Background(), tokenDeviceSelf), req)
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	assert.Equal(t, codes.Unimplemented, status.Code(err),
+		"the device itself must pass the device:consume gate for its own queue (#2207)")
+
+	// Cross-device: the device-1 principal watching device-2's queue (subject != device_id)
+	// is denied — ownership is per-message, tenant/device-agnostic.
+	stream, err = client.WatchCommands(bearer(context.Background(), tokenDeviceSelf),
+		&commandv1.WatchCommandsRequest{DeviceId: "device-2"})
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	assert.Equal(t, codes.PermissionDenied, status.Code(err),
+		"a device must NOT watch another device's queue (subject != resource)")
 }

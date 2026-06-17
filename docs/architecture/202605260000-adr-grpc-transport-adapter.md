@@ -360,17 +360,18 @@ mirrors HTTP `RequirePermission` forwarding `r.URL.Path`).
 
 ### Deferred (registered follow-up issues / documented boundary)
 
-- **Owner-scoped per-message resource extraction** (the analog of HTTP
-  `RequirePermissionForResource`): not feasible generically in an interceptor (`req`
-  is `any`; a stream has no message at open). `device:command` is a coarse role-based
-  baseline that ignores `resource`, so the coarse gate is correct for the current
-  consumer; per-message resource extraction is a documented boundary (related to #2207).
 - **transport-neutral `authz.MethodPolicyResolver`** (the issue's "重构"): would
   require migrating HTTP's per-route hand-written gates to contract-derived metadata —
   **#2205** (still open).
-- **gRPC `WatchCommands` device:consume** (allow device-self to watch own queue;
-  the gRPC analog of the HTTP dequeue `device:consume` ownership gate) — **#2207** (still open).
 - **`internalOnly`**: PR-11 internal cell-to-cell gRPC boundary.
+
+> **Delivered in #2207** (see "Amendment 2026-06-18 — #2207" below), no longer
+> deferred: **owner-scoped per-message resource extraction** (the gRPC analog of HTTP
+> `RequirePermissionForResource`) and **gRPC `WatchCommands` device:consume** (a device
+> watching its own command queue). The earlier "not feasible generically in an
+> interceptor" boundary is superseded: a stream wrapper that gates on the first
+> `RecvMsg` makes it both feasible and fail-closed. The threat-matrix rows are
+> re-evaluated in that amendment.
 
 > **Delivered in the 2026-06-16 #2204 review hardening** (see amendment below), no
 > longer deferred: **gRPC startup fail-fast for a nil Authorizer** (was a tracked DX
@@ -452,3 +453,57 @@ no transport label, no cardinality blowup). A Nop/nil provider leaves the Author
   anti-vacuity (each protected option func / field individually asserted).
 - Stale "ABAC fields deferred to #2008" godoc in `kernel/metadata/schema_types.go` corrected
   (`Public` + `Permission` are both live exported overlay fields).
+
+## Amendment 2026-06-18 — #2207: owner-scoped per-message resource extraction (gRPC RequirePermissionForResource parity)
+
+#2008 left `resource = fullMethod` (coarse) and documented per-message resource extraction
+as deferred ("not feasible generically in an interceptor; a stream has no message at open").
+#2207 delivers it, closing the gRPC/HTTP consume-semantics gap: a device can now watch its
+OWN command queue via gRPC `WatchCommands`, the analog of the HTTP dequeue `device:consume`
+ownership gate. The earlier infeasibility boundary is superseded — wrapping the stream so the
+gate runs on the FIRST `RecvMsg` (when the request message IS available) makes it feasible and
+fail-closed.
+
+### Mechanism
+
+- **Contract**: `endpoints.grpc.methods[].resource` (optional) names the REQUEST-MESSAGE field
+  (proto snake_case, e.g. `device_id`) whose value becomes the PDP `resource`. `WatchCommands`
+  becomes `permission: device:consume` + `resource: device_id`; `IssueCommand` stays the coarse
+  `device:command`. Mutually exclusive with `public`; valid only with a `permission`.
+- **Permission scope (the key AI-robustness primitive)**: `authz.Permission` gains a
+  machine-readable `ownerScoped` bit (sealed minter `newPermission(s, scope)`, accessor
+  `IsOwnerScoped()`). The pre-existing prose invariant "coarse vs ownership is NEVER folded into
+  one Permission" is now TYPED, not documented. Owner-scoped set = `device:consume / device:read /
+  user:read / user:write / role:read / order:read / order:update`.
+- **Generate-time cross-check (Hard)**: the cellgen completeness pre-pass
+  (`validateGrpcMethodOverlayAgainstProto` → `validateOwnerScopedResourceSymmetry`) fails the
+  build if an owner-scoped permission lacks a `resource` selector (else the device owner is
+  silently locked out — `fullMethod` never equals the device id, so `subject == resource` never
+  fires) OR a coarse permission carries one (inert/misleading). This is the sibling of #2008's
+  "dead 403" completeness gate.
+- **Derivation + startup re-check (Medium)**: cellgen derives `GRPCServiceSpec.MethodResources`
+  (golden-locked); the registrar validates each resource method-key against the registered method
+  set (stale-key fail-fast) and exposes `ResourceFieldForMethod`.
+- **Interceptor**: a method with a resource selector → the field is read via protoreflect and
+  canonicalized with the SAME `httputil.ParseCanonicalUUID` HTTP uses (UUID → canonical, else
+  forwarded raw — exact parity). Unary extracts from `req` at interceptor entry; server-streaming
+  DEFERS the WHOLE permission gate to the first `RecvMsg` via `resourceGatedStream` (the open-time
+  coarse gate MUST NOT run, or it would deny the owner before the per-message check). The gate is
+  the single `authorizePermission` decision function with a `resource` parameter.
+- **F3 fail-closed**: only a STRUCTURAL extraction failure (not a proto.Message / declared field
+  absent / wrong kind) denies (`RESOURCE_UNRESOLVED`, never falls back to fullMethod). A
+  value-level case (empty / non-UUID) is FORWARDED to the PDP — denying on value would wrongly
+  block admin/operator, who pass coarsely and never consult the resource.
+- **Wiring funnel**: `WithResourceResolver(reg.ResourceFieldForMethod)` is installed only in
+  `chain.go` (archtest **GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01**, the third auth dimension beside
+  the #1675 public-method bypass and the #2008 permission gate).
+
+### 威胁矩阵 re-eval (#2207)
+
+| Concern | Re-eval (#2207) |
+|---|---|
+| Wire / schema break | **Safe (pre-GA window).** `resource` is additive; flipping `WatchCommands` to `device:consume` changes the auth requirement (a breaking wire change) but the contract + cell_gen + e2e update atomically in one PR (no external consumer). |
+| PII / redaction | **Unchanged.** The extracted resource (a device id) is used ONLY for the decision; it NEVER enters `denyMeta` / `google.rpc.ErrorInfo.Metadata` (still method + permission only). Verified by a PII assertion in the resource tests. |
+| Layering | **Safe.** `MethodResources` is `map[string]string` in kernel (no authz/proto import). The interceptor adds `google.golang.org/protobuf` — curated into the `runtime-isolation` depguard allow-list (the canonical companion to the already-allowed `google.golang.org/grpc`, scoped to per-message field reflection). cellgen→pkg/authz (for `IsOwnerScoped`) is tooling, layering-legal. |
+| Auth granularity / security | **Improves (fail-closed, owner-scoped).** A device authorizes against its OWN id (`subject == resource`), not a coarse role gate; cross-device access is denied by the tenant/device-agnostic ownership rule (e2e `cross-device` case). Owner-scoped streaming defers the gate to first-RecvMsg but still BEFORE the user handler runs (the generated server-stream handler Recvs the single request first). Structural extraction failure fails closed. |
+| AI-robustness | **Improves.** The coarse-vs-owner taxonomy is now a typed `Permission` bit (Hard sealed marker) instead of prose; the owner-scoped⟺resource symmetry is a Hard generate-time build failure (prevents the silent owner lock-out — the most security-relevant regression); derivation is golden-locked; the resolver wiring is funnel-locked. The owner-scoped permission set is frozen by a value-golden test (anti-vacuity: count + membership). |

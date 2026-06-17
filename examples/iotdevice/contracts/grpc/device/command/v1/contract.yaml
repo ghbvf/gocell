@@ -9,13 +9,21 @@ endpoints:
   grpc:
     service: device.command.v1.DeviceCommandService
     proto: contracts/grpc/device/command/v1/device_command.proto
-    # Per-method ABAC permission overlay (#2008). Both RPCs are authed and gated on
-    # device:command (admin/operator baseline) — the same coarse gate the HTTP
-    # devicecommand enqueue route uses. The interceptor PDP gate enforces this;
-    # the handler no longer hand-authorizes. Strict fail-closed: every non-public
-    # RPC must appear here (completeness pre-pass), else it is a dead 403.
+    # Per-method ABAC permission overlay (#2008, #2207). IssueCommand is gated on
+    # device:command (admin/operator coarse baseline — the same gate the HTTP
+    # devicecommand enqueue route uses). WatchCommands is gated on device:consume
+    # (owner-scoped): admin/operator OR the device itself (subject == resource). The
+    # `resource: device_id` selector tells the interceptor to extract the per-message
+    # device_id field and forward it as the PDP resource (the gRPC analog of HTTP
+    # RequirePermissionForResource), so a device can watch its OWN command queue —
+    # the gRPC/HTTP consume-semantics parity #2207 closes. The interceptor PDP gate
+    # enforces this; the handler no longer hand-authorizes. Strict fail-closed: every
+    # non-public RPC must appear here (completeness pre-pass), else a dead 403; an
+    # owner-scoped permission MUST carry a resource selector (cellgen cross-check) or
+    # the device owner is silently locked out.
     methods:
       - name: IssueCommand
         permission: device:command
       - name: WatchCommands
-        permission: device:command
+        permission: device:consume
+        resource: device_id
