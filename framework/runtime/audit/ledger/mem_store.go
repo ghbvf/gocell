@@ -233,13 +233,13 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 	return copyEntry(e), nil
 }
 
-// auditEntryNotFound is the IDOR-safe not-found sentinel for the single-entry
+// auditEntryNotFoundByID is the IDOR-safe not-found sentinel for the single-entry
 // reads that key on an opaque id (MemStore.GetByID / MemCrossTenantStore.
-// GetByIDCrossTenant). It carries NO public detail: unlike the by-seq path (which
+// GetByIDCrossTenant); the name mirrors the PG adapter's auditEntryNotFoundByID. It carries NO public detail: unlike the by-seq path (which
 // echoes the integer seqNo), the id is a caller-supplied opaque string, so it is
 // kept off the wire and out of logs. Existence is never revealed — the same code
 // is returned for "absent", "another tenant's row", and "outside owner scope".
-func auditEntryNotFound() error {
+func auditEntryNotFoundByID() error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
 		"audit ledger: entry not found")
 }
@@ -274,12 +274,12 @@ func (m *MemStore) GetByID(_ context.Context, t tenant.TenantID, vis tenant.RowV
 			}
 			if !vis.Allows(e.ActorID) {
 				// IDOR-safe collapse: do not reveal that the entry exists.
-				return nil, auditEntryNotFound()
+				return nil, auditEntryNotFoundByID()
 			}
 			return copyEntry(e), nil
 		}
 	}
-	return nil, auditEntryNotFound()
+	return nil, auditEntryNotFoundByID()
 }
 
 // validateQueryArgs validates the mandatory preconditions shared by all MemStore

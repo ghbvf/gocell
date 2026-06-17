@@ -37,6 +37,14 @@ import (
 // it is absent (the admin read pool is not provisioned), a super-admin's
 // RowScopeAll request stays fail-closed at HTTP 501 (RowScopeAllUnsupportedError),
 // exactly as before #1810 — graceful, fail-closed, never fail-open.
+// ErrMsgCrossTenantObligation is the single-source const-literal fail-close
+// message (MESSAGE-CONST-LITERAL-01) every CrossTenantQueryStore backend uses when
+// the data-layer PEP rejects a zero/invalid CrossTenantVisibility (F2). Exported so
+// the mem backend (this package), the PG AuditCrossTenantStore (adapters/postgres),
+// and the auditquery Service (corecells) all reference one literal — a single edit
+// site, no cross-backend drift.
+const ErrMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
+
 type CrossTenantQueryStore interface {
 	// QueryCrossTenant lists audit entries across ALL tenants (and both the relay
 	// and bootstrap namespace chains) matching AuditFilters, using the same keyset

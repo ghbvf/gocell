@@ -58,12 +58,6 @@ func NewMemCrossTenantStore(stores ...*MemStore) (*MemCrossTenantStore, error) {
 	return &MemCrossTenantStore{stores: cp}, nil
 }
 
-// errMsgCrossTenantObligation is the const-literal fail-close message
-// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
-// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
-// is a server-side invariant break, not client input — mirrors the service PEP.
-const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
-
 // QueryCrossTenant enumerates ALL tenants across ALL backing MemStores, applies
 // AuditFilters, merge-sorts by params.Sort (callers pass QuerySort —
 // timestamp DESC, id ASC), and keyset-paginates via query.ApplyCursor.
@@ -88,7 +82,7 @@ func (m *MemCrossTenantStore) QueryCrossTenant(
 ) ([]*Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ErrMsgCrossTenantObligation)
 	}
 	if err := ValidateQueryFilters(filters); err != nil {
 		return nil, err
@@ -166,14 +160,14 @@ func (m *MemCrossTenantStore) GetByIDCrossTenant(
 ) (*Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ErrMsgCrossTenantObligation)
 	}
 	for _, store := range m.stores {
 		if e := findByIDInMemStore(store, id); e != nil {
 			return e, nil
 		}
 	}
-	return nil, auditEntryNotFound()
+	return nil, auditEntryNotFoundByID()
 }
 
 // findByIDInMemStore returns a defensive copy of the entry with the given id from

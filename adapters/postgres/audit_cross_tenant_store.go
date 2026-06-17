@@ -76,7 +76,8 @@ WHERE true`
 // crossTenantByIDSQL fetches a single entry by its opaque uuid id across ALL
 // tenants and BOTH namespace chains (no namespace / tenant predicate — the admin
 // pool's permissive RLS SELECT policy USING(true) returns every row). The
-// `$1::uuid` cast matches the house pattern; the caller parse-guards id first so
+// `$1::uuid` cast matches the house pattern (session_store.go subject_id = $2::uuid)
+// for comparing a uuid column to a string parameter; the caller parse-guards id first so
 // the cast never raises 22P02. id is the globally-unique PRIMARY KEY, so at most
 // one row matches.
 const crossTenantByIDSQL = `SELECT id, seq_no, event_id, event_type, actor_id,
@@ -84,12 +85,6 @@ const crossTenantByIDSQL = `SELECT id, seq_no, event_id, event_type, actor_id,
        timestamp, payload, prev_hash, hash
 FROM audit_entries
 WHERE id = $1::uuid`
-
-// errMsgCrossTenantObligation is the const-literal fail-close message
-// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
-// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
-// is a server-side invariant break, not client input — mirrors the service PEP.
-const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
 
 // QueryCrossTenant lists audit entries across ALL tenants and BOTH namespace
 // chains matching AuditFilters, using keyset cursor pagination. params.Sort must
@@ -114,7 +109,7 @@ func (s *AuditCrossTenantStore) QueryCrossTenant(
 ) ([]*ledger.Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ledger.ErrMsgCrossTenantObligation)
 	}
 	if err := ledger.ValidateQueryFilters(filters); err != nil {
 		return nil, err
@@ -181,7 +176,7 @@ func (s *AuditCrossTenantStore) GetByIDCrossTenant(
 ) (*ledger.Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ledger.ErrMsgCrossTenantObligation)
 	}
 	if _, perr := uuid.Parse(id); perr != nil {
 		return nil, auditEntryNotFoundByID()

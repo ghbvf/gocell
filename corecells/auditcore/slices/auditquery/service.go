@@ -220,7 +220,10 @@ func (s *Service) Query(
 // (MESSAGE-CONST-LITERAL-01): a zero-value or non-All CrossTenantVisibility must
 // never reach the store (F2, Codex review). The typed funnel guarantees a
 // CrossTenantVisibility is passed (forget = compile error), but the zero value is
-// constructable, so the PEP validates the obligation at runtime.
+// constructable, so the PEP validates the obligation at runtime. This is the
+// SERVICE-layer PEP message, distinct from the STORE-layer single-source
+// ledger.ErrMsgCrossTenantObligation (defense in depth — both layers re-validate
+// ctv); the two are deliberately separate so a log line names which layer rejected.
 const errMsgInvalidCrossTenantObligation = "cross-tenant audit read: invalid or zero CrossTenantVisibility obligation"
 
 func (s *Service) QueryCrossTenant(

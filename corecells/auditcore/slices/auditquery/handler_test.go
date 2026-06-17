@@ -2383,3 +2383,65 @@ func TestHandleGetByID_SuperAdmin_NoCrossTenantStore_501(t *testing.T) {
 	w := getByID(mux, newSuperAdminCtx("sa-user"), id)
 	require.Equal(t, http.StatusNotImplemented, w.Code, "body=%s", w.Body.String())
 }
+
+// TestHandleGetByID_SuperAdmin_SingleAuditRecord pins the FR-007 mandatory
+// cross-tenant audit invariant for the detail path (mirrors the list's
+// TestHandleQuery_SuperAdmin_SingleAuditRecord): EVERY super-admin GetByID request
+// emits EXACTLY ONE FR-007 slog.Error (via deriveAuditVisibility → single-mint
+// p.CrossTenantVisibility), on BOTH the 200 (admin pool wired) and 501 (admin pool
+// absent) paths. Guards against a future double-mint regression or a 501 path that
+// skips the audit.
+func TestHandleGetByID_SuperAdmin_SingleAuditRecord(t *testing.T) {
+	capture := &testCaptureHandler{}
+	slogcapture.InstallDefault(t, slog.New(capture))
+
+	// 200 path: admin pool wired, entry resolvable cross-tenant.
+	e := &ledger.Entry{
+		EventID: "evt-fr007-detail", EventType: "cross.tenant.detail.v1",
+		ActorID: "usrA", TenantID: auditQueryTestTenant,
+		Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	}
+	relay := newHandlerStore(t)
+	require.NoError(t, relay.Append(context.Background(), e))
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+	muxWithStore := getByIDService(t, newHandlerStore(t), WithCrossTenantStore(ctStore))
+
+	capture.records = capture.records[:0]
+	w := getByID(muxWithStore, newSuperAdminCtx("sa-200"), e.ID)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, countAuditMandatoryRecords(capture.records),
+		"super-admin GetByID (200) must emit EXACTLY ONE FR-007 Error record; records=%v", capture.records)
+
+	// 501 path: admin pool absent — FR-007 must still fire (audit of intent).
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-fr007-501", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	muxNoStore := getByIDService(t, store)
+	capture.records = capture.records[:0]
+	w = getByID(muxNoStore, newSuperAdminCtx("sa-501"), id)
+	require.Equal(t, http.StatusNotImplemented, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, countAuditMandatoryRecords(capture.records),
+		"super-admin GetByID (501, no admin pool) must STILL emit EXACTLY ONE FR-007 Error record; records=%v", capture.records)
+}
+
+func TestHandleGetByID_NonCanonicalTenant_InternalError(t *testing.T) {
+	// A malformed (non-canonical) principal tenant is a server-side invariant break
+	// (the JWT authenticator canonicalizes the claim): getEntry's tenant.ParseTenantID
+	// fails → 500 ErrInternal (mirrors the list's TestList_NonCanonicalTenant path).
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-nc", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	p := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "admin-user", Roles: []string{"admin"},
+		TenantID: "not-a-uuid", AuthMethod: "test",
+	}
+	ctx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
+	w := getByID(mux, ctx, id)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+}

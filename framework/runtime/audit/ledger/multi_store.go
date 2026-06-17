@@ -132,7 +132,7 @@ func (m *MultiStore) GetByID(
 		}
 		return nil, fmt.Errorf("multi-store get-by-id: %w", err)
 	}
-	return nil, auditEntryNotFound()
+	return nil, auditEntryNotFoundByID()
 }
 
 // compareBySort returns a negative integer when a sorts before b under cols,

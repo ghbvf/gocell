@@ -499,10 +499,22 @@ func (a ListAdapter) executeQuery(
 // exemption like the list's auditQueryPolicy, because the path param is the ENTRY
 // id, not an actor identity, so "is the caller asking only for its own actor rows?"
 // cannot be answered at the gate. A non-admin's own-entry detail is served by the
-// list (?actorId=<self>, which returns the full row = the detail). Self-scoping is
-// still enforced independently at the data layer by the principal's RowScope (a
-// RowScopeSelf caller only resolves entries whose actor_id is itself; others
-// collapse to 404 IDOR-safe), so the flat gate does not widen data access (D3).
+// list (?actorId=<self>, which returns the matching rows with the SAME field set as
+// this endpoint — the field sets are maintained separately per contract, see
+// toGetResponseDataItem vs toListResponseDataItem, so equality is a current design
+// choice, not a structural guarantee). Self-scoping is still enforced independently
+// at the data layer by the principal's RowScope (a RowScopeSelf caller only resolves
+// entries whose actor_id is itself; others collapse to 404 IDOR-safe), so the flat
+// gate does not widen data access (D3).
+//
+// Audit-access breadcrumb: unlike ListAdapter (which emits logAdminAuditQuery when an
+// admin enumerates the ledger), the detail read emits NO per-request admin breadcrumb
+// by design. A by-id read is a TARGETED fetch, not enumeration — the caller must
+// already hold the specific entry id, which it obtained from a list query that WAS
+// breadcrumbed (admin) or row-scoped (self). The super-admin cross-tenant path still
+// emits the mandatory FR-007 slog.Error inside deriveAuditVisibility. Adding a
+// per-detail admin breadcrumb here would require a HasRole branch (PERMISSION-BASED-
+// AUTHZ-01 allowlist churn) for marginal coverage over the already-audited list.
 type GetAdapter struct {
 	S *Service
 }
