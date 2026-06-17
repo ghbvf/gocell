@@ -437,7 +437,7 @@ func TestAutoWireOutboxRejectCollector_RealProvider_NoRelayWiring(t *testing.T) 
 	b := New(
 		clock.Real(),
 		WithMetricsProvider(spy),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 	)
 
 	err := b.autoWireOutboxRejectCollector()

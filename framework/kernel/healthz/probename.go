@@ -155,6 +155,27 @@ func EmitterFailOpenProbeName(cellID string) (ProbeName, error) {
 	return NewProbeName(emitterFailOpenProbeNamePrefix + cellID)
 }
 
+// RelayInstanceProbeName composes the instance-scoped variant of an outbox
+// relay operation probe (base is one of outbox_relay_poll / _reclaim / _cleanup)
+// for a fanned-out relay that is NOT the colocated default infra instance, so N
+// relays expose globally-distinct probe names (#2152 PR-1). The colocated
+// default keeps the bare base name (operations contract unchanged); only
+// additional instances get the "<base>_<instanceID>" suffix.
+//
+// instanceID is the deduplicated infra instance id (a lowercase snake_case
+// identifier minted by the composition root). It is validated against the full
+// [NewProbeName] shape via the composed result, so an invalid id surfaces at
+// relay registration rather than per-probe invocation. This is the SOLE
+// sanctioned composed-name constructor for relay-instance probes — a sibling of
+// EmitterFailOpenProbeName / ProjectionStoreReadyProbeName / SagaTailerReadyProbeName.
+func RelayInstanceProbeName(base ProbeName, instanceID string) (ProbeName, error) {
+	if instanceID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: relay instance probe id must not be empty")
+	}
+	return NewProbeName(string(base) + "_" + instanceID)
+}
+
 // remoteCellReadyProbeNameSuffix is the terminal segment of the cross-cell
 // remote-peer readiness probe name ("<cellID>_remote_ready"). It is a
 // dependency-availability probe (the remote peer's listener is TCP-reachable),

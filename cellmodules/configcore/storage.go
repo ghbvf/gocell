@@ -94,7 +94,7 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	}
 	return configCoreModuleResult{
 		cellOptions:   cellOpts,
-		bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(relayWorker)},
+		bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)},
 	}, nil
 }
 

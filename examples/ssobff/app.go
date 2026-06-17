@@ -300,7 +300,8 @@ func buildSSOBFFBootstrapOptions(
 		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
 	// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
-	opts = append(opts, bootstrap.WithRelay(relayWorker))
+	// Colocated single-pod: one relay under the default infra instance (#2152 PR-1).
+	opts = append(opts, bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker))
 	// ABAC PDP injector for the primary listener (#1348 PR-10a) + the mandatory gRPC
 	// listener (accesscore registers grpc.auth.session.verify.v1 unconditionally, #1154).
 	opts = append(opts, authGRPCOpts...)
