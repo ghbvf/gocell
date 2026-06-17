@@ -2,6 +2,10 @@ package governance
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +34,10 @@ func newGate(t *testing.T) (*RegistrationGate, *registry.ContractRegistrar) {
 }
 
 // validEventContract is a fully-formed event contract: owner + lifecycle +
-// provider (publisher) + a consumer (subscriber). It passes every gate rule.
+// provider (publisher) + a consumer. A runtime event declares its consumer via
+// ActorSubscribers (the user-authored field); Subscribers is parser-derived
+// (yaml:"-"), so the gate's NormalizeRuntimeContract derives it from
+// ActorSubscribers. It passes every gate rule.
 func validEventContract() *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:        "event.registry.thing-happened.v1",
@@ -38,8 +45,8 @@ func validEventContract() *metadata.ContractMeta {
 		OwnerCell: "registrycore",
 		Lifecycle: "active",
 		Endpoints: metadata.EndpointsMeta{
-			Publisher:   "registrycore",
-			Subscribers: []string{"othercell"},
+			Publisher:        "registrycore",
+			ActorSubscribers: []string{"external-sink"},
 		},
 	}
 }
@@ -214,7 +221,7 @@ func TestGate_FanoutIncomplete_FailClosed(t *testing.T) {
 	}{
 		{"missing owner", func(c *metadata.ContractMeta) { c.OwnerCell = "" }, codeCH01},
 		{"missing publisher", func(c *metadata.ContractMeta) { c.Endpoints.Publisher = "" }, codeREG01},
-		{"missing subscriber", func(c *metadata.ContractMeta) { c.Endpoints.Subscribers = nil }, codeREG01},
+		{"missing subscriber", func(c *metadata.ContractMeta) { c.Endpoints.ActorSubscribers = nil }, codeREG01},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -328,6 +335,104 @@ func TestGateReason_ZeroValueFailClosed(t *testing.T) {
 	assert.Equal(t, GateReasonUnknown, zero.String())
 	assert.True(t, zero.IsZero())
 	assert.False(t, zero.isRegistered())
+}
+
+// TestGate_Check_InvalidDeclaration_FailClosed covers the C1/F1 hole: the gate
+// runs the per-contract declaration rules (FMT-01 lifecycle value, FMT-08 ID-prefix
+// ↔ kind, FMT-09 kind value), so an otherwise-complete contract with an invalid
+// declaration field is rejected — not falsely Allowed.
+func TestGate_Check_InvalidDeclaration_FailClosed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		mutate   func(*metadata.ContractMeta)
+		wantCode RuleCode
+	}{
+		{"invalid lifecycle value", func(c *metadata.ContractMeta) { c.Lifecycle = "bogus" }, codeFMT01},
+		{"unknown kind", func(c *metadata.ContractMeta) { c.Kind = "bogus" }, codeFMT09},
+		{"id prefix mismatches kind", func(c *metadata.ContractMeta) { c.ID = "wrong.registry.thing.v1" }, codeFMT08},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gate, reg := newGate(t)
+			c := validEventContract()
+			tc.mutate(c)
+
+			res := gate.Check(context.Background(), validTenant, c)
+
+			assert.False(t, res.Allowed, "invalid declaration must fail-closed")
+			assert.Equal(t, ReasonValidationFailed(), res.Reason)
+			assert.True(t, hasCode(res.Result, tc.wantCode), "expected finding %s", tc.wantCode)
+			assert.Equal(t, 0, reg.Count())
+		})
+	}
+}
+
+// TestGate_Check_ActorSubscribersOnlyEvent_Allowed covers C1/F2: a runtime event
+// declaring its consumer ONLY via actorSubscribers (Subscribers is parser-derived)
+// is Allowed — the gate's NormalizeRuntimeContract derives Subscribers, so REG-01
+// no longer falsely rejects it as having no consumer.
+func TestGate_Check_ActorSubscribersOnlyEvent_Allowed(t *testing.T) {
+	t.Parallel()
+	gate, _ := newGate(t)
+	c := &metadata.ContractMeta{
+		ID: "event.registry.actor-only.v1", Kind: "event",
+		OwnerCell: "registrycore", Lifecycle: "active",
+		Endpoints: metadata.EndpointsMeta{
+			Publisher:        "registrycore",
+			ActorSubscribers: []string{"external-sink"},
+			// Subscribers intentionally unset (derived) — pre-fix this was falsely rejected.
+		},
+	}
+
+	res := gate.Check(context.Background(), validTenant, c)
+
+	assert.True(t, res.Allowed, "actorSubscribers-only event must be allowed after canonicalization")
+	assert.Empty(t, res.Result)
+}
+
+// TestGateReason_MarshalText covers C3/F4: GateReason serializes to its wire value
+// string (not the "{}" a struct-with-unexported-field would default to), so the
+// machine-readable result survives JSON encoding.
+func TestGateReason_MarshalText(t *testing.T) {
+	t.Parallel()
+	b, err := ReasonValidationFailed().MarshalText()
+	require.NoError(t, err)
+	assert.Equal(t, "validation-failed", string(b))
+
+	j, err := json.Marshal(GovernanceGateResult{Reason: ReasonDuplicate()})
+	require.NoError(t, err)
+	assert.Contains(t, string(j), `"duplicate"`, "reason must JSON-encode to its wire string, not {}")
+
+	var zero GateReason
+	zb, err := zero.MarshalText()
+	require.NoError(t, err)
+	assert.Equal(t, GateReasonUnknown, string(zb), "forged zero marshals fail-closed")
+}
+
+// TestGateDeclarationRuleSet_Golden pins the gate's runtime declaration rule set
+// (C1: single source, no silent drift). Adding/removing a rule forces a conscious
+// classification against runtimeDeclarationRules' inclusion criteria + this golden.
+func TestGateDeclarationRuleSet_Golden(t *testing.T) {
+	t.Parallel()
+	v := NewValidator(nil, "", clockmock.New(gateTestEpoch))
+	var names []string
+	for _, fn := range v.runtimeDeclarationRules() {
+		full := runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name()
+		name := full[strings.LastIndex(full, ".")+1:]
+		names = append(names, strings.TrimSuffix(name, "-fm"))
+	}
+	want := []string{
+		"validateFMT01", "validateFMT08", "validateFMT09", "validateFMT39",
+		"validateFRAMEWORKOWNEDCONTRACTSCOPED01",
+		"checkCH01", "checkCH02", "checkCH03",
+		"runtimeFanoutCompleteness", "runtimeRegistrationAdvisories",
+	}
+	assert.Equal(t, want, names,
+		"gate declaration rule set drifted — classify the rule per runtimeDeclarationRules "+
+			"inclusion criteria (per-contract / no cross-ref / no filesystem / derived-fields canonicalized) "+
+			"and update this golden")
 }
 
 // TestRuntimeFanoutCompleteness_PerKind directly exercises the REG-01 rule across

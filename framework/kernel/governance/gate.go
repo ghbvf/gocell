@@ -107,12 +107,21 @@ func (g *RegistrationGate) Check(ctx context.Context, tnt tenant.TenantID, candi
 // as Check; only when the verdict is Allowed does it record the registration via
 // the registrar (entering the sealed state machine at `submitted`). A denied
 // candidate is never persisted (no "submitted but invalid" intermediate state),
-// and the returned result carries the machine-readable Reason.
+// and the returned result carries the machine-readable Reason. An empty submitter
+// (the required audit identity) is rejected as ReasonInvalidInput before any store
+// call.
 //
 // On a store-side error the gate stays fail-closed: a duplicate id maps to
-// ReasonDuplicate, any other store error to ReasonValidationFailed; the store
-// error is also returned so callers can inspect it. submitter is the audit
-// identity recorded against the registration.
+// ReasonDuplicate, any other (infrastructure) store error to
+// ReasonValidatorUnavailable; the store error is also returned so callers can
+// inspect it.
+//
+// Idempotency boundary: US3 dedups by registration id and treats a duplicate as a
+// conflict (ReasonDuplicate). The spec's idempotent "re-submit returns the EXISTING
+// registration" semantic dedups by the (kind,domain,version,owner) quadruple plus a
+// content fingerprint — that is FR-009 / US15 (#2245). Returning the existing
+// registration here without a fingerprint would silently mask a same-id /
+// different-content conflict, so US3 keeps the conflict verdict pending US15.
 func (g *RegistrationGate) Submit(
 	ctx context.Context, tnt tenant.TenantID, candidate *metadata.ContractMeta, submitter string,
 ) (registry.ContractRegistration, GovernanceGateResult, error) {
@@ -183,21 +192,55 @@ func (g *RegistrationGate) runRules(ctx context.Context, candidate *metadata.Con
 			err = errcode.Assertion("governance: registration gate validation panicked")
 		}
 	}()
-	// NewValidator is pure in-memory construction (no I/O, non-blocking), so the
-	// ctx.Err() check before the first rule fires is sufficient to honor a
-	// pre-canceled context.
-	v := NewValidator(singleContractProject(candidate), "", g.clk)
-	rules := []func() []ValidationResult{
-		v.checkCH01, v.checkCH02, v.checkCH03,
-		v.runtimeFanoutCompleteness, v.runtimeRegistrationAdvisories,
-	}
-	for _, run := range rules {
+	// Canonicalize a COPY of the candidate (Check is side-effect-free, so the
+	// caller's contract must not be mutated) to the parser-equivalent field state
+	// the declaration rules expect, then validate. NewValidator is pure in-memory
+	// construction (no I/O), so the ctx.Err() check before the first rule fires is
+	// sufficient to honor a pre-canceled context.
+	normalized := *candidate
+	metadata.NormalizeRuntimeContract(&normalized)
+	v := NewValidator(singleContractProject(&normalized), "", g.clk)
+	for _, run := range v.runtimeDeclarationRules() {
 		if cerr := ctx.Err(); cerr != nil {
 			return nil, cerr
 		}
 		findings = append(findings, run()...)
 	}
 	return findings, nil
+}
+
+// runtimeDeclarationRules is the SINGLE SOURCE for the rule set the runtime
+// registration gate runs over a (NormalizeRuntimeContract-canonicalized)
+// single-contract candidate — the runtime "form" of `gocell validate`'s
+// per-contract declaration checks (Check and Submit share it).
+//
+// Inclusion criteria — a rule belongs here iff it is: (1) per-contract (iterates
+// v.project.Contracts; no REF/TOPO/DEP cross-reference to sibling cells/slices a
+// standalone candidate lacks — that is the very "vacuous for runtime contracts"
+// set the epic-303 ADR documents); (2) free of filesystem dependency (no
+// handler-file scan / verify-command existence — CH-04/05, VERIFY-*); (3) not
+// codegen-coupled (CH-06/07); (4) any parser-derived field it reads is
+// canonicalized by metadata.NormalizeRuntimeContract (transports → FMT-39, event
+// subscribers → REG-01).
+//
+// The exact set is golden-locked by TestGateDeclarationRuleSet_Golden, so adding a
+// rule forces a conscious in/out classification against the criteria above instead
+// of silent drift (the hand-picked-subset risk). FMT-01/08/09/39 +
+// FRAMEWORK-OWNED close the "invalid lifecycle / wrong-prefix / unknown kind /
+// bad transport / ineligible _framework owner all pass the gate" hole.
+func (v *Validator) runtimeDeclarationRules() []func() []ValidationResult {
+	return []func() []ValidationResult{
+		v.validateFMT01,                          // lifecycle ∈ {draft,active,deprecated}
+		v.validateFMT08,                          // ID prefix matches kind
+		v.validateFMT09,                          // kind ∈ known kinds
+		v.validateFMT39,                          // transport ↔ kind compatibility
+		v.validateFRAMEWORKOWNEDCONTRACTSCOPED01, // _framework owner eligibility
+		v.checkCH01,                              // ownerCell present
+		v.checkCH02,                              // lifecycle present
+		v.checkCH03,                              // http schemaRefs complete
+		v.runtimeFanoutCompleteness,              // REG-01 publisher/subscriber completeness
+		v.runtimeRegistrationAdvisories,          // REG-02 deprecated-registration advisory
+	}
 }
 
 // singleContractProject wraps one candidate contract in an otherwise-empty

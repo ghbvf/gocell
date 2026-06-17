@@ -15,15 +15,22 @@
 // handler or anywhere else would re-admit the ungated "submitted but invalid"
 // path the gate exists to eliminate.
 //
+// The allowlist is ENTRY-LEVEL, not package-level: the single sanctioned callsite
+// is the one inside (*RegistrationGate).Submit in kernel/governance. Any OTHER
+// callsite — including another function/method INSIDE kernel/governance — is
+// flagged, because the invariant is "only the gate entry", and the governance
+// package is large (a package-level allowlist would authorize far more than the
+// one entry the invariant protects).
+//
 // # AI-robust rating
 //
 //   - MEDIUM (caller-allowlist, type-aware scan) — a GO-LANGUAGE CEILING, not a
 //     deferred TODO. A genuinely-Hard sealed-construction funnel (Submit requires
 //     a token only the gate can mint) is blocked by kernel layering: a token
 //     sealed in registry cannot be minted by governance, and registry cannot
-//     import governance (cycle). Go cannot express "only kernel/governance may
-//     call this exported method", so the caller-allowlist archtest is the ceiling
-//     — same permanent posture documented for COMMAND-ASYNC-EMIT-CALLER-01 /
+//     import governance (cycle). Go cannot express "only (*RegistrationGate).Submit
+//     may call this exported method", so the caller-allowlist archtest is the
+//     ceiling — same permanent posture documented for COMMAND-ASYNC-EMIT-CALLER-01 /
 //     CROSSCELLOBS-MINTER-FUNNEL-01 / #851 / #893 / #1282. No fake Hard-upgrade
 //     issue is opened. The complementary HARD half is the sealed RegistrationState
 //     (registry.state.go): `submitted` cannot be forged, only reached via the
@@ -37,11 +44,18 @@
 //     a production bypass.
 //  2. Build-tag-gated production files under a non-default tag are not scanned by
 //     the default-tags Production scan (same posture as sibling caller funnels).
+//  3. The scan walks top-level FuncDecls (and the func literals nested in them); a
+//     Submit call in a package-level var initializer (outside any FuncDecl) is not
+//     reached. Implausible — Submit needs a *ContractRegistrar receiver value and
+//     returns two values — and consistent with the AST-scan surface of sibling
+//     funnels.
 package archtest
 
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	"testing"
 
@@ -97,79 +111,122 @@ func registrarReceiverName(t types.Type) string {
 	return ""
 }
 
-// TestRegistrarSubmitCaller01 asserts that no production package other than the
-// governance registration gate calls registry.ContractRegistrar.Submit.
+// recvTypeName returns the (de-pointered) receiver type name of a method
+// declaration, or "" for a free function / unparsable receiver.
+func recvTypeName(fd *ast.FuncDecl) string {
+	if fd.Recv == nil || len(fd.Recv.List) != 1 {
+		return ""
+	}
+	t := fd.Recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	if id, ok := t.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// isGateSubmitMethodDecl reports whether fd is the sanctioned gate entry method
+// (*RegistrationGate).Submit — the ONE callsite allowed to reach
+// ContractRegistrar.Submit. Callers must additionally confirm fd lives in the
+// governance package (a same-named type elsewhere would not be the gate).
+func isGateSubmitMethodDecl(fd *ast.FuncDecl) bool {
+	return fd.Name != nil && fd.Name.Name == "Submit" && recvTypeName(fd) == "RegistrationGate"
+}
+
+// TestRegistrarSubmitCaller01 asserts that the ONLY production callsite of
+// registry.ContractRegistrar.Submit is inside (*RegistrationGate).Submit — an
+// entry-level allowlist, not a package-level one (any other callsite, even inside
+// kernel/governance, is flagged).
 func TestRegistrarSubmitCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	var sanctionedCallsites int
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
-		if p.Pkg.Path() == registrationGatePkgPath {
-			return nil // sanctioned caller: the governance registration gate
-		}
+		gatePkg := p.Pkg.Path() == registrationGatePkgPath
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if !isRegistrarSubmitCall(p.TypesInfo, call) {
-					return
-				}
-				pos := p.Fset.Position(call.Pos())
-				d = append(d, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit directly. "+
-							"A runtime contract MUST enter the `submitted` state only through the governance "+
-							"registration gate (kernel/governance.RegistrationGate.Submit), which validates the "+
-							"candidate and fail-closes on error. A direct Submit re-admits the ungated "+
-							"\"submitted but invalid\" path the gate eliminates (303-US3 #2234).",
-						rel),
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				sanctioned := gatePkg && isGateSubmitMethodDecl(fd)
+				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
+					if !isRegistrarSubmitCall(p.TypesInfo, call) {
+						return
+					}
+					if sanctioned {
+						sanctionedCallsites++
+						return // the single allowed callsite
+					}
+					pos := p.Fset.Position(call.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit outside "+
+								"(*RegistrationGate).Submit. A runtime contract MUST enter `submitted` only through "+
+								"the governance registration gate, which validates the candidate and fail-closes on "+
+								"error. Any other callsite — even inside kernel/governance — re-admits the ungated "+
+								"\"submitted but invalid\" path the gate eliminates (303-US3 #2234).",
+							rel),
+					})
 				})
 			})
 		}
 		return d
 	})
 
-	// Anti-vacuity: the governance gate must actually call ContractRegistrar.Submit,
-	// else this funnel guards nothing (the Production scan would never observe a
-	// sanctioned caller and any future bypass would still be the ONLY caller).
-	if sanctioned := countGateRegistrarSubmitCalls(t); sanctioned == 0 {
+	// Anti-vacuity: EXACTLY ONE sanctioned callsite must exist — the single
+	// store.Submit call inside (*RegistrationGate).Submit. 0 = the gate no longer
+	// persists (the funnel guards nothing); >1 = the gate grew a second Submit
+	// callsite that must be reviewed (the invariant is "the one gate entry", not
+	// "the gate package").
+	if sanctionedCallsites != 1 {
 		diags = append(diags, Diagnostic{
-			Message: "REGISTRAR-SUBMIT-CALLER-01 anti-vacuity: kernel/governance does not call " +
-				"registry.ContractRegistrar.Submit — the gate is no longer the registration entry, " +
-				"so the caller funnel guards nothing. Either the gate was removed/renamed or the " +
-				"scanner regressed.",
+			Message: fmt.Sprintf("REGISTRAR-SUBMIT-CALLER-01 anti-vacuity: expected EXACTLY 1 "+
+				"registry.ContractRegistrar.Submit callsite inside (*RegistrationGate).Submit, found %d "+
+				"(0 = gate no longer the registration entry → funnel vacuous; >1 = unreviewed second entry).",
+				sanctionedCallsites),
 		})
 	}
 
 	Report(t, "REGISTRAR-SUBMIT-CALLER-01", diags)
 }
 
-// countGateRegistrarSubmitCalls returns the number of ContractRegistrar.Submit
-// calls in the governance package (the sanctioned-caller anti-vacuity anchor).
-func countGateRegistrarSubmitCalls(t *testing.T) int {
-	t.Helper()
-	var found int
-	_ = Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/governance"}), func(p *Pass) []Diagnostic {
-		if !p.Typed() {
-			return nil
-		}
-		for _, file := range p.Files {
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if isRegistrarSubmitCall(p.TypesInfo, call) {
-					found++
-				}
-			})
-		}
-		return nil
+// TestIsGateSubmitMethodDecl unit-tests the entry-level discriminator directly: it
+// must accept (*RegistrationGate).Submit and reject a same-package non-gate
+// function / a Submit on a different receiver — the function-level refinement a
+// same-package RED fixture cannot exercise (fixtures live in their own package).
+func TestIsGateSubmitMethodDecl(t *testing.T) {
+	t.Parallel()
+	const src = `package governance
+type RegistrationGate struct{}
+type Other struct{}
+func (g *RegistrationGate) Submit() {}
+func (g *RegistrationGate) Check() {}
+func (o *Other) Submit() {}
+func Submit() {}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := map[string]bool{}
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		key := recvTypeName(fd) + "." + fd.Name.Name
+		got[key] = isGateSubmitMethodDecl(fd)
 	})
-	return found
+	assert.True(t, got["RegistrationGate.Submit"], "(*RegistrationGate).Submit must be sanctioned")
+	assert.False(t, got["RegistrationGate.Check"], "non-Submit gate method must not be sanctioned")
+	assert.False(t, got["Other.Submit"], "Submit on a different receiver must not be sanctioned")
+	assert.False(t, got[".Submit"], "free function Submit must not be sanctioned")
 }
 
 // TestRegistrarSubmitCaller01_RedFixture verifies the scanner fires against a

@@ -53,6 +53,17 @@ func (r GateReason) String() string {
 // IsZero reports whether r is the zero (forged/uninitialised) value.
 func (r GateReason) IsZero() bool { return r.v == "" }
 
+// MarshalText implements encoding.TextMarshaler so GateReason serializes to its
+// wire value string (e.g. "validation-failed") under encoding/json — the
+// AdmissionResponse-style result is meant to be machine-readable, but a struct
+// with only an unexported field would otherwise JSON-encode to "{}" and silently
+// drop the reason. A forged zero value marshals to [GateReasonUnknown]
+// (fail-closed), never the empty string. The wire values are golden-locked by
+// TestGateReason_FrozenRegistry, so this is a stable wire contract.
+func (r GateReason) MarshalText() ([]byte, error) {
+	return []byte(r.String()), nil
+}
+
 // Package-private singletons — the sole GateReason values. Exposed via accessor
 // functions (not exported vars) so the registered values are immutable.
 var (
@@ -67,8 +78,11 @@ var (
 // ReasonAllowed: the candidate passed every applicable governance rule.
 func ReasonAllowed() GateReason { return reasonAllowed }
 
-// ReasonValidationFailed: the candidate violated a governance rule (including a
-// REG-01 fanout-completeness error), or a malformed/missing candidate.
+// ReasonValidationFailed: the declaration rules ran and the candidate violated at
+// least one — a CH/FMT/FRAMEWORK-OWNED declaration error or a REG-01
+// fanout-completeness error. A nil/malformed candidate or empty submitter is
+// ReasonInvalidInput (not this); an interrupted run is ReasonValidatorUnavailable;
+// a store-side failure is ReasonValidatorUnavailable / ReasonDuplicate.
 func ReasonValidationFailed() GateReason { return reasonValidationFailed }
 
 // ReasonValidatorUnavailable: the validation run could not complete (ctx
