@@ -262,7 +262,7 @@ The old global PostgreSQL env names for the **serving pool** (`cmd/corebundle`) 
 > the conventional DSN variable for the **`tools/pg-migrate` migration-admin tool**
 > (owner/superuser role, distinct from the restricted `gocell_app` serving role).
 > `tools/pg-migrate` and the associated `pg-migrate` service in
-> `docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml` continue to
+> `deploy/docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml` continue to
 > use `GOCELL_PG_DSN`. The migration-admin tool and the `cmd/corebundle` serving
 > pool may point at the **same database** but with **different roles** (superuser vs
 > restricted `gocell_app`).

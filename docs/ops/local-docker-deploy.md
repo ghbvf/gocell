@@ -203,7 +203,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`hack/scripts/gen-deploy-secrets.sh` writes 14 values to `.env.local`:
+`hack/scripts/gen-deploy-secrets.sh` writes 15 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|
@@ -213,6 +213,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 | `CONFIGCORE_MASTER_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `CONFIGCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `AUDITCORE_HMAC_KEY` | `openssl rand -base64 32` |
+| `AUDIT_BOOTSTRAP_HMAC_KEY` | `openssl rand -base64 32` (bootstrap audit chain HMAC key B, ADR 202605270230 / #1121) |
 | `AUDITCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `ACCESSCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `ACCESSCORE_IP_HASH_SALT` | `openssl rand -base64 32` |
