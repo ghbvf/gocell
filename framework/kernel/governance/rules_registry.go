@@ -54,6 +54,8 @@ var allRules = []Rule{
 	{Code: codeTOPO11, Phase: PhaseBase, Detect: (*Validator).validateTOPO11},
 	// TOPO-13: broker-mandatory static gate (Epic #1423 US3, permanent).
 	{Code: codeTOPO13, Phase: PhaseBase, Detect: (*Validator).validateTOPO13},
+	// TOPO-14: split-topology mTLS endpoint gate (#2263, non-loopback remote → https).
+	{Code: codeTOPO14, Phase: PhaseBase, Detect: (*Validator).validateTOPO14},
 
 	// VERIFY — verify closure (VERIFY-06 is PhaseStrict below)
 	{Code: codeVERIFY01, Phase: PhaseBase, Detect: (*Validator).validateVERIFY01},
