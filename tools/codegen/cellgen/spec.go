@@ -118,6 +118,12 @@ type GrpcServiceGenSpec struct {
 	// gates; the completeness pre-pass rejects a non-public proto method with no
 	// permission, so empty means the service is all-public or has no authed RPCs.
 	MethodPermissions []MethodPermission
+	// MethodResources lists the (FULL method name → request message field name) pairs
+	// derived from the contract's endpoints.grpc.methods[] resource entries (#2207),
+	// sorted by full method name for deterministic golden output. Rendered into the
+	// generated GRPCServiceSpec literal as a map[string]string. Empty → no owner-scoped
+	// per-message resource extraction; all methods use fullMethod as PDP resource (coarse).
+	MethodResources []MethodResource
 }
 
 // MethodPermission pairs a full gRPC method name with its required ABAC action
@@ -129,6 +135,18 @@ type MethodPermission struct {
 	FullMethod string
 	// Permission is the ABAC action string, e.g. "device:command".
 	Permission string
+}
+
+// MethodResource pairs a full gRPC method name with the request message field
+// name whose value is forwarded as the PDP resource for per-message ownership
+// authz (#2207). The slice form keeps the rendered golden deterministic.
+type MethodResource struct {
+	// FullMethod is the /{Service}/{Method} name, e.g.
+	// "/device.command.v1.DeviceCommandService/WatchCommands".
+	FullMethod string
+	// Field is the proto request message field name (snake_case), e.g. "device_id".
+	// The interceptor extracts it via protoreflect and canonicalizes the value.
+	Field string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.

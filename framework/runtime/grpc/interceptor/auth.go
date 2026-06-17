@@ -41,6 +41,10 @@ const (
 	msgGRPCInvalidToken              = "invalid token"
 	msgGRPCAuthnServiceUnavailable   = "authentication service unavailable"
 	msgGRPCAuthzServiceUnavailable   = "authorization service unavailable"
+	// msgGRPCResourceUnresolved is the PDP gate message when the method declares a
+	// resource field selector but extraction fails (field absent, wrong kind, empty
+	// value, or non-proto message) — F3 fail-closed (#2207).
+	msgGRPCResourceUnresolved = "resource field extraction failed; access denied"
 )
 
 // denyReason is the sealed, machine-readable reason carried in the
@@ -76,6 +80,11 @@ var (
 	reasonObligationsUnsupported  = denyReason{"OBLIGATIONS_UNSUPPORTED"}
 	reasonPDPUnavailable          = denyReason{"PDP_UNAVAILABLE"}
 	reasonAuthorizationDenied     = denyReason{"AUTHORIZATION_DENIED"}
+	// reasonResourceUnresolved is the F3 fail-closed reason for #2207: the method
+	// declares a resource field selector but extraction failed (field absent, wrong
+	// kind, empty, or req is not a proto.Message). PII-safe: no extracted value
+	// enters ErrorInfo.Metadata.
+	reasonResourceUnresolved = denyReason{"RESOURCE_UNRESOLVED"}
 )
 
 // allDenyReasons registers every reason for anti-vacuity tests (uniqueness +
@@ -84,7 +93,7 @@ var allDenyReasons = []denyReason{
 	reasonInvalidAuthMetadata, reasonInvalidToken, reasonAuthnServiceUnavailable,
 	reasonPasswordResetRequired, reasonAuthenticationRequired, reasonNoPermissionMapping,
 	reasonAuthzNotWired, reasonInsufficientPermissions, reasonObligationsUnsupported,
-	reasonPDPUnavailable, reasonAuthorizationDenied,
+	reasonPDPUnavailable, reasonAuthorizationDenied, reasonResourceUnresolved,
 }
 
 // deniedStatus builds a gRPC status carrying a machine-readable google.rpc.ErrorInfo
@@ -130,6 +139,15 @@ type AuthOption func(*authConfig)
 // authoring origin.
 type PermissionResolver func(fullMethod string) (authz.Permission, bool)
 
+// ResourceResolver maps a full gRPC method name (/{Service}/{Method}) to the
+// request message field name (proto field, snake_case) whose string value should
+// be extracted and forwarded as the PDP resource for per-message ownership authz
+// (#2207). ok=false means the method has no resource field selector — the gate
+// uses fullMethod as the resource (coarse, existing behavior). In production the
+// registrar's ResourceFieldForMethod is the single source (wired in chain.go via
+// WithResourceResolver, guarded by GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01).
+type ResourceResolver func(fullMethod string) (field string, ok bool)
+
 type authConfig struct {
 	publicMethod        func(fullMethod string) bool
 	passwordResetExempt func(fullMethod string) bool
@@ -140,6 +158,10 @@ type authConfig struct {
 	// permissionFor resolves a method to its required permission. nil → every
 	// non-public method has no mapping → deny (strict fail-closed).
 	permissionFor PermissionResolver
+	// resourceFor resolves a method to the request-message field name to extract as
+	// the PDP resource (#2207). nil → every method uses fullMethod as resource
+	// (coarse, existing behavior). LAST-WINS: a single registrar-sourced resolver.
+	resourceFor ResourceResolver
 }
 
 // WithPublicMethod adds pred to the predicates marking RPC methods that bypass
@@ -224,12 +246,35 @@ func WithPermissionResolver(r PermissionResolver) AuthOption {
 	}
 }
 
+// WithResourceResolver installs the method→resource-field resolver the PDP gate
+// uses to extract the per-message resource for owner-scoped authz (#2207). When a
+// method resolves to a field name, the interceptor extracts that field from the
+// first received request message (unary: the only message; streaming: first RecvMsg)
+// via protoreflect, canonicalizes it via ParseCanonicalUUID, and forwards it as the
+// PDP resource instead of fullMethod. F3 fail-closed: if extraction fails for any
+// reason (not proto.Message, field absent, wrong kind, empty/non-canonical value) the
+// gate DENIES — it never falls back to fullMethod. In production the SOLE installer
+// is chain.go (GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01). A nil resolver is a no-op;
+// the default (no resolver) is the coarse fallback (fullMethod as resource).
+// LAST-WINS: like password-reset exemption, the resource map has a single source.
+func WithResourceResolver(r ResourceResolver) AuthOption {
+	return func(c *authConfig) {
+		if r != nil {
+			c.resourceFor = r
+		}
+	}
+}
+
 // UnaryAuth returns an interceptor that extracts a bearer token from the
 // incoming metadata, verifies it via runtime/auth.AuthenticateBearer (the shared
 // transport-agnostic core), applies the password-reset gate, and on success
 // forwards the principal-enriched context to the handler. Failures map directly
 // to gRPC status codes (Unauthenticated / Unavailable / PermissionDenied),
 // mirroring the HTTP handleAuthRequest classification.
+//
+// For owner-scoped methods (#2207) the interceptor additionally extracts the
+// resource field from req (F3 fail-closed: extraction failure → deny) and forwards
+// it as the PDP resource instead of fullMethod.
 //
 // The verifier is required: a nil verifier is a wiring bug that fails fast at
 // construction (programmer-error panic). For a security interceptor this is
@@ -244,41 +289,62 @@ func UnaryAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Unary
 	for _, o := range opts {
 		o(&cfg)
 	}
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		ctx, err := authorize(ctx, cfg, verifier, info.FullMethod)
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (res any, retErr error) {
+		// Stage-level panic guard (mirrors the guard in authorizeWithPrincipal): covers
+		// the extractResourceForUnary / authorizePermission calls that run outside the
+		// authorizeWithPrincipal recover scope (#1790).
+		defer func() {
+			if v := recover(); v != nil {
+				res, retErr = nil, recoverGRPCPanic(ctx, "auth", info.FullMethod, v)
+			}
+		}()
+		authCtx, p, err := authorizeWithPrincipal(ctx, cfg, verifier, info.FullMethod)
 		if err != nil {
 			return nil, err
 		}
-		return handler(ctx, req)
+		// p == nil → public method (bypass granted by authorizeWithPrincipal). Skip
+		// resource extraction and permission gate.
+		if p != nil {
+			// Owner-scoped resource extraction (#2207): run after authn so we have the
+			// principal for logging, but before forwarding to the handler. F3 fail-closed.
+			resource, denyErr := extractResourceForUnary(authCtx, cfg, p, info.FullMethod, req)
+			if denyErr != nil {
+				return nil, denyErr
+			}
+			if err := authorizePermission(authCtx, cfg, p, info.FullMethod, resource); err != nil {
+				return nil, err
+			}
+		}
+		return handler(authCtx, req)
 	}
 }
 
-// authorize is the transport-shape-agnostic auth core shared by UnaryAuth and
-// StreamAuth (PR-10 #1153) — the single source of the gRPC bearer-auth decision
-// across both transports. It applies the public-method bypass, extracts and
-// verifies the bearer token via the shared runtime/auth.AuthenticateBearer core,
-// and applies the password-reset gate. On success it returns the
-// principal-enriched context and a nil error; on any failure it returns a gRPC
-// status error (the context is returned unchanged on the failure paths). The
-// caller forwards the returned context to the handler (wrapping the stream for
-// the streaming path).
+// authorizeWithPrincipal is the transport-shape-agnostic authn core shared by
+// UnaryAuth and StreamAuth — the single source of the gRPC bearer-auth + authn
+// decision across both transports. It returns the principal-enriched context and
+// the authenticated Principal so callers can pass it to the permission gate
+// (authorizePermission) with an appropriate resource.
+//
+// It applies the public-method bypass, extracts and verifies the bearer token via
+// the shared runtime/auth.AuthenticateBearer core, and applies the password-reset
+// gate. On any failure it returns a gRPC status error and a nil Principal (the
+// context is returned unchanged on failure). For public methods it returns (ctx,
+// nil, nil) — no principal is available.
 //
 // The whole auth stage runs OUTSIDE UnaryRecovery/StreamRecovery (Recovery wraps
-// only the handler), so authorize installs ONE stage-level panic guard reusing the
-// shared recoverGRPCPanic core (#1790): any panic from a predicate, the bearer
-// verifier, or metadata parsing is collapsed into codes.Internal and logged
+// only the handler), so authorizeWithPrincipal installs ONE stage-level panic guard
+// reusing the shared recoverGRPCPanic core (#1790): any panic from a predicate, the
+// bearer verifier, or metadata parsing is collapsed into codes.Internal and logged
 // (redacted) instead of escaping the chain unobserved by the outer Metrics/Tracing
-// interceptors. This is the single chokepoint — no per-callsite guard can be
-// forgotten — so the inner helpers (callPredicate) stay panic-naive. The named
-// returns exist solely so the deferred guard can rewrite the result on the panic
-// path; the normal paths all return explicitly.
-func authorize(
+// interceptors. The named returns exist solely so the deferred guard can rewrite the
+// result on the panic path; the normal paths all return explicitly.
+func authorizeWithPrincipal(
 	ctx context.Context, cfg authConfig, verifier auth.IntentTokenVerifier, fullMethod string,
-) (resultCtx context.Context, err error) {
+) (resultCtx context.Context, p *auth.Principal, err error) {
 	resultCtx = ctx
 	defer func() {
 		if v := recover(); v != nil {
-			resultCtx, err = ctx, recoverGRPCPanic(ctx, "auth", fullMethod, v)
+			resultCtx, p, err = ctx, nil, recoverGRPCPanic(ctx, "auth", fullMethod, v)
 		}
 	}()
 
@@ -288,41 +354,34 @@ func authorize(
 	// yields a caller — it is anonymous by construction. A public method is never
 	// permission-gated (Public ⊕ Permission are mutually exclusive in the overlay).
 	if callPredicate(cfg.publicMethod, fullMethod) {
-		return ctx, nil
+		//nolint:nilnil // public-method bypass: a JWT-exempt RPC has no principal and
+		// no error — (ctx, nil, nil) is the documented signal callers branch on (p==nil).
+		return ctx, nil, nil
 	}
 
 	token, ok := bearerFromMetadata(ctx)
 	if !ok {
-		return ctx, deniedStatus(codes.Unauthenticated, msgGRPCMissingAuthMetadata,
+		return ctx, nil, deniedStatus(codes.Unauthenticated, msgGRPCMissingAuthMetadata,
 			reasonInvalidAuthMetadata, denyMeta(fullMethod, ""))
 	}
 
-	authCtx, p, verr := auth.AuthenticateBearer(ctx, verifier, token)
+	authCtx, principal, verr := auth.AuthenticateBearer(ctx, verifier, token)
 	if verr != nil {
-		return ctx, authErrorToStatus(verr, fullMethod)
+		return ctx, nil, authErrorToStatus(verr, fullMethod)
 	}
 
-	if auth.PasswordResetBlocked(p, callPredicate(cfg.passwordResetExempt, fullMethod)) {
-		return ctx, deniedStatus(codes.PermissionDenied, msgGRPCPasswordResetRequired,
+	if auth.PasswordResetBlocked(principal, callPredicate(cfg.passwordResetExempt, fullMethod)) {
+		return ctx, nil, deniedStatus(codes.PermissionDenied, msgGRPCPasswordResetRequired,
 			reasonPasswordResetRequired, denyMeta(fullMethod, ""))
 	}
 
-	// PDP authorization gate (#2008): after authentication, a non-public RPC must
-	// carry a permission overlay and pass the ABAC PDP, mirroring the HTTP
-	// RequirePermission route gate. Fail-closed at every step. Running here (inside
-	// the shared core, under the stage-level panic guard) gives unary + stream
-	// parity for free and keeps a panicking PDP/resolver collapsed to codes.Internal.
-	if err := authorizePermission(authCtx, cfg, p, fullMethod); err != nil {
-		return ctx, err
-	}
-
-	return authCtx, nil
+	return authCtx, principal, nil
 }
 
-// authorizePermission is the #2008 per-method PDP gate, run after authentication
-// on the non-public path. It mirrors runtime/auth.RequirePermission's fail-closed
-// decision order, adapted to gRPC status codes (there is no general errcode→codes
-// mapper yet; the gate maps inline like authErrorToStatus). Decision order:
+// authorizePermission is the #2008/#2207 per-method PDP gate, run after
+// authentication on the non-public path. It mirrors runtime/auth.RequirePermission's
+// fail-closed decision order, adapted to gRPC status codes (there is no general
+// errcode→codes mapper yet; the gate maps inline like authErrorToStatus). Decision order:
 //
 //  1. No permission mapping (resolver nil, or ok=false, or zero Permission) →
 //     PermissionDenied. Strict fail-closed (#2008): a non-public RPC with no
@@ -338,11 +397,14 @@ func authorize(
 //     PermissionDenied (HTTP F5 parity: dropping a restricting obligation would
 //     widen what the caller sees; the baseline carries zero obligations).
 //
-// resource = fullMethod (coarse, mirrors HTTP RequirePermission forwarding
-// r.URL.Path); owner-scoped per-message resource extraction (the analog of
-// RequirePermissionForResource) is not feasible in an interceptor (req is `any`,
-// and a stream has no message at open) and is out of scope for #2008.
-func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal, fullMethod string) error {
+// resource is the PDP authz target for the Authorize call. For coarse methods it
+// equals fullMethod (mirroring HTTP RequirePermission forwarding r.URL.Path). For
+// owner-scoped methods the caller pre-extracts the per-message field value
+// (extractResourceForMessage, resource.go, #2207) and supplies it here; F3
+// fail-closed means extraction failure → DENY before reaching this function.
+// PII note: resource may be a device UUID — it MUST NOT appear in denyMeta (which
+// goes into wire ErrorInfo.Metadata). Only fullMethod and permission enter denyMeta.
+func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal, fullMethod, resource string) error {
 	perm, ok := resolveMethodPermission(cfg.permissionFor, fullMethod)
 	if !ok {
 		// Misconfiguration (or a dead method): WARN so it is distinguishable from a
@@ -362,7 +424,7 @@ func authorizePermission(ctx context.Context, cfg authConfig, p *auth.Principal,
 		return deniedStatus(codes.PermissionDenied, msgGRPCAuthzNotWired,
 			reasonAuthzNotWired, denyMeta(fullMethod, perm.String()))
 	}
-	dec, err := cfg.authorizer.Authorize(ctx, p.Subject, fullMethod, perm.String())
+	dec, err := cfg.authorizer.Authorize(ctx, p.Subject, resource, perm.String())
 	if err != nil {
 		logGRPCAuthorizeError(ctx, err, fullMethod, p.Subject, perm.String())
 		return pdpErrorToStatus(err, fullMethod, perm.String())

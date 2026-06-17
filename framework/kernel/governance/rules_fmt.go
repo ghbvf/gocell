@@ -1051,6 +1051,44 @@ func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []Validat
 				"use a registered authz action string (e.g. device:command); add a new Perm* to framework/pkg/authz if needed",
 			))
 		}
+		// Resource field validation (#2207): checked outside the switch because it is
+		// independent of the name/dup/public guards above and must run even when the
+		// switch arm fires (e.g. an entry that passes public/permission checks can still
+		// have a resource constraint violation). Three constraints:
+		//   1. resource without permission → meaningless (no PDP gate to forward it to).
+		//   2. resource on a public RPC → JWT-exempt, no subject to compare against.
+		//   3. resource MISSING when permission is owner-scoped → silent owner lock-out
+		//      (fullMethod never equals device-id, so the ownership rule never fires).
+		switch {
+		case m.Resource != "" && m.Permission == "":
+			results = append(results, v.newError(
+				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q declares resource %q "+
+					"without a permission; resource extraction requires an ABAC gate to forward the "+
+					"value to (#2207)", c.ID, m.Name, m.Resource),
+				"add a permission entry for this method, or remove the resource field",
+			))
+		case m.Resource != "" && m.Public:
+			results = append(results, v.newError(
+				codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+				fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q declares BOTH public and resource %q; "+
+					"a JWT-exempt RPC has no authenticated subject to compare the resource against (#2207)", c.ID, m.Name, m.Resource),
+				"keep public:true (no auth, no resource) or permission+resource (ABAC owner-scoped), not both",
+			))
+		case m.Resource == "" && m.Permission != "" && authz.IsKnownPermissionString(m.Permission):
+			if perm, ok := authz.PermissionByName(m.Permission); ok && perm.IsOwnerScoped() {
+				results = append(results, v.newError(
+					codeFMT41, IssueRequired, file, fieldEndpointsGRPCMethods,
+					fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q uses owner-scoped permission %q "+
+						"but declares no resource field (#2207); without a resource selector the gate uses "+
+						"fullMethod as the PDP resource, so the ownership rule (subject.sub == resource.id) "+
+						"never fires and the device owner is silently locked out",
+						c.ID, m.Name, m.Permission),
+					"declare endpoints.grpc.methods[].resource with the proto field name (e.g. device_id) "+
+						"whose value identifies the owned resource — see RequirePermissionForResource for the HTTP analog",
+				))
+			}
+		}
 	}
 	return results
 }

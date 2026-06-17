@@ -12,14 +12,28 @@ package authz
 //
 // # Sealed construction (closed value set)
 //
-// The single field `s` is unexported and the only minter is the unexported
-// newPermission, called solely from the package-level var declarations below.
-// Outside this package there is NO way to construct a Permission:
-// authz.Permission{s: "anything"} is a compile error (unexported field), and
-// there is no exported constructor or Unmarshal. The set of Permissions that
-// can ever exist is therefore exactly the exported Perm* vars in this file — a
-// closed, audited registry. The zero value (Permission{}) is invalid; IsZero()
-// reports it and downstream consumers fail closed on it.
+// The two fields `s` and `ownerScoped` are unexported and the only minter is
+// the unexported newPermission, called solely from the package-level var
+// declarations below. Outside this package there is NO way to construct a
+// Permission: authz.Permission{s: "anything"} is a compile error (unexported
+// field), and there is no exported constructor or Unmarshal. The set of
+// Permissions that can ever exist is therefore exactly the exported Perm* vars
+// in this file — a closed, audited registry. The zero value (Permission{}) is
+// invalid; IsZero() reports it and downstream consumers fail closed on it.
+//
+// # Scope: coarse vs owner-scoped
+//
+// Every Permission carries a machine-readable scope declared at mint time. The
+// constraint "read vs write and coarse vs ownership are NEVER folded into one
+// Permission" was previously documented as a prose invariant; it is now
+// MACHINE-EXPRESSED via the typed permScope parameter to newPermission. The
+// field ownerScoped is true when the permission requires per-message resource
+// extraction (the subject.sub == resource check), false for coarse gates. See
+// IsOwnerScoped. This distinction drives the gRPC per-message resource
+// extraction cross-check in cellgen (#2207): an owner-scoped permission on a
+// gRPC method MUST declare endpoints.grpc.methods[].resource, or the device
+// owner is silently locked out (gate uses fullMethod, subject==resource never
+// matches).
 //
 // # AI-robust Grade
 //
@@ -47,19 +61,57 @@ package authz
 // introduced without adding a perm* var + accessor in this file (which the
 // registry test pins via allPermissions).
 type Permission struct {
-	s string
+	s           string
+	ownerScoped bool
 }
+
+// permScope is the machine-readable scope dimension of a Permission. It is
+// passed to newPermission at mint time and stored in Permission.ownerScoped.
+// Using a named type ensures the caller cannot accidentally swap the order of
+// arguments or pass an arbitrary bool (an int8 enum is harder to misuse than
+// a raw bool literal).
+type permScope uint8
+
+const (
+	// scopeCoarse marks a permission that uses fullMethod as the PDP resource —
+	// coarse grant/deny, no per-message ownership check. Most platform permissions
+	// are coarse (audit:read, config:*, session:verify, device:command, etc.).
+	scopeCoarse permScope = iota
+	// scopeOwnerScoped marks a permission that requires per-message resource
+	// extraction so the PDP ownership rule (subject.sub == resource.id) can match.
+	// HTTP uses auth.RequirePermissionForResource; gRPC declares
+	// endpoints.grpc.methods[].resource (#2207). Examples: device:consume,
+	// device:read, user:read, user:write, role:read, order:read, order:update.
+	scopeOwnerScoped
+)
 
 // newPermission is the sole minter of Permission values. It is unexported and
 // must be called only from the package-level perm* var declarations in this
 // file, which is what makes the exported set closed and audited.
-func newPermission(s string) Permission {
-	return Permission{s: s}
+func newPermission(s string, scope permScope) Permission {
+	return Permission{s: s, ownerScoped: scope == scopeOwnerScoped}
+}
+
+// IsOwnerScoped reports whether this permission requires per-message resource
+// extraction so the PDP ownership rule (subject.sub == resource.id) can fire.
+// This is the MACHINE-EXPRESSED form of the previously prose-only constraint
+// that "coarse vs ownership are NEVER folded into one Permission".
+//
+// # AI-robust Grade (#2207)
+//
+// Hard (sealed construction): the ownerScoped bit is set only by newPermission
+// (unexported, registry-only), so no external code can forge an owner-scoped
+// Permission. The gRPC cellgen cross-check uses this to enforce at build time
+// that every owner-scoped permission on a gRPC method declares a resource
+// selector, preventing the silent owner lock-out (fullMethod never equals
+// device-id, so the PDP ownership rule never fires).
+func (p Permission) IsOwnerScoped() bool {
+	return p.ownerScoped
 }
 
 // permAuditRead is the package-private singleton backing the PermAuditRead()
 // accessor. Unexported so no external package can reassign it.
-var permAuditRead = newPermission("audit:read")
+var permAuditRead = newPermission("audit:read", scopeCoarse)
 
 // PermAuditRead returns the permission authorizing reading the audit ledger
 // across actors within the caller's tenant (the gate auditquery's "query other
@@ -74,7 +126,7 @@ func PermAuditRead() Permission {
 
 // permSystemRead is the package-private singleton backing the PermSystemRead()
 // accessor. Unexported so no external package can reassign it.
-var permSystemRead = newPermission("system:read")
+var permSystemRead = newPermission("system:read", scopeCoarse)
 
 // PermSystemRead returns the permission authorizing reads of runtime/system
 // observability state — the gate for the aggregated cell-health endpoint
@@ -96,11 +148,11 @@ func PermSystemRead() Permission {
 // hasAuthority("resource:action")). Same accessor-func-over-private-singleton
 // shape as PermAuditRead — reassignment is a compile error (Hard immutability).
 var (
-	permConfigRead    = newPermission("config:read")
-	permConfigWrite   = newPermission("config:write")
-	permConfigPublish = newPermission("config:publish")
-	permFlagRead      = newPermission("flag:read")
-	permFlagWrite     = newPermission("flag:write")
+	permConfigRead    = newPermission("config:read", scopeCoarse)
+	permConfigWrite   = newPermission("config:write", scopeCoarse)
+	permConfigPublish = newPermission("config:publish", scopeCoarse)
+	permFlagRead      = newPermission("flag:read", scopeCoarse)
+	permFlagWrite     = newPermission("flag:write", scopeCoarse)
 )
 
 // PermConfigRead authorizes reading configuration entries (configread slice:
@@ -133,11 +185,11 @@ func PermFlagWrite() Permission { return permFlagWrite }
 // folds create/update/delete (plus lock/unlock/change-password for user) per the
 // AWS-IAM Write access-level grouping the prior uniform admin gate already implied.
 var (
-	permPolicyRead  = newPermission("policy:read")
-	permPolicyWrite = newPermission("policy:write")
-	permUserRead    = newPermission("user:read")
-	permUserWrite   = newPermission("user:write")
-	permRoleRead    = newPermission("role:read")
+	permPolicyRead  = newPermission("policy:read", scopeCoarse)
+	permPolicyWrite = newPermission("policy:write", scopeCoarse)
+	permUserRead    = newPermission("user:read", scopeOwnerScoped)
+	permUserWrite   = newPermission("user:write", scopeOwnerScoped)
+	permRoleRead    = newPermission("role:read", scopeOwnerScoped)
 )
 
 // PermPolicyRead authorizes reading ABAC policies (policymanage slice: GET
@@ -177,7 +229,7 @@ func PermRoleRead() Permission { return permRoleRead }
 
 // permSessionVerify is the package-private singleton backing the
 // PermSessionVerify() accessor. Unexported so no external package can reassign it.
-var permSessionVerify = newPermission("session:verify")
+var permSessionVerify = newPermission("session:verify", scopeCoarse)
 
 // PermSessionVerify returns the permission authorizing service-to-service
 // introspection of an access/session token via the accesscore sessionverifyrpc
@@ -206,10 +258,10 @@ func PermSessionVerify() Permission { return permSessionVerify }
 // Hard immutability). Migrated from auth.AnyRole / auth.SelfOr / the hand-rolled
 // gRPC role gate the devicecell slices used pre-PR-10d.
 var (
-	permDeviceCommand = newPermission("device:command")
-	permDeviceConsume = newPermission("device:consume")
-	permDeviceRead    = newPermission("device:read")
-	permDeviceList    = newPermission("device:list")
+	permDeviceCommand = newPermission("device:command", scopeCoarse)
+	permDeviceConsume = newPermission("device:consume", scopeOwnerScoped)
+	permDeviceRead    = newPermission("device:read", scopeOwnerScoped)
+	permDeviceList    = newPermission("device:list", scopeCoarse)
 )
 
 // PermDeviceCommand authorizes dispatching a command to a device (devicecommand
@@ -238,10 +290,10 @@ func PermDeviceList() Permission { return permDeviceList }
 // coarse (role:customer); read / update are owner-scoped (subject.sub ==
 // order.owner, owner supplied by a PIP lookup over the order repository).
 var (
-	permOrderCreate = newPermission("order:create")
-	permOrderList   = newPermission("order:list")
-	permOrderRead   = newPermission("order:read")
-	permOrderUpdate = newPermission("order:update")
+	permOrderCreate = newPermission("order:create", scopeCoarse)
+	permOrderList   = newPermission("order:list", scopeCoarse)
+	permOrderRead   = newPermission("order:read", scopeOwnerScoped)
+	permOrderUpdate = newPermission("order:update", scopeOwnerScoped)
 )
 
 // PermOrderCreate authorizes creating an order (ordercreate). Baseline grants it

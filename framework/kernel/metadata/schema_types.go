@@ -224,6 +224,23 @@ type GRPCMethodMeta struct {
 	// authz.IsKnownPermissionString, so a typo fails at `gocell validate` rather than
 	// silently denying at runtime. Mutually exclusive with Public (see above).
 	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
+	// Resource is the REQUEST MESSAGE field name (proto field, snake_case, e.g.
+	// "device_id") whose string value becomes the PDP resource for owner-scoped
+	// per-message authz (#2207). The interceptor extracts it via protoreflect on
+	// the first received message, canonicalizes it (same ParseCanonicalUUID path as
+	// HTTP RequirePermissionForResource), and forwards it as the PDP resource so
+	// the ownership rule (subject.sub == resource.id) can fire.
+	//
+	// Constraints (enforced by cellgen cross-check and metadata parser):
+	//   - Mutually exclusive with Public (a JWT-exempt RPC has no subject to compare).
+	//   - Only valid when Permission is also set (resource extraction without an ABAC
+	//     decision is meaningless; the gate always runs).
+	//   - Must be set when Permission refers to an owner-scoped authz.Permission
+	//     (authz.Permission.IsOwnerScoped()==true); omitting it silently locks out
+	//     the owner because fullMethod never equals device-id.
+	//
+	// Mirrors HTTP auth.RequirePermissionForResource's path-param role for gRPC.
+	Resource string `yaml:"resource,omitempty" json:"resource,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.

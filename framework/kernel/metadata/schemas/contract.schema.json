@@ -702,6 +702,11 @@
                           "type": "string",
                           "minLength": 1,
                           "description": "ABAC action string the non-public RPC requires (#2008), e.g. device:command. Carried as the PDP `action`; cellgen derives GRPCServiceSpec.MethodPermissions and the runtime registrar resolves it to a sealed authz.Permission. Must be a member of the closed authz registry — FMT-41 validates membership statically (the schema cannot). Mutually exclusive with public."
+                        },
+                        "resource": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Request message field name (proto field, snake_case, e.g. device_id) whose string value becomes the PDP resource for owner-scoped per-message authz (#2207). The interceptor extracts it via protoreflect, canonicalizes via ParseCanonicalUUID, and forwards it as the PDP resource so the ownership rule (subject.sub == resource.id) can fire. Only valid when permission is also set; mutually exclusive with public. Must be declared when permission refers to an owner-scoped authz.Permission, or the owner is silently locked out. Mirrors HTTP RequirePermissionForResource's path-param role."
                         }
                       },
                       "allOf": [
@@ -716,6 +721,16 @@
                           "description": "public ⊕ permission mutex: a JWT-exempt RPC has no authenticated subject, so requiring a permission on it is contradictory.",
                           "if": { "required": ["public"], "properties": { "public": { "const": true } } },
                           "then": { "not": { "required": ["permission"] } }
+                        },
+                        {
+                          "description": "resource requires permission: resource extraction without an ABAC decision is meaningless.",
+                          "if": { "required": ["resource"] },
+                          "then": { "required": ["permission"] }
+                        },
+                        {
+                          "description": "resource ⊕ public mutex: a JWT-exempt RPC has no authenticated subject to compare the resource against.",
+                          "if": { "required": ["resource"] },
+                          "then": { "not": { "required": ["public"] } }
                         }
                       ]
                     }

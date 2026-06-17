@@ -119,6 +119,15 @@ func StreamMetrics(collector metrics.GRPCCollector, clk clock.Clock, validCellID
 // context-wrapped stream. The verifier is required (programmer-error panic on
 // nil) — the server must refuse to start rather than expose unauthenticated
 // streams.
+//
+// For owner-scoped methods (#2207) the resource lives in the request message,
+// which is NOT available at stream open. The permission gate is therefore DEFERRED
+// ENTIRELY to the first RecvMsg via resourceGatedStream — the coarse (fullMethod)
+// gate MUST NOT run at open for these methods, because it would wrongly DENY the
+// owner (subject == fullMethod never holds) before the per-message check ever runs.
+// Coarse methods (no resource selector) keep the open-time gate. This is the
+// streaming analog of UnaryAuth's extractResourceForUnary path (unary has the
+// message at interceptor entry, so it gates once with the right resource).
 func StreamAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.StreamServerInterceptor {
 	if validation.IsNilInterface(verifier) {
 		panic(panicregister.Approved("interceptor-auth-verifier-required",
@@ -129,12 +138,55 @@ func StreamAuth(verifier auth.IntentTokenVerifier, opts ...AuthOption) grpc.Stre
 		o(&cfg)
 	}
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		ctx, err := authorize(ss.Context(), cfg, verifier, info.FullMethod)
+		authCtx, p, err := authorizeWithPrincipal(ss.Context(), cfg, verifier, info.FullMethod)
 		if err != nil {
 			return err
 		}
-		return handler(srv, wrapServerStream(ss, ctx))
+		wrapped := wrapServerStream(ss, authCtx)
+		// p == nil → public method (bypass granted by authorizeWithPrincipal); no
+		// permission gate.
+		if p == nil {
+			return handler(srv, wrapped)
+		}
+		// Owner-scoped method (#2207): DEFER the whole permission gate to the first
+		// RecvMsg, where the resource field value is known. Running the coarse gate
+		// here would deny the owner. The deferred gate (resourceGatedStream.RecvMsg)
+		// runs during handler execution, so a panic in it is collapsed to
+		// codes.Internal by the innermost StreamRecovery interceptor (F3 fail-closed
+		// on extraction failure is a returned deny, not a panic).
+		if cfg.resourceFor != nil {
+			if fieldName, hasField := cfg.resourceFor(info.FullMethod); hasField {
+				return handler(srv, &resourceGatedStream{
+					ServerStream: wrapped,
+					ctx:          authCtx,
+					cfg:          cfg,
+					p:            p,
+					fullMethod:   info.FullMethod,
+					fieldName:    fieldName,
+				})
+			}
+		}
+		// Coarse method: gate at open with resource=fullMethod (pre-#2207 behavior).
+		if err := gateStreamAtOpen(authCtx, cfg, p, info.FullMethod); err != nil {
+			return err
+		}
+		return handler(srv, wrapped)
 	}
+}
+
+// gateStreamAtOpen runs the coarse permission gate (resource = fullMethod) for a
+// non-public, non-owner-scoped streaming method at stream open. It installs a
+// stage-level panic guard mirroring authorizeWithPrincipal (#1790): the gate runs
+// OUTSIDE StreamRecovery, so a panicking PDP/resolver is collapsed to codes.Internal
+// here rather than escaping the chain. Owner-scoped methods do NOT use this — their
+// gate is deferred to resourceGatedStream.RecvMsg (#2207).
+func gateStreamAtOpen(ctx context.Context, cfg authConfig, p *auth.Principal, fullMethod string) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = recoverGRPCPanic(ctx, "auth", fullMethod, v)
+		}
+	}()
+	return authorizePermission(ctx, cfg, p, fullMethod, fullMethod)
 }
 
 // StreamDrain binds each in-flight stream's handler context to the shared

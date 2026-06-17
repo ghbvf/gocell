@@ -53,6 +53,8 @@ func TestDenyReasonRegistry_UniqueNonEmptyClosedSet(t *testing.T) {
 		"PASSWORD_RESET_REQUIRED", "AUTHENTICATION_REQUIRED", "NO_PERMISSION_MAPPING",
 		"AUTHZ_NOT_WIRED", "INSUFFICIENT_PERMISSIONS", "OBLIGATIONS_UNSUPPORTED",
 		"PDP_UNAVAILABLE", "AUTHORIZATION_DENIED",
+		// #2207: F3 fail-closed resource extraction failure.
+		"RESOURCE_UNRESOLVED",
 	}
 	assert.ElementsMatch(t, want, got, "allDenyReasons must equal the documented closed set")
 }

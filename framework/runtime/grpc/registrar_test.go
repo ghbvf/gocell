@@ -603,3 +603,85 @@ func TestServiceRegistrar_Register_UnknownPublicMethodKey_Panics(t *testing.T) {
 	}()
 	_ = reg.Register(spec)
 }
+
+// --- ResourceFieldForMethod (#2207): per-message resource extraction ----------
+
+// TestServiceRegistrar_ResourceFieldForMethod verifies that a method declared in
+// spec.MethodResources resolves to its field name, and an unmapped or unknown
+// method returns ("", false).
+func TestServiceRegistrar_ResourceFieldForMethod(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	spec := synthSpec("grpc.health.res.v1", "cell-res", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodResources = map[string]string{
+		"/grpc.health.v1.Health/Watch": "device_id",
+	}
+	require.NoError(t, reg.Register(spec))
+
+	field, ok := reg.ResourceFieldForMethod("/grpc.health.v1.Health/Watch")
+	require.True(t, ok, "a method declared in spec.MethodResources must resolve")
+	assert.Equal(t, "device_id", field, "field name must match the overlay declaration")
+
+	_, ok = reg.ResourceFieldForMethod("/grpc.health.v1.Health/Check")
+	assert.False(t, ok, "an undeclared method must not resolve (fail-closed)")
+
+	_, ok = reg.ResourceFieldForMethod("/nonexistent.Svc/Method")
+	assert.False(t, ok, "a non-registered method must not resolve")
+}
+
+// TestServiceRegistrar_ResourceFieldForMethod_EmptyDefault verifies that a
+// registrar with no MethodResources reports ok=false for every method.
+func TestServiceRegistrar_ResourceFieldForMethod_EmptyDefault(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, false)
+	spec := synthSpec("grpc.health.nores.v1", "cell-nores", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	require.NoError(t, reg.Register(spec))
+
+	_, ok := reg.ResourceFieldForMethod("/grpc.health.v1.Health/Check")
+	assert.False(t, ok, "no MethodResources declared → no resource field (coarse behavior)")
+}
+
+// TestServiceRegistrar_Register_UnknownResourceMethodKey_Panics verifies that a
+// MethodResources entry whose key does not name a method registered by the spec
+// fails fast at register time (F2 defense-in-depth, mirrors MethodPermissions).
+func TestServiceRegistrar_Register_UnknownResourceMethodKey_Panics(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	spec := synthSpec("grpc.health.staleres.v1", "cell-staleres", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.MethodResources = map[string]string{
+		"/grpc.health.v1.Health/Nonexistent": "device_id",
+	}
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "unknown MethodResources key must panic")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "does not name a method registered", "panic must explain the dangling key")
+		assert.Contains(t, msg, "Nonexistent")
+	}()
+	_ = reg.Register(spec)
+}
+
+// TestServiceRegistrar_ResourceFieldForMethod_MultiSpecAggregation verifies that
+// MethodResources are aggregated across multiple registered specs.
+func TestServiceRegistrar_ResourceFieldForMethod_MultiSpecAggregation(t *testing.T) {
+	t.Parallel()
+	reg, _ := newRegistrar()
+
+	specA := synthSpec("grpc.health.resa.v1", "cell-resa", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	specA.MethodResources = map[string]string{
+		"/grpc.health.v1.Health/Watch": "service",
+	}
+	require.NoError(t, reg.Register(specA))
+
+	field, ok := reg.ResourceFieldForMethod("/grpc.health.v1.Health/Watch")
+	assert.True(t, ok)
+	assert.Equal(t, "service", field)
+}
