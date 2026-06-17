@@ -138,44 +138,53 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 	}
 }
 
-// WithRelay registers the relay BOTH for outbox wiring AND for lifecycle
-// (Start/Stop driven through the package-private relayAdapter). Calling
-// WithRelay is the ONLY supported path to integrate a relay; passing it to
-// WithManagedResource is a compile-time type-mismatch — *runtimeoutbox.Relay
-// does not implement kernel/lifecycle.ManagedResource. See ADR
+// WithRelay registers a relay for the deduplicated infrastructure instance
+// identified by key, BOTH for outbox wiring AND for lifecycle (Start/Stop driven
+// through the package-private relayAdapter). Calling WithRelay is the ONLY
+// supported path to integrate a relay; passing it to WithManagedResource is a
+// compile-time type-mismatch — *runtimeoutbox.Relay does not implement
+// kernel/lifecycle.ManagedResource. See ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md and
 // archtest RELAY-NOT-MANAGEDRESOURCE-01.
 //
-// Calling WithRelay more than once is a programmer error and panics through
-// the panic-taxonomy funnel (panicregister.Approved + errcode.Assertion, B
-// class): the second call would silently overwrite b.relay while leaving the
-// earlier relay registered in managedResources, hiding a double-managed
-// resource that the previous runtime guard could not catch once the active
-// b.relay pointer moved.
+// Relay fan-out is keyed by InfraInstanceKey (#2152 PR-1): a colocated assembly
+// registers its one relay under DefaultInstanceKey (behavior unchanged); a
+// split assembly registers one relay per distinct instance key, each wrapped in
+// its own relayAdapter so every instance's outbox drains independently.
+//
+// Calling WithRelay more than once with the SAME instance key is a programmer
+// error and panics through the panic-taxonomy funnel (panicregister.Approved +
+// errcode.Assertion, B class): the second call would silently overwrite the
+// relay stored under that key while leaving the earlier relay's adapter
+// registered in managedResources, hiding a double-managed resource. Distinct
+// keys accumulate — that is the sanctioned fan-out.
 //
 // Nil inputs are silently ignored (cumulative builder noop pattern,
-// runtime-api.md §Option 范式分层): the relay remains unset, and
-// autoWireOutboxRejectCollector skips relay-specific wiring.
+// runtime-api.md §Option 范式分层): no relay is registered for that key.
 //
 // Must be called before Run(). Typical usage:
 //
-//	relay := runtimeoutbox.NewRelay(store, pub, cfg)
+//	relay := runtimeoutbox.NewRelay(clk, store, pub, cfg)
 //	relay.WithPendingDepthObserver(pendingDepthCollector)
 //	bootstrap.New(
-//	    bootstrap.WithRelay(relay), // sole sanctioned entry; no WithManagedResource needed
+//	    bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relay), // colocated: one relay
 //	    ...
 //	)
-func WithRelay(r *runtimeoutbox.Relay) Option {
+func WithRelay(key InfraInstanceKey, r *runtimeoutbox.Relay) Option {
 	return func(b *Bootstrap) {
 		if r == nil {
 			return
 		}
-		if b.relay != nil {
+		if _, exists := b.relaysByInstance[key]; exists {
 			panic(panicregister.Approved("bootstrap-relay-rebind",
-				errcode.Assertion("bootstrap: WithRelay called more than once; only one relay may be registered per Bootstrap")))
+				errcode.Assertion("bootstrap: WithRelay called twice for infra instance key %q; one relay per instance", key.id)))
 		}
-		b.relay = r
-		b.managedResources = append(b.managedResources, newRelayAdapter(r)) // auto-lifecycle via sole sanctioned holder
+		if b.relaysByInstance == nil {
+			b.relaysByInstance = make(map[InfraInstanceKey]*runtimeoutbox.Relay, 1)
+		}
+		b.relaysByInstance[key] = r
+		// One relayAdapter per instance (sole sanctioned holder); auto-lifecycle.
+		b.managedResources = append(b.managedResources, newRelayAdapter(key, r))
 	}
 }
 

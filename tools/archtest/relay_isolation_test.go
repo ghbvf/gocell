@@ -38,23 +38,35 @@
 //
 // # RELAY-SOLE-HOLDER-01
 //
-// Among all production named struct types satisfying
-// `kernel/lifecycle.ManagedResource`, the ONLY type permitted to hold a
-// `*runtime/outbox.Relay` field (named, embedded, or by value) is
-// `runtime/bootstrap.relayAdapter`. Any other satisfying-and-holding type
-// would constitute an alternative sanctioned-holder path, breaking the
-// §"single sanctioned holder" Hard 范本
-// (.claude/rules/gocell/ai-robust.md) even when the upstream
+// Keyed-by-instance holder invariant (#2152 PR-1). Bootstrap's relay channel
+// fans out into a keyed collection — one relay per deduplicated infra instance,
+// each wrapped in its OWN `runtime/bootstrap.relayAdapter` — so the old
+// "single relay per Bootstrap" framing is lifted. What survives, and is the
+// type-level guard here, is the SOLE-HOLDER-TYPE property: among all production
+// named struct types satisfying `kernel/lifecycle.ManagedResource`, the ONLY
+// type permitted to hold a `*runtime/outbox.Relay` — directly (named, embedded,
+// or by value) OR inside a slice/array/map element — is
+// `runtime/bootstrap.relayAdapter`. N relayAdapter INSTANCES are fine (that is
+// the fan-out); an alternative satisfying-AND-holding TYPE is not, as it would
+// be a second sanctioned-holder path, breaking the §"single sanctioned holder"
+// Hard 范本 (.claude/rules/gocell/ai-robust.md) even when the upstream
 // `newRelayAdapter` constructor stays package-private.
+//
+// The fan-out collection itself (`Bootstrap.relaysByInstance
+// map[InfraInstanceKey]*Relay`) is legal and NOT flagged: `*Bootstrap` does not
+// satisfy ManagedResource, so it never enters the candidate set. The collection
+// scan below exists so that a NEW ManagedResource holding a relay COLLECTION
+// (`[]*Relay` / `map[K]*Relay`) — the natural bypass once fan-out makes relay
+// collections idiomatic — is rejected exactly like a bare `*Relay` field.
 //
 // AI-robust grade: Hard (downstream). The production type universe is
 // walked via `Run(t, Production(...))`; for each `*types.Named` whose
 // underlying is `*types.Struct` and whose pointer method set satisfies
-// `ManagedResource`, every struct field is inspected and any
-// `*Relay` / `Relay` field that does not live in `relayAdapter` fails the
-// test. Upstream Hard is again the package-private `newRelayAdapter`
-// constructor — external packages cannot construct an alternative
-// wrapper that holds the relay.
+// `ManagedResource`, every struct field is inspected (recursing into
+// slice/array/map element types) and any `*Relay` / `Relay` reached that does
+// not live in `relayAdapter` fails the test. Upstream Hard is again the
+// package-private `newRelayAdapter` constructor — external packages cannot
+// construct an alternative wrapper that holds the relay.
 //
 // Blind-spot inventory (tool: `types.Implements` + `*types.Struct`
 // field walk):
@@ -66,6 +78,14 @@
 //   - Embedded *Relay is the same shape as a named pointer field in
 //     go/types (`Field(i).Anonymous() == true`, same Type()); the field
 //     walk does not need to special-case embedding.
+//   - Collection holders: `[]*Relay`, `[N]*Relay`, `map[K]*Relay`, the
+//     pointer-to-collection forms `*[]*Relay` / `*map[K]*Relay`, and nested
+//     combinations are all caught — fieldHoldsRelay recurses through every
+//     pointer / slice / array / map-value layer (the Pointer case delegates to
+//     itself, so a non-Named element no longer bails the walk). A relay in a
+//     map KEY position (`map[*Relay]V`) is NOT inspected (only the value) —
+//     holding a relay as a key is nonsensical and never a real lifecycle-holder
+//     shape; that miss is asserted in TestFieldHoldsRelay_DetectsCollections.
 //   - Indirect-via-interface (e.g. a struct holds
 //     `interface{ Worker(); Close(...)... }`) is NOT inspected by this
 //     rule — but reaching such a wrapper to a real `*Relay` still
@@ -77,11 +97,14 @@
 //     (production loader filters `<module>/generated/`).
 //   - Reverse self-check: `runtime/bootstrap.relayAdapter` MUST appear
 //     in the satisfying-AND-holding set, otherwise the filter is
-//     vacuous and the test passes silently.
+//     vacuous and the test passes silently. The synthetic-type unit test
+//     `TestFieldHoldsRelay_DetectsCollections` separately proves the
+//     collection recursion is live (not vacuous).
 
 package archtest
 
 import (
+	"go/token"
 	"go/types"
 	"testing"
 
@@ -185,23 +208,90 @@ func TestRELAY_NOT_MANAGEDRESOURCE_01(t *testing.T) {
 		relayIsoLifecyclePkgPath, relayIsoMRTypeName)
 }
 
-// fieldHoldsRelay reports whether t resolves to *relayNamed (pointer field
-// or embedded *Relay) or relayNamed (value field / embedded Relay).
-// Type identity is checked via *types.Named.Obj() rather than
-// types.Identical so the comparison is robust against repeated calls to
-// types.NewNamed and instantiation.
+// fieldHoldsRelay reports whether t reaches relayNamed through any chain of
+// pointer / slice / array / map-value indirection — covering `*Relay`, `Relay`,
+// `[]*Relay`, `map[K]*Relay`, AND pointer-to-collection forms like `*[]*Relay`
+// or `*map[K]*Relay` (the holder shapes that fan-out makes idiomatic, #2152
+// PR-1). Every recursing case (including Pointer) delegates to itself, so the
+// Named base case is the single relay-identity check; adding a holder shape
+// requires no new identity comparison. Type identity is checked via
+// *types.Named.Obj() rather than types.Identical so the comparison is robust
+// against repeated calls to types.NewNamed and instantiation.
+//
+// Map KEY position is intentionally NOT inspected (only ty.Elem(), the value):
+// a relay used as a map key is never a real lifecycle-holder shape (you hold a
+// relay to drive Start/Stop, not to look one up). That blind spot is documented
+// in the RELAY-SOLE-HOLDER-01 godoc and asserted-as-miss in the unit test.
 func fieldHoldsRelay(ft types.Type, relayNamed *types.Named) bool {
 	switch ty := ft.(type) {
 	case *types.Pointer:
-		inner, ok := ty.Elem().(*types.Named)
-		if !ok {
-			return false
-		}
-		return inner.Obj() == relayNamed.Obj()
+		return fieldHoldsRelay(ty.Elem(), relayNamed)
 	case *types.Named:
 		return ty.Obj() == relayNamed.Obj()
+	case *types.Slice:
+		return fieldHoldsRelay(ty.Elem(), relayNamed)
+	case *types.Array:
+		return fieldHoldsRelay(ty.Elem(), relayNamed)
+	case *types.Map:
+		return fieldHoldsRelay(ty.Elem(), relayNamed)
 	}
 	return false
+}
+
+// TestFieldHoldsRelay_DetectsCollections proves the collection recursion added
+// for the keyed relay fan-out (#2152 PR-1) is live: a synthetic ManagedResource
+// holding a relay inside a slice/array/map element must be detected exactly like
+// a bare *Relay field, while a collection of an unrelated type must not be. This
+// is the synthetic RED/GREEN backstop for the production type-walk (which today
+// finds zero collection holders, so without this the recursion would be
+// untested).
+func TestFieldHoldsRelay_DetectsCollections(t *testing.T) {
+	t.Parallel()
+
+	relayObj := types.NewTypeName(token.NoPos, nil, relayIsoRelayTypeName, nil)
+	relayNamed := types.NewNamed(relayObj, types.NewStruct(nil, nil), nil)
+	otherObj := types.NewTypeName(token.NoPos, nil, "NotARelay", nil)
+	otherNamed := types.NewNamed(otherObj, types.NewStruct(nil, nil), nil)
+
+	ptrRelay := types.NewPointer(relayNamed)
+	strKey := types.Typ[types.String]
+
+	holds := []struct {
+		name string
+		typ  types.Type
+	}{
+		{"bare pointer", ptrRelay},
+		{"value", relayNamed},
+		{"slice of pointer", types.NewSlice(ptrRelay)},
+		{"array of pointer", types.NewArray(ptrRelay, 3)},
+		{"map value pointer", types.NewMap(strKey, ptrRelay)},
+		{"nested slice of slice", types.NewSlice(types.NewSlice(ptrRelay))},
+		{"map of slice", types.NewMap(strKey, types.NewSlice(ptrRelay))},
+		// Pointer-to-collection forms (F1 #2338): the Pointer branch must recurse,
+		// not bail on a non-Named element, else `*[]*Relay` / `*map[K]*Relay`
+		// silently bypass the sole-holder guard.
+		{"pointer to slice of pointer", types.NewPointer(types.NewSlice(ptrRelay))},
+		{"pointer to map value pointer", types.NewPointer(types.NewMap(strKey, ptrRelay))},
+		{"pointer to pointer", types.NewPointer(ptrRelay)},
+	}
+	for _, c := range holds {
+		require.True(t, fieldHoldsRelay(c.typ, relayNamed),
+			"fieldHoldsRelay must detect a relay held as %s", c.name)
+	}
+
+	misses := []struct {
+		name string
+		typ  types.Type
+	}{
+		{"unrelated pointer", types.NewPointer(otherNamed)},
+		{"slice of unrelated", types.NewSlice(types.NewPointer(otherNamed))},
+		{"map of unrelated", types.NewMap(strKey, types.NewPointer(otherNamed))},
+		{"relay in map KEY only", types.NewMap(ptrRelay, otherNamed)},
+	}
+	for _, c := range misses {
+		require.False(t, fieldHoldsRelay(c.typ, relayNamed),
+			"fieldHoldsRelay must NOT flag %s", c.name)
+	}
 }
 
 // structHoldsRelay reports whether the struct underlying named declares any

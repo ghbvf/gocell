@@ -510,7 +510,7 @@ func runBootstrap(
 			bootstrap.WithListenerNet(lns.health)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newTestConsumerBase(t, clock.Real())),
-		bootstrap.WithRelay(relayWorker),
+		bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker),
 		// accesscore registers grpc.auth.session.verify.v1 unconditionally
 		// (cell_gen.go, PR-11 #1154). A gRPC listener must be wired or bootstrap
 		// fail-fasts with checkOrphanGRPCServices. HTTP-focused tests don't call
