@@ -27,6 +27,11 @@ func TestParse_NullableType(t *testing.T) {
 		{name: "two real types still unsupported", typeJSON: `["string", "integer"]`, wantErr: true},
 		{name: "single-element array unsupported", typeJSON: `["string"]`, wantErr: true},
 		{name: "null only unsupported", typeJSON: `["null"]`, wantErr: true},
+		// #2340 F1: only scalars may be nullable — object/array/typo fail fast
+		// rather than degrade to an `any` GoType.
+		{name: "nullable object unsupported", typeJSON: `["object", "null"]`, wantErr: true},
+		{name: "nullable array unsupported", typeJSON: `["array", "null"]`, wantErr: true},
+		{name: "scalar typo unsupported", typeJSON: `["strnig", "null"]`, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

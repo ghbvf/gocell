@@ -254,7 +254,7 @@ func fillType(s *Schema, rawNode map[string]any, loc string) error {
 		scalar, ok := nullableScalarType(tv)
 		if !ok {
 			return fmt.Errorf("contractgen/jsonschema: unsupported \"type\" array %v at %s "+
-				"(only [\"<scalar>\", \"null\"] is accepted)", tv, loc)
+				"(only [<scalar>, \"null\"] where scalar ∈ {string, integer, number, boolean} is accepted)", tv, loc)
 		}
 		s.Type = scalar
 		s.Nullable = true
@@ -266,9 +266,26 @@ func fillType(s *Schema, rawNode map[string]any, loc string) error {
 	return nil
 }
 
+// nullableScalarTypes is the CLOSED value-set of JSON-Schema types that may carry
+// a `["<type>", "null"]` nullable declaration: only scalars whose Go zero value has
+// a well-defined non-null wire form worth pointer-izing. `object` and `array` are
+// excluded on purpose — their "no value" is `{}` / `[]`, not a nullable pointer, and
+// codegen renders them as nested DTOs / slices, so `*object` / `*[]T` would be
+// nonsense; a nullable object/array (or a typo like "strnig") must fail fast rather
+// than fall through to the `any` GoType fallback (#2340 F1). To allow a new nullable
+// type, add it here AND extend the pointer-derivation in collectDTOs.
+var nullableScalarTypes = map[string]bool{
+	"string":  true,
+	"integer": true,
+	"number":  true,
+	"boolean": true,
+}
+
 // nullableScalarType returns the non-"null" scalar of a 2-element `type` array
 // exactly one of whose members is "null" (e.g. ["string","null"]), reporting ok.
-// Any other shape returns ok=false so fillType rejects it.
+// The scalar must be in the closed nullableScalarTypes set; any other shape
+// (wrong length, no/extra "null", a non-scalar like "object"/"array", or a typo)
+// returns ok=false so fillType rejects it (fail-fast, no `any` degradation).
 func nullableScalarType(tv []any) (scalar string, ok bool) {
 	if len(tv) != 2 {
 		return "", false
@@ -286,7 +303,7 @@ func nullableScalarType(tv []any) (scalar string, ok bool) {
 		}
 		scalars = append(scalars, s)
 	}
-	if nullCount != 1 || len(scalars) != 1 || scalars[0] == "null" {
+	if nullCount != 1 || len(scalars) != 1 || !nullableScalarTypes[scalars[0]] {
 		return "", false
 	}
 	return scalars[0], true

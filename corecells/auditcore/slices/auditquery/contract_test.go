@@ -246,6 +246,14 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 // wire either omitted the key (presence side channel) or emitted "" (format:
 // date-time violation) — this test pins that the schema and the full-column-set
 // ToMap agree on the null representation.
+//
+// It also pins zero-value schema-validity ACROSS types (#2340 F3): the seeded row
+// leaves every optional column empty, so ValidateHTTPResponseRecorder asserts the
+// whole full-column-set zero-value response is schema-valid — a plain optional
+// string (subjectId) renders as "" (valid for type:string, present not absent),
+// while the format-constrained occurredAt renders as null. The systematic guard
+// that NO optional projection column can have a schema-invalid zero (e.g. an
+// optional array/object whose nil marshals to JSON null) is tracked separately.
 func TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
@@ -280,12 +288,23 @@ func TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates(t *testing.T) {
 	if len(resp.Data) != 1 {
 		t.Fatalf("want 1 row, got %d\nbody=%s", len(resp.Data), rec.Body.String())
 	}
-	oc, has := resp.Data[0]["occurredAt"]
+	row := resp.Data[0]
+	oc, has := row["occurredAt"]
 	if !has {
 		t.Errorf("occurredAt key must be present (stable column set)\nbody=%s", rec.Body.String())
 	}
 	if oc != nil {
 		t.Errorf("zero OccurredAt must render as JSON null, got %v\nbody=%s", oc, rec.Body.String())
+	}
+	// Cross-type zero-value validity: an empty optional plain string renders as ""
+	// (present, schema-valid for type:string), NOT absent and NOT null — distinct
+	// from the nullable occurredAt above.
+	sid, hasSID := row["subjectId"]
+	if !hasSID {
+		t.Errorf("subjectId key must be present even when empty (stable column set)\nbody=%s", rec.Body.String())
+	}
+	if sid != "" {
+		t.Errorf("empty optional subjectId must render as \"\" (schema-valid), got %v\nbody=%s", sid, rec.Body.String())
 	}
 }
 
