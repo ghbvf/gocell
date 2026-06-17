@@ -118,10 +118,25 @@ func TestWithRelay_DistinctInstanceKeys_BothRegistered(t *testing.T) {
 	// k1-before-k2 registration order is exactly what makes k2 tear down first.
 	require.Less(t, idx1, idx2, "k1 relay adapter must be registered before k2 (so LIFO teardown closes k2 first)")
 
-	// Both relays must flow through the managed-resource teardown pipeline.
+	// Both relays must flow through the managed-resource teardown pipeline, and
+	// each non-default instance's relay must expose INSTANCE-SCOPED probe names on
+	// the readyz health-checker set (the per-instance readyz wire contract, F3
+	// #2338) — proving the namespacing reaches bootstrap registration, not just
+	// the relayAdapter helper.
 	require.NoError(t, b.expandManagedResources())
 	require.GreaterOrEqual(t, len(b.managedResourceTeardowns), 2,
 		"both relays must register a LIFO teardown")
+
+	probeNames := make(map[string]bool, len(b.healthCheckers))
+	for _, hc := range b.healthCheckers {
+		probeNames[string(hc.name)] = true
+	}
+	for _, op := range []string{"outbox_relay_poll", "outbox_relay_reclaim", "outbox_relay_cleanup"} {
+		require.True(t, probeNames[op+"_poola"], "non-default instance poola must expose suffixed probe %q", op+"_poola")
+		require.True(t, probeNames[op+"_poolb"], "non-default instance poolb must expose suffixed probe %q", op+"_poolb")
+		require.False(t, probeNames[op], "non-default instances must NOT expose the bare probe %q (it is reserved for DefaultInstanceKey)", op)
+	}
+
 	ctx := context.Background()
 	for _, td := range b.managedResourceTeardowns {
 		require.NoError(t, td.fn(ctx), "teardown %q must not fail", td.name)

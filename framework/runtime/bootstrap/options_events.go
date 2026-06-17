@@ -164,7 +164,7 @@ func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
 //
 // Must be called before Run(). Typical usage:
 //
-//	relay := runtimeoutbox.NewRelay(store, pub, cfg)
+//	relay := runtimeoutbox.NewRelay(clk, store, pub, cfg)
 //	relay.WithPendingDepthObserver(pendingDepthCollector)
 //	bootstrap.New(
 //	    bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relay), // colocated: one relay

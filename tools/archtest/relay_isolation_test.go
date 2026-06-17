@@ -78,11 +78,14 @@
 //   - Embedded *Relay is the same shape as a named pointer field in
 //     go/types (`Field(i).Anonymous() == true`, same Type()); the field
 //     walk does not need to special-case embedding.
-//   - Collection holders: `[]*Relay`, `[N]*Relay`, `map[K]*Relay` (and
-//     nested combinations) are caught by recursing into element/value
-//     types. A relay in a map KEY position (`map[*Relay]V`) is NOT
-//     inspected — holding a relay as a key is nonsensical and never a
-//     real lifecycle-holder shape.
+//   - Collection holders: `[]*Relay`, `[N]*Relay`, `map[K]*Relay`, the
+//     pointer-to-collection forms `*[]*Relay` / `*map[K]*Relay`, and nested
+//     combinations are all caught — fieldHoldsRelay recurses through every
+//     pointer / slice / array / map-value layer (the Pointer case delegates to
+//     itself, so a non-Named element no longer bails the walk). A relay in a
+//     map KEY position (`map[*Relay]V`) is NOT inspected (only the value) —
+//     holding a relay as a key is nonsensical and never a real lifecycle-holder
+//     shape; that miss is asserted in TestFieldHoldsRelay_DetectsCollections.
 //   - Indirect-via-interface (e.g. a struct holds
 //     `interface{ Worker(); Close(...)... }`) is NOT inspected by this
 //     rule — but reaching such a wrapper to a real `*Relay` still
@@ -205,22 +208,24 @@ func TestRELAY_NOT_MANAGEDRESOURCE_01(t *testing.T) {
 		relayIsoLifecyclePkgPath, relayIsoMRTypeName)
 }
 
-// fieldHoldsRelay reports whether t reaches *relayNamed (pointer field or
-// embedded *Relay) or relayNamed (value field / embedded Relay), including
-// when held inside a slice/array/map element (e.g. `[]*Relay`,
-// `map[K]*Relay`) — the collection-holder shape that fan-out makes idiomatic
-// (#2152 PR-1). Type identity is checked via *types.Named.Obj() rather than
-// types.Identical so the comparison is robust against repeated calls to
-// types.NewNamed and instantiation. Map KEY position is intentionally not
-// inspected — a relay as a map key is never a real lifecycle-holder shape.
+// fieldHoldsRelay reports whether t reaches relayNamed through any chain of
+// pointer / slice / array / map-value indirection — covering `*Relay`, `Relay`,
+// `[]*Relay`, `map[K]*Relay`, AND pointer-to-collection forms like `*[]*Relay`
+// or `*map[K]*Relay` (the holder shapes that fan-out makes idiomatic, #2152
+// PR-1). Every recursing case (including Pointer) delegates to itself, so the
+// Named base case is the single relay-identity check; adding a holder shape
+// requires no new identity comparison. Type identity is checked via
+// *types.Named.Obj() rather than types.Identical so the comparison is robust
+// against repeated calls to types.NewNamed and instantiation.
+//
+// Map KEY position is intentionally NOT inspected (only ty.Elem(), the value):
+// a relay used as a map key is never a real lifecycle-holder shape (you hold a
+// relay to drive Start/Stop, not to look one up). That blind spot is documented
+// in the RELAY-SOLE-HOLDER-01 godoc and asserted-as-miss in the unit test.
 func fieldHoldsRelay(ft types.Type, relayNamed *types.Named) bool {
 	switch ty := ft.(type) {
 	case *types.Pointer:
-		inner, ok := ty.Elem().(*types.Named)
-		if !ok {
-			return false
-		}
-		return inner.Obj() == relayNamed.Obj()
+		return fieldHoldsRelay(ty.Elem(), relayNamed)
 	case *types.Named:
 		return ty.Obj() == relayNamed.Obj()
 	case *types.Slice:
@@ -262,6 +267,12 @@ func TestFieldHoldsRelay_DetectsCollections(t *testing.T) {
 		{"map value pointer", types.NewMap(strKey, ptrRelay)},
 		{"nested slice of slice", types.NewSlice(types.NewSlice(ptrRelay))},
 		{"map of slice", types.NewMap(strKey, types.NewSlice(ptrRelay))},
+		// Pointer-to-collection forms (F1 #2338): the Pointer branch must recurse,
+		// not bail on a non-Named element, else `*[]*Relay` / `*map[K]*Relay`
+		// silently bypass the sole-holder guard.
+		{"pointer to slice of pointer", types.NewPointer(types.NewSlice(ptrRelay))},
+		{"pointer to map value pointer", types.NewPointer(types.NewMap(strKey, ptrRelay))},
+		{"pointer to pointer", types.NewPointer(ptrRelay)},
 	}
 	for _, c := range holds {
 		require.True(t, fieldHoldsRelay(c.typ, relayNamed),

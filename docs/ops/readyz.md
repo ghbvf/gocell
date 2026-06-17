@@ -612,9 +612,12 @@ get an instance-scoped name:
   (a lowercase snake_case identifier ≤32 chars; composition roots SHOULD use a semantic id
   such as the owning cell id, not a physical-resource fragment). Naming is composed via the
   sanctioned `healthz.RelayInstanceProbeName` constructor.
-- **When they appear**: only when a composition root registers ≥2 relays (distinct
-  `InfraInstanceKey`s). The default single-relay colocated deployment keeps the bare names, so
-  existing dashboards/alerts on `outbox_relay_*` are unaffected.
+- **When they appear**: the suffix is keyed on the InfraInstanceKey, not on relay count — a relay
+  registered under ANY non-default key (`bootstrap.NewInfraInstanceKey(...)`) always gets the
+  `_<instanceID>` suffix; the colocated `DefaultInstanceKey()` always keeps the bare names. Today
+  every deployment uses only the default key (single colocated relay; see the NB below), so the
+  bare `outbox_relay_*` names are what dashboards/alerts see — but the contract is key-based, not
+  count-based.
 - **On-call attribution**: an unhealthy `outbox_relay_poll_<id>` identifies which infra
   instance's relay is failing (poll/reclaim/cleanup budget tripped); the bare-named probe is
   the colocated default. Two relays can never collide — bootstrap's `expandManagedResources`

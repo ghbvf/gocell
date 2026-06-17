@@ -202,6 +202,25 @@ func TestRelayInstanceProbeName_Invalid(t *testing.T) {
 	}
 }
 
+// TestRelayInstanceProbeName_InvalidBase verifies the base allowlist (F2 #2338):
+// a non-relay-operation base must be rejected, so this relay-specific composer
+// cannot mint a misleading "outbox_relay_*"-shaped name from an arbitrary
+// ProbeName. The three real relay bases must be accepted.
+func TestRelayInstanceProbeName_InvalidBase(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []ProbeName{"postgres_ready", "outbox_relay", "outbox_relay_poll_extra", "config_watcher", ""} {
+		if _, err := RelayInstanceProbeName(bad, "poola"); err == nil {
+			t.Errorf("RelayInstanceProbeName(base=%q) expected error, got nil", bad)
+		}
+	}
+	for _, ok := range []ProbeName{"outbox_relay_poll", "outbox_relay_reclaim", "outbox_relay_cleanup"} {
+		if _, err := RelayInstanceProbeName(ok, "poola"); err != nil {
+			t.Errorf("RelayInstanceProbeName(base=%q) unexpected error: %v", ok, err)
+		}
+	}
+}
+
 func TestProjectionStoreReadyProbeName(t *testing.T) {
 	t.Parallel()
 
