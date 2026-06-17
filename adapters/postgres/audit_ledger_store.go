@@ -588,11 +588,13 @@ func (s *LedgerStore) Query(
 FROM audit_entries WHERE namespace = `, ns)
 	// TENANT axis (#1618): the mandatory typed tenant t scopes results to its OWN
 	// tenant's rows PLUS tenant-less system/framework rows (tenant_id == "" —
-	// bootstrap.auth.fail and other pre-auth events have no principal tenant) —
-	// never another tenant's rows. This is the app-layer half of the dual-layer
-	// isolation (FORCE RLS on the app.tenant_id GUC is the DB-Hard primary); it is
-	// always applied (no tenant-less Query is expressible). The auditquery handler
-	// passes t from the authenticated principal.
+	// bootstrap.auth.fail and other pre-auth events have no principal tenant).
+	// The empty-tenant chain is a shared operational signal surface intentionally
+	// visible to tenant-scoped audit admins; rows carrying any other tenant_id stay
+	// excluded. This is the app-layer half of the dual-layer isolation (FORCE RLS
+	// on the app.tenant_id GUC is the DB-Hard primary); it is always applied (no
+	// tenant-less Query is expressible). The auditquery handler passes t from the
+	// authenticated principal.
 	//
 	// Index note: the `OR tenant_id=''` disjunction is served by
 	// idx_audit_namespace_ts_id (namespace equality + the ts/id keyset, ORDER BY

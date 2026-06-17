@@ -40,9 +40,10 @@
 --   exact and index-friendly. The issue text wrote `::uuid`, which assumed a
 --   uuid column; casting only the setting (text = uuid) is a type error against
 --   a TEXT column, and casting the column defeats the tenant_id index — so the
---   correct, index-preserving predicate is the uncast TEXT form above. The
---   SystemTenantID (nil UUID) system-config tier is read by setting the GUC to
---   that nil UUID (strict equality), so no OR-branch is needed.
+--   correct, index-preserving predicate is the uncast TEXT form above. Internal
+--   config reads no longer use a SystemTenantID/nil-UUID tier (#1577); they pass
+--   the caller's real tenant through X-Tenant-ID and set the GUC to that canonical
+--   tenant string, so strict tenant equality remains the only branch needed.
 --
 -- WITH CHECK is stated explicitly (it defaults to USING when omitted) so the
 -- write-side guard survives a future USING-only edit.
