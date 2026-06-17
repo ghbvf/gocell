@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	configget "github.com/ghbvf/gocell/generated/contracts/http/config/get/v1"
 	configlist "github.com/ghbvf/gocell/generated/contracts/http/config/list/v1"
 )
@@ -92,13 +91,13 @@ type Handler struct {
 }
 
 // NewHandler creates a public configread Handler with generated per-contract
-// handlers. Both endpoints are gated by auth.RequirePermission(authz.PermConfigRead());
-// the ABAC PDP decides — baseline grants admin/super-admin (PR-10b #1348).
-func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermission(authz.PermConfigRead())
+// handlers. Both endpoints are gated via the contract-derived resolver
+// (endpoints.http.permission overlay, #2205); the ABAC PDP decides — baseline
+// grants admin/super-admin (PR-10b #1348).
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		getH:  configget.NewHandler(GetAdapter{svc}, policy),
-		listH: configlist.NewHandler(ListAdapter{svc}, policy),
+		getH:  configget.NewHandler(GetAdapter{svc}, resolver),
+		listH: configlist.NewHandler(ListAdapter{svc}, resolver),
 	}
 }
 

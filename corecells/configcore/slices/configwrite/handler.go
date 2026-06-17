@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	configdelete "github.com/ghbvf/gocell/generated/contracts/http/config/delete/v1"
 	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
 	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
@@ -119,14 +118,14 @@ type Handler struct {
 }
 
 // NewHandler creates a configwrite Handler using generated per-contract handlers.
-// All endpoints are gated by auth.RequirePermission(authz.PermConfigWrite());
-// the ABAC PDP decides — baseline grants admin/super-admin (PR-10b #1348).
-func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermission(authz.PermConfigWrite())
+// All endpoints are gated via the contract-derived resolver
+// (endpoints.http.permission overlay, #2205); the ABAC PDP decides — baseline
+// grants admin/super-admin (PR-10b #1348).
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		writeH:  write.NewHandler(WriteAdapter{svc}, policy),
-		updateH: update.NewHandler(UpdateAdapter{svc}, policy),
-		deleteH: configdelete.NewHandler(DeleteAdapter{svc}, policy),
+		writeH:  write.NewHandler(WriteAdapter{svc}, resolver),
+		updateH: update.NewHandler(UpdateAdapter{svc}, resolver),
+		deleteH: configdelete.NewHandler(DeleteAdapter{svc}, resolver),
 	}
 }
 

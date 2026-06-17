@@ -24,15 +24,20 @@ import (
 
 const testAdminSubject = "admin-test"
 
+// contractFlagWriteResolver mirrors the cellHTTPResolver for flagwrite contract tests.
+var contractFlagWriteResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.flags.create.v1": "flag:write",
+	"http.config.flags.update.v1": "flag:write",
+	"http.config.flags.toggle.v1": "flag:write",
+	"http.config.flags.delete.v1": "flag:write",
+})
+
 // newContractMux registers flagwrite routes under the canonical API prefix
 // by delegating to Handler.RegisterRoutes — the same single source of truth
-// production wiring uses (corecells/configcore/cell.go). Inlining policy
-// wrappers here would re-open the policy-drift surface the P0 fix closed:
-// any change to the required role would land in RegisterRoutes and silently
-// desync from contract tests. TestMux.Route mirrors production chi so
-// auth.Mount strips the prefix off Contract.Path exactly as production does.
+// production wiring uses (corecells/configcore/cell.go). Using the contract-derived
+// resolver mirrors the production cellHTTPResolver (#2205).
 func newContractMux(svc *Service) http.Handler {
-	h := NewHandler(svc)
+	h := NewHandler(svc, contractFlagWriteResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/flags", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

@@ -160,6 +160,13 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 	return h, r
 }
 
+// testFlagReadResolver mirrors the cellHTTPResolver for featureflag handler tests.
+var testFlagReadResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.flags.get.v1":      "flag:read",
+	"http.config.flags.list.v1":     "flag:read",
+	"http.config.flags.evaluate.v1": "flag:read",
+})
+
 // setupHandlerWithCodec wires the slice handler onto a celltest mux via
 // RegisterRoutes — nested under /api/v1/flags to match production cell_routes.go
 // (which uses mux.Route to compose the collection-root trailing-slash dispatch).
@@ -172,7 +179,7 @@ func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCo
 	}
 	mux := celltest.NewTestMux()
 	mux.Route(flagsBasePath, func(sub kcell.RouteMux) {
-		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+		if err := NewHandler(svc, testFlagReadResolver).RegisterRoutes(sub); err != nil {
 			panic("RegisterRoutes: " + err.Error())
 		}
 	})

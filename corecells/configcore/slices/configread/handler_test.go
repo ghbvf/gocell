@@ -65,6 +65,13 @@ func asAdmin(req *http.Request) *http.Request {
 	return req.WithContext(ctx)
 }
 
+// testConfigReadResolver is the contract-derived resolver for configread handler tests,
+// mirroring the cellHTTPResolver built by cellgen from endpoints.http.permission overlays.
+var testConfigReadResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.get.v1":  "config:read",
+	"http.config.list.v1": "config:read",
+})
+
 // setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —
 // nested under /api/v1/config to match the production cell_routes.go layout.
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
@@ -76,7 +83,7 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	}
 	mux := celltest.NewTestMux()
 	mux.Route(configBasePath, func(sub kcell.RouteMux) {
-		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+		if err := NewHandler(svc, testConfigReadResolver).RegisterRoutes(sub); err != nil {
 			panic("RegisterRoutes: " + err.Error())
 		}
 	})

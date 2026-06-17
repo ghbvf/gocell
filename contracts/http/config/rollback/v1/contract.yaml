@@ -13,6 +13,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/config/{key}/rollback
+    permission: config:publish
     pathParams:
       key:
         type: string
