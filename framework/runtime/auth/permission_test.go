@@ -416,3 +416,103 @@ func TestRequirePermissionForResource_AllowWithObligations_FailClosed(t *testing
 		"Allow with non-zero obligations must return PermissionDenied (403)")
 	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
 }
+
+// --- RequirePermissionForSelf (#1863): self-introspection gate (resource = own subject) ---
+
+// TestRequirePermissionForSelf_ForwardsCanonicalSelfSubject is the core semantic +
+// canonicalization guard: the gate forwards the caller's OWN subject as the PDP
+// resource (so the subject.sub == resource.id baseline self rule can fire), and an
+// uppercase subject is canonicalized to lowercase before forwarding.
+func TestRequirePermissionForSelf_ForwardsCanonicalSelfSubject(t *testing.T) {
+	upper := strings.ToUpper(roselfSubjectA)
+	p := &Principal{Kind: PrincipalUser, Subject: upper, Roles: []string{"user"}}
+	cap := &captureAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), cap))
+
+	err := RequirePermissionForSelf(authz.PermAccessDecide())(req)
+	assert.NoError(t, err, "PDP allow for self must return nil")
+	assert.Equal(t, roselfSubjectA, cap.gotResource,
+		"gate must forward the caller's own canonical (lowercase) subject as resource; got %q, want %q",
+		cap.gotResource, roselfSubjectA)
+}
+
+// TestRequirePermissionForSelf_PDPDeny verifies a PDP Deny (no matching rule) → 403.
+func TestRequirePermissionForSelf_PDPDeny(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	err := RequirePermissionForSelf(authz.PermAccessDecide())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "PDP deny must return 403")
+}
+
+// TestRequirePermissionForSelf_NoPrincipal_Unauthenticated verifies that an absent
+// principal forwards resource="" and enforcePermission's own principal guard returns
+// 401 (single fail-closed source — no duplicated check in the gate).
+func TestRequirePermissionForSelf_NoPrincipal_Unauthenticated(t *testing.T) {
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithAuthorizer(req.Context(), allow)) // no Principal
+
+	err := RequirePermissionForSelf(authz.PermAccessDecide())(req)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindUnauthenticated, ec.Kind, "absent principal must return 401")
+}
+
+// TestRequirePermissionForSelf_NoAuthorizer_FailClosed verifies the gate fails closed
+// (403) when no Authorizer is wired, even though the subject names itself.
+func TestRequirePermissionForSelf_NoAuthorizer_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithPrincipal(req.Context(), p)) // no Authorizer
+
+	err := RequirePermissionForSelf(authz.PermAccessDecide())(req)
+	require.Error(t, err, "absent Authorizer must fail-closed (403)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+}
+
+// TestRequirePermissionForSelf_ZeroPermission_FailClosed verifies zero
+// authz.Permission{} → 403 even with an allow-everything Authorizer.
+func TestRequirePermissionForSelf_ZeroPermission_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"admin"}}
+	allow := &mockAuthorizer{allowed: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
+
+	err := RequirePermissionForSelf(authz.Permission{})(req)
+	require.Error(t, err, "zero Permission must fail-closed even with allow-everything Authorizer")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}
+
+// TestRequirePermissionForSelf_AllowWithObligations_FailClosed asserts F5: an Allow
+// carrying non-zero obligations this coarse gate cannot discharge must fail-closed.
+func TestRequirePermissionForSelf_AllowWithObligations_FailClosed(t *testing.T) {
+	p := &Principal{Kind: PrincipalUser, Subject: roselfSubjectA, Roles: []string{"user"}}
+	mock := &mockAuthorizer{allowed: true, obligations: authz.Obligations{RowScope: tenant.RowScopeSelf}}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), mock))
+
+	err := RequirePermissionForSelf(authz.PermAccessDecide())(req)
+	require.Error(t, err, "Allow with unenforceable obligations must fail-closed, not silently drop")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind)
+}

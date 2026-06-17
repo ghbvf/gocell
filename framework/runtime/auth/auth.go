@@ -119,15 +119,20 @@ type IntentTokenVerifier = kauth.IntentTokenVerifier
 // policy store is unreachable → HTTP 503; KindPermissionDenied when the request
 // carries no tenant scope). When err == nil the Decision is the policy verdict.
 //
-// PR-7 (#1345) note for wiring (PR-10): as of the ABAC engine landing, the
-// subject/resource/action parameters do NOT themselves gate evaluation — the
-// engine evaluates the tenant's policy conditions against the authenticated
-// principal's attributes (from ctx) plus environment attributes. subject is
-// carried for observability; resource/action are reserved for PR-9 resource-
-// attribute lookup. Do not assume coarse-grained (subject,resource,action)
-// matching is enforced yet. Decision.Reason() carries a deny diagnostic; the
-// current PEP (middleware) does not yet surface it — wire it into deny logs when
-// connecting business endpoints.
+// Parameter semantics (production ABAC engine, post PR-10 wiring):
+//   - action GATES rule applicability: a rule with a non-empty action set applies
+//     only when action ∈ rule.Action (an empty set is untargeted and applies to
+//     every action). Coarse (action) matching IS enforced.
+//   - resource is the PDP resource identity/context input: it is exposed as
+//     resource.id so ownership baseline rules can fire (e.g. subject.sub ==
+//     resource.id for self/owner-scoped actions) and is the key for resource-
+//     attribute (PIP) lookup. Owner-scoped callers canonicalize it before calling.
+//   - subject is carried for observability/correlation only — the subject
+//     ATTRIBUTES evaluated against rule conditions are derived from the
+//     authenticated principal in ctx (trusted JWT claims), never from this string.
+//
+// Decision.Reason() carries a deny diagnostic for server-side deny logs; per the
+// observability rules it must never cross the wire.
 type Authorizer interface {
 	Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error)
 }
