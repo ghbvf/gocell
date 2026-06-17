@@ -231,6 +231,15 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 // registered; callers should propagate the error to the bootstrap phase6
 // subscription walker.
 //
+// Lifecycle boundary: Run snapshots the handler set once at entry, so a handler
+// registered after Run has started is stored in the map but is NOT picked up by
+// the in-flight Run. This is the reserved seam for US10 runtime add/remove
+// (specs/070-runtime-contract-registry); today bootstrap completes all
+// registration before Run, so the case does not arise. Validators run outside
+// the store lock, so two concurrent registrations of the same key may both
+// validate before either inserts — the duplicate check under the final lock
+// still fails the loser closed.
+//
 // ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 // ref: ADR docs/architecture/202605111000-adr-subscription-cellid-mandatory.md
 func (r *Router) AddContractHandler(
@@ -324,7 +333,7 @@ func (r *Router) AddSubscriptionValidator(v cell.SubscriptionValidator) {
 }
 
 // errAlreadyRunning is returned if Run is called more than once.
-var errAlreadyRunning = fmt.Errorf("eventrouter: Run called more than once")
+var errAlreadyRunning = errors.New("eventrouter: Run called more than once")
 
 // Run starts all registered subscriptions and blocks until ctx is canceled
 // or an unrecoverable subscription error occurs.
