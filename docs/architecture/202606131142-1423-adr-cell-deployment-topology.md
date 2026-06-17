@@ -440,7 +440,7 @@ US7（#1967）把 SC-001 验收信号「可执行化」时暴露一个**模型�
 「assembly 声明拓扑 → 进程只挂 colocated 子集 → 其余当 remote」这条桥接接上。本 amendment 裁定**把该能力
 做进生产**（用户裁定「彻底拆分」，非另造测试 harness——后者是平行结构），并细化 D1/D4。
 
-**开源对标深化（13 框架，写入对标库索引）**：「一份代码 + 配置驱动子集部署 + 位置透明调用」的共识模式 =
+**开源对标深化（13 框架，对标索引节已写入 `docs/references/framework-comparison.md` §「Cell 部署拓扑 / 可重定位」，指回本节）**：「一份代码 + 配置驱动子集部署 + 位置透明调用」的共识模式 =
 **枚举全部组件 → 本进程只实例化 colocated 子集 → 其余给位置透明 client**。代表实现：Service Weaver
 `component.local` `WriteOnce[bool]`（`internal/weaver/remoteweavelet.go`，deployer 启动期决定）；**Akka
 ClusterSharding** `init()` 在所有节点调用、role 匹配建真 `ShardRegion`/不匹配建 proxy（`.withRole()`）；

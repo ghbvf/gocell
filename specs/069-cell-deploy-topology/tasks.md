@@ -58,7 +58,7 @@
 
 - [ ] T050 [US6] `runtime/capability` per-cell DB 凭据/连接注入 seam（单 cell assembly 独立凭据；缺失 fail-fast 不静默共享）
 - [ ] T051 [US6] broker 连接 per-cell 注入点（与 #1940 funnel 对齐）
-- [ ] T052 [US6] per-cell HMAC keyring / cell 身份颁发的安全模型评估（mTLS 缺口登记，threat matrix 进 US1 ADR amendment）
+- [x] T052 [US6] per-cell HMAC keyring / cell 身份颁发的安全模型评估（→ #1964 评估 + **#2153 已实现** token 层 per-cell HKDF 子密钥/ProvisionedKeyring；mTLS 对等认证 deferred **#2263**；threat matrix 见 US1 ADR §#2153 amendment）
 
 ## Phase 4: 「彻底拆分」能力 + 验收收口（ADR §#1967 Amendment）
 
@@ -77,7 +77,9 @@
   `generatedDeploymentTopology()` → `generatedTopologyGroups()` + golden（Hard）。synthetic red case（非法 groups）。
 - [ ] T091 [US9·PR-2] 启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生 `DeploymentTopologySpec`
   （未设+多 group→fail-fast / 未设+单/无 group→全 colocated / role∉声明集→fail-fast）；`composition.NewForRole(topo,
-  role, allModules...)` 单 sealed 入口（filter+New+With+封 spec）；`cmd/corebundle/{run,shared_deps}.go` 改走之。
+  role, allModules...)` **exported 收口入口**（filter+New+With+封 spec；exported 跨包构造器 → caller-funnel 仅
+  **Medium** archtest，**非** Hard 包内 sealed，同 `CELLTRANSPORT-SELECT-FUNNEL-01` 族）；`cmd/corebundle/{run,shared_deps}.go`
+  改走之。**真正 fail-closed enforcement = T092 的 `MOUNTED-EQUALS-COLOCATED` phase guard**（不依赖调用方走 funnel）。
 - [ ] T092 [US9·PR-2] **新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`（mounted==colocated ∧ remote∉mounted，
   违反 fail-fast，Medium）；M12a（New==With，#1093）代码不动、语义精化为「本进程 host 的 cell」（ADR D4 amendment）。
   双子集 boot 集成测试（accesscore+auditcore host、configcore remote 调通）+ 守卫 red/green fixture + anti-vacuity。
