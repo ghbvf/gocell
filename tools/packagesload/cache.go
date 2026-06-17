@@ -11,17 +11,27 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// cache-key kind discriminators: which loader produced (and would re-serve) the
+// entry. A "W" entry and an "F" entry for the same (root, cfg, patterns) load
+// different package sets, so they never alias.
+const (
+	cacheKindWorkspace = "W" // satellite-aware LoadWorkspace
+	cacheKindFlat      = "F" // flat ModeWorkspace LoadFlat
+)
+
 // WorkspaceCache memoizes [LoadWorkspace] / [LoadFlat] results across calls
 // within a process: repeated identical loads run packages.Load once and reuse
 // the loaded packages, collapsing concurrent identical loads via singleflight.
 //
-// Single source (#2165): this is the ONLY package-load cache in GoCell tooling.
-// Both the OBS-01 metric scan (tools/metricschema) and the archtest typed façade
-// (tools/archtest/internal/typeseval) route their cached loads here — no package
-// re-implements a parallel singleflight+map cache. The loading itself is already
-// Hard-funneled by PACKAGES-LOAD-FUNNEL-01 (packages.Load reachable only from
-// this package), so a re-introduced parallel cache could not bypass the loader,
-// only fail to reuse this cache (a perf regression, not a correctness gap).
+// Single source (#2165): this is the sanctioned single package-load cache in
+// GoCell tooling. Both the OBS-01 metric scan (tools/metricschema) and the
+// archtest typed façade (tools/archtest/internal/typeseval) route their cached
+// loads here, rather than each re-implementing a parallel singleflight+map cache.
+// The loading itself is Hard-funneled by PACKAGES-LOAD-FUNNEL-01 (packages.Load
+// reachable only from this package), so a re-introduced parallel cache could not
+// bypass the loader (Hard) — it could only fail to reuse this cache (a perf
+// regression, not a correctness gap). The "single cache" boundary is documented,
+// not separately enforced.
 //
 // Unbounded by design: entries are held for the process lifetime. The consumers
 // are short-lived batch processes (`gocell generate`, the archtest gate) that
@@ -31,12 +41,15 @@ import (
 // triggers re-loads (the regression this fixes), a safe-large cap never evicts.
 type WorkspaceCache struct {
 	mu    sync.Mutex
-	items map[string]cacheEntry
+	items map[string][]*packages.Package // CLEAN loads only (len(errs)==0); never an errored result
 	group singleflight.Group
 }
 
-// cacheEntry is a completed, clean load (len(errs)==0) retained for reuse.
-type cacheEntry struct {
+// loadResult is the transient carrier passed through singleflight so co-flight
+// waiters see the same (pkgs, errs). Only the pkgs of a CLEAN load reach the
+// items map — errs never persist, so an errored load can never be served from
+// cache (type-level fail-closed).
+type loadResult struct {
 	pkgs []*packages.Package
 	errs []packages.Error
 }
@@ -45,7 +58,7 @@ type cacheEntry struct {
 // production routes through the process-wide [LoadWorkspaceCached] /
 // [LoadFlatCached].
 func NewWorkspaceCache() *WorkspaceCache {
-	return &WorkspaceCache{items: map[string]cacheEntry{}}
+	return &WorkspaceCache{items: map[string][]*packages.Package{}}
 }
 
 // LoadWorkspace is the cached form of the package-level [LoadWorkspace] (the
@@ -54,7 +67,7 @@ func NewWorkspaceCache() *WorkspaceCache {
 func (c *WorkspaceCache) LoadWorkspace(
 	root string, cfg packages.Config, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
-	key := cacheKeyFor("W", cfg, root, patterns)
+	key := cacheKeyFor(cacheKindWorkspace, cfg, root, patterns)
 	return c.loadKeyed(key, func() ([]*packages.Package, []packages.Error, error) {
 		return LoadWorkspace(root, cfg, patterns...)
 	})
@@ -63,18 +76,23 @@ func (c *WorkspaceCache) LoadWorkspace(
 // LoadFlat is the cached form of a flat ModeWorkspace [Load] from root (no
 // satellite parent-prefix expansion) — the cross-module workspace production
 // scan typeseval's LoadProductionPackages performs.
+//
+// Keyed distinctly from [WorkspaceCache.LoadWorkspace] (kind "F" vs "W"): the
+// two load different package sets, so a warm-up via LoadFlat does NOT pre-heat
+// LoadWorkspace callers (SharedResolver) and vice versa — each holds its own entry.
 func (c *WorkspaceCache) LoadFlat(
 	root string, cfg packages.Config, patterns ...string,
 ) ([]*packages.Package, []packages.Error, error) {
-	key := cacheKeyFor("F", cfg, root, patterns)
+	key := cacheKeyFor(cacheKindFlat, cfg, root, patterns)
 	return c.loadKeyed(key, func() ([]*packages.Package, []packages.Error, error) {
 		return loadFlat(root, cfg, patterns...)
 	})
 }
 
 // loadFlat performs a flat ModeWorkspace load from root and collects the
-// dir-prefixed packages.Errors, mirroring [LoadWorkspace]'s return shape. cfg is
-// taken by value; Dir is owned here.
+// dir-prefixed packages.Errors, mirroring [LoadWorkspace]'s return shape (the
+// prefix is the flat root, matching the pre-#2165 typeseval ModeWorkspace path).
+// cfg is taken by value; Dir is owned here.
 func loadFlat(root string, cfg packages.Config, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	cfg.Dir = root
 	pkgs, err := Load(ModeWorkspace, &cfg, patterns...)
@@ -91,59 +109,67 @@ func loadFlat(root string, cfg packages.Config, patterns ...string) ([]*packages
 	return pkgs, errs, nil
 }
 
-// loadKeyed returns the cached result for key, or runs loader once — collapsing
-// concurrent identical loads via singleflight — and caches a CLEAN result. A Go
-// error or any non-empty packages.Error is NOT cached: both are fail-closed
-// failures for callers (metricschema / typeseval both treat non-empty errs as a
-// scan failure), so the next call re-loads rather than serving a poisoned entry.
+// loadKeyed returns the cached packages for key, or runs loader once —
+// collapsing concurrent identical loads via singleflight — and caches only a
+// CLEAN result. A Go error or any non-empty packages.Error is NOT persisted:
+// both are fail-closed failures for callers (metricschema / typeseval both treat
+// non-empty errs as a scan failure), so the NEXT independent call re-loads
+// rather than serving a poisoned entry. Concurrent co-flight waiters of a failed
+// load share that one failure result; only persistence is suppressed.
+//
+// On a cache HIT no load runs, so the caller's cfg.Context is irrelevant — a
+// canceled ctx does not interrupt a hit; ctx only governs the first real load.
+// The singleflight "shared" bool is intentionally discarded: a build-time batch
+// tool has no need to distinguish a self-load from a collapsed one.
 func (c *WorkspaceCache) loadKeyed(
 	key string, loader func() ([]*packages.Package, []packages.Error, error),
 ) ([]*packages.Package, []packages.Error, error) {
-	if e, ok := c.get(key); ok {
-		return e.pkgs, e.errs, nil
+	if pkgs, ok := c.get(key); ok {
+		return pkgs, nil, nil
 	}
 	v, err, _ := c.group.Do(key, func() (any, error) {
 		// Re-check: another caller may have filled the cache between our miss
 		// and entering Do.
-		if e, ok := c.get(key); ok {
-			return e, nil
+		if pkgs, ok := c.get(key); ok {
+			return loadResult{pkgs: pkgs}, nil
 		}
 		pkgs, errs, err := loader()
 		if err != nil {
 			return nil, err
 		}
-		e := cacheEntry{pkgs: pkgs, errs: errs}
 		if len(errs) == 0 {
-			c.put(key, e)
+			c.put(key, pkgs)
 		}
-		return e, nil
+		return loadResult{pkgs: pkgs, errs: errs}, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	e := v.(cacheEntry)
-	return e.pkgs, e.errs, nil
+	r := v.(loadResult)
+	return r.pkgs, r.errs, nil
 }
 
-func (c *WorkspaceCache) get(key string) (cacheEntry, bool) {
+func (c *WorkspaceCache) get(key string) ([]*packages.Package, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.items[key]
-	return e, ok
+	pkgs, ok := c.items[key]
+	return pkgs, ok
 }
 
-func (c *WorkspaceCache) put(key string, e cacheEntry) {
+func (c *WorkspaceCache) put(key string, pkgs []*packages.Package) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.items[key] = e
+	c.items[key] = pkgs
 }
 
 // cacheKeyFor builds the cache key from the result-determining inputs: kind
-// ("W" satellite-aware / "F" flat), cfg.Mode, cfg.Tests, cfg.BuildFlags, root,
-// and the patterns (sorted — pattern order never changes the loaded package
-// SET, and callers dedup/sort downstream). cfg.Context (per-call) and cfg.Dir
-// (loader-owned) are deliberately EXCLUDED. NUL separates fields; it cannot
-// occur in a filesystem path or go import pattern, so collisions are impossible.
+// ([cacheKindWorkspace] "W" satellite-aware / [cacheKindFlat] "F" flat),
+// cfg.Mode, cfg.Tests, cfg.BuildFlags, root, and the patterns (sorted — pattern
+// order never changes the loaded package SET, and callers dedup/sort downstream).
+// cfg.Context (per-call) and cfg.Dir (loader-owned) are deliberately EXCLUDED;
+// because Context is not keyed, a cache hit ignores a canceled ctx (see
+// [WorkspaceCache.loadKeyed]). NUL separates fields; it cannot occur in a
+// filesystem path or go import pattern, so collisions are impossible.
 func cacheKeyFor(kind string, cfg packages.Config, root string, patterns []string) string {
 	tests := "0"
 	if cfg.Tests {

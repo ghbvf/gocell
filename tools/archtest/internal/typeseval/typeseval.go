@@ -113,9 +113,12 @@ const loadMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 // packagesload.LoadWorkspace, so a satellite parent prefix ("./cmd/...",
 // "./adapters/...", "./examples/...") is expanded to its go.work members and
 // loaded in workspace mode — the single-module name refers to the GOWORK mode
-// requested, not a guarantee that only one module loads. [SharedResolver] is the
-// cached counterpart (#2165). The signature is held stable so the pass /
-// production funnel meta-archtests keep matching it.
+// requested, not a guarantee that only one module loads. The signature is held
+// stable so the pass / production funnel meta-archtests keep matching it.
+//
+// Prefer [SharedResolver] (the cached counterpart, #2165) in new code; this
+// uncached form exists only for that signature-stability requirement — a fresh
+// caller that wants memoization must not reach for LoadPackages.
 func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	return packagesload.LoadWorkspace(modRoot, typesevalCfg(tests, tags), patterns...)
 }
@@ -141,7 +144,9 @@ func typesevalCfg(tests bool, tags []string) packages.Config {
 // that matters: no re-load), not the same wrapper.
 //
 // The cache lives in tools/packagesload (the single sanctioned package-load
-// cache); typeseval holds no cache state of its own.
+// cache); typeseval holds no cache state of its own. SharedResolver wraps the
+// raw cached load [packagesload.LoadWorkspaceCached], mapping any packages.Error
+// into a fail-fast scan error via [resolverFrom].
 // ref: ADR docs/architecture/202605190000-adr-archtest-in-process-warmup.md
 func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
 	return resolverFrom(packagesload.LoadWorkspaceCached(modRoot, typesevalCfg(tests, tags), patterns...))

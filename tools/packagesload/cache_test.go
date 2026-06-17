@@ -88,7 +88,7 @@ func TestWorkspaceCache_HitReturnsSamePackages(t *testing.T) {
 	if err2 != nil {
 		t.Fatalf("second LoadWorkspace: err=%v", err2)
 	}
-	if &p1[0] != &p2[0] && p1[0] != p2[0] {
+	if p1[0] != p2[0] {
 		t.Fatalf("cache hit must return the same *packages.Package; got %p vs %p", p1[0], p2[0])
 	}
 }

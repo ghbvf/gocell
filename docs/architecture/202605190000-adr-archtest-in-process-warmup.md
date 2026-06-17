@@ -132,6 +132,12 @@ warm 命中后 wall/RSS 同前；本 ADR 改造 1（TestMain warm-up）经 `Load
 `packagesload.LoadFlatCached` 继续命中。`Resolver` 退为每调用新建的薄 wrapper，缓存命中以
 共享底层 `[]*packages.Package` 表达（非共享 wrapper）。perf refactor，不在 ai-robust.md §适用范围。
 
+**RSS 峰值不变（不要误读为"合并缓存=省内存"）**：`LoadFlatCached`（warm-up 路径，kind `F`）与
+`LoadWorkspaceCached`（`SharedResolver` 路径，kind `W`）的 cache key **kind 前缀不同**，二者加载
+不同 package 集、**不共享 entry**——与下沉前 typeseval 私有缓存按 `ModeWorkspace`/`ModeModule`
+分键的语义等价。故 §"威胁矩阵/资源边界变化"的 RSS 峰值（≈2× 全模块）维持不变，本次只是把缓存
+**实现**单源化，不改变峰值内存。
+
 ## 参考
 
 - ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md`（前置 ADR — process isolation 与本 ADR 叠加非冲突）
