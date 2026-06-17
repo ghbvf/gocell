@@ -12,7 +12,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ---
 
 ## 输入解析
-优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——按 createdAt 倒序，跳过自己上一轮的 `pm:ship`/`pm:fix` 留痕（已处理），取最近一批 **review findings**：codex review/comment 或 `/pr-review` 贴的 `pm:pr-review` 无损详表（二者都是 fix 的 findings 源），**不回头处理上一轮已 triage 的 findings**）> **文件:行号** > **自然语言**（Grep/Glob）。**issue 号不再受理**——裸数字一律先按 PR 解析；issue 状态核查 + triage 收敛到 `issues` 技能（判定后建议 `/ship #<N>` 或 file:line）。
+优先级：**PR 号**（裸数字先按 PR 试 → `gh pr view <N> --json reviews,comments` 读对话评论 + review 摘要（每条带 body/id/url/createdAt）；再 `gh api repos/ghbvf/gocell/pulls/<N>/comments --jq length` 探 inline review comments，>0 则 `gh api .../pulls/<N>/comments` 一并读入（codex/人的 inline finding 不静默漏），=0（本仓常态）跳过；**只取最新一轮**——findings 源 = **最后一条 `<!-- pm:pr-review -->` 评论**（按 createdAt 倒序取首个带该 marker 的评论：`gh pr view <N> --json comments --jq '[.comments[]|select(.body|startswith("<!-- pm:pr-review -->"))]|sort_by(.createdAt)|last|.body'`），其 `<details>` 无损详表即本轮 findings；无 `pm:pr-review` 时回退取最新一条 codex review/comment。**跳过**自己上一轮的 `pm:ship`/`pm:fix`/`pm:ci`/`pm:oos` 留痕（已处理）与早于该最新 review 的旧 `pm:pr-review`，**不回头处理上一轮已 triage 的 findings**）> **文件:行号** > **自然语言**（Grep/Glob）。**issue 号不再受理**——裸数字一律先按 PR 解析；issue 状态核查 + triage 收敛到 `issues` 技能（判定后建议 `/ship #<N>` 或 file:line）。
 
 ---
 
@@ -299,6 +299,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 **默认按分析结果自动决策。** 仅以下情况用 AskUserQuestion：
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
-- 修复过程中发现新问题超出原始 scope
 - **OUT_OF_SCOPE finding / /fix 派生新问题 → 默认自动 `gh issue create` + 回填 #N**（流程见 4.6 step 3：先反思确认确实 OUT_OF_SCOPE 且非 Cx1 搭车修，再无损填 backlog.md body + 派生四轴标签 → `issue-labels.sh validate` → 建单）。**不逐条问**；仅 `pri-p0`（incident）→ 停下 AskUserQuestion，或 area/type 判不定（`validate` 失败）→ 标 `deferred=labels-underivable` 回退草稿。
 - pri-p0 红线升级（incident-driven 或安全 CVE）

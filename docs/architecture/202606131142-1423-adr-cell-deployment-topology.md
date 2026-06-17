@@ -434,11 +434,93 @@ relay 到 broker），此部分追踪在 **#2152** 中；在该 issue 落地前�
 进程内 per-cell publisher/subscriber 扇出（即在同一 broker 连接上为每个 cell 派生独立的 exchange /
 routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB relay 一起追踪在 **#2152** 中。
 
+### #1967 Amendment — 「彻底拆分」能力落地：groups/role 子集挂载 + 双拓扑验收（2026-06-17）
+
+US7（#1967）把 SC-001 验收信号「可执行化」时暴露一个**模型缺口**（非疏忽）：所有拆分 seam（US2-US6/US8）
+均已 ship，但**没有任何端到端「以子集运行 + 把对端当 remote」的接线**——生产 `corebundle`
+`generatedCellModules()` 无条件挂载**全部** `asm.Cells`，`generatedDeploymentTopology()` 恒空。根因：epic
+按 seam 拆分并假定「subset 部署 = 写一个子集 composition root」（`composition.With`，#1081），从未把
+「assembly 声明拓扑 → 进程只挂 colocated 子集 → 其余当 remote」这条桥接接上。本 amendment 裁定**把该能力
+做进生产**（用户裁定「彻底拆分」，非另造测试 harness——后者是平行结构），并细化 D1/D4。
+
+**开源对标深化（13 框架，对标索引节已写入 `docs/references/framework-comparison.md` §「Cell 部署拓扑 / 可重定位」，指回本节）**：「一份代码 + 配置驱动子集部署 + 位置透明调用」的共识模式 =
+**枚举全部组件 → 本进程只实例化 colocated 子集 → 其余给位置透明 client**。代表实现：Service Weaver
+`component.local` `WriteOnce[bool]`（`internal/weaver/remoteweavelet.go`，deployer 启动期决定）；**Akka
+ClusterSharding** `init()` 在所有节点调用、role 匹配建真 `ShardRegion`/不匹配建 proxy（`.withRole()`）；
+kube-controller-manager `NewControllerDescriptors()` 枚举全部 + `--controllers=` 子集实例化；Orleans
+`[SiloRoleBasedPlacement]` + silo metadata role；Helm `{{ if .Values.x.enabled }}`；Spring
+`@ConditionalOnProperty`。事件传输 swap（in-mem↔broker）+ in-mem 不跨进程 fail-fast：Spring Modulith
+`@Externalized` / MassTransit `UsingInMemory` vs `UsingRabbitMq`（均已对应 #1965）。静态边界校验：Spring
+Modulith `ApplicationModules.verify()`（对应缺失依赖闸）。多拓扑测试 gold standard = Service Weaver
+`weavertest.Local`/`.Multi` 同 test 双 runner（对应 US7 双拓扑 journey）。**核心借鉴 = Akka 节点角色模型**：
+一份制品、静态 role 配置选 role；与 ADR D1「拓扑静态声明在 assembly.yaml」一致（role 选择是启动期 env，
+仍 WriteOnce、非 Dapr 式运行期协商）。
+ref: ServiceWeaver/weaver `internal/weaver/remoteweavelet.go`；akka/akka cluster-sharding `withRole`；
+kubernetes `cmd/kube-controller-manager` ControllerDescriptor；spring-projects/spring-modulith
+`ApplicationModules.verify`。
+
+**D1 amendment — topology 载体增 `groups`（全图），取代单进程 `colocated/remote` authoring**：
+- assembly.yaml `topology.groups: [{role, cells, endpoint}]` 声明**完整部署分区图**（每组的 cell 集 + 对端可达
+  endpoint）；`ValidateTopologyStructure` 重写为 groups 的**穷尽 + 互斥分区**校验（每 cell 恰在一组、role 唯一、
+  endpoint 合法）。**PR-1 删除**现有 `TopologyMeta.{Colocated,Remote}` **authoring** 字段 + 单进程视图校验 +
+  `ClassifyCell` 单视图分支（本 amendment 是决策记录，删除动作在 PR-1 落地，非本 docs PR 已执行；#1962 引入，
+  生产零 assembly 使用，pre-GA 窗口允许原地删除，无 shim/双 schema）。
+- 启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生本进程 `bootstrap.DeploymentTopologySpec`
+  （colocated = 本组 cells，remote = 其余组 cells × 各自 endpoint）——**运行期 `DeploymentTopologySpec{Colocated,
+  Remote}` 作派生形态保留**（仍被 `celltransport.Resolve` 消费，#1966 接线不变，喂入值变真）。未设 role + 多 group
+  → fail-fast；未设 + 单/无 group → 全 colocated（零迁移默认不变）；role ∉ 声明集 → fail-fast。
+- codegen：`generatedDeploymentTopology()`（恒空单 spec）替换为 `generatedTopologyGroups()`（全图）+ golden。
+- 备选 (i) 多 assembly（每 tier 一 assembly + 各自二进制）与 (ii') 纯运行期 env 拓扑均拒（见 Rejected alternatives）。
+
+**D4 amendment — M12a 闭集语义精化 + 新增 `MOUNTED-EQUALS-COLOCATED` 守卫**：
+- M12a（`validateClosedSet`，#1093）守的是 `New==With` 双射，**不是** `mounted==colocated`——若把未过滤全量模块喂
+  `New(allCells).With(allMods)`，M12a 通过但拆分被破坏（remote cell 仍被本地挂载，静默双挂）。故闭集**语义**由
+  「assembly 声明的全部 cell」精化为「本进程 host 的 colocated cell」（对标 controller-runtime ControllerDescriptor
+  「枚举全部、实例化 enabled 子集」/ Akka role-match-or-proxy）；`validateClosedSet` 代码不变（仍校验 New==With，
+  在 role 过滤后 New/With 同为 colocated，双射天然成立）。
+- **新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`：本进程已挂 cell 集 == active topology colocated 集
+  ∧ **remote cell 一律不得被挂载**，违反 fail-fast。配 `composition.NewForRole(topo, role, allModules...)`
+  收口派生+挂载（内部 filter+New+With+封 spec）。**funnel 强度分层**：`NewForRole` 是 **exported 跨包构造器**
+  （`cmd/corebundle` 调用），Go 可见性不可表达「只本 root mint」，故 caller-funnel 仅 **Medium** archtest（同
+  `CELLTRANSPORT-SELECT-FUNNEL-01` / `CROSSCELLOBS-MINTER-FUNNEL-01` 族的文档化 Go 天花板，非 Hard 包内 sealed）；
+  **真正的 fail-closed enforcement = `MOUNTED-EQUALS-COLOCATED` phase guard**（不依赖调用方走 funnel，捕获任何绕过
+  入口的直挂——upstream backstop）。`MOUNTED-EQUALS-COLOCATED` **AI-robust 评级 Medium**（运行期 bijection 守卫；
+  cellID 运行期字符串，Hard 不可达——同 M12a / broker-mandatory闸 诚实天花板）+ red/green fixture + anti-vacuity。
+
+**缺失依赖启动期闸（SC-002 sync 维补全）**：消费 contract 的 provider cell ∉ colocated ∪ remote map → fail-fast
+（区分「本地依赖缺失」vs「拓扑漏声明」）+ `gocell validate` 静态 arm。**注**：该静态检查原属 US2 T011（计划但未落地）
++ US3 T030（event 维，已由 #1965 broker 闸覆盖）；本 amendment 把 sync 维补全并加运行期闸。对标 Spring Modulith
+`ApplicationModules.verify()` 的 allowed-dependencies。sync 维（本闸）+ event 维（#1965）合起来 = 无静默死路由。
+
+**威胁矩阵重评（AI-robust 章程：amendment 必须同步重评）**：本 amendment 使 split **真实端到端可发生**（此前
+seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring」缺口经 **#2153（per-cell HKDF 子密钥 + master 缺席）
+在 split 下 CLOSED**（见 §#2153 Amendment）；「无 mTLS」defer **#2263**（与 token 层身份正交）；remote 操作约束
+（私网部署 + 共享 `GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist）见 §#1966 review Amendment，groups 多
+进程部署沿用之。本 amendment **不新增**安全缺口——它把既已可达的 remote 路径从「单进程内不触发」变为「双拓扑验收
+触发」，威胁画像不变（MAC 完整性 Hard + per-cell 身份 #2153 + 私网/mTLS-#2263）。
+
+**PR 分解（mini-epic 收口，逐个独立 review，TDD RED→GREEN 在各 feature PR 内；能力 = US9 #2278，验收 = US7 #1967）**：
+- **PR-0（本 PR）**：本 amendment + `specs/069 tasks.md` US7 细化 + sibling issues。**docs-only、全绿**（不携 RED stub——
+  独立可合并 PR 不挂失败测试；TDD RED→GREEN 落各 feature PR 内）。
+- **PR-1**：`topology.groups` schema（取代 colocated/remote authoring）+ 重写 `ValidateTopologyStructure` + codegen
+  golden（Hard golden + Medium validate）。
+- **PR-2**：role 选择器 + `NewForRole` 子集挂载 + `MOUNTED-EQUALS-COLOCATED` 守卫（Medium）。
+- **PR-3**：缺失依赖启动期闸 + `gocell validate` 静态 arm + archtest red/green（Medium）。
+- **PR-4（= #1967 验收）**：`corebundle` assembly.yaml `topology.groups`（accesstier/configtier）+ `tests/e2e/` split
+  compose（同 image 2 进程 + broker + PG）+ 双拓扑参数化 journey 一致性断言 + CI 接入（对标 weavertest Local/Multi）。
+
+AI-robust 新机制评级：groups codegen golden = **Hard**；groups 校验 / role fail-fast / `MOUNTED-EQUALS-COLOCATED`
+/ 缺失依赖闸 = **Medium**（拓扑/role/cellID 均运行期数据，Hard 不可达，诚实天花板，无 Soft）。
+
+**范围切割（显式 backlog，不静默）**：外部 cell（ssobff 等）双拓扑覆盖（epic 验收第二条）→ 新 backlog issue；
+per-cell relay 扇出 → 已 #2152；mTLS → 已 #2263（见下 §#2263 Amendment，已 CLOSED，非 defer）。
 
 ### #2263 Amendment — split 拓扑强制 mTLS 对等认证落地（2026-06-17）
 
 #2263（ZT-1）关闭上表「无 mTLS 对等认证」残留缺口，**移除「非 loopback split 建议部署在可信私有网络」的 soft 约束**，
-代之以 fail-closed 技术边界。按 AI-robust 章程逐项重评威胁矩阵：
+代之以 fail-closed 技术边界。**本 amendment 取代上文 §#1967 与 §#1966 中「mTLS defer #2263 / 私网补偿」的措辞**：
+mTLS 对等认证行此刻 CLOSED，私网不再是 peer-auth 的替代补偿（其余 #1966 remote 操作约束——共享
+`GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist——不受影响）。按 AI-robust 章程逐项重评威胁矩阵：
 
 - **「无 mTLS 对等认证」行 → CLOSED**。机制：非 loopback split 跨 cell 调用现强制 mTLS（TLS 1.3）；
   客户端以 `VerifyConnection` 替代 hostname 检查——对 trust-root CA bundle 做完整 chain verify + 要求 leaf
@@ -453,6 +535,10 @@ routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB 
 - **fail-closed 双闸**：① 静态（`gocell validate` 新增 `TOPO-14`）：非 loopback remote endpoint 必须 `https`
   scheme；② 运行时（`celltls.Resolve` 启动期 fail-fast）：topology 含非 loopback remote cell 而 TLS material
   缺失 → 拒绝启动。逐 peer 检查由 `celltransport.Resolve` 负责。
+- **split mTLS = 一进程一 cell（codex pr-review F1 最小缓解）**：mTLS 绑定一进程一 cell SPIFFE 身份，
+  `celltls.Resolve` 在 TLS material 已配置 + topology 把同一非 loopback endpoint 分给 ≥2 remote cell 时
+  启动期 fail-closed（`bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 信号）；完整
+  per-caller-cell identity resolver 为 follow-up（#2297）。详见新 ADR `202606171200-2263` §残留。
 - **cert 供应：静态 operator PEM（本 PR）**：四 env 变量全有或全无（`GOCELL_TRANSPORT_TLS_CERT_FILE` /
   `_KEY_FILE` / `_CA_FILE` + `GOCELL_SPIFFE_TRUST_DOMAIN`），缺任一 → 启动 fail-fast。
   cert 自动颁发/轮换（via `runtime/certlifecycle` reconciler）是 follow-up，SPIFFE Workload API（ZT-4）
@@ -461,11 +547,12 @@ routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB 
   monolith 信任模型不变（同进程单信任域，private network 补偿在 monolith 下始终成立）。
 
 **新增 enforcement（同 PR 三件套）**：
-- `CELLTLS-MATERIAL-RESOLVE-FUNNEL-01`（Medium，caller-funnel AST scan）：wiring 层唯一 minter `celltls.Resolve`。
-- `CELLTLS-CROSSBIND-WIRING-FUNNEL-01`（Medium，wiring 层 AST scan）：internal listener 必须 wire cross-bind middleware。
+- `CELLTLS-MATERIAL-FUNNEL-01`（Medium，caller-funnel AST scan，(pkg,ctor) 粒度）：wiring 层唯一 minter `celltls.Resolve` + adapters/grpc 仅 `NewServerMTLSConfig`。
 - `TOPO-14`（Hard-leaning，`gocell validate` static gate）：非 loopback remote endpoint 禁 http scheme。
-- `tlsutil.ClientIdentity` sealed construction（Hard，downstream）：包外不可构造，所有「接 metrics 忘 chain check」
+- cross-bind 守卫（bootstrap 测试断言 mTLS+service-token 链末位是 cross-bind）：internal listener 自动 append。
+- `tlsutil.ClientIdentity` sealed construction（Hard，downstream）：包外不可构造，所有「接 chain check 忘 SPIFFE-ID」
   形态类型级不可表达。
+- `INSECURE-SKIP-VERIFY-LITERAL-01`（Medium）：`InsecureSkipVerify:true` 字面量限 tlsutil 包内。
 - 完整评级分层见 ADR `202606171200-2263` §AI-robust 档位表。
 
 ## Rejected alternatives
@@ -477,6 +564,8 @@ routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB 
 | 运行时动态 routing（Dapr placement）| GoCell 拓扑静态；动态协商引入控制面，越出「嵌入式库」形态 |
 | sidecar 进程（Dapr）| GoCell 是 library-form，无独立进程；与 §3.2「经接口注入」模型冲突 |
 | go-micro 三层 Registry/Selector/Client | 对 GoCell 过重；最小 Resolver+CellTransport 即足 |
+| 子集挂载方案 (i)：每 tier 一 assembly + 各自二进制（#1967 amendment）| N tier = N 个 cmd 二进制 + 各 assembly.yaml 重复列全 cell 分区；与「单 image 部署期可拆分」诉求不符，不如 groups/role 单制品优雅（对标 Akka 单 jar 多 role）|
+| 子集挂载方案 (ii')：纯运行期 env 拓扑（无 assembly.yaml 声明，#1967 amendment）| 拓扑变运行期输入、绕过 `gocell validate` 静态门，削弱 SC-002「100% 静态/启动期拒绝非法组合」；违 D1「拓扑静态声明」。groups（静态可验证）+ role 选择器（启动期 WriteOnce）是 ADR-faithful 折中 |
 
 ## Boundaries with sibling epics & trigger gates
 

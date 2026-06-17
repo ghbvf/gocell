@@ -22,6 +22,18 @@ var _ reconcile.LeaderElector = (*RedisReconcileElector)(nil)
 // truly stale.
 const reconcileEpochKeyTTL = 30 * 24 * time.Hour
 
+func reconcileEpochKeyTTLSeconds() (int64, error) {
+	return reconcileEpochKeyTTLSecondsFor(reconcileEpochKeyTTL)
+}
+
+func reconcileEpochKeyTTLSecondsFor(ttl time.Duration) (int64, error) {
+	if ttl < time.Second {
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"redis reconcile elector: epoch key TTL must be at least 1s")
+	}
+	return int64(ttl / time.Second), nil
+}
+
 // reconcileAcquireScript atomically acquires the leader lease and returns
 // {acquired, epoch}. The monotonic epoch (KEYS[2]) is INCR'd only when the holder
 // key (KEYS[1]) is free — i.e. on a real holder change (free / TTL-expired /
@@ -186,9 +198,13 @@ func (e *RedisReconcileElector) epochKey(reconcilerID string) string {
 // AcquireLease implements reconcile.LeaderElector.
 func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID string) (reconcile.LeaseToken, error) {
 	now := e.clk.Now()
+	epochTTLSeconds, err := reconcileEpochKeyTTLSeconds()
+	if err != nil {
+		return reconcile.LeaseToken{}, err
+	}
 	res, err := e.rdb.Eval(ctx, reconcileAcquireScript,
 		[]string{e.holderKey(reconcilerID), e.epochKey(reconcilerID)},
-		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Slice()
+		e.holderID, e.lease.Milliseconds(), epochTTLSeconds).Slice()
 	if err != nil {
 		return reconcile.LeaseToken{}, classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector acquire")
 	}
@@ -213,9 +229,13 @@ func (e *RedisReconcileElector) AcquireLease(ctx context.Context, reconcilerID s
 // epoch-key TTL here is what keeps the monotonic counter alive under a long-held
 // leader. Returns ErrReconcileLeaseLost when no longer the holder.
 func (e *RedisReconcileElector) RenewLease(ctx context.Context, token reconcile.LeaseToken) error {
+	epochTTLSeconds, err := reconcileEpochKeyTTLSeconds()
+	if err != nil {
+		return err
+	}
 	held, err := e.rdb.Eval(ctx, reconcileRenewScript,
 		[]string{e.holderKey(token.ReconcilerID), e.epochKey(token.ReconcilerID)},
-		e.holderID, e.lease.Milliseconds(), int64(reconcileEpochKeyTTL.Seconds())).Int64()
+		e.holderID, e.lease.Milliseconds(), epochTTLSeconds).Int64()
 	if err != nil {
 		return classifyRedisError(err, ErrAdapterRedisSet, "redis reconcile elector renew")
 	}
