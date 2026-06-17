@@ -106,7 +106,7 @@ level-triggered + leader-elect + `LeaseToken.Epoch` fencing。阶段 1–6 喂�
 1. **`enrollcell`**（type: control, L3）— 设备身份 + 注册编排
    - slices：`enroll`（serve `deviceidentity.enroll`、跑 saga）、`renew`、`revoke`、`status`（serve `deviceidentity.status`）、`identitybind`（device↔user↔tenant）
    - wire：`certsigning`+`softca`+`deviceprincipal`；saga `Coordinator`（经 `sagaprojectiondeps.Resolve`）
-   - publish：`event.deviceidentity.cert-issued/revoked`（**首个 publisher → active-ize**）、`event.mdm.device-enrolled`
+   - publish：`event.deviceidentity.cert-issued/revoked`（**首个 publisher**；契约 active 化经 framework serving 前置项，gated §6.1）、`event.mdm.device-enrolled`
 
 2. **`inventorycell`**（type: edge/projection, L2+L3）— 状态采集 + 事实沉淀 + 动态分组
    - slices：`stateingest`（多 transport 入站：HTTP+gRPC+MQTT+WebSocket，L2 写 fact+outbox）、`inventoryproject`（CQRS 读模型）、`groupproject`（动态分组/Scope，M1）
@@ -120,7 +120,7 @@ level-triggered + leader-elect + `LeaseToken.Epoch` fencing。阶段 1–6 喂�
 
 4. **`compliancecell`**（type: projection, L3）— 合规评估 + 零信任 feed
    - slices：`complianceeval`（posture 判定，M3）、`complianceproject`（dashboard 读模型）、`ztfeed`（compliance→accesscore device_trust）
-   - serve：`http.devicecompliance`（**首个 serving → active-ize**）
+   - serve：`http.devicecompliance`（**首个 serving**；契约 active 化经 framework serving 前置项，gated §6.1）
 
 > 共 4 个新 cell + 复用 4 corecells = 8-cell MDM 装配。若评审觉得过大，`convergencecell` 可再拆
 > `policycell`（6–7）/`commandcell`（8–10）/`reconcilecell`（11–12），但建议先合后拆。
@@ -202,8 +202,8 @@ postgres/split-topology（P5）依赖全 cell 就位。
 | PR | Phase | 内容 | 复用/新建 关键 | 主要原语 |
 |---|---|---|---|---|
 | **PR-0** | 0 | `externalcells/mdm` 骨架：assembly + 外部 module + 空 `enrollcell` + demo 拓扑，health/readyz green | 复用 iotdevice run.go 形态 | bootstrap |
-| **PR-1** | 0 | `enrollcell` 接 `certsigning`+`softca`+`deviceprincipal`；serve `http.deviceidentity.status`（L0 读），active-ize status 契约 | 复用休眠底座 | certsigning, L0 |
-| **PR-2** | 0 | serve `deviceidentity.enroll`（L2 发证）+ renew + revoke；publish `event.deviceidentity.cert-issued/revoked`（首发布者，active-ize event） | 复用底座 | L2 OutboxFact |
+| **PR-1** | 0 | `enrollcell` 接 `certsigning`+`softca`+`deviceprincipal`；serve `http.deviceidentity.status`（L0 读）；status 契约 active 化经 framework serving 前置项（gated §6.1，非外部 cell 单方） | 复用休眠底座 | certsigning, L0 |
+| **PR-2** | 0 | serve `deviceidentity.enroll`（L2 发证）+ renew + revoke；publish `event.deviceidentity.cert-issued/revoked`（首发布者；event active 化 gated §6.1） | 复用底座 | L2 OutboxFact |
 | **PR-3** | 1 | enrollment saga 契约 + Impl（issueCert→createDevice→bindUser→bindTenant→activate）+ 补偿（bind 失败撤证）；wire `Coordinator`（`sagaprojectiondeps.Resolve`）；publish `event.mdm.device-enrolled` | 复用 saga harness（参考 orderfulfillment） | L3 saga |
 | **PR-4** | 1 | `identitybind` slice：device↔user↔tenant；多租户 RLS device 表（PG，`tenant_id`+FORCE RLS+`RowVisibility` 位置参） | 复用 TxManager/RLS（参考 accesscore user_repo） | L1/L2, RLS |
 | **PR-5** | 2 | `inventorycell` + `stateingest`：多 transport 入站（HTTP+gRPC+MQTT+WebSocket），L2 写状态 fact+outbox | 复用 4 transport（参考 iotdevice grpc/mqtt + websocket hub） | L2, transports |
@@ -213,7 +213,7 @@ postgres/split-topology（P5）依赖全 cell 就位。
 | **PR-9** | 3 | `desiredstate`（**M2**）：per-device 期望 profile spec store | MDM 自建 | L1/L2 |
 | **PR-10** | 3 | 命令规划 + L4 dispatch + receipt：L4 命令队列 + async claimer + 在线 push（WS/MQTT/gRPC）+ **MDM 自有 `PushNotifier` seam + noop/log provider（M7，离线 push 占位，不进框架）**；`command.mdm.remotecommand.v1`（**M4**，cell-owned：lock/wipe/locate/restart） | 复用 command/iotdevice 模式 | L4 command |
 | **PR-11** | 3 | `reconcile` 纠偏（**L4 核心控制环**）：期望↔实际 diff→re-plan，level-triggered，leader-elect+`LeaseToken.Epoch` fencing | 复用 reconcile harness | L4 reconcile |
-| **PR-12** | 4 | `compliancecell` + `complianceeval`（**M3**）+ `complianceproject`（CQRS dashboard）；serve `http.devicecompliance`（首 serving，active-ize） | MDM 自建判定 + serve 框架契约 | L3 CQRS |
+| **PR-12** | 4 | `compliancecell` + `complianceeval`（**M3**）+ `complianceproject`（CQRS dashboard）；serve `http.devicecompliance`（首 serving；active 化 gated §6.1） | MDM 自建判定 + serve 框架契约 | L3 CQRS |
 | **PR-13** | 4 | `ztfeed`：compliance posture → accesscore `device_trust` 属性 → Authorize 决策（零信任闭环） | 复用 accesscore PDP | ABAC |
 | **PR-14** | 4 | 审计接入：MDM events → auditcore（事件驱动 append；评估是否需 auditcore 加 `auditappenddevice` slice，或 MDM 自发审计事件） | 复用 auditcore | L2 audit |
 | **PR-15** | 5 | postgres 拓扑全接线：PG RLS device 表、RabbitMQ broker、Redis claimer/locker、saga/projection PG journal+checkpoint，fail-closed 选型 | 复用 3 个 topology resolver | 全 adapter |
@@ -227,9 +227,11 @@ postgres/split-topology（P5）依赖全 cell 就位。
 
 ## 6. 决策点与风险
 
-1. **deviceidentity 契约 active-ize 由谁负责**：示例 serve 即把 framework 契约 draft→active。需确认 ADR-1939 D3
-   允许「example cell serve framework-owned 契约」——若框架团队希望 serving 走专门 framework serving wire 而非
-   example，PR-1/PR-2 需调整为「示例消费 + 框架另起 serving PR」。**建议接线前与框架 owner 对齐**（决策点）。
+1. **deviceidentity 契约 active-ize 由谁负责**：framework-owned 契约 draft→active **不是**外部示例的单方动作——
+   per ADR-1939，需同步 framework serving harness wire + `FRAMEWORK-OWNED-CONTRACT-SCOPED-01` serving 扫描扩展 +
+   Journey 覆盖（§5 caveat）。需确认 ADR-1939 D3 允许「example cell serve framework-owned 契约」——若框架团队希望
+   serving 走专门 framework serving wire 而非 example，PR-1/PR-2 需调整为「示例消费 + 框架另起 serving PR」。
+   **此决策门 gate 住 PR-1/PR-2/PR-12 的 active 化；建议接线前与框架 owner 对齐**（决策点）。
 2. **convergencecell 粒度**：合（推荐先合）还是拆三 cell（policy/command/reconcile）。影响 PR-8~11 切分。
 3. **push（M7，原 G1）下沉 MDM**：push 整体归 MDM 模块，框架不承载。foundation 期仅 `PushNotifier` seam +
    noop/log 占位（在线闭环靠 WS/MQTT/gRPC），真实 apns/fcm/webpush provider = post-foundation 且仍在 MDM 模块。
