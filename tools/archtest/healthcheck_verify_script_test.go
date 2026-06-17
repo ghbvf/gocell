@@ -51,6 +51,12 @@ package archtest
 //     compose down` (e.g. `trap 'echo bye' EXIT`) would pass A. Invariant
 //     D asserts the script contains a literal `docker compose down`
 //     command, ensuring the trap has a real cleanup target to reach.
+//   - Compose-file target (#1781): the checker keys on the bare `docker
+//     compose up/down/ps` literals and does NOT verify WHICH compose file
+//     they resolve to. The script points them at deploy/docker-compose.yml
+//     via `export COMPOSE_FILE=...` (kept as env, not a `-f` flag, so the
+//     literals above stay matchable). A wrong/stale COMPOSE_FILE target is
+//     not caught here — it surfaces only at runtime (`make healthcheck-verify`).
 //
 // Self-check (meta-regression): TestHealthcheckVerifyScriptInvariantMeta01
 // feeds known-broken script fixtures through the same checker the file-
