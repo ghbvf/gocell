@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	auditget "github.com/ghbvf/gocell/generated/contracts/http/audit/get/v1"
 )
 
 const bootstrapAuditEntryOffset = 2 * time.Hour
@@ -2226,10 +2227,11 @@ func getByID(mux http.Handler, ctx context.Context, id string) *httptest.Respons
 
 func TestHandleGetByID_Admin_Found(t *testing.T) {
 	store := newHandlerStore(t)
+	occurred := time.Date(2026, 6, 1, 2, 3, 4, 123456789, time.UTC)
 	id := seedAuditEntry(t, store, &ledger.Entry{
 		EventID: "evt-detail-1", EventType: "audit.detail.v1", ActorID: "usr-actor",
 		TenantID: auditQueryTestTenant, CorrelationID: "corr-visible",
-		Timestamp: time.Now().UTC(), Payload: []byte(`{"k":"v"}`),
+		OccurredAt: occurred, Timestamp: time.Now().UTC(), Payload: []byte(`{"k":"v"}`),
 	})
 	mux := getByIDService(t, store)
 
@@ -2242,6 +2244,7 @@ func TestHandleGetByID_Admin_Found(t *testing.T) {
 			EventID       string `json:"eventId"`
 			ActorID       string `json:"actorId"`
 			CorrelationID string `json:"correlationId"`
+			OccurredAt    string `json:"occurredAt"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
@@ -2251,6 +2254,8 @@ func TestHandleGetByID_Admin_Found(t *testing.T) {
 	// admin (RowScopeTenant) → identity mask → diagnostic columns visible.
 	assert.Equal(t, "corr-visible", resp.Data.CorrelationID,
 		"admin must see the correlationId column unmasked")
+	// Non-zero OccurredAt is projected as RFC3339Nano (toGetResponseDataItem).
+	assert.Equal(t, occurred.Format(time.RFC3339Nano), resp.Data.OccurredAt)
 }
 
 func TestHandleGetByID_NotFound(t *testing.T) {
@@ -2444,4 +2449,18 @@ func TestHandleGetByID_NonCanonicalTenant_InternalError(t *testing.T) {
 	ctx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
 	w := getByID(mux, ctx, id)
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+}
+
+// TestGetAdapter_Get_Unauthenticated_Typed401 exercises the adapter's
+// defense-in-depth auth check directly (the route gate would 401 before the adapter
+// on the mux path): no principal → KindUnauthenticated errcode → the typed-envelope
+// wrapper (mapGetError) maps it to Get401ErrorResponse, NOT a raw Go error (F3,
+// #2288 review). This pins the declared-status → typed-response contract.
+func TestGetAdapter_Get_Unauthenticated_Typed401(t *testing.T) {
+	svc, _ := newTestService()
+	a := GetAdapter{S: svc}
+	resp, err := a.Get(context.Background(), &auditget.Request{ID: "some-id"})
+	require.NoError(t, err, "declared 401 must be a typed response, not a Go error")
+	_, ok := resp.(auditget.Get401ErrorResponse)
+	assert.True(t, ok, "unauthenticated GET must map to Get401ErrorResponse, got %T", resp)
 }

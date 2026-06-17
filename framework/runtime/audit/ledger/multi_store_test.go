@@ -280,6 +280,44 @@ func TestMultiStore_Query_TiedTimestamps_TieBreakedByID(t *testing.T) {
 		[]string{got[0].EventID, got[1].EventID}, "both stores' events present")
 }
 
+// TestMultiStore_GetByID covers the read-side aggregator's single-entry fan-out
+// (#1852): GetByID tries each backing store and returns the first hit (an entry
+// lives in exactly one namespace chain), or ErrAuditLedgerNotFound when no store
+// has it.
+func TestMultiStore_GetByID(t *testing.T) {
+	t.Parallel()
+	ts := time.Date(2026, 5, 27, 11, 0, 0, 0, time.UTC)
+	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(ts))
+	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(ts))
+
+	// Seed one entry into store b only; capture its store-assigned id.
+	e := &ledger.Entry{
+		EventID: "evt-multi-get", EventType: "event.x.v1", ActorID: "actor",
+		Timestamp: ts, Payload: []byte(`{}`),
+	}
+	require.NoError(t, b.Append(context.Background(), e))
+	require.NotEmpty(t, e.ID)
+
+	ms, err := ledger.NewMultiStore(a, b)
+	require.NoError(t, err)
+
+	// Found: fan-out skips store a (no match), resolves it in store b.
+	got, err := ms.GetByID(context.Background(), tenant.TenantID(""), memTestVis(), e.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "evt-multi-get", got.EventID)
+
+	// Not found across every backing store → ErrAuditLedgerNotFound.
+	_, err = ms.GetByID(context.Background(), tenant.TenantID(""), memTestVis(),
+		"00000000-0000-0000-0000-000000000000")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuditLedgerNotFound, ec.Code)
+
+	// A non-canonical tenant is rejected before fan-out (mirrors Query).
+	_, err = ms.GetByID(context.Background(), tenant.TenantID("not-a-uuid"), memTestVis(), e.ID)
+	require.Error(t, err)
+}
+
 // TestMultiStore_Query_AppliesCursor exercises the cross-store cursor
 // behavior: page 2 must skip the page-1 results from every backing store.
 func TestMultiStore_Query_AppliesCursor(t *testing.T) {
