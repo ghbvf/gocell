@@ -93,6 +93,22 @@ func okHandler() outbox.EntryHandler {
 	}
 }
 
+// soleHandlerCfg returns the single registered handlerConfig, failing the test
+// if the count is not exactly 1. Replaces direct r.handlers[0] indexing now
+// that the container is a map keyed by (topic, consumerGroup).
+func soleHandlerCfg(tb testing.TB, r *Router) handlerConfig {
+	tb.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.handlers) != 1 {
+		tb.Fatalf("expected exactly 1 handler, got %d", len(r.handlers))
+	}
+	for _, rh := range r.handlers {
+		return rh.cfg
+	}
+	return handlerConfig{}
+}
+
 // --- Guard tests ---
 
 func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
@@ -140,7 +156,7 @@ func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	assert.Equal(t, 1, r.HandlerCount())
 
 	// Router stores the business handler; bootstrap-owned middleware wraps it.
-	res := r.handlers[0].handler(context.Background(), outbox.Entry{})
+	res := soleHandlerCfg(t, r).handler(context.Background(), outbox.Entry{})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 }
 
@@ -162,8 +178,7 @@ func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
 	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
-	require.Equal(t, 1, len(r.handlers))
-	cfg := r.handlers[0]
+	cfg := soleHandlerCfg(t, r)
 	assert.Equal(t, "event.config.entry-upserted.v1", cfg.topic, "topic derived from spec.Topic")
 	assert.Equal(t, "accesscore", cfg.consumerGroup, "consumerGroup preserved")
 	assert.NotNil(t, cfg.handler, "handler stored")
@@ -187,8 +202,38 @@ func TestAddContractHandler_OwnerCellIDDistinctFromConsumerGroup(t *testing.T) {
 	const consumerGroup = "accesscore-rbac-session-sync"
 	const ownerCellID = "accesscore"
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), consumerGroup, ownerCellID))
-	require.Equal(t, 1, len(r.handlers))
-	sub := r.handlers[0].subscription()
+	sub := soleHandlerCfg(t, r).subscription()
 	assert.Equal(t, consumerGroup, sub.ConsumerGroup, "ConsumerGroup must be preserved as-is")
 	assert.Equal(t, ownerCellID, sub.CellID, "CellID must be ownerCellID, not consumerGroup")
+}
+
+// --- Duplicate-key fail-fast (map container) ---
+
+// TestAddContractHandler_DuplicateKey_ReturnsError verifies that a second
+// registration with the same (topic, consumerGroup) is rejected. That pair is
+// the broker's subscription identity (runtime/eventbus keys by
+// ConsumerGroup|Topic), so two handlers on it would be competing consumers
+// splitting one stream — a misconfiguration the old slice silently accepted.
+// The second call uses a *different* ownerCellID to lock in that cellID is NOT
+// part of the key: subscription identity is (topic, group) only.
+func TestAddContractHandler_DuplicateKey_ReturnsError(t *testing.T) {
+	t.Parallel()
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
+
+	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "othercell")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Equal(t, 1, r.HandlerCount(), "duplicate registration must not grow the handler set")
+}
+
+// TestAddContractHandler_SameTopicDistinctGroup_BothRegister verifies the key
+// includes consumerGroup: the same topic under a different group is a distinct
+// subscription and registers independently.
+func TestAddContractHandler_SameTopicDistinctGroup_BothRegister(t *testing.T) {
+	t.Parallel()
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "groupA", "accesscore"))
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "groupB", "accesscore"))
+	assert.Equal(t, 2, r.HandlerCount())
 }
