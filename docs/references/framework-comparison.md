@@ -193,6 +193,29 @@ goal:      外部 Cell 仓库 go get + import 跑平台不变量（M3 #1084）�
 ref PR:    M3 PR-1（refactor/archtest-external-library，#1084）
 ```
 
+### framework/runtime/transport + composition — Cell 部署拓扑 / 可重定位（location-transparent transport）
+
+```
+primary:   ServiceWeaver/weaver → internal/weaver/remoteweavelet.go（component.local WriteOnce，deployer
+                                   启动期决定 local vs remote-stub）；weavertest Local/Multi（同 test 双 runner 验收）
+           akka/akka            → cluster-sharding withRole（role 匹配建真 ShardRegion / 不匹配建 proxy，
+                                   一份 jar + 静态 akka.cluster.roles 选 role）← 核心借鉴：单 image + role 选择
+secondary: kubernetes/kubernetes → cmd/kube-controller-manager（NewControllerDescriptors 枚举全部 +
+                                   IsControllerEnabled/--controllers 子集实例化）；dapr（appId 逻辑寻址 +
+                                   nameresolution.Resolver）；spring-projects/spring-modulith
+                                   （ApplicationModules.verify 结构边界校验 ← 缺失依赖闸对标）；
+                                   spring-modulith @Externalized / MassTransit UsingInMemory↔UsingRabbitMq
+                                   （事件传输 swap，in-mem 不跨进程 → 已对应 #1965 broker 闸）
+goal:      共识模式 =「枚举全部组件 → 本进程只挂 colocated 子集 → 其余给位置透明 client」；拓扑静态声明在
+           assembly.yaml（groups）+ 启动期 role 选择器 WriteOnce（非 Dapr 运行期协商）；exported 收口构造器
+           仅算 Medium caller-funnel，真正 fail-closed = MOUNTED-EQUALS-COLOCATED phase guard
+deviations:
+  - 偏离 Service Weaver method-level RPC stub → contract-level HTTP（CellTransport.DoContract），保 contract 治理边界
+  - 偏离 Dapr 运行时 placement 协商 / sidecar → 拓扑静态、library-form，无控制面
+权威详情（13 框架完整对标表 + 教训 + Rejected alternatives）见 ADR
+docs/architecture/202606131142-1423-adr-cell-deployment-topology.md §#1967 Amendment
+```
+
 ## Go 标准库参考（问题修复用）
 
 | 领域 | 标准库参考 | 关注点 |

@@ -32,7 +32,7 @@ const defaultFakeLeaseTTL = 30 * time.Second
 // for one lease — that is how the conformance suite simulates a multi-replica
 // handoff. The monotonic epoch increments on every holder change (acquire of a
 // free/expired lease) and is kept on an idempotent same-holder re-acquire of a
-// still-live lease, mirroring the redis SETNX+INCR and postgres advisory-lock
+// still-live lease, mirroring the redis SETNX+INCR and postgres row-TTL CAS
 // adapters.
 type FakeLeaseBackend struct {
 	mu     sync.Mutex

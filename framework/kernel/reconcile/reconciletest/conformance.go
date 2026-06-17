@@ -306,7 +306,7 @@ const (
 	confShortInterval = 20 * time.Millisecond  // loop interval for fast requeue
 	confEventualWait  = 3 * time.Second        // budget for require.Eventually-style polls
 	confPollTick      = 5 * time.Millisecond   // polling frequency inside wait loops
-	confQuietPeriod   = 80 * time.Millisecond  // quiet-period check for PermanentError
+	confQuietPeriod   = 200 * time.Millisecond // quiet-period check for PermanentError
 	confLeaderRenew   = 10 * time.Millisecond  // fast renew cadence for leader tests
 	confBarrierWait   = 2 * time.Second        // barrier wait for concurrency test
 	confBackoffMax    = confShortInterval * 10 // panic-recovery backoff cap (TEST-TIME-LITERAL-01)
@@ -476,9 +476,12 @@ func confPermanentError(t *testing.T, newHarness HarnessFactory) {
 		return count.Load() >= 1
 	}, confEventualWait, confPollTick, "PermanentError: Reconcile never called")
 
-	// Quiet period: no further invocation expected after dead-letter. This is a
-	// genuine sleep (asserting the ABSENCE of an event cannot be polled-for) —
-	// not synchronous polling, so testwait does not apply.
+	// Quiet period: no further invocation expected after dead-letter. This bounded
+	// sleep asserts the ABSENCE of an event, which cannot be polled-for. Skip it
+	// under -short to avoid spending wall-clock budget on a negative assertion.
+	if testing.Short() {
+		t.Skip("skipping quiet-period absence assertion in -short mode")
+	}
 	snapshot := count.Load()
 	time.Sleep(confQuietPeriod) //archtest:allow:test-sleep quiet-period asserts no re-run after dead-letter (absence cannot be polled)
 	if after := count.Load(); after != snapshot {

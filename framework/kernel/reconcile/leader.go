@@ -9,9 +9,10 @@ import (
 
 // LeaderElector is the leader-election seam a multi-replica reconcile deployment
 // wires into a Loop. The interface is declared in kernel/reconcile and
-// implemented in adapters (adapters/redis SETNX+EXPIRE, adapters/postgres
-// pg_try_advisory_lock) — the kernel-declares / adapter-implements layering that
-// mirrors outbox.Emitter and persistence.CellTxManager.
+// implemented in adapters (adapters/redis SETNX+EXPIRE + epoch key,
+// adapters/postgres row-TTL CAS in reconcile_leases) — the kernel-declares /
+// adapter-implements layering that mirrors outbox.Emitter and
+// persistence.CellTxManager.
 //
 // CRITICAL — leader election is NOT fencing. client-go's own
 // tools/leaderelection documents: "This implementation does not guarantee that
@@ -22,6 +23,10 @@ import (
 // window (single dispatcher in steady state + lost-lease ctx cancel). Cross-replica
 // correctness is the job of the monotonic LeaseToken.Epoch fed into a
 // FencedWriter (see fenced.go) plus consumer idempotency — never the lease.
+// Adapter choice matters for the epoch provenance: Redis keeps the epoch in an
+// evictable key and is best-effort under allkeys-* eviction, while Postgres keeps
+// the epoch in a durable row and is the strong-fencing adapter when eviction
+// residuals are unacceptable.
 //
 // A nil LeaderElector on a Loop means single-process mode: the Loop is always
 // the leader, Epoch is 0, and no fencing is applied (the single-replica

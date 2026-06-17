@@ -90,18 +90,14 @@ const systemProducerActor = "system"
 //   - Downstream Hard: the actual ctxkeys writes below are caller-allowlisted by
 //     CTXKEYS-PRINCIPAL-WRITE-CALLER-01 (go/types object resolution); this file is
 //     a sanctioned principal writer alongside the auth bridge, the outbox consumer
-//     restore, and the projection system-principal carrier. Granularity note: that
-//     allowlist is FILE-level (key = "kernel/reconcile/identity.go"), NOT the
-//     function/callsite-level lock of PROJECTION-SYSTEM-PRINCIPAL-INSTALL-CALLER-01
-//     — so a second function added to THIS file could call the setters without
-//     tripping the archtest. That is the accepted same-file residual blind spot
-//     below, not an equivalence claim with the projection funnel.
+//     restore, and the projection system-principal carrier. The reconcile-specific
+//     RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01 invariant closes the remaining
+//     grain: within kernel/reconcile, these four setter references may appear only
+//     in this function, and this function may be referenced only by Loop.process.
 //
-// Residual blind spot (honest self-check): another function inside
-// kernel/reconcile could call this unexported installer. That is accepted — the
-// package is small trusted framework code and the threat model is external
-// producers, not in-package framework code; a same-package caller-allowlist would
-// be disproportionate.
+// Residual blind spot (honest self-check): build-tag-gated production files under
+// non-default tags are outside the default production archtest scan. No such
+// reconcile system-identity writer exists today.
 func installSystemProducerIdentity(ctx context.Context) context.Context {
 	ctx = ctxkeys.WithActorID(ctx, systemProducerActor)
 	ctx = ctxkeys.WithSubjectID(ctx, systemProducerActor)

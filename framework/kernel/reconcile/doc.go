@@ -157,6 +157,11 @@
 //     command-id obligation to be a conscious declaration (was a Soft godoc MUST
 //     before #1954). The archtest freezes only the stance VALUE SET (Medium); the
 //     sealing + required-param are type/compile Hard. See the Tenancy godoc.
+//   - RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01 (#1955): the system producer
+//     identity installer is callsite-frozen to Loop.process, and the package's
+//     principal ctx-key setter references are callsite-frozen to
+//     installSystemProducerIdentity. This is the reconcile-specific function-level
+//     backstop layered over CTXKEYS-PRINCIPAL-WRITE-CALLER-01.
 //
 // Leader election (PR-A6) is whole-loop: when a LeaderElector is wired only the
 // lease holder dispatches Reconcile; a lost lease cancels the lease-scoped ctx to
@@ -189,8 +194,9 @@
 // code fact, never inheriting or being changed by an ambient lifecycle-ctx
 // identity (#1808 F5). Enforcement is two-axis Hard: the installer is unexported
 // (Go visibility — only Loop.process reaches it) and its ctxkeys writes are
-// caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01. A multi-tenant
-// reconciler must add its own tenant dimension (the system identity is
+// caller-allowlisted by CTXKEYS-PRINCIPAL-WRITE-CALLER-01, with the in-package
+// callsite grain pinned by RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01. A
+// multi-tenant reconciler must add its own tenant dimension (the system identity is
 // deliberately tenantless); this obligation is machine-enforced at construction by
 // the required sealed Tenancy stance on reconcile.New (RECONCILE-TENANCY-DECLARED-01,
 // #1954) — see the ADR.

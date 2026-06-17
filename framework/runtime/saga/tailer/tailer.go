@@ -270,9 +270,11 @@ func (t *Tailer) recoverObserverPanic(ctx context.Context, method string) {
 }
 
 func nilDepErr(dep string) error {
+	// The dependency name is an internal wiring identifier, not caller input — it
+	// flows only through the server-only InternalDetails channel, never into the
+	// public 4xx Details that would expose the internal wiring surface (#1884).
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"tailer.NewTailer: required dependency is nil",
-		errcode.WithDetails(errcode.PublicString("dependency", dep)),
 		errcode.WithInternal(errcode.InternalAttr("dependency", dep)))
 }
 
@@ -541,7 +543,7 @@ func (t *Tailer) recordLockAcquireOutcome(reason LockAcquireResult) {
 func (t *Tailer) drain(ctx context.Context, ownerToken string) error {
 	head, err := t.replay.Head(ctx)
 	if err != nil {
-		t.observeDrain(ctx, DrainStoreError)
+		t.observeDrain(ctx, DrainHeadError)
 		return fmt.Errorf("tailer drain: head: %w", err)
 	}
 	checkpoint, err := t.store.LoadOffset(ctx, t.cellID, t.projectionID)

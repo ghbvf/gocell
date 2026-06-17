@@ -946,7 +946,7 @@ Projection 投影 metric 同维度约定。readiness probe `<cell>_saga_tailer_<
 | Metric (registered name) | 类型 | 含义 |
 |---|---|---|
 | `saga_journal_tailer_lock_acquire_failed_total{reason}` | Counter | per-projection distlock 抢锁失败（leader gate 跳过该 tick），`reason ∈ {contended, ctx_canceled, backend_error}` |
-| `saga_journal_tailer_drain_total{result}` | Counter | 有进展或失败的 drain，`result ∈ {ok, store_error, apply_error}`（空闲 caught-up tick 不计） |
+| `saga_journal_tailer_drain_total{result}` | Counter | 有进展或失败的 drain，`result ∈ {ok, head_error, store_error, apply_error}`（head_error = head 取上界失败；空闲 caught-up tick 不计） |
 | `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error}` |
 | `saga_journal_tailer_pending_events` | Gauge | 残余积压 = HeadSeq − checkpoint（上次干净 tick 后） |
 | `saga_journal_tailer_last_success_timestamp_seconds` | Gauge | 上次完整 tick 的 unix 时间（驱动停摆告警） |

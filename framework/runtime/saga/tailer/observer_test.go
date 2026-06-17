@@ -27,6 +27,7 @@ func TestObserverEnumValues(t *testing.T) {
 		{string(LockCtxCanceled), "ctx_canceled"},
 		{string(LockBackendError), "backend_error"},
 		{string(DrainOK), "ok"},
+		{string(DrainHeadError), "head_error"},
 		{string(DrainStoreError), "store_error"},
 		{string(DrainApplyError), "apply_error"},
 		{string(AdvanceOK), "ok"},
