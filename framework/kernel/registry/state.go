@@ -22,6 +22,8 @@ type RegistrationState struct {
 
 // RegistrationStateUnknown is the fail-closed render of a zero-value (forged)
 // RegistrationState. It is NOT a producible state (not in allRegistrationStates).
+// It is a plain string (the String() output), not a RegistrationState value — to
+// test for a forged/uninitialised state use IsZero(), not a string comparison.
 const RegistrationStateUnknown = "unknown"
 
 // String returns the wire/label value. The zero value renders as

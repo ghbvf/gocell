@@ -20,8 +20,14 @@ import (
 // RegistrationEvent log (source of truth for history) and an in-mem projection
 // index (current state per registration). Advance validates the transition
 // BEFORE appending, so an illegal transition leaves both structures untouched
-// (fail-closed, no half-write). A plain sync.Mutex serializes all access —
-// reads return value copies, so there is no lock-upgrade hazard.
+// (fail-closed, no half-write).
+//
+// Concurrency uses a plain sync.Mutex (not sync.RWMutex), matching
+// kernel/saga/journal.MemJournal: every read returns a value copy under the lock
+// and there are no consumers yet, so a read/write split would be premature
+// optimization that adds a lock-upgrade hazard for no measured benefit. Revisit
+// (RWMutex) only if a downstream read-heavy benchmark — e.g. a ByState polling
+// hot path — demonstrates contention.
 type ContractRegistrar struct {
 	clk    clock.Clock
 	mu     sync.Mutex
@@ -81,32 +87,36 @@ func (r *ContractRegistrar) Submit(in SubmitInput) (ContractRegistration, error)
 // ErrRegistrationInvalidTransition for a transition the legalTransitions table
 // forbids (including any transition out of a terminal state, a self-loop, or a
 // forged zero target). The transition is validated before any mutation, so a
-// rejected Advance leaves the projection and event log untouched. When `to` is
-// approved, the actor is recorded as the registration's Approver.
-func (r *ContractRegistrar) Advance(id string, to RegistrationState, actor, reason string) (ContractRegistration, error) {
+// rejected Advance leaves the projection and event log untouched. It also returns
+// ErrValidationFailed for an empty in.ID or in.Actor (attribution is required).
+// When in.To is approved, in.Actor is recorded as the registration's Approver.
+func (r *ContractRegistrar) Advance(in AdvanceInput) (ContractRegistration, error) {
+	if err := in.validate(); err != nil {
+		return ContractRegistration{}, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	cur, ok := r.index[id]
+	cur, ok := r.index[in.ID]
 	if !ok {
 		return ContractRegistration{}, errcode.New(errcode.KindNotFound, errcode.ErrRegistrationNotFound,
 			"registry: registration not found",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", id))))
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", in.ID))))
 	}
-	if err := Transition(cur.State, to); err != nil {
+	if err := Transition(cur.State, in.To); err != nil {
 		return ContractRegistration{}, err
 	}
 	now := r.clk.Now()
 	from := cur.State
-	cur.State = to
+	cur.State = in.To
 	cur.UpdatedAt = now
-	if to == stateApproved {
-		cur.Approver = actor
+	if in.To == stateApproved {
+		cur.Approver = in.Actor
 	}
-	r.appendLocked(id, RegistrationEvent{
+	r.appendLocked(in.ID, RegistrationEvent{
 		From:       from,
-		To:         to,
-		Actor:      actor,
-		Reason:     reason,
+		To:         in.To,
+		Actor:      in.Actor,
+		Reason:     in.Reason,
 		OccurredAt: now,
 	})
 	return *cur, nil
@@ -137,7 +147,12 @@ func (r *ContractRegistrar) Get(id string) (ContractRegistration, bool) {
 // sorted by id. The set is derived by filtering the projection on read (no
 // separate byState index to keep consistent — registration counts are small and
 // the mutable index makes a maintained bucket map a needless correctness risk).
+// A forged/zero state is fail-closed: it is not a registered value, so the
+// result is always empty (explicit guard, mirroring the transition table).
 func (r *ContractRegistrar) ByState(state RegistrationState) []ContractRegistration {
+	if !state.isRegistered() {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []ContractRegistration

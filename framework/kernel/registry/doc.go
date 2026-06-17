@@ -28,5 +28,9 @@
 // (Hard); the append-only event log is Hard by encapsulation (unexported, no
 // exported mutator deletes events). The runtime transition guard is Medium (Go
 // has no typestate; runtime fail-closed is the ceiling), with the table's edge
-// set and the value set pinned by anti-vacuity freeze tests.
+// set and the value set pinned by anti-vacuity freeze tests. Those freeze tests
+// are package-level unit tests (TestLegalTransitions_Frozen,
+// TestRegistrationState_FrozenRegistry) — not tools/archtest INVARIANT guards,
+// since the state machine is package-internal; if a future story exposes it to
+// out-of-package callers, the freeze tests are the archtest upgrade path.
 package registry

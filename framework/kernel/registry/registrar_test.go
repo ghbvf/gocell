@@ -3,6 +3,7 @@ package registry_test
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,20 @@ func mustSubmit(t *testing.T, r *registry.ContractRegistrar, id string) registry
 	return reg
 }
 
+// advance is a test convenience over the named-field AdvanceInput API.
+func advance(r *registry.ContractRegistrar, id string, to registry.RegistrationState, actor, reason string) (
+	registry.ContractRegistration, error,
+) {
+	return r.Advance(registry.AdvanceInput{ID: id, To: to, Actor: actor, Reason: reason})
+}
+
+// happyPath is the full main-path lifecycle (excluding the initial submitted state).
+var happyPath = []registry.RegistrationState{
+	registry.StateProbing(), registry.StateConformant(),
+	registry.StatePendingApproval(), registry.StateApproved(),
+	registry.StateActive(), registry.StateRetired(),
+}
+
 func TestSubmit_CreatesAtSubmitted(t *testing.T) {
 	t.Parallel()
 	r, clk := newRegistrar(t)
@@ -47,6 +62,7 @@ func TestSubmit_CreatesAtSubmitted(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, events, 1)
 	assert.Equal(t, 1, events[0].Seq)
+	assert.Equal(t, "reg-1", events[0].RegistrationID)
 	assert.True(t, events[0].From.IsZero(), "initial event From must be the zero sentinel")
 	assert.Equal(t, registry.StateSubmitted(), events[0].To)
 	assert.Equal(t, "cell-a", events[0].Actor)
@@ -81,19 +97,14 @@ func TestAdvance_FullLifecycle(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
 	mustSubmit(t, r, "reg-1")
-	path := []registry.RegistrationState{
-		registry.StateProbing(), registry.StateConformant(),
-		registry.StatePendingApproval(), registry.StateApproved(),
-		registry.StateActive(), registry.StateRetired(),
-	}
-	for _, to := range path {
-		reg, err := r.Advance("reg-1", to, "admin", "ok")
+	for _, to := range happyPath {
+		reg, err := advance(r, "reg-1", to, "admin", "ok")
 		require.NoError(t, err, "advance to %q", to)
 		assert.Equal(t, to, reg.State)
 	}
 	events, ok := r.Events("reg-1")
 	require.True(t, ok)
-	assert.Len(t, events, len(path)+1) // +1 for the initial submit event
+	assert.Len(t, events, len(happyPath)+1) // +1 for the initial submit event
 }
 
 // TestAdvance_SubmittedToActivate_Rejected is acceptance scenario 1: a submitted
@@ -104,7 +115,7 @@ func TestAdvance_SubmittedToActivate_Rejected(t *testing.T) {
 	r, _ := newRegistrar(t)
 	mustSubmit(t, r, "reg-1")
 
-	_, err := r.Advance("reg-1", registry.StateActive(), "attacker", "bypass")
+	_, err := advance(r, "reg-1", registry.StateActive(), "attacker", "bypass")
 	errcodetest.AssertCode(t, err, errcode.ErrRegistrationInvalidTransition)
 
 	reg, ok := r.Get("reg-1")
@@ -119,22 +130,52 @@ func TestAdvance_SubmittedToActivate_Rejected(t *testing.T) {
 func TestAdvance_NotFound(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
-	_, err := r.Advance("nope", registry.StateProbing(), "admin", "")
+	_, err := advance(r, "nope", registry.StateProbing(), "admin", "")
 	errcodetest.AssertCode(t, err, errcode.ErrRegistrationNotFound)
 }
 
+// TestAdvance_EmptyFields verifies the attribution guard: an empty id or actor is
+// rejected with ErrValidationFailed (symmetric with SubmitInput requiring a
+// Submitter — an approve/retire with no actor is an audit-attribution hole).
+func TestAdvance_EmptyFields(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	mustSubmit(t, r, "reg-1")
+	_, err := advance(r, "", registry.StateProbing(), "admin", "")
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+	_, err = advance(r, "reg-1", registry.StateProbing(), "", "no actor")
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+
+	// The rejected empty-actor advance must not have mutated state or appended.
+	reg, ok := r.Get("reg-1")
+	require.True(t, ok)
+	assert.Equal(t, registry.StateSubmitted(), reg.State)
+	events, _ := r.Events("reg-1")
+	assert.Len(t, events, 1)
+}
+
+// TestAdvance_SetsApproverOnApprove verifies Approver is set ONLY on the approve
+// transition, stays empty before it, and is NOT changed by later transitions
+// (active/retired) — symmetric with TestTransition_ActiveOnlyFromApproved.
 func TestAdvance_SetsApproverOnApprove(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
 	mustSubmit(t, r, "reg-1")
 	for _, to := range []registry.RegistrationState{registry.StateProbing(), registry.StateConformant(), registry.StatePendingApproval()} {
-		reg, err := r.Advance("reg-1", to, "system", "")
+		reg, err := advance(r, "reg-1", to, "system", "")
 		require.NoError(t, err)
 		assert.Empty(t, reg.Approver, "Approver must not be set before approval (state %q)", to)
 	}
-	reg, err := r.Advance("reg-1", registry.StateApproved(), "admin-42", "looks good")
+	reg, err := advance(r, "reg-1", registry.StateApproved(), "admin-42", "looks good")
 	require.NoError(t, err)
 	assert.Equal(t, "admin-42", reg.Approver)
+
+	// Subsequent transitions must NOT change the recorded approver.
+	for _, to := range []registry.RegistrationState{registry.StateActive(), registry.StateRetired()} {
+		reg, err := advance(r, "reg-1", to, "ops-1", "")
+		require.NoError(t, err)
+		assert.Equal(t, "admin-42", reg.Approver, "Approver must be unchanged after approval (state %q)", to)
+	}
 }
 
 func TestAdvance_StampsUpdatedAt(t *testing.T) {
@@ -144,7 +185,7 @@ func TestAdvance_StampsUpdatedAt(t *testing.T) {
 	created := reg.CreatedAt
 
 	clk.Advance(5 * time.Minute)
-	advanced, err := r.Advance("reg-1", registry.StateProbing(), "system", "")
+	advanced, err := advance(r, "reg-1", registry.StateProbing(), "system", "")
 	require.NoError(t, err)
 	assert.Equal(t, created, advanced.CreatedAt, "CreatedAt must not change on advance")
 	assert.Equal(t, clk.Now(), advanced.UpdatedAt)
@@ -153,18 +194,19 @@ func TestAdvance_StampsUpdatedAt(t *testing.T) {
 
 // TestReplayEvents_ProjectionConsistent is acceptance scenario 3: folding the
 // append-only event stream (from the zero sentinel) reproduces the live
-// projection state — an honest cross-check that the independently-maintained
-// projection equals the fold of the log.
+// projection — an honest cross-check that the independently-maintained
+// projection equals the fold of the log. It drives the FULL happy path so the
+// Approver field (set on the approve event) is also reconstructed from the log.
 func TestReplayEvents_ProjectionConsistent(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
 	mustSubmit(t, r, "reg-1")
-	lifecycle := []registry.RegistrationState{
-		registry.StateProbing(), registry.StateConformant(),
-		registry.StatePendingApproval(), registry.StateRejected(),
-	}
-	for _, to := range lifecycle {
-		_, err := r.Advance("reg-1", to, "system", "")
+	for _, to := range happyPath {
+		actor := "system"
+		if to == registry.StateApproved() {
+			actor = "admin-7"
+		}
+		_, err := advance(r, "reg-1", to, actor, "")
 		require.NoError(t, err)
 	}
 
@@ -173,17 +215,25 @@ func TestReplayEvents_ProjectionConsistent(t *testing.T) {
 	require.NotEmpty(t, events)
 
 	// Fold the event stream from the zero sentinel; each event's From must chain
-	// to the prior event's To, and the final To is the derived current state.
-	var derived registry.RegistrationState
+	// to the prior event's To. State and Approver are reconstructed independently
+	// of the live projection.
+	var derivedState registry.RegistrationState
+	var derivedApprover string
 	for i, e := range events {
 		assert.Equal(t, i+1, e.Seq, "events must be 1-based and contiguous")
-		assert.Equal(t, derived, e.From, "event %d From must chain from prior To", i)
-		derived = e.To
+		assert.Equal(t, "reg-1", e.RegistrationID)
+		assert.Equal(t, derivedState, e.From, "event %d From must chain from prior To", i)
+		derivedState = e.To
+		if e.To == registry.StateApproved() {
+			derivedApprover = e.Actor
+		}
 	}
 
 	live, ok := r.Get("reg-1")
 	require.True(t, ok)
-	assert.Equal(t, live.State, derived, "replayed state must equal the live projection")
+	assert.Equal(t, live.State, derivedState, "replayed state must equal the live projection")
+	assert.Equal(t, live.Approver, derivedApprover, "replayed approver must equal the live projection")
+	assert.Equal(t, "admin-7", live.Approver)
 }
 
 func TestByState_Filters(t *testing.T) {
@@ -192,7 +242,7 @@ func TestByState_Filters(t *testing.T) {
 	mustSubmit(t, r, "a")
 	mustSubmit(t, r, "b")
 	mustSubmit(t, r, "c")
-	_, err := r.Advance("b", registry.StateProbing(), "system", "")
+	_, err := advance(r, "b", registry.StateProbing(), "system", "")
 	require.NoError(t, err)
 
 	submitted := r.ByState(registry.StateSubmitted())
@@ -201,6 +251,15 @@ func TestByState_Filters(t *testing.T) {
 	assert.Len(t, probing, 1)
 	assert.Equal(t, "b", probing[0].ID)
 	assert.Empty(t, r.ByState(registry.StateApproved()))
+}
+
+// TestByState_ZeroStateEmpty pins the fail-closed contract: querying a
+// forged/zero RegistrationState returns empty (never panics, never matches).
+func TestByState_ZeroStateEmpty(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	mustSubmit(t, r, "a")
+	assert.Empty(t, r.ByState(registry.RegistrationState{}))
 }
 
 func TestGet_NoAliasMutation(t *testing.T) {
@@ -250,9 +309,9 @@ func TestAllIDs_Sorted(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, r.AllIDs())
 }
 
-// TestConcurrent_SubmitAdvance_Race fires concurrent Submit+Advance and asserts
-// no data race (run with -race) and that each registration's event count matches
-// the transitions applied (projection consistent under the lock).
+// TestConcurrent_SubmitAdvance_Race fires concurrent Submit+Advance on DISTINCT
+// ids and asserts no data race (run with -race) and that each registration's
+// event count matches the transitions applied (projection consistent).
 func TestConcurrent_SubmitAdvance_Race(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)
@@ -265,7 +324,7 @@ func TestConcurrent_SubmitAdvance_Race(t *testing.T) {
 			id := fmt.Sprintf("reg-%d", i)
 			_, err := r.Submit(registry.SubmitInput{ID: id, Kind: "http", Submitter: "cell"})
 			require.NoError(t, err)
-			_, err = r.Advance(id, registry.StateProbing(), "system", "")
+			_, err = advance(r, id, registry.StateProbing(), "system", "")
 			require.NoError(t, err)
 			_ = r.ByState(registry.StateProbing())
 		}(i)
@@ -282,4 +341,37 @@ func TestConcurrent_SubmitAdvance_Race(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, registry.StateProbing(), reg.State)
 	}
+}
+
+// TestConcurrent_SameID_Advance fires N concurrent Advance calls against the SAME
+// id (submitted→probing). The lock must serialize them: exactly one wins, the
+// rest see the already-advanced state and fail with ErrRegistrationInvalidTransition
+// (probing→probing is a self-loop). Run with -race to prove single-key locking.
+func TestConcurrent_SameID_Advance(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	mustSubmit(t, r, "shared")
+	const n = 16
+	var wg sync.WaitGroup
+	var success, rejected int64
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := advance(r, "shared", registry.StateProbing(), "system", "")
+			if err == nil {
+				atomic.AddInt64(&success, 1)
+			} else {
+				errcodetest.AssertCode(t, err, errcode.ErrRegistrationInvalidTransition)
+				atomic.AddInt64(&rejected, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(1), success, "exactly one concurrent advance must win")
+	assert.Equal(t, int64(n-1), rejected, "the rest must be rejected as invalid transitions")
+	events, ok := r.Events("shared")
+	require.True(t, ok)
+	assert.Len(t, events, 2, "submit + exactly one successful advance")
 }

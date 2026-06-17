@@ -44,12 +44,15 @@ type ContractRegistration struct {
 // stream from the zero state reproduces the current State (the From of the first
 // event is the zero sentinel; each subsequent From chains from the prior To).
 type RegistrationEvent struct {
-	// RegistrationID is the owning registration's ID.
+	// RegistrationID is the owning registration's ID. It is injected by the
+	// registrar in appendLocked; callers reading via Events() always receive a
+	// non-empty value matching the queried id (no need to set it by hand).
 	RegistrationID string
 	// Seq is the 1-based, contiguous position within this registration's stream.
 	Seq int
-	// From is the prior state (the zero sentinel for the initial submit event);
-	// To is the resulting state.
+	// From is the prior state; To is the resulting state. On the initial submit
+	// event From is the zero sentinel (From.IsZero() == true), so folding the
+	// stream from a zero RegistrationState reproduces the lifecycle.
 	From RegistrationState
 	To   RegistrationState
 	// Actor is the identity driving the transition (submitter / admin / system);
@@ -86,5 +89,39 @@ func (in SubmitInput) validate() error {
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"registry: submit input missing required field",
+		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s", missing))))
+}
+
+// AdvanceInput is the data required to advance a registration to a new state.
+// It mirrors SubmitInput (a named-field struct, not positional args) so that the
+// two same-typed strings Actor and Reason cannot be silently swapped at a call
+// site. Actor is required (attribution: who drove the transition — submitter /
+// admin / system); Reason is optional free-form (e.g. a rejection reason). To's
+// legality is enforced by Transition against legalTransitions, not here.
+type AdvanceInput struct {
+	ID     string
+	To     RegistrationState
+	Actor  string
+	Reason string
+}
+
+// validate rejects empty required fields (ID, Actor) with ErrValidationFailed.
+// A non-empty Actor closes the audit-attribution gap: an approve / retire
+// transition must name who performed it, symmetric with SubmitInput requiring a
+// Submitter. To legality is validated by Transition (so an illegal/zero target
+// surfaces as ErrRegistrationInvalidTransition, not a missing-field error).
+func (in AdvanceInput) validate() error {
+	missing := ""
+	switch {
+	case in.ID == "":
+		missing = "id"
+	case in.Actor == "":
+		missing = "actor"
+	}
+	if missing == "" {
+		return nil
+	}
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"registry: advance input missing required field",
 		errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("field=%s", missing))))
 }
