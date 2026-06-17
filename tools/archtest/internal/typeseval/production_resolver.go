@@ -73,7 +73,7 @@ func LoadProductionPackages(workspaceRoot string, modules []workspace.Module, te
 			generatedPrefixes[i] = m.ImportPath + "/generated/"
 		}
 	}
-	resolver, err := sharedResolverMode(packagesload.ModeWorkspace, workspaceRoot, tests, tags, patterns...)
+	resolver, err := resolverFrom(packagesload.LoadFlatCached(workspaceRoot, typesevalCfg(tests, tags), patterns...))
 	if err != nil {
 		return nil, fmt.Errorf("typeseval: load production packages: %w", err)
 	}

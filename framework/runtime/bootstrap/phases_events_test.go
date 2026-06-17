@@ -431,22 +431,7 @@ func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 
 // newEventsTestRelay creates a minimal Relay suitable for WithRelay lifecycle tests.
 func newEventsTestRelay() *runtimeoutbox.Relay {
-	cfg := runtimeoutbox.RelayConfig{
-		PollInterval:         testtime.FastPoll,
-		ReclaimInterval:      testtime.D10ms,
-		BatchSize:            10,
-		MaxAttempts:          3,
-		BaseRetryDelay:       testtime.D1ms,
-		MaxRetryDelay:        testtime.D10ms,
-		ClaimTTL:             testtime.D100ms,
-		RetentionPeriod:      testtime.D1h,
-		DeadRetentionPeriod:  testtime.D24h,
-		CleanupWaitFloor:     testtime.FastPoll,
-		PollFailureBudget:    3,
-		ReclaimFailureBudget: 3,
-		CleanupFailureBudget: 3,
-	}
-	return runtimeoutbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
+	return runtimeoutbox.NewRelay(clock.Real(), outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, testRelayConfig())
 }
 
 // TestWithRelay_AutoLifecycle_AdapterAddedToManagedResources verifies that
@@ -460,7 +445,7 @@ func TestWithRelay_AutoLifecycle_AdapterAddedToManagedResources(t *testing.T) {
 	relay := newEventsTestRelay()
 	b := New(
 		clock.Real(),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 	)
 
 	// The wrapping adapter must appear in managedResources, pointing at the
@@ -476,7 +461,7 @@ func TestWithRelay_AutoLifecycle_AdapterAddedToManagedResources(t *testing.T) {
 	assert.True(t, found,
 		"WithRelay must wrap the relay in *relayAdapter and append it to managedResources; "+
 			"current managedResources len=%d", len(b.managedResources))
-	assert.Same(t, relay, b.relay, "WithRelay must also store the relay on b.relay for outbox wiring")
+	assert.Same(t, relay, b.relaysByInstance[DefaultInstanceKey()], "WithRelay must store the relay under its instance key for outbox wiring")
 }
 
 // TestWithRelay_AutoLifecycle_CloseCalledDuringTeardown verifies that the relay
@@ -490,7 +475,7 @@ func TestWithRelay_AutoLifecycle_CloseCalledDuringTeardown(t *testing.T) {
 	relay := newEventsTestRelay()
 	b := New(
 		clock.Real(),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 	)
 
 	require.NoError(t, b.expandManagedResources(),
@@ -510,26 +495,10 @@ func TestWithRelay_AutoLifecycle_CloseCalledDuringTeardown(t *testing.T) {
 		"WithRelay must populate managedResourceTeardowns via expandManagedResources")
 }
 
-// TestWithRelay_Rebind_Panics verifies that calling WithRelay more than once
-// is an unrecoverable programmer error: it panics through the panic-taxonomy
-// funnel (panicregister.Approved). Without this guard, the second call would
-// overwrite b.relay while leaving the earlier adapter in managedResources —
-// the exact "early double-managed relay invisible" hole that motivated this
-// PR (see ADR docs/architecture/202605201400-adr-relay-managedresource-isolation.md).
-func TestWithRelay_Rebind_Panics(t *testing.T) {
-	t.Parallel()
-
-	r1 := newEventsTestRelay()
-	r2 := newEventsTestRelay()
-
-	assert.Panics(t, func() {
-		_ = New(
-			clock.Real(),
-			WithRelay(r1),
-			WithRelay(r2),
-		)
-	}, "WithRelay called twice must panic via panicregister.Approved + errcode.Assertion")
-}
+// The keyed rebind guard (same instance key panics; distinct keys accumulate)
+// is covered by TestWithRelay_SameInstanceKey_Rebind_Panics and
+// TestWithRelay_DistinctInstanceKeys_BothRegistered in relay_fanout_test.go
+// (#2152 PR-1, RELAY-SOLE-HOLDER-01 keyed-by-instance rewrite).
 
 // TestWithManagedResource_Relay_CompileTimeMismatch is a compile-time-only
 // assertion fixture: the line below is intentionally commented out. If it

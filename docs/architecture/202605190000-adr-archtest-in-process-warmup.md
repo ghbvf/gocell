@@ -121,9 +121,27 @@ PR #584 CI 首次运行 shard 12 触发 slowgate fail：`TestArchtestVerifyCover
 - 改造 3 `TAGGROUP-LOOP-FORBIDS-TYPED-RUN-01` = typed-function-call funnel **Hard**（对齐 ai-robust.md §"Hard 范本" 第 2 条 panic 范本同构 + staticcheck SA4000 同构）
 - 改造 1 (TestMain) / 改造 2 (两次 Load) = perf refactor，不在 ai-robust.md §适用范围
 
+## Amendment 2026-06-18 — #2165 缓存实现下沉 packagesload
+
+`SharedResolver` / `LoadProductionPackages` 的进程内缓存实现（原 typeseval 私有
+`sharedCache map[string]*Resolver` + `singleflight.Group`）下沉为 `tools/packagesload`
+的 `WorkspaceCache`（无界 map + singleflight），metricschema 的 OBS-01 扫描经同一
+`packagesload.LoadWorkspaceCached` 共用——去除 typeseval 与 metricschema 间的平行缓存实现，
+单源化（#2165）。**行为/威胁矩阵不变**：仍是同构 singleflight 摊销 + TestMain 预热路径，
+warm 命中后 wall/RSS 同前；本 ADR 改造 1（TestMain warm-up）经 `LoadProductionPackages` →
+`packagesload.LoadFlatCached` 继续命中。`Resolver` 退为每调用新建的薄 wrapper，缓存命中以
+共享底层 `[]*packages.Package` 表达（非共享 wrapper）。perf refactor，不在 ai-robust.md §适用范围。
+
+**RSS 峰值不变（不要误读为"合并缓存=省内存"）**：`LoadFlatCached`（warm-up 路径，kind `F`）与
+`LoadWorkspaceCached`（`SharedResolver` 路径，kind `W`）的 cache key **kind 前缀不同**，二者加载
+不同 package 集、**不共享 entry**——与下沉前 typeseval 私有缓存按 `ModeWorkspace`/`ModeModule`
+分键的语义等价。故 §"威胁矩阵/资源边界变化"的 RSS 峰值（≈2× 全模块）维持不变，本次只是把缓存
+**实现**单源化，不改变峰值内存。
+
 ## 参考
 
 - ADR `docs/architecture/202605120000-adr-archtest-process-isolation.md`（前置 ADR — process isolation 与本 ADR 叠加非冲突）
+- `tools/packagesload/cache.go` — `WorkspaceCache` 单源缓存实现（#2165）
 - `tools/archtest/internal/typeseval/typeseval.go` — SharedResolver godoc 同 PR 补"为什么保留 patterns 维度"段
 - `tools/archtest/taggroup_loop_no_typed_run_test.go` — 改造 3 实现
 - `tools/archtest/internal/taggrouploopfixtures/` — 改造 3 fixture self-check
