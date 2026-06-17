@@ -29,6 +29,8 @@ type ResponseData struct {
 	Label string   `json:"label,omitempty"`
 	Score int64    `json:"score,omitempty"`
 	Tags  []string `json:"tags,omitempty"`
+	// format: date-time
+	LastSeenAt *string `json:"lastSeenAt"`
 }
 
 // ToMap projects ResponseData into the column map the masking funnel
@@ -49,10 +51,11 @@ type ResponseData struct {
 // "no value" with the key still present and maskable.
 func (i ResponseData) ToMap() map[string]any {
 	return map[string]any{
-		"id":    i.ID,
-		"label": i.Label,
-		"score": i.Score,
-		"tags":  i.Tags,
+		"id":         i.ID,
+		"label":      i.Label,
+		"score":      i.Score,
+		"tags":       i.Tags,
+		"lastSeenAt": i.LastSeenAt,
 	}
 }
 

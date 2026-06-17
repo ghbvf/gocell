@@ -166,7 +166,9 @@ type EnumValue struct {
 type DTOField struct {
 	// Name is the PascalCase Go field name.
 	Name string
-	// JSONTag is the JSON tag value, e.g. "item,omitempty".
+	// JSONTag is the JSON tag value, e.g. "item,omitempty". A Nullable field
+	// (see below) carries NO ",omitempty" suffix — it is always present on the wire
+	// (its nil pointer serializes to JSON null), e.g. "occurredAt".
 	JSONTag string
 	// BareJSONTag is the JSON key without the ",omitempty" suffix, e.g. "item".
 	// Used by the generated ToMap() (EmitToMap DTOs) so the projection column map

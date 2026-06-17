@@ -2038,6 +2038,45 @@ func TestHandleQuery_ZeroOccurredAt_RendersNull(t *testing.T) {
 	}
 }
 
+// TestHandleQuery_EmptyMaskedColumn_RendersRedactedNotAbsent is the end-to-end
+// side-channel guard for #1875: a masked diagnostic column (correlationId/traceId,
+// masked for non-admin self callers) that is EMPTY on the row must still render as
+// "<REDACTED>" with the key present — NOT omitted. The #2159 omitempty fission
+// would have dropped the empty key, letting "absent vs <REDACTED>" reveal the
+// column was empty. Full column set keeps presence uniform.
+func TestHandleQuery_EmptyMaskedColumn_RendersRedactedNotAbsent(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Row owned by the self caller, with EMPTY correlationId/traceId.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "mask-empty-1", EventID: "evt-mask-empty-1", EventType: "event.test.v1",
+		ActorID:   "usr-mask-self",
+		Timestamp: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		// CorrelationID / TraceID left empty.
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-mask-self", nil)
+	req = req.WithContext(auditTestCtx("usr-mask-self", nil)) // non-admin → self scope masks correlationId/traceId
+	mux.ServeHTTP(w, req)
+	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	row := resp.Data[0]
+	for _, col := range []string{"correlationId", "traceId"} {
+		v, has := row[col]
+		assert.Truef(t, has, "%s key must be present even when empty+masked (no presence side channel)", col)
+		assert.Equalf(t, "<REDACTED>", v, "%s must be value-masked, not omitted", col)
+	}
+}
+
 // --- Issue #1742: actorId/subjectId/traceId/eventType input validation ---
 
 // maxIDLen matches idutil.MaxMetadataIDLen (256). Redeclared here as a

@@ -139,6 +139,15 @@ without amending this ADR, because the Decision-2 invariant lived only as prose
    (`occurredAt`), `http.deviceidentity.status.v1` (`renewalTime`),
    `http.devicestate.v1` (`lastSeenAt`) — the complete set of optional + `format`
    projection columns at this date.
+   - **Why not `timestamp`**: a `format`-constrained column that is **required**
+     needs no nullable treatment — the ledger protocol stamps it on write, so there
+     is no zero-value path. `occurredAt` is the only audit time column that is
+     optional (empty for legacy rows), hence the only one made nullable.
+   - **audit vs device**: `audit.*` is **active** — this is a fix for a live
+     `format: date-time` violation (#1875). `deviceidentity.status` /
+     `devicestate` are `lifecycle: draft`, `ownerCell: _framework`, not yet served;
+     aligning them now is **preventive** (the same nullable-as-absent pattern is
+     baked in before activation), not a fix for a live wire.
 
 ### Threat matrix (re-evaluated; supersedes Decision-2 prose where it conflicts)
 

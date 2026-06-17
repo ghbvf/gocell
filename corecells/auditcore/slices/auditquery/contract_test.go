@@ -375,6 +375,44 @@ func TestHttpAuditGetV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
+// TestHttpAuditGetV1Serve_ZeroOccurredAt_NullValidates is the GET-side wire-schema
+// gate for #1875, symmetric to the list-side TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates:
+// a single-entry read of a row with zero producer-clock time must render occurredAt
+// as JSON null (key present, schema-valid for the nullable column).
+func TestHttpAuditGetV1Serve_ZeroOccurredAt_NullValidates(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.get.v1")
+
+	e := &ledger.Entry{
+		ID: "ae-get-zero", EventID: "evt-get-zero", EventType: "event.test.v1",
+		ActorID: "usr-1", TenantID: auditQueryTestTenant,
+		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		// OccurredAt left zero (legacy row predating #1229).
+	}
+	h := newContractQueryHandler(e)
+
+	rec := httptest.NewRecorder()
+	path := strings.Replace(c.HTTP.Path, "{id}", e.ID, 1)
+	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
+	h.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, rec.Body.String())
+	}
+	oc, has := resp.Data["occurredAt"]
+	if !has {
+		t.Errorf("occurredAt key must be present (stable column set)\nbody=%s", rec.Body.String())
+	}
+	if oc != nil {
+		t.Errorf("zero OccurredAt must render as JSON null, got %v\nbody=%s", oc, rec.Body.String())
+	}
+}
+
 // TestHttpAuditGetV1_PathParamConstraints pins the path-param schema shape: the
 // opaque id is a string bounded to [1,256] (a SafeID, NOT format:uuid).
 func TestHttpAuditGetV1_PathParamConstraints(t *testing.T) {

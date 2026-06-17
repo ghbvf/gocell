@@ -54,7 +54,8 @@
         "renewalTime": {
           "type": ["string", "null"],
           "format": "date-time",
-          "maxLength": 64
+          "maxLength": 64,
+          "description": "Next scheduled certificate renewal time. null when not yet scheduled / unknown; the key is always present (stable column set, #1875)."
         }
       }
     }

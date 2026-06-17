@@ -1500,8 +1500,11 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 		// A nullable scalar column becomes a pointer so its zero value is a distinct
 		// nil that marshals to JSON null — three states (value / null / <REDACTED>)
 		// stay distinguishable in the masked projection view (#1875), extending the
-		// optional-bool→*bool convention to format-constrained columns.
-		if nullable {
+		// optional-bool→*bool convention to format-constrained columns. The
+		// HasPrefix guard avoids a double pointer when the type is ALREADY a pointer
+		// (e.g. an optional bool that the block above converted to *bool): nil already
+		// expresses "no value", so a nullable optional bool stays *bool, not **bool.
+		if nullable && !strings.HasPrefix(goType, "*") {
 			goType = "*" + goType
 		}
 

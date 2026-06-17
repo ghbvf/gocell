@@ -682,8 +682,10 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // before being returned to API consumers.
 //
 // Principal/Observability exposure (issue #1229 §4 + #1219): SubjectID,
-// CorrelationID and OccurredAt are surfaced (additive, omitempty — empty/zero
-// for rows predating PR-A2). CorrelationID is an opaque cross-cell correlation
+// CorrelationID and OccurredAt are surfaced. OccurredAt is a nullable column
+// (*string): a zero producer-clock time (rows predating PR-A2) maps to nil → wire
+// JSON null, with the key always present (full column set, #1875). CorrelationID
+// is an opaque cross-cell correlation
 // id (NOT in pkg/redaction's sensitive-key set), so projecting it is safe and
 // lets consumers stitch an audited action back to its originating request.
 //

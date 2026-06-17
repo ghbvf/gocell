@@ -21,6 +21,8 @@ func TestParse_NullableType(t *testing.T) {
 		{name: "scalar then null", typeJSON: `["string", "null"]`, wantType: "string", wantNullable: true},
 		{name: "null then scalar", typeJSON: `["null", "string"]`, wantType: "string", wantNullable: true},
 		{name: "integer nullable", typeJSON: `["integer", "null"]`, wantType: "integer", wantNullable: true},
+		{name: "boolean nullable", typeJSON: `["boolean", "null"]`, wantType: "boolean", wantNullable: true},
+		{name: "number nullable", typeJSON: `["number", "null"]`, wantType: "number", wantNullable: true},
 		{name: "plain string not nullable", typeJSON: `"string"`, wantType: "string", wantNullable: false},
 		{name: "two real types still unsupported", typeJSON: `["string", "integer"]`, wantErr: true},
 		{name: "single-element array unsupported", typeJSON: `["string"]`, wantErr: true},

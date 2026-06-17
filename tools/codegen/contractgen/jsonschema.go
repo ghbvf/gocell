@@ -253,8 +253,8 @@ func fillType(s *Schema, rawNode map[string]any, loc string) error {
 	case []any:
 		scalar, ok := nullableScalarType(tv)
 		if !ok {
-			return fmt.Errorf("contractgen/jsonschema: unsupported keyword \"type\" as array at %s "+
-				"(only [\"<scalar>\", \"null\"] is accepted)", loc)
+			return fmt.Errorf("contractgen/jsonschema: unsupported \"type\" array %v at %s "+
+				"(only [\"<scalar>\", \"null\"] is accepted)", tv, loc)
 		}
 		s.Type = scalar
 		s.Nullable = true

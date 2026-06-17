@@ -45,6 +45,39 @@ func TestNullableField_JSONTag_GoType(t *testing.T) {
 	}
 }
 
+// TestNullableField_GoType_PointerEdges pins the pointer-derivation edges of a
+// nullable column (#1875): (a) a nullable named string enum becomes *<EnumType>
+// (the pointer wraps the named type, not a bare string); (b) a nullable OPTIONAL
+// bool stays *bool — NOT **bool — because the optional-bool→*bool conversion
+// already made it a pointer and the nullable guard must not double up.
+func TestNullableField_GoType_PointerEdges(t *testing.T) {
+	t.Parallel()
+	root := &Schema{
+		Type:          "object",
+		Required:      []string{"id"},
+		PropertyOrder: []string{"id", "status", "flag"},
+		Properties: map[string]*Schema{
+			"id":     {Type: "string"},
+			"status": {Type: "string", Enum: []string{"active", "inactive"}, Nullable: true}, // nullable enum → *ResponseDataStatus
+			"flag":   {Type: "boolean", Nullable: true},                                      // nullable optional bool → *bool (not **bool)
+		},
+	}
+	dtos, err := schemaToDTOs("ResponseData", root)
+	if err != nil {
+		t.Fatalf("schemaToDTOs: %v", err)
+	}
+	byName := map[string]DTOField{}
+	for _, f := range dtos[0].Fields {
+		byName[f.Name] = f
+	}
+	if f := byName["Status"]; f.GoType != "*ResponseDataStatus" || !f.Nullable {
+		t.Errorf("Status: GoType=%q Nullable=%v — want *ResponseDataStatus, Nullable=true", f.GoType, f.Nullable)
+	}
+	if f := byName["Flag"]; f.GoType != "*bool" {
+		t.Errorf("Flag: GoType=%q — want *bool (nullable optional bool must NOT become **bool)", f.GoType)
+	}
+}
+
 // TestApplyResponseProjection_FailClosed pins the fail-closed branches of the
 // responseProjection rewrite (epic #1337 PR-12): a marker set on a response that
 // has no projectable `data` resource is a codegen error, never a silent no-op —
@@ -258,10 +291,17 @@ func TestToMap_FullColumnSet(t *testing.T) {
 	}
 
 	// NO conditional omission anywhere in the generated ToMap — the omitempty
-	// fission shape (#2159) must never reappear.
-	if i := strings.Index(norm, "func (i ResponseData) ToMap()"); i < 0 {
+	// fission shape (#2159) must never reappear. Scope the search to the ToMap
+	// method body only (up to the next top-level func), not the whole file.
+	start := strings.Index(norm, "func (i ResponseData) ToMap()")
+	if start < 0 {
 		t.Fatal("rendered output is missing the ResponseData ToMap method")
-	} else if strings.Contains(norm[i:], "if ") {
+	}
+	body := norm[start:]
+	if next := strings.Index(body[1:], "func "); next >= 0 {
+		body = body[:next+1]
+	}
+	if strings.Contains(body, "if ") {
 		t.Error("ToMap must not contain any `if` guard — full column set is unconditional (#1875)")
 	}
 }
