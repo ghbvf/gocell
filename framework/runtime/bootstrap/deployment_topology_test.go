@@ -667,24 +667,32 @@ func TestDeploymentTopologySharedNonLoopbackRemoteEndpoint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dt, err := newDeploymentTopology(tc.spec)
-			if err != nil {
-				t.Fatalf("newDeploymentTopology: %v", err)
-			}
-			ep, cells, found := dt.SharedNonLoopbackRemoteEndpoint()
-			if found != tc.wantFound {
-				t.Fatalf("found = %v, want %v", found, tc.wantFound)
-			}
-			if !found {
-				return
-			}
-			if ep != tc.wantEP {
-				t.Errorf("endpoint = %q, want %q", ep, tc.wantEP)
-			}
-			if strings.Join(cells, ",") != strings.Join(tc.wantCells, ",") {
-				t.Errorf("cells = %v, want %v", cells, tc.wantCells)
-			}
+			assertSharedNonLoopbackRemoteEndpoint(t, tc.spec, tc.wantFound, tc.wantEP, tc.wantCells)
 		})
+	}
+}
+
+// assertSharedNonLoopbackRemoteEndpoint resolves spec and checks
+// SharedNonLoopbackRemoteEndpoint against the expectations. Extracted from the
+// table loop so neither function exceeds cognitive-complexity limits.
+func assertSharedNonLoopbackRemoteEndpoint(t *testing.T, spec DeploymentTopologySpec, wantFound bool, wantEP string, wantCells []string) {
+	t.Helper()
+	dt, err := newDeploymentTopology(spec)
+	if err != nil {
+		t.Fatalf("newDeploymentTopology: %v", err)
+	}
+	ep, cells, found := dt.SharedNonLoopbackRemoteEndpoint()
+	if found != wantFound {
+		t.Fatalf("found = %v, want %v", found, wantFound)
+	}
+	if !found {
+		return
+	}
+	if ep != wantEP {
+		t.Errorf("endpoint = %q, want %q", ep, wantEP)
+	}
+	if strings.Join(cells, ",") != strings.Join(wantCells, ",") {
+		t.Errorf("cells = %v, want %v", cells, wantCells)
 	}
 }
 

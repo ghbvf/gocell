@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
 )
 
@@ -34,26 +36,14 @@ func TestForCell(t *testing.T) {
 			t.Parallel()
 			got, err := spiffeid.ForCell(tc.trustDomain, tc.cell)
 			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("ForCell(%q,%q) = %v, want error", tc.trustDomain, tc.cell, got)
-				}
+				require.Error(t, err, "ForCell(%q,%q) = %v, want error", tc.trustDomain, tc.cell, got)
 				return
 			}
-			if err != nil {
-				t.Fatalf("ForCell(%q,%q) unexpected error: %v", tc.trustDomain, tc.cell, err)
-			}
-			if got.String() != tc.wantString {
-				t.Fatalf("String() = %q, want %q", got.String(), tc.wantString)
-			}
-			if got.TrustDomain() != tc.trustDomain {
-				t.Fatalf("TrustDomain() = %q, want %q", got.TrustDomain(), tc.trustDomain)
-			}
-			if got.Cell() != tc.cell {
-				t.Fatalf("Cell() = %q, want %q", got.Cell(), tc.cell)
-			}
-			if got.IsZero() {
-				t.Fatalf("IsZero() = true for a constructed ID")
-			}
+			require.NoError(t, err, "ForCell(%q,%q)", tc.trustDomain, tc.cell)
+			require.Equal(t, tc.wantString, got.String())
+			require.Equal(t, tc.trustDomain, got.TrustDomain())
+			require.Equal(t, tc.cell, got.Cell())
+			require.False(t, got.IsZero(), "IsZero() = true for a constructed ID")
 		})
 	}
 }
@@ -233,19 +223,13 @@ func TestFromURIs(t *testing.T) {
 			t.Parallel()
 			got, ok, err := spiffeid.FromURIs(tc.uris)
 			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("FromURIs = (%v,%v,nil), want error", got, ok)
-				}
+				require.Error(t, err, "FromURIs = (%v,%v,nil), want error", got, ok)
 				return
 			}
-			if err != nil {
-				t.Fatalf("FromURIs unexpected error: %v", err)
-			}
-			if ok != tc.wantOK {
-				t.Fatalf("FromURIs ok = %v, want %v", ok, tc.wantOK)
-			}
-			if ok && got.Cell() != tc.wantCel {
-				t.Fatalf("FromURIs cell = %q, want %q", got.Cell(), tc.wantCel)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantOK, ok, "FromURIs ok")
+			if ok {
+				require.Equal(t, tc.wantCel, got.Cell(), "FromURIs cell")
 			}
 		})
 	}
