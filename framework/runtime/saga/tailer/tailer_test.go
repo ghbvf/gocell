@@ -419,34 +419,53 @@ func TestTailer_DrainHeadError(t *testing.T) {
 // TestTailer_NilDepErrRedaction verifies the required-dependency constructor
 // error keeps the internal dependency name off the wire (#1884): the dep name
 // flows only through the server-only InternalDetails channel, never into the
-// public Details that a 4xx response surfaces.
+// public Details that a 4xx response surfaces. nilDepErr is the single function
+// reached by every required-dep guard, so the table covers both guard styles —
+// an interface dep (replay, validation.IsNilInterface) and the func dep (apply,
+// == nil) — to prove neither leaks the dep name.
 func TestTailer_NilDepErrRedaction(t *testing.T) {
 	clk := clockmock.New(time.Unix(1000, 0))
 	src := &fakeSource{}
 	store := projection.NewMemOwnerCheckpointStore()
 	apply := func(context.Context, projection.ProjectionEvent) error { return nil }
-	// nil replay dependency triggers nilDepErr("replay").
-	_, err := NewTailer(clk, nil, src, store, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj)
-	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		t.Fatalf("NewTailer err = %v, want *errcode.Error", err)
+	locker := newTestLocker(t, clk)
+
+	cases := []struct {
+		dep     string
+		newCall func() (*Tailer, error)
+	}{
+		{"replay", func() (*Tailer, error) {
+			return NewTailer(clk, nil, src, store, fakeTxRunner{}, apply, locker, testCell, testProj)
+		}},
+		{"apply", func() (*Tailer, error) {
+			return NewTailer(clk, src, src, store, fakeTxRunner{}, nil, locker, testCell, testProj)
+		}},
 	}
-	// Public wire surface must not carry the internal dependency name. FindAttr
-	// searches only e.Details (public); ok==false proves no leak.
-	if _, ok := ec.FindAttr("dependency"); ok {
-		t.Errorf("dependency name leaked to public Details: %+v", ec.Details)
-	}
-	// The dep name remains available server-side for diagnosis.
-	var internalDep string
-	for _, d := range ec.InternalDetails {
-		if d.Key() == "dependency" {
-			if s, ok := d.Value().(string); ok {
-				internalDep = s
+	for _, tc := range cases {
+		t.Run(tc.dep, func(t *testing.T) {
+			_, err := tc.newCall()
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("NewTailer err = %v, want *errcode.Error", err)
 			}
-		}
-	}
-	if internalDep != "replay" {
-		t.Errorf("internal dependency attr = %q, want %q", internalDep, "replay")
+			// Public wire surface must not carry the internal dependency name.
+			// FindAttr searches only e.Details (public); ok==false proves no leak.
+			if _, ok := ec.FindAttr("dependency"); ok {
+				t.Errorf("dependency name leaked to public Details: %+v", ec.Details)
+			}
+			// The dep name remains available server-side for diagnosis.
+			var internalDep string
+			for _, d := range ec.InternalDetails {
+				if d.Key() == "dependency" {
+					if s, ok := d.Value().(string); ok {
+						internalDep = s
+					}
+				}
+			}
+			if internalDep != tc.dep {
+				t.Errorf("internal dependency attr = %q, want %q", internalDep, tc.dep)
+			}
+		})
 	}
 }
 

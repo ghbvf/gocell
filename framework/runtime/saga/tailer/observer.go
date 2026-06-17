@@ -77,8 +77,10 @@ const (
 	DrainOK DrainResult = "ok"
 	// DrainHeadError means the head-bound fetch (replay.Head) failed, so the tick's
 	// replay upper bound is unknown and the drain aborts before any replay — no
-	// event applied, checkpoint untouched. Distinct from DrainStoreError (which is
-	// specifically a checkpoint LoadOffset fault).
+	// event applied, checkpoint untouched. Head is fetched before LoadOffset in
+	// drain(), so a head failure aborts before the checkpoint is even loaded —
+	// distinct from DrainStoreError (which is specifically a checkpoint LoadOffset
+	// fault).
 	DrainHeadError DrainResult = "head_error"
 	// DrainStoreError means the checkpoint LoadOffset failed (storage fault).
 	DrainStoreError DrainResult = "store_error"
