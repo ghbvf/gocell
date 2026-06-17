@@ -1,6 +1,6 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 容量装箱排序：每 wave ≤4、pri 优先、wave 内切并行组/串行链、OPEN 重排、已完成不动、超窗/溢出不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /ship 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 容量装箱排序：每 wave ≤4、pri 优先、wave 内切并行组/串行链、OPEN 重排、已完成不动、装箱溢出顺延下一 wave、仅超窗(Wave 4 后仍未分配)不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /ship 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
 argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -112,7 +112,7 @@ gh issue edit <epic#> --body "$(...更新 ## 实施顺序 段...)"
 # 回评通知（一行 + 标记）
 gh issue comment <epic#> --body "$(cat <<'C'
 <!-- pm:epic-wave -->
-🌊 Wave 滚动更新：每 wave ≤4 容量装箱，OPEN 按 pri 排 Wave 1-4（并行组可同时跑 / 串行链按序），已完成不动，超窗(>W4 或装箱溢出)暂不入字段。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
+🌊 Wave 滚动更新：每 wave ≤4 容量装箱，OPEN 按 pri 排 Wave 1-4（并行组可同时跑 / 串行链按序），已完成不动；装箱溢出顺延下一 wave（仍入字段），仅超窗（装箱到 Wave 4 后仍未分配）暂不入字段。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
 C
 )"
 ```
