@@ -52,17 +52,21 @@
 //
 // A consuming cell wires this Reconciler by:
 //  1. implementing DeviceCertRepository — ListRenewalCandidates (scan State=active
-//     certs with NotAfter <= cutoff) and ApplyFenced (the monotonic-epoch CAS that
-//     persists the cert row AND writes the cert-issued L2 outbox entry in ONE
-//     transaction — see ApplyFenced's contract);
-//  2. NewReconciler(clk, repo, signer, authorizer, policy, logger);
+//     certs with NotAfter <= cutoff, capped at the limit = Policy.BatchSize) and
+//     ApplyFenced (the monotonic-epoch CAS that persists the cert row AND writes
+//     the cert-issued L2 outbox entry in ONE transaction — see ApplyFenced's
+//     contract);
+//  2. NewReconciler(clk, repo, signer, authorizer, policy, logger) — Policy
+//     requires a positive BatchSize (the per-sweep workload bound);
 //  3. binding it on a reconcile.Loop in the composition root:
 //     reconcile.New(rec, SingleTenant()|TenantScoped()).WithTrigger(
 //     reconcile.TickerTrigger(clk, interval)).WithLeader(le).WithFencedRepo(repo).
-//     WithoutDefaultRequeue().Build() — a TickerTrigger is the intended driver
-//     (this Reconciler always does a full bounded sweep; entity-specific Requests
-//     are ignored), and WithLeader+WithFencedRepo are REQUIRED (Reconcile fails
-//     closed without a fenced writer).
+//     WithoutDefaultRequeue().Build() — a TickerTrigger is the intended periodic
+//     driver (this Reconciler does a bounded full sweep; entity-specific Requests
+//     are ignored). WithoutDefaultRequeue is fine: when a sweep returns a FULL
+//     batch the Reconciler self-requeues (an explicit RequeueAfter, still honored)
+//     to drain the backlog faster than the tick. WithLeader+WithFencedRepo are
+//     REQUIRED (Reconcile fails closed without a fenced writer).
 //
 // The Signer / Authorizer are bound by the certsigning composition root (a later
 // epic PR). Specific-certificate lookup (by CertScope, never a bare serial — the

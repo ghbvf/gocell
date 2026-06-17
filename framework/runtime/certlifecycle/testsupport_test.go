@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	testTenant = "11111111-1111-1111-1111-111111111111"
-	testIssuer = "ca-test"
+	testTenant  = "11111111-1111-1111-1111-111111111111"
+	testTenant2 = "22222222-2222-2222-2222-222222222222"
+	testIssuer  = "ca-test"
 )
 
 // errFake is a reusable error for fake failure injection.
@@ -156,6 +157,7 @@ type fakeRepo struct {
 	candidates []cl.Candidate
 	listErr    error
 	listCalls  int
+	lastLimit  int
 }
 
 func newFakeRepo(candidates ...cl.Candidate) *fakeRepo {
@@ -165,20 +167,31 @@ func newFakeRepo(candidates ...cl.Candidate) *fakeRepo {
 	}
 }
 
-func (r *fakeRepo) ListRenewalCandidates(context.Context, time.Time) ([]cl.Candidate, error) {
+func (r *fakeRepo) ListRenewalCandidates(_ context.Context, _ time.Time, limit int) ([]cl.Candidate, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.listCalls++
+	r.lastLimit = limit
 	if r.listErr != nil {
 		return nil, r.listErr
 	}
-	return append([]cl.Candidate(nil), r.candidates...), nil
+	out := append([]cl.Candidate(nil), r.candidates...)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit] // honor the scan cap like a real SQL LIMIT
+	}
+	return out, nil
 }
 
 func (r *fakeRepo) listCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.listCalls
+}
+
+func (r *fakeRepo) lastListLimit() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastLimit
 }
 
 var _ cl.DeviceCertRepository = (*fakeRepo)(nil)
@@ -208,9 +221,16 @@ func firstMutation(t *testing.T, r *fakeRepo) *cl.IssuedMutation {
 // window. Caller controls due-ness via the window relative to the test clock.
 func activeCandidate(t *testing.T, deviceID string, notBefore, notAfter time.Time) cl.Candidate {
 	t.Helper()
+	return activeCandidateForTenant(t, testTenant, deviceID, notBefore, notAfter)
+}
+
+// activeCandidateForTenant is activeCandidate scoped to an explicit tenant — used
+// to prove two tenants sharing a deviceID get distinct fenced entity keys.
+func activeCandidateForTenant(t *testing.T, tenantID, deviceID string, notBefore, notAfter time.Time) cl.Candidate {
+	t.Helper()
 	return cl.Candidate{
 		DeviceID:   deviceID,
-		TenantID:   tenant.TenantID(testTenant),
+		TenantID:   tenant.TenantID(tenantID),
 		IssuerID:   testIssuer,
 		Serial:     "00aa",
 		Epoch:      1,

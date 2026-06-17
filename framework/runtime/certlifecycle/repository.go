@@ -17,8 +17,10 @@ import (
 // chokepoint (#1821), so the tenant dimension MUST come from the scanned row
 // (TenantID below), never from ctx.
 type Candidate struct {
-	// DeviceID is the entity locator: the FencedWriter Write key and the cert
-	// subject device.
+	// DeviceID is the cert subject device. It is NOT the fenced-write key on its
+	// own: the FencedWriter entity key is the composite Candidate.EntityKey
+	// (tenant|issuer|device) so a multi-tenant sweep never collides two tenants
+	// that share a deviceID on one epoch namespace.
 	DeviceID string
 	// TenantID is the isolation domain of this certificate, sourced from the row
 	// (NOT ctx). Typed (tenancy.md FR-003: repo/service APIs carry typed tenant,
@@ -56,6 +58,21 @@ type Candidate struct {
 	URIs        []*url.URL
 }
 
+// EntityKey is the reconcile FencedWriter entity key for this candidate's
+// certificate — the full isolation identity tenant|issuer|device, NOT the bare
+// DeviceID. Encoding all three keeps the monotonic lease-epoch CAS namespace
+// PER-CERTIFICATE so a TenantScoped reconciler never lets two tenants that share
+// a deviceID collide on one epoch space (where one tenant's renewal would
+// stale-reject the other's). For a SingleTenant deployment the deviceID is
+// already globally unique, so the extra dimensions are harmless. The three
+// components are validated identifiers (canonical-UUID tenant, NewIssuerID /
+// NewDeviceID-shaped issuer and device), none of which can contain the '|'
+// separator, so the encoding is unambiguous. This is also the entityID the
+// consumer's ApplyFenced receives.
+func (c Candidate) EntityKey() string {
+	return string(c.TenantID) + "|" + c.IssuerID + "|" + c.DeviceID
+}
+
 // IssuedMutation is the payload of the Reconciler's single fenced write. It
 // carries BOTH the persisted certificate material AND every field of the
 // event.deviceidentity.cert-issued.v1 L2 fact, because the consumer's
@@ -79,6 +96,15 @@ type IssuedMutation struct {
 	TenantID tenant.TenantID
 	IssuerID string
 	Serial   string
+	// ActorID is the principal that triggered issuance — a REQUIRED field of the
+	// cert-issued payload schema. Server-side renewal has no request principal, so
+	// the Reconciler stamps the system actor ("system"), which matches the
+	// tenantless system identity the reconcile Loop installs on the ctx (#1821):
+	// the payload's actorId therefore equals the outbox envelope's principal
+	// actorId by construction. The consumer maps this onto the generated payload's
+	// actorId; the framework module cannot import the generated type, so it must
+	// ride on the mutation rather than being derived consumer-side.
+	ActorID string
 	// TargetEpoch is the renewed generation (Candidate.Epoch+1) — the cert epoch
 	// the row advances to and the cert-issued event's epoch. NOTE: this is the
 	// CERT epoch, distinct from the LEASE epoch the FencedWriter passes to
@@ -112,15 +138,18 @@ type IssuedMutation struct {
 // reconcile.FencedWriterFrom(ctx).Write — declaring the method is legal; calling
 // it from outside the sanctioned funnel is not.
 type DeviceCertRepository interface {
-	// ListRenewalCandidates returns all certificates whose NotAfter is at or
-	// before cutoff AND whose State is renewable (active), in a deterministic
-	// order (NotAfter ascending, then DeviceID). It is a bounded full sweep per
-	// tick (the cutoff bounds the scan; there is no LIMIT) — the precise per-cert
-	// 70–90% jitter decision is applied by the Reconciler, not the scan. The
-	// implementation returns only State=active rows: near-expiry / renewing are
-	// computed in-memory by the Reconciler and never persisted, so the consumer
-	// does NOT write those states.
-	ListRenewalCandidates(ctx context.Context, cutoff time.Time) ([]Candidate, error)
+	// ListRenewalCandidates returns certificates whose NotAfter is at or before
+	// cutoff AND whose State is renewable (active), in a deterministic order
+	// (NotAfter ascending, then DeviceID), capped at limit rows (the SQL LIMIT).
+	// The scan is bounded on BOTH axes: the cutoff bounds WHICH certs are due, and
+	// limit bounds HOW MANY a single sweep loads + signs, so a large backlog cannot
+	// load and serially sign every candidate in one tick. The Reconciler drains a
+	// full batch across sweeps (it self-requeues when the returned slice fills the
+	// limit). The precise per-cert 70–90% jitter decision is applied by the
+	// Reconciler, not the scan. The implementation returns only State=active rows:
+	// near-expiry / renewing are computed in-memory by the Reconciler and never
+	// persisted, so the consumer does NOT write those states.
+	ListRenewalCandidates(ctx context.Context, cutoff time.Time, limit int) ([]Candidate, error)
 
 	// ApplyFenced is the reconcile.FencedRepository monotonic-epoch CAS. The Loop
 	// (via FencedWriter) calls it with the LEASE epoch as the fencing token; the

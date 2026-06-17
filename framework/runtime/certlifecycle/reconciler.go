@@ -15,8 +15,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
 
-// Policy holds the cert-lifecycle Reconciler tuning. Both fields must be
-// positive; NewReconciler validates via Policy.validate().
+// Policy holds the cert-lifecycle Reconciler tuning. All fields must be positive;
+// NewReconciler validates via Policy.validate().
 type Policy struct {
 	// MaxLookahead is the scan-cutoff window: ListRenewalCandidates returns certs
 	// with NotAfter <= now+MaxLookahead. It must comfortably exceed 30% of the
@@ -28,6 +28,13 @@ type Policy struct {
 	// within the Authorizer's granted MaxTTL (NewAuthorizedCertRequest enforces
 	// SignTTL <= grant.MaxTTL, else the request is denied).
 	SignTTL time.Duration
+	// BatchSize caps how many candidates ListRenewalCandidates returns (and the
+	// Reconciler loads + serially signs) per sweep — the workload bound the scan
+	// cutoff alone does not provide. A full batch (len == BatchSize) means there is
+	// likely more due work, so the Reconciler self-requeues to drain the backlog
+	// across sweeps rather than signing an unbounded set in one tick. Required
+	// positive (no silent default): the deployment must choose its per-sweep cost.
+	BatchSize int
 }
 
 func (p Policy) validate() error {
@@ -39,8 +46,26 @@ func (p Policy) validate() error {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"certlifecycle.Policy: SignTTL must be positive")
 	}
+	if p.BatchSize <= 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"certlifecycle.Policy: BatchSize must be positive")
+	}
 	return nil
 }
+
+// fullBatchRequeueInterval is how soon the Reconciler re-sweeps after a FULL
+// batch (len(candidates) == Policy.BatchSize), to drain a renewal backlog faster
+// than the TickerTrigger interval without hammering the scan. It is an explicit
+// Result.RequeueAfter, which the Loop honors even under WithoutDefaultRequeue
+// (only the zero-Result default-tick self-requeue is suppressed there).
+const fullBatchRequeueInterval = time.Second
+
+// systemActorID is the cert-issued payload actorId the Reconciler stamps on every
+// renewal. Server-side renewal has no request principal; "system" mirrors the
+// tenantless system identity the reconcile Loop installs on the ctx (#1821,
+// reconcile's systemProducerActor) and projection.SystemPrincipalActor, so the
+// cert-issued payload actorId equals the outbox envelope principal actorId.
+const systemActorID = "system"
 
 // Reconciler is the reusable server-side certificate-lifecycle reconcile.Reconciler.
 // On each tick it sweeps every renewable certificate due for renewal (k8s 70–90%
@@ -67,6 +92,21 @@ func (p Policy) validate() error {
 // runtime/command — "reuse runtime/command" is satisfied at the reconcile-loop
 // archetype level, and the queue active-uniqueness the issue mentions is realized
 // structurally by the fencing CAS, not a command queue.
+//
+// Residual (at-most-once VALID vs at-most-once MINT). The fencing CAS guards the
+// PERSIST/DELIVER boundary: at most one renewed generation is ever persisted to
+// the row and at most one cert-issued event is emitted. It does NOT guard the
+// SIGN side effect, which runs first: Signer.Sign (and a CA's ledger.Record)
+// executes before the fenced Write, so a zombie leader that lost its lease
+// mid-sweep can mint a certificate / record a ledger entry whose subsequent
+// fenced Write is then stale-rejected — a phantom that is never persisted on the
+// row and never delivered to the device, but a wasted serial / spurious ledger
+// row. Losing the lease cancels the lease-scoped ctx (Sign must honor ctx),
+// narrowing but not closing the window. So "at-most-once VALID signing"
+// (persisted + delivered) holds; full at-most-once-MINT hardening (a fenced
+// pre-claim before Sign, or an idempotency-keyed Signer/ledger CAS) is a backlog
+// follow-up under EPIC #1895 (cluster C1) — it also touches certsigning / softca,
+// outside this PR's framework-primitive scope.
 //
 // # System identity / multi-tenant
 //
@@ -142,7 +182,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	now := r.clk.Now()
 	cutoff := now.Add(r.policy.MaxLookahead)
-	candidates, err := r.repo.ListRenewalCandidates(ctx, cutoff)
+	candidates, err := r.repo.ListRenewalCandidates(ctx, cutoff, r.policy.BatchSize)
 	if err != nil {
 		// Transient (DB/scan I/O may recover): errcode.Wrap stamps the Kind so the
 		// Loop classifies it as retryable rather than guessing from a bare error.
@@ -168,14 +208,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		slog.Int("candidates", c.total), slog.Int("renewed", c.renewed),
 		slog.Int("denied", c.denied), slog.Int("skipped", c.skipped),
 		slog.Int("errored", c.errored))
-	return reconcile.Result{}, firstErr
+	if firstErr != nil {
+		// The error path drives backoff/retry (RequeueAfter is ignored when err is
+		// non-nil), so surface the transient error rather than a drain requeue.
+		return reconcile.Result{}, firstErr
+	}
+	if c.total == r.policy.BatchSize {
+		// A full batch means the scan was capped — there is likely more due work.
+		// Self-requeue to drain the backlog promptly (honored despite
+		// WithoutDefaultRequeue); the next sweep skips the certs renewed this pass
+		// (their NotAfter advanced beyond the cutoff).
+		return reconcile.Result{RequeueAfter: fullBatchRequeueInterval}, nil
+	}
+	return reconcile.Result{}, nil
 }
 
 // sweepCounts aggregates per-candidate outcomes of one Reconcile sweep for the
-// summary log. denied counts authorization deny/error (the security-relevant
-// "policy said no"); skipped counts benign non-renewals (not-due, non-renewable
-// state, malformed row, constraint violation, lost fencing race); errored counts
-// transient failures that also bubble to the Loop.
+// summary log. denied counts policy denial (the security-relevant "policy said
+// no": a non-granted SignConstraints, or a malformed enrollment claim); skipped
+// counts benign non-renewals (not-due, non-renewable state, malformed row,
+// constraint violation, lost fencing race); errored counts transient failures
+// that also bubble to the Loop (sign failure, authorizer/PDP unavailable,
+// unexpected fenced-write error).
 type sweepCounts struct {
 	total, renewed, denied, skipped, errored int
 }
@@ -218,7 +272,13 @@ func (r *Reconciler) renew(ctx context.Context, fw reconcile.FencedWriter, cand 
 		c.skipped++
 		return nil
 	}
-	grant, ok := r.authorize(ctx, scope, subject, cand)
+	grant, ok, err := r.authorize(ctx, scope, subject, cand)
+	if err != nil {
+		// Authorizer/PDP unavailable (not a policy deny) — bubble transient so the
+		// Loop backs off and re-sweeps; do NOT sign, existing cert untouched.
+		c.errored++
+		return err
+	}
 	if !ok {
 		c.denied++
 		return nil // fail-closed deny: do NOT sign, existing cert untouched
@@ -242,30 +302,37 @@ func (r *Reconciler) renew(ctx context.Context, fw reconcile.FencedWriter, cand 
 	return r.persist(ctx, fw, cand, issued, c)
 }
 
-// authorize evaluates the enrollment claim fail-closed. It returns ok=false (and
-// logs) on any denial — an error, or a non-granted SignConstraints — so the
-// caller skips signing.
+// authorize evaluates the enrollment claim fail-closed, distinguishing three
+// outcomes so the caller can classify them correctly:
+//   - (grant, true, nil)  — granted: proceed to sign.
+//   - (_, false, nil)     — policy DENY (not granted) or a malformed claim from
+//     the row: fail-closed skip, counted as denied; no retry.
+//   - (_, false, err)     — authorizer/PDP UNAVAILABLE: a transient error the
+//     caller bubbles so the Loop backs off. An outage must NOT be silently folded
+//     into "denied" (which would never retry).
 func (r *Reconciler) authorize(
 	ctx context.Context, scope certsigning.CertScope, subject certsigning.DeviceSubject, cand Candidate,
-) (certsigning.SignConstraints, bool) {
+) (certsigning.SignConstraints, bool, error) {
 	claim, err := certsigning.NewEnrollmentClaim(scope, subject)
 	if err != nil {
+		// Malformed claim from already-validated scope/subject — not retryable; skip.
 		r.logger.Error("certlifecycle: build enrollment claim failed",
 			slog.String("device_id", cand.DeviceID), slog.Any("err", err))
-		return certsigning.SignConstraints{}, false
+		return certsigning.SignConstraints{}, false, nil
 	}
 	grant, err := r.authorizer.AuthorizeEnroll(ctx, claim)
 	if err != nil {
-		r.logger.Warn("certlifecycle: renewal authorization error — skipping",
+		r.logger.Warn("certlifecycle: renewal authorization unavailable — will retry",
 			slog.String("device_id", cand.DeviceID), slog.Any("err", err))
-		return certsigning.SignConstraints{}, false
+		return certsigning.SignConstraints{}, false, errcode.Wrap(errcode.KindUnavailable, errcode.ErrInternal,
+			"certlifecycle: renewal authorization unavailable", err)
 	}
 	if !grant.Granted() {
 		r.logger.Warn("certlifecycle: renewal authorization denied — skipping",
 			slog.String("device_id", cand.DeviceID))
-		return certsigning.SignConstraints{}, false
+		return certsigning.SignConstraints{}, false, nil
 	}
-	return grant, true
+	return grant, true, nil
 }
 
 // buildAuthorizedRequest rebuilds the CertRequest from the stored CSR and funnels
@@ -314,6 +381,7 @@ func (r *Reconciler) persist(
 		TenantID:    cand.TenantID,
 		IssuerID:    cand.IssuerID,
 		Serial:      issued.Serial().String(),
+		ActorID:     systemActorID,
 		TargetEpoch: cand.Epoch + 1,
 		CertDER:     issued.DER(),
 		ChainDER:    issued.Chain(),
@@ -321,7 +389,7 @@ func (r *Reconciler) persist(
 		NotAfter:    issued.NotAfter(),
 		NewState:    StateActive(),
 	}
-	if err := fw.Write(ctx, cand.DeviceID, mut); err != nil {
+	if err := fw.Write(ctx, cand.EntityKey(), mut); err != nil {
 		if errors.Is(err, reconcile.ErrFencedWriteStale) {
 			r.logger.Info("certlifecycle: lost fencing race — another replica renewed",
 				slog.String("device_id", cand.DeviceID), slog.Uint64("target_epoch", mut.TargetEpoch))
@@ -333,9 +401,11 @@ func (r *Reconciler) persist(
 			"certlifecycle: persist renewed certificate failed", err)
 	}
 	c.renewed++
+	// device_id is the operational correlation key; the cert serial is device PII
+	// (ADR #1895) and is deliberately NOT logged here.
 	r.logger.Info("certlifecycle: renewed certificate",
 		slog.String("device_id", cand.DeviceID), slog.Uint64("epoch", mut.TargetEpoch),
-		slog.String("serial", mut.Serial), slog.Time("not_after", mut.NotAfter))
+		slog.Time("not_after", mut.NotAfter))
 	return nil
 }
 

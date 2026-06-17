@@ -66,7 +66,8 @@ func TestReconcileLoopMultiReplicaFencing(t *testing.T) {
 
 	now := time.Now()
 	nb, na := dueWindow(now)
-	repo := newFakeRepo(activeCandidate(t, "device-1", nb, na))
+	cand := activeCandidate(t, "device-1", nb, na)
+	repo := newFakeRepo(cand)
 	signer := newFakeSigner(t, now, now.Add(testSignTTL))
 	authz := &fakeAuthorizer{grant: grantAll(t, testSignTTL)}
 	rec := newReconciler(t, repo, signer, authz)
@@ -76,12 +77,13 @@ func TestReconcileLoopMultiReplicaFencing(t *testing.T) {
 	defer stop()
 	testwait.External(t, "new-leader-renewed", func() bool { return len(repo.mutations()) == 1 }, pollTimeout, pollTick)
 
-	if got := repo.LastEpoch("device-1"); got <= tokOld.Epoch {
+	// The Reconciler writes under the composite entity key (tenant|issuer|device).
+	if got := repo.LastEpoch(cand.EntityKey()); got <= tokOld.Epoch {
 		t.Fatalf("live write epoch %d must exceed the old leader's epoch %d (handoff must bump)", got, tokOld.Epoch)
 	}
 
 	// Zombie old leader replays an in-flight write at the STALE epoch — rejected.
-	accepted, err := repo.ApplyFenced(ctx, "device-1", tokOld.Epoch, "zombie-renewal")
+	accepted, err := repo.ApplyFenced(ctx, cand.EntityKey(), tokOld.Epoch, "zombie-renewal")
 	if err != nil {
 		t.Fatalf("zombie write: %v", err)
 	}

@@ -67,11 +67,24 @@ func (s State) String() string { return s.v }
 func (s State) IsZero() bool { return s.v == "" }
 
 // renewable reports whether the Reconciler should attempt to renew a certificate
-// in this state. Only active certificates are renewed: revoked is a terminal the
-// Reconciler observes-and-skips, and the pre-active (requested/issued) and
-// derived/terminal (near-expiry/renewing/rotated/expired) states are out of the
-// PR-7 renewal sweep's scope. This is the single behavioral gate the Reconciler
-// consults so a revoked/pre-active cert is never re-signed.
+// in this state. ONLY active is renewable, and that is coherent with the rest of
+// the model — it is not a missed case:
+//
+//   - The scan (ListRenewalCandidates) returns ONLY State=active rows, so a
+//     persisted non-active state never reaches this gate in production; the gate
+//     is defense-in-depth that keeps a revoked / pre-active cert from ever being
+//     re-signed even if a consumer hands one to reconcileOne.
+//   - "Expired-cert recovery" does NOT mean renewing a State=expired row. A cert
+//     past its NotAfter is still State=active until something flips it, so the
+//     Reconciler recovers it via the active + past-NotAfter path in reconcileOne
+//     (it re-signs the stored CSR). expired/rotated are event/observation
+//     vocabulary, not persisted renewal inputs (see the State type doc); a row
+//     persisted as expired is intentionally left for an operator/EST path, not
+//     auto-renewed here.
+//   - near-expiry / renewing are DERIVED / in-flight (computed per tick, never
+//     persisted), so they are never a stored gate input either.
+//
+// This is the single behavioral gate the Reconciler consults.
 func (s State) renewable() bool { return s.v == stateActive }
 
 // ParseState resolves a persisted-row string to its State, reporting ok=false
