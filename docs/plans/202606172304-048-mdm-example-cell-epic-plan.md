@@ -141,8 +141,9 @@ level-triggered + leader-elect + `LeaseToken.Epoch` fencing。阶段 1–6 喂�
 > APNs=Apple、FCM=Google、WSTEP 等厂商专有 API ✗）；② **非单一产品线专属**——≥2 消费方或设计上可复用。
 > 任一不满足 → 归消费方模块（MDM 等）自建。此判据的 durable 落点是 PR-18 的 MDM ADR。**评级诚实分层**：
 > 模块边界是 **Hard** 但只锁一个向量——`externalcells/mdm` 自有 module，framework module 不可 import 它
-> （go module 依赖不可循环）；「有人直接往 framework `adapters/`/`cellmodules/` 新增厂商 wrapper」这一向量靠
-> review / depguard 拦（**Medium**），不由模块边界自动保证。判据 markdown 本身只是 **Soft** 辅助。
+> （go module 依赖不可循环）；「有人直接往 framework `adapters/`/`cellmodules/` 新增厂商 wrapper」这一向量
+> **当前仅 Soft（本判据 markdown）+ review 约束**——**尚无** depguard/archtest，故**不是** Medium；要升 Medium 须新增
+> 厂商-forbidden depguard/archtest 并登记 enforcement ID（backlog，未立项）。
 
 ### 3.1 框架该补 → 拆独立 backlog epic（**不混进示例 PR**）
 
@@ -192,6 +193,11 @@ postgres/split-topology（P5）依赖全 cell 就位。
 
 **TDD 纪律**（严格红→绿）：每个 PR 的 contract test + archtest 先以 Wave commit 落 RED，再让实施转 GREEN。
 每个 PR 带契约扇出矩阵（`.claude/rules/gocell/contract-fanout.md`）。范围切割的 carve-out 必须同步 backlog。
+
+> **active-ize 责任归属（对齐 §6.1 决策点）**：本表及 §2.1 中「serve/publish framework-owned `_framework` 契约 →
+> active-ize」的责任归属是 **§6.1 决策点**——per ADR-1939，draft→active 需同步 framework serving harness wire +
+> `FRAMEWORK-OWNED-CONTRACT-SCOPED-01` serving 扫描扩展 + Journey 覆盖，**gated on 与框架 owner 对齐**；非外部 MDM
+> cell 单方承诺。示例提供实现/消费，active 化经 framework serving 前置项（PR-1/PR-2/PR-12 的 active-ize 据此理解）。
 
 | PR | Phase | 内容 | 复用/新建 关键 | 主要原语 |
 |---|---|---|---|---|
