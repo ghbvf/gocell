@@ -60,6 +60,7 @@ __debug_bin*
 tmp/
 *.tmp
 .codex-tmp/
+.codex-backups/
 
 # Local env files (e.g. tests/e2e/.env.e2e); .env.e2e.example is committed
 *.env.e2e
