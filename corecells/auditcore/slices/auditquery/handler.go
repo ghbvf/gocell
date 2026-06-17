@@ -3,6 +3,7 @@ package auditquery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -519,15 +520,65 @@ type GetAdapter struct {
 	S *Service
 }
 
-// Get implements auditget.Service. The path-param id is already length-bounded
-// (1..256) by handler_gen; this adapter additionally validates it as an
-// idutil.SafeID (charset) — the audit entry id is an opaque backend-agnostic handle
-// treated exactly like the list's actorId/subjectId/traceId filters, NOT a
-// format:uuid, so a malformed id is a 400 here (the store separately parse-guards
-// the PG uuid lookup). Exactly ONE visibility mint per request (mirrors ListAdapter
-// via deriveAuditVisibility): super-admin routes to GetByIDCrossTenant, all others
-// to the tenant-scoped GetByID.
+// Get implements auditget.Service. It is a thin typed-response-envelope wrapper
+// around get(): the generated contract (iface_gen.go) and cell-patterns.md §Typed
+// response envelope require declared business 4xx/5xx to be returned as the
+// generated typed response objects (Get400/401/403/404/501ErrorResponse), reserving
+// the Go error return for UNDECLARED framework 5xx (panics, infra faults, the
+// KindInternal non-canonical-tenant invariant break). get() produces a raw errcode;
+// mapGetError converts the declared kinds to their typed envelope, and any other
+// kind falls through to the error return. The Kind→status mapping is identical to
+// the framework httputil.WriteError fallback, so wire status codes are unchanged.
 func (a GetAdapter) Get(ctx context.Context, req *auditget.Request) (auditget.GetResponseObject, error) {
+	resp, err := a.get(ctx, req)
+	if err != nil {
+		if mapped := mapGetError(err); mapped != nil {
+			return mapped, nil
+		}
+		return nil, err // undeclared framework 5xx (e.g. KindInternal)
+	}
+	return resp, nil
+}
+
+// mapGetError maps a declared business errcode to its generated typed response
+// envelope (http.audit.get.v1 declares 400/401/403/404/501). Returns nil for an
+// undeclared kind (e.g. KindInternal) so the caller surfaces it as a framework 5xx
+// via the Go error return — the split the generated iface_gen.go godoc and
+// cell-patterns.md §Typed response envelope mandate. Each declared status maps from
+// a distinct errcode Kind (the same Kind→status the framework WriteError would
+// derive), so the typed envelope changes which code path writes the status, not the
+// status itself.
+func mapGetError(err error) auditget.GetResponseObject {
+	var ce *errcode.Error
+	if !errors.As(err, &ce) {
+		return nil
+	}
+	switch ce.Kind {
+	case errcode.KindInvalid:
+		return auditget.Get400ErrorResponse{Body: *ce}
+	case errcode.KindUnauthenticated:
+		return auditget.Get401ErrorResponse{Body: *ce}
+	case errcode.KindPermissionDenied:
+		return auditget.Get403ErrorResponse{Body: *ce}
+	case errcode.KindNotFound:
+		return auditget.Get404ErrorResponse{Body: *ce}
+	case errcode.KindNotImplemented:
+		return auditget.Get501ErrorResponse{Body: *ce}
+	default:
+		return nil
+	}
+}
+
+// get runs the single-entry read business logic and returns a raw errcode on the
+// declared-status / framework-5xx paths (Get wraps it into the typed envelope). The
+// path-param id is already length-bounded (1..256) by handler_gen; this adapter
+// additionally validates it as an idutil.SafeID (charset) — the audit entry id is an
+// opaque backend-agnostic handle treated exactly like the list's actorId/subjectId/
+// traceId filters, NOT a format:uuid, so a malformed id is a 400 here (the store
+// separately parse-guards the PG uuid lookup). Exactly ONE visibility mint per
+// request (mirrors ListAdapter via deriveAuditVisibility): super-admin routes to
+// GetByIDCrossTenant, all others to the tenant-scoped GetByID.
+func (a GetAdapter) get(ctx context.Context, req *auditget.Request) (auditget.GetResponseObject, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
@@ -588,7 +639,7 @@ func (a GetAdapter) getEntry(
 		return a.S.GetByIDCrossTenant(ctx, vr.ctv, id)
 	}
 	// Tenant axis (#1618): typed tenant scope re-parsed from the authenticated
-	// principal (guaranteed non-empty — the empty case is rejected in Get).
+	// principal (guaranteed non-empty — the empty case is rejected in get).
 	tid, err := tenant.ParseTenantID(p.TenantID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
