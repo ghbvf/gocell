@@ -268,7 +268,8 @@ func auditEntryNotFoundByID() error {
 // takes the explicit typed tenant t (the post-auth http.audit.get.v1 funnel, like
 // Query) rather than the ctx scope: it scans t's chain PLUS the "" system chain
 // (the mem analog of the PG `(tenant_id = ” OR tenant_id = $t)` predicate + FORCE
-// RLS), so a cross-tenant id read finds nothing.
+// RLS). The "" chain is a shared pre-auth/system signal surface; an id from a
+// different non-empty tenant still finds nothing.
 func (m *MemStore) GetByID(_ context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*Entry, error) {
 	if err := ValidateQueryTenant(t); err != nil {
 		return nil, err
@@ -499,8 +500,9 @@ func contentFingerprint(e *Entry) string {
 // tenantMatches mirrors the PG store's tenant predicate `(tenant_id = ” OR
 // tenant_id = $N)` exactly, where $N is the query tenant (#1618). A non-empty
 // query tenant matches its OWN tenant's chain PLUS the tenant-less
-// system/framework chain (entryTenant == "" — e.g. bootstrap.auth.fail), never
-// another tenant's rows. An EMPTY query tenant (queryTenant == "") collapses the
+// system/framework chain (entryTenant == "" — e.g. bootstrap.auth.fail). That
+// empty chain is shared operational signal, while another non-empty tenant's
+// rows never match. An EMPTY query tenant (queryTenant == "") collapses the
 // PG predicate to `tenant_id = ”` → system rows ONLY (NOT "all"): a tenant-less
 // query is fail-closed and can never read another tenant's rows. The query
 // tenant is the mandatory Store.Query t parameter, always non-empty in
