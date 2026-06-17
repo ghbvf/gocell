@@ -244,7 +244,7 @@ var sagaLabelEnumWant = map[string][]string{
 	"LeaderSkipReason":       {"contended", "ctx_canceled", "backend_error"},
 	// tailer enums (EPIC #1609 PR-04).
 	"LockAcquireResult": {"backend_error", "contended", "ctx_canceled"},
-	"DrainResult":       {"apply_error", "ok", "store_error"},
+	"DrainResult":       {"apply_error", "head_error", "ok", "store_error"},
 	"AdvanceResult":     {"error", "ok", "stale_owner"},
 }
 

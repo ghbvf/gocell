@@ -83,20 +83,30 @@ func TestSagaTailerCollector_ObserveLockAcquire_AllReasons(t *testing.T) {
 func TestSagaTailerCollector_ObserveDrainAndAdvance(t *testing.T) {
 	p := newTLSpy()
 	c, _ := obmetrics.NewSagaTailerCollector(p, tlCell)
-	c.ObserveDrain(context.Background(), tlProj, tailer.DrainOK)
-	c.ObserveDrain(context.Background(), tlProj, tailer.DrainStoreError)
-	c.ObserveDrain(context.Background(), tlProj, tailer.DrainApplyError)
-	c.ObserveCheckpointAdvance(context.Background(), tlProj, tailer.AdvanceOK)
-	c.ObserveCheckpointAdvance(context.Background(), tlProj, tailer.AdvanceStaleOwner)
-	c.ObserveCheckpointAdvance(context.Background(), tlProj, tailer.AdvanceError)
+	// Exercise the full DrainResult / AdvanceResult enums so that adding a value
+	// (e.g. DrainHeadError) without covering it here is caught. Expected label
+	// values derive from the same ordered enum slices, so there is no parallel
+	// string list to drift out of sync with the enum.
+	drainResults := []tailer.DrainResult{
+		tailer.DrainOK, tailer.DrainHeadError, tailer.DrainStoreError, tailer.DrainApplyError,
+	}
+	for _, r := range drainResults {
+		c.ObserveDrain(context.Background(), tlProj, r)
+	}
+	advanceResults := []tailer.AdvanceResult{
+		tailer.AdvanceOK, tailer.AdvanceStaleOwner, tailer.AdvanceError,
+	}
+	for _, r := range advanceResults {
+		c.ObserveCheckpointAdvance(context.Background(), tlProj, r)
+	}
 
 	drains := labelValues(p.counterOps["saga_journal_tailer_drain_total"], "result")
-	if !equalStringSlice(drains, []string{"ok", "store_error", "apply_error"}) {
-		t.Errorf("drain results = %v", drains)
+	if want := enumStrings(drainResults); !equalStringSlice(drains, want) {
+		t.Errorf("drain results = %v, want %v", drains, want)
 	}
 	adv := labelValues(p.counterOps["saga_journal_tailer_checkpoint_advance_total"], "result")
-	if !equalStringSlice(adv, []string{"ok", "stale_owner", "error"}) {
-		t.Errorf("advance results = %v", adv)
+	if want := enumStrings(advanceResults); !equalStringSlice(adv, want) {
+		t.Errorf("advance results = %v, want %v", adv, want)
 	}
 }
 
@@ -159,6 +169,17 @@ func labelValues(ops []tlSpyRecord, key string) []string {
 	out := make([]string, len(ops))
 	for i, op := range ops {
 		out[i] = op.labels[key]
+	}
+	return out
+}
+
+// enumStrings maps an ordered slice of string-kind enum values to their wire
+// string forms, so a test's expected label set derives from the same enum
+// constants it exercises (no parallel string list to drift).
+func enumStrings[T ~string](vs []T) []string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = string(v)
 	}
 	return out
 }

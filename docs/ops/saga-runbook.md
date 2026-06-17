@@ -182,7 +182,7 @@ ORDER BY updated_at ASC LIMIT 20;
 **根因（按概率）**：
 
 1. **无 leader 在跑**：没有 tailer pod 抢到 per-projection distlock（部署缩到 0 副本 / 全部副本崩溃）。
-2. **drain 反复失败**：`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——apply 路径或 checkpoint 事务故障。
+2. **drain 反复失败**：`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——apply 路径或 checkpoint 事务故障；`drain_total{result="head_error"}` 持续 >0——saga journal Head 读取失败（journal / DB 不可达），drain 在 replay 前即中止。
 3. **distlock 后端故障**：`lock_acquire_failed_total{reason="backend_error"}` 持续 >0（Redis 不可达），fail-closed → 无 drain。
 
 **诊断**：

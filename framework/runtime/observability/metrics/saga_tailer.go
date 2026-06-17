@@ -21,8 +21,8 @@ import (
 //     the lock-acquire failure rate (drives the alert); contended is benign
 //     multi-process contention.
 //   - saga_journal_tailer_drain_total{cell,projection,result}: drains that made
-//     progress or failed, result ∈ {ok, store_error, apply_error}. Idle caught-up
-//     ticks are not counted.
+//     progress or failed, result ∈ {ok, head_error, store_error, apply_error}.
+//     Idle caught-up ticks are not counted.
 //   - saga_journal_tailer_checkpoint_advance_total{cell,projection,result}:
 //     AdvanceIfOwner attempts, result ∈ {ok, stale_owner, error}. stale_owner is a
 //     benign leader handoff (exclude from advance-failure alerting).
@@ -33,9 +33,9 @@ import (
 //   - saga_journal_tailer_last_success_timestamp_seconds{cell,projection}: unix
 //     time of the last fully-completed tick (drives the stalled-tailer alert).
 //
-// Cardinality discipline: cell × projection × (≤3 reason/result values). Both
-// cell and projection are assembly-enumerated static sets; per-event identities
-// (event id, owner token) are never label dimensions.
+// Cardinality discipline: cell × projection × (bounded reason/result enum
+// values). Both cell and projection are assembly-enumerated static sets;
+// per-event identities (event id, owner token) are never label dimensions.
 type SagaTailerCollector struct {
 	cellID string
 
@@ -81,8 +81,8 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 	if c.drain, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_journal_tailer_drain_total",
 		Help: "Total saga-journal tailer drains that made progress or failed, labeled by result " +
-			"(ok = ≥1 event applied; store_error = checkpoint load failed; apply_error = non-stale " +
-			"replay/apply failure). Idle caught-up ticks are not counted.",
+			"(ok = ≥1 event applied; head_error = head-bound fetch failed; store_error = checkpoint " +
+			"load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.",
 		LabelNames: []string{"cell", "projection", "result"},
 	}, &registered); err != nil {
 		return nil, err
