@@ -2484,4 +2484,3 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
 	}
 }
-

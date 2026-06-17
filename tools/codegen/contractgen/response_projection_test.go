@@ -20,7 +20,7 @@ func TestNullableField_JSONTag_GoType(t *testing.T) {
 		PropertyOrder: []string{"id", "label", "occurredAt"},
 		Properties: map[string]*Schema{
 			"id":         {Type: "string"},
-			"label":      {Type: "string"},                              // plain optional → ",omitempty", string
+			"label":      {Type: "string"},                                      // plain optional → ",omitempty", string
 			"occurredAt": {Type: "string", Format: "date-time", Nullable: true}, // nullable → *string, no omitempty
 		},
 	}
@@ -224,11 +224,11 @@ func TestToMap_FullColumnSet(t *testing.T) {
 				Name:      "ResponseData",
 				EmitToMap: true,
 				Fields: []DTOField{
-					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string"},                                     // required
-					{Name: "Description", JSONTag: "description,omitempty", BareJSONTag: "description", GoType: "string"}, // plain optional
-					{Name: "Tags", JSONTag: "tags,omitempty", BareJSONTag: "tags", GoType: "[]string"},                   // optional slice
-					{Name: "Count", JSONTag: "count,omitempty", BareJSONTag: "count", GoType: "int64"},                   // optional int64
-					{Name: "Payload", JSONTag: "payload,omitempty", BareJSONTag: "payload", GoType: "any"},               // optional any
+					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string"},                                          // required
+					{Name: "Description", JSONTag: "description,omitempty", BareJSONTag: "description", GoType: "string"},     // plain optional
+					{Name: "Tags", JSONTag: "tags,omitempty", BareJSONTag: "tags", GoType: "[]string"},                        // optional slice
+					{Name: "Count", JSONTag: "count,omitempty", BareJSONTag: "count", GoType: "int64"},                        // optional int64
+					{Name: "Payload", JSONTag: "payload,omitempty", BareJSONTag: "payload", GoType: "any"},                    // optional any
 					{Name: "OccurredAt", JSONTag: "occurredAt", BareJSONTag: "occurredAt", GoType: "*string", Nullable: true}, // nullable
 				},
 			},
@@ -259,8 +259,9 @@ func TestToMap_FullColumnSet(t *testing.T) {
 
 	// NO conditional omission anywhere in the generated ToMap — the omitempty
 	// fission shape (#2159) must never reappear.
-	tomap := norm[strings.Index(norm, "func (i ResponseData) ToMap()"):]
-	if strings.Contains(tomap, "if ") {
+	if i := strings.Index(norm, "func (i ResponseData) ToMap()"); i < 0 {
+		t.Fatal("rendered output is missing the ResponseData ToMap method")
+	} else if strings.Contains(norm[i:], "if ") {
 		t.Error("ToMap must not contain any `if` guard — full column set is unconditional (#1875)")
 	}
 }

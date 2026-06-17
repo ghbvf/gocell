@@ -15,7 +15,7 @@ import (
 // PropertyOrder preserves the source order of properties keys for stable diffs.
 type Schema struct {
 	Type                 string             // "string" | "integer" | "number" | "boolean" | "object" | "array"
-	Nullable             bool               // true when the source declared `type: ["<scalar>", "null"]` (JSON-Schema 2020-12 nullable form); Type holds the scalar and the column also accepts JSON null (#1875).
+	Nullable             bool               // source type was [scalar, "null"]; Type is the scalar, column accepts JSON null (#1875)
 	Format               string             // "uuid" | "date-time" | "int64" | ""
 	Properties           map[string]*Schema // type=object
 	PropertyOrder        []string           // source order of property keys

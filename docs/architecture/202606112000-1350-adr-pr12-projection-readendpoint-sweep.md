@@ -42,6 +42,9 @@ coherent change, not ten independent ones.
 
 ### Decision 2 — `ToMap()` emits the full column set (no omitempty fission)
 
+> **Amended 2026-06-18 (#1875)** — this decision was silently reverted by #2159 and
+> is now restored + corrected; see [§Amendment 2026-06-18 — #1875](#amendment-2026-06-18--1875-tomap-full-column-set-restored--nullable-as-absent).
+
 The generated `ToMap()` includes every column (the masking funnel replaces masked
 values with `<REDACTED>`, keeping the key present). For an identity projection this
 means previously-`omitempty` empty fields now serialize as their zero value rather
@@ -49,8 +52,15 @@ than being omitted. This is intentional and aligned with the masking model's
 "no response-shape fission" principle (PR-11): a **stable, uniform column set is a
 security-positive property for a data-permission API** — field *presence* never
 reveals whether a masked column held data, closing a presence-based side channel.
-The response schemas mark these columns optional, so the wider wire shape is
-schema-valid; GoCell is pre-GA with no external wire consumers.
+~~The response schemas mark these columns optional, so the wider wire shape is
+schema-valid~~; GoCell is pre-GA with no external wire consumers.
+
+> **Correction (#1875):** the struck-out claim is FALSE for a column that carries a
+> `format` constraint — its zero value `""` is NOT schema-valid (it violates e.g.
+> `format: date-time`). "optional" only permits *absence*, not an invalid present
+> value, and the full-column-set rule keeps the column *present*. Such columns must
+> be **nullable** (`type: ["<scalar>", "null"]`) so their schema-valid "no value" is
+> JSON `null`. See the amendment.
 
 ## Decision
 
@@ -87,3 +97,73 @@ This exception is scoped to PR-12 and does not relax the EPIC cap for other PRs.
   by the policy Decision in PR-10; it is interim enforcement, not a fallback.
 - The wider (omitempty-free) wire shape for projected responses is the accepted
   steady state; consumers must treat the full column set as always-present.
+
+## Amendment 2026-06-18 — #1875 (`ToMap()` full column set restored + nullable-as-absent)
+
+**Status: Accepted.** This amendment (a) records that Decision 2 was silently
+reverted and is now restored, (b) corrects an over-broad claim in Decision 2, and
+(c) extends it with nullable-as-absent semantics for `format`-constrained columns.
+Per the AI-robust charter (ADR amendment must re-evaluate the threat model), the
+threat matrix below supersedes the relevant Decision-2 prose.
+
+### What happened
+
+PR-12 (#1350) landed Decision 2: `ToMap()` emits the **full, stable column set**
+so field *presence* never leaks whether a masked column held data. #2159
+("fix(codegen): ToMap 尊重 omitempty") then re-introduced omitempty fission into
+`ToMap()` to "align the projection path with `json.Marshal`". That alignment was
+chasing a **wire path that does not exist for projection contracts**: a
+`responseProjection` contract's `Response.Data` is the sealed
+`projection.ResourceProjection`, whose **only** populator is `ToMap()` — the
+`ResponseDataItem` struct is never marshaled directly. So #2159 re-opened the exact
+presence side channel Decision 2 closed — and it did so on the **masked diagnostic
+columns** (`correlationId` / `traceId` / `subjectId`), where the leak matters most —
+without amending this ADR, because the Decision-2 invariant lived only as prose
+(Soft) with no machine guard.
+
+### Decision (restored + extended)
+
+1. **`ToMap()` is the full, stable column set again.** It is a single
+   `return map[string]any{ <one entry per field> }` literal — every column always
+   present, no conditional omission. The omitempty-fission `ToMap()` of #2159 is
+   **superseded**.
+2. **Decision-2 correction.** "optional column ⇒ wire is schema-valid" is false for
+   a `format`-constrained column: its zero value `""` violates the format. "optional"
+   permits *absence*, not an invalid *present* value, and the stable-column rule keeps
+   the column present.
+3. **Nullable-as-absent.** A `format`-constrained optional column is declared
+   `type: ["<scalar>", "null"]` and generated as a pointer (`*T`); its zero is a
+   distinct nil that marshals to JSON `null`. Three states stay distinguishable and
+   all schema-valid: **value** / **`null`** (no value, column present, maskable) /
+   **`<REDACTED>`** (masked). Scope: `http.audit.list.v1` / `http.audit.get.v1`
+   (`occurredAt`), `http.deviceidentity.status.v1` (`renewalTime`),
+   `http.devicestate.v1` (`lastSeenAt`) — the complete set of optional + `format`
+   projection columns at this date.
+
+### Threat matrix (re-evaluated; supersedes Decision-2 prose where it conflicts)
+
+| Threat | Pre-#2159 (Decision 2) | #2159 regression | Post-#1875 (this amendment) |
+|---|---|---|---|
+| Presence side channel on a masked column (absent vs `<REDACTED>` reveals whether it held data) | Closed (key always present) | **OPEN** on `correlationId`/`traceId`/`subjectId` | Closed (key always present) |
+| `format`-column zero on the wire | `occurredAt:""` → **format violation** | Hidden by omission, but side channel re-opened | `occurredAt:null` → schema-valid, key present |
+| Silent recurrence of omitempty fission | Prose-only (Soft) — **#2159 slipped through** | n/a | `PROJECTION-TOMAP-FULL-COLUMN-SET-01` (Medium AST guard) + golden byte-lock (Hard on drift) + wire schema-validation test |
+
+### Enforcement (AI-robust)
+
+- **`PROJECTION-TOMAP-FULL-COLUMN-SET-01`** (Medium, `tools/archtest`): AST-asserts
+  every generated `ToMap()` body is a single full-column-set map literal with no
+  `if`. Strictly stronger than the golden byte-lock — it stays red even if a
+  regressor `-update`s the goldens (which is exactly how #2159 passed). RED/GREEN
+  fixture + anti-vacuity floor. A load-bearing funnel column-set check (Hard) is a
+  documented ceiling, deliberately not built (it couples the PEP to per-contract
+  column constants for a property this static scan already covers).
+- **Wire gate**: `TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates` validates a
+  zero-`occurredAt` response against the nullable schema (`null` accepted, key
+  present) — the schema and the full-column-set `ToMap()` agree on `null`.
+
+### Why not "naive omit" (the rejected alternative #2159 took)
+
+Omitting an empty column makes "key absent" distinguishable from "key present but
+`<REDACTED>`", letting a reader infer the column was empty for masked rows — the
+presence side channel. Nullable-as-absent keeps the column present, so absence is
+never observable, while `null` keeps it schema-valid.

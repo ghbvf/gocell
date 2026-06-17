@@ -64,6 +64,8 @@ import (
 	"go/ast"
 	"go/types"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
 const tomapFullColumnSetFixturePkg = "./tools/archtest/internal/tomapfullcolumnsetfixture"
@@ -102,14 +104,13 @@ func TestProjectionToMapFullColumnSet01(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				for _, decl := range f.Decls {
-					fn, ok := decl.(*ast.FuncDecl)
-					if !ok || !isToMapMethod(fn) {
-						continue
+				scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+					if !isToMapMethod(fn) {
+						return
 					}
 					count++
 					diags = append(diags, toMapFullColumnSetDiags(p, f, fn)...)
-				}
+				})
 			}
 			return nil
 		})
@@ -143,10 +144,9 @@ func TestProjectionToMapFullColumnSet01_ScannerCatchesViolation(t *testing.T) {
 				return nil
 			}
 			for _, f := range p.Files {
-				for _, decl := range f.Decls {
-					fn, ok := decl.(*ast.FuncDecl)
-					if !ok || !isToMapMethod(fn) {
-						continue
+				scanner.EachInChildren[ast.FuncDecl](f, func(fn *ast.FuncDecl) {
+					if !isToMapMethod(fn) {
+						return
 					}
 					recv := toMapReceiverName(fn)
 					d := toMapFullColumnSetDiags(p, f, fn)
@@ -159,7 +159,7 @@ func TestProjectionToMapFullColumnSet01_ScannerCatchesViolation(t *testing.T) {
 							redSeen[recv] = true
 						}
 					}
-				}
+				})
 			}
 			return nil
 		})
@@ -224,12 +224,8 @@ func toMapFullColumnSetDiags(p *Pass, f *ast.File, fn *ast.FuncDecl) []Diagnosti
 	}
 	// No conditional omission anywhere in the body.
 	hasIf := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if _, ok := n.(*ast.IfStmt); ok {
-			hasIf = true
-			return false
-		}
-		return true
+	scanner.EachInSubtree[ast.IfStmt](fn.Body, func(*ast.IfStmt) {
+		hasIf = true
 	})
 	if hasIf {
 		return diag("uses a conditional (`if`) to add columns — omitempty fission")
