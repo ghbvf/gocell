@@ -1,4 +1,4 @@
-// F06: table-driven tests for buildInternalHMACRing behavior.
+// F06: table-driven tests for buildInternalServiceKeyring behavior.
 //
 // SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is required in ALL adapter modes.
 // Missing secret returns an error regardless of mode (no dev-mode silent bypass).
@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 )
 
-func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
+func TestBuildInternalServiceKeyring_WarnLogging_TableDriven(t *testing.T) {
 	tests := []struct {
 		name        string
 		adapterMode string
@@ -72,7 +72,7 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 
 			buf := captureSlogWarnLines(t)
 
-			ring, err := buildInternalHMACRing(tc.adapterMode)
+			ring, err := buildInternalServiceKeyring(tc.adapterMode)
 
 			if tc.wantErr {
 				require.Error(t, err,
@@ -103,7 +103,7 @@ func TestBuildInternalHMACRing_WarnLogging_TableDriven(t *testing.T) {
 				assert.Equal(t, errcode.ErrControlplaneServiceSecretMissing, ec.Code,
 					"dev_no_secret: error code must be ERR_CONTROLPLANE_SERVICE_SECRET_MISSING")
 			case "real_no_secret":
-				// buildInternalHMACRing must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
+				// buildInternalServiceKeyring must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
 				// when GOCELL_SERVICE_SECRET is empty in adapter mode "real".
 				var ec *errcode.Error
 				require.ErrorAs(t, err, &ec,

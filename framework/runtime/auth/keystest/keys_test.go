@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/auth/keystest"
 )
 
@@ -43,8 +42,7 @@ func TestMustNewKeyProvider_ExposesBothDomains(t *testing.T) {
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	assert.NotNil(t, ring)
-	assert.GreaterOrEqual(t, len(ring.Current()), auth.MinHMACKeyBytes,
-		"HMAC ring must satisfy minimum byte length")
+	require.NoError(t, ring.Validate(), "HMAC ring must satisfy minimum byte length")
 }
 
 // TestMustNewKeySet_PanicsOnNilClock verifies the panic plumbing of

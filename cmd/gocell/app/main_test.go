@@ -126,7 +126,7 @@ func TestCommands(t *testing.T) {
 	// stray addition, the findSub loop catches a removal or rename (a renamed
 	// command leaves its old name unfound). This keeps the anti-drift
 	// guarantee airtight rather than blind to graph/export.
-	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export", "archtest", "version"}
+	want := []string{"validate", "scaffold", "generate", "check", "verify", "graph", "export", "archtest", "version", "derive-service-keys"}
 	if len(commands) != len(want) {
 		t.Fatalf("commands registry has %d entries, want %d (%v)", len(commands), len(want), subNames(commands))
 	}

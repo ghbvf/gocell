@@ -2,53 +2,91 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
-// buildInternalHMACRing builds the /internal/v1/* service-token HMAC key ring
-// from GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
+// buildInternalServiceKeyring builds the /internal/v1/* service-token keyring in
+// exactly one of two MUTUALLY EXCLUSIVE modes (#2153), selected by env:
 //
-// GOCELL_SERVICE_SECRET is required in all adapter modes (SEC-FAIL-CLOSED).
-// A missing secret returns ErrControlplaneServiceSecretMissing regardless of
-// the adapterMode parameter — there is no dev-mode silent bypass.
+//   - master mode (monolith): GOCELL_SERVICE_SECRET [+ _PREVIOUS] → an
+//     HMACKeyRing that derives per-cell subkeys in-process. Single trust domain;
+//     a process compromise yields the master, so this is NOT per-cell-Hard.
+//   - provisioned mode (split, per-cell): GOCELL_SERVICE_SIGNING_KEY +
+//     GOCELL_SERVICE_VERIFY_KEYS [+ _PREVIOUS] (+ GOCELL_SERVICE_CELL) → a
+//     master-absent ProvisionedKeyring holding only this cell's signing subkey
+//     and its declared callers' verify subkeys. Cross-cell forgery is
+//     cryptographically fail-closed. Subkeys come from `gocell derive-service-keys`.
 //
-// The ring + the NonceStore (built by replaydeps.Resolve) are the two components
-// of the internal-listener service-token guard. Both are placed on
-// composition.SharedDeps (InternalHMACRing + NonceStore) so that the
-// composition-contract control-plane validation can introspect NonceStore.Kind()
-// at startup and reject a NoopNonceStore / single-process store in a multi-pod
-// real deployment — see runtime/composition.SharedDeps.validateProductionControlPlane.
+// Fail-closed env-layer guard: setting BOTH master and provisioned envs is
+// ambiguous (a split cell must never also hold the master) → error; setting
+// NEITHER → error. There is no dev-mode silent bypass.
+//
+// The keyring + the NonceStore (built by replaydeps.Resolve) are the two
+// components of the internal-listener service-token guard. Both are placed on
+// composition.SharedDeps (InternalServiceKeyring + NonceStore) so the
+// composition-contract control-plane validation can introspect them at startup.
 //
 // ref: Kubernetes kube-apiserver service-account verification — require key
 // material before installing an authentication guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
-func buildInternalHMACRing(adapterMode string) (*auth.HMACKeyRing, error) {
-	secret := os.Getenv(auth.EnvServiceSecret)
-	if secret == "" {
+func buildInternalServiceKeyring(adapterMode string) (kauth.ServiceKeyring, error) {
+	master := os.Getenv(auth.EnvServiceSecret)
+	masterMode := master != ""
+	// Detect provisioned (split) mode from the FULL split env family, not just the
+	// signing-key sentinel: a partial split config (e.g. only GOCELL_SERVICE_CELL)
+	// alongside the master must be caught as the ambiguous both-modes case, never
+	// silently boot master mode holding the master (#2153 F1).
+	provisionedMode := auth.AnySplitEnvSet()
+
+	switch {
+	case masterMode && provisionedMode:
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-			"GOCELL_SERVICE_SECRET must be set in all adapter modes to protect /internal/v1/*")
-	}
-	if err := cellsecrets.RejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {
-		return nil, err
-	}
-	prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
-	var prevBytes []byte
-	if prevSecret != "" {
-		if err := cellsecrets.RejectDemoKey(adapterMode, auth.EnvServiceSecretPrevious, []byte(prevSecret)); err != nil {
+			"service-token keyring config is ambiguous: the master secret ("+auth.EnvServiceSecret+") and one "+
+				"or more split per-cell provisioning vars ("+auth.EnvServiceOwnCell+" / "+auth.EnvServiceSigningKey+
+				" / "+auth.EnvServiceVerifyKeys+") are both set; a split cell must hold only its per-cell subkeys, "+
+				"never the master")
+	case provisionedMode:
+		ring, err := auth.LoadProvisionedKeyringFromEnv()
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+				"build provisioned service keyring", err)
+		}
+		// LoadProvisionedKeyringFromEnv succeeded, so EnvServiceOwnCell already
+		// passed metadata.MatchCellID (^[a-z][a-z0-9]{1,31}$ — no newlines/control
+		// chars); the value is safe to log.
+		//nolint:gosec // G706: env value is MatchCellID-validated above, not raw taint.
+		slog.Info("controlplane: per-cell provisioned service keyring built for /internal/v1/*",
+			slog.String("cell", os.Getenv(auth.EnvServiceOwnCell)))
+		return ring, nil
+	case masterMode:
+		if err := cellsecrets.RejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(master)); err != nil {
 			return nil, err
 		}
-		prevBytes = []byte(prevSecret)
+		prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
+		var prevBytes []byte
+		if prevSecret != "" {
+			if err := cellsecrets.RejectDemoKey(adapterMode, auth.EnvServiceSecretPrevious, []byte(prevSecret)); err != nil {
+				return nil, err
+			}
+			prevBytes = []byte(prevSecret)
+		}
+		ring, err := auth.NewHMACKeyRing([]byte(master), prevBytes)
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+				"build service HMAC master keyring", err)
+		}
+		slog.Info("controlplane: master-derived service keyring built for /internal/v1/*")
+		return ring, nil
+	default:
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
+			"service-token keyring not configured: set "+auth.EnvServiceSecret+" (monolith, master) or "+
+				auth.EnvServiceSigningKey+" + "+auth.EnvServiceVerifyKeys+" (split, per-cell subkeys from "+
+				"`gocell derive-service-keys`)")
 	}
-	ring, err := auth.NewHMACKeyRing([]byte(secret), prevBytes)
-	if err != nil {
-		return nil, fmt.Errorf("build service HMAC key ring: %w", err)
-	}
-	slog.Info("controlplane: service-token HMAC ring built for /internal/v1/*")
-	return ring, nil
 }

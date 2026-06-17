@@ -408,8 +408,8 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 	internalNonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	internalSharedForHarness := &composition.SharedDeps{
-		InternalHMACRing: internalRing,
-		NonceStore:       internalNonceStore,
+		InternalServiceKeyring: internalRing,
+		NonceStore:             internalNonceStore,
 	}
 
 	privKey, pubKey := keystest.MustGenerateKeyPair()

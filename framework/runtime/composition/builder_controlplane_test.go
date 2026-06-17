@@ -50,7 +50,7 @@ func TestBuilder_InjectsControlPlaneTopology_RejectsDivergentInternalStore(t *te
 		if derr != nil {
 			return nil, derr
 		}
-		svcTok, terr := kauth.NewAuthServiceToken(divergent, shared.InternalHMACRing)
+		svcTok, terr := kauth.NewAuthServiceToken(divergent, shared.InternalServiceKeyring)
 		if terr != nil {
 			return nil, terr
 		}

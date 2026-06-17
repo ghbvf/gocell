@@ -137,15 +137,17 @@ type SharedDeps struct {
 	// without redis.
 	Redis capability.RedisProvider
 
-	// InternalHMACRing is the HMAC key ring for /internal/v1/* service-token
-	// signing and verification. Promoted from cmd/corebundle's private
-	// internalGuard struct so cell modules can sign outbound requests without
-	// coupling to the cmd-private type.
-	InternalHMACRing *auth.HMACKeyRing
+	// InternalServiceKeyring supplies per-cell HMAC subkeys for /internal/v1/*
+	// service-token signing and verification (#2153). It is an interface so the
+	// composition root can inject either a master-derived keyring (monolith) or a
+	// master-absent ProvisionedKeyring (split, per-cell). Promoted from
+	// cmd/corebundle's private internalGuard struct so cell modules can sign
+	// outbound requests without coupling to the cmd-private type.
+	InternalServiceKeyring kauth.ServiceKeyring
 
 	// NonceStore is the replay-defense store backing the /internal/v1/*
 	// service-token guard. Promoted from cmd/corebundle's private internalGuard
-	// struct (alongside InternalHMACRing) so that production control-plane
+	// struct (alongside InternalServiceKeyring) so that production control-plane
 	// validation can introspect Kind() at the composition boundary: in adapter
 	// mode "real" a NoopNonceStore is rejected, and an in-memory store requires
 	// the single-pod acknowledgement. Nil is permitted in dev/test adapter
@@ -237,7 +239,7 @@ func NewSharedDeps(d SharedDeps) (*SharedDeps, error) {
 // runs every composition-contract startup guard. Guards apply in two groups:
 //
 //   - Always-required (every adapter mode): IL1 (InternalHTTPAddr must be set),
-//     IL2 (InternalHMACRing must be set), V1/V2 (verbose endpoint must be
+//     IL2 (InternalServiceKeyring must be set), V1/V2 (verbose endpoint must be
 //     token-gated or explicitly disabled).
 //   - Real-adapter-mode-only: CP1 (VerboseDisabled forbidden), CP3 (MetricsToken
 //     required), CP5 (NonceStore must be set), CP6 (NoopNonceStore rejected),
@@ -339,10 +341,11 @@ func (d *SharedDeps) validateInternalListenerGuard() []error {
 			"SharedDeps.InternalHTTPAddr must be set; the internal listener is always "+
 				"enabled and protected by the service-token HMAC ring"))
 	}
-	if d.InternalHMACRing == nil {
+	if validation.IsNilInterface(d.InternalServiceKeyring) {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-			"SharedDeps.InternalHMACRing must be set to protect /internal/v1/*; "+
-				"build it via auth.NewHMACKeyRing (cmd/corebundle convention: from GOCELL_SERVICE_SECRET)"))
+			"SharedDeps.InternalServiceKeyring must be set to protect /internal/v1/*; "+
+				"build it via cellsecrets/auth (cmd/corebundle convention: master from GOCELL_SERVICE_SECRET, "+
+				"or per-cell subkeys from gocell derive-service-keys)"))
 	}
 	return errs
 }

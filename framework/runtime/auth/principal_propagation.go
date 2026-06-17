@@ -37,11 +37,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 const (
@@ -174,14 +176,14 @@ func rebuildPropagatedPrincipal(ctx context.Context, header string) context.Cont
 // svctoken_caller_cell.go; this function is the sanctioned caller.
 func SignInternalRequest(
 	ctx context.Context,
-	ring *HMACKeyRing,
+	ring kauth.ServiceKeyring,
 	callerCell string,
 	req *http.Request,
 	tn tenant.TenantID,
 	clk clock.Clock,
 ) error {
 	clock.MustHaveClock(clk, "auth.SignInternalRequest")
-	if ring == nil {
+	if validation.IsNilInterface(ring) {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgSignNilRing)
 	}
 	if callerCell == "" {

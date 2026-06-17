@@ -207,16 +207,16 @@ func defaultRuntimeOptions(
 
 // buildInternalAuthChain constructs the auth chain for the internal listener
 // from the two service-token guard components on SharedDeps: the NonceStore and
-// the InternalHMACRing. Both are always non-nil after SEC-FAIL-CLOSED:
-// buildInternalHMACRing returns an error rather than a nil ring in all adapter
-// modes when GOCELL_SERVICE_SECRET is unset, and SharedDeps.validate rejects a
-// nil InternalHMACRing / (in real mode) a missing NonceStore before this
-// function is reached.
+// the InternalServiceKeyring. Both are always non-nil after SEC-FAIL-CLOSED:
+// buildInternalServiceKeyring returns an error rather than a nil keyring in all
+// adapter modes when neither master nor provisioned env is set, and
+// SharedDeps.validate rejects a nil InternalServiceKeyring / (in real mode) a
+// missing NonceStore before this function is reached.
 //
 // See docs/ops/listener-topology.md for the deployment topology, threat boundaries,
 // and single-listener migration guide that frame this auth-chain composition.
 func buildInternalAuthChain(shared *composition.SharedDeps) ([]auth.ListenerAuth, error) {
-	plan, err := auth.NewAuthServiceToken(shared.NonceStore, shared.InternalHMACRing)
+	plan, err := auth.NewAuthServiceToken(shared.NonceStore, shared.InternalServiceKeyring)
 	if err != nil {
 		return nil, fmt.Errorf("build internal auth chain: %w", err)
 	}

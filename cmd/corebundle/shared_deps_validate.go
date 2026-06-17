@@ -11,7 +11,7 @@ import (
 // that does NOT belong to the portable composition contract: it rejects the
 // .env.example sample verbose token in adapter mode "real". Every other
 // control-plane production check — verbose/metrics tokens, the internal-listener
-// guard (InternalHTTPAddr + InternalHMACRing), nonce-store kind, and claimer
+// guard (InternalHTTPAddr + InternalServiceKeyring), nonce-store kind, and claimer
 // kind — moved into composition.SharedDeps.validate (#1410), so external
 // composition consumers inherit them fail-closed via NewSharedDeps and no longer
 // depend on any cmd-private type.

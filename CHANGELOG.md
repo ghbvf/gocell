@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- **[breaking-api] `composition.SharedDeps.InternalHMACRing` → `InternalServiceKeyring`**（#2153，pre-GA 无外部消费方）：字段类型由 `*auth.HMACKeyRing` 改为接口 `kauth.ServiceKeyring`；kernel `auth.HMACKeyring` 同步重命名为 `auth.ServiceKeyring`。wiring 代码须将 `shared.InternalHMACRing` 改为 `shared.InternalServiceKeyring`（见 `cmd/CLAUDE.md` §Listener 配置）；`auth.NewAuthServiceToken` 第二参类型随之变化，编译时即暴露不兼容。
+
+### Added
+
+- **Per-cell HKDF service-token 子密钥隔离**（#2153）：`/internal/v1/*` service-token keying 改为 per-cell HKDF 子密钥——master secret 在 monolith 进程内按 cell id 派生子密钥，不同 cell 互不可伪造。新增 `ProvisionedKeyring`（split 模式专用）：split cell 进程只持自身子密钥 + 其声明 caller 的验签子密钥，不持 master（密码学 fail-closed）。master 与 provisioned env 互斥，皆设或皆缺均 fail-fast。详见 `docs/ops/env-vars.md` §Service Token。
+- **`gocell derive-service-keys` CLI**（#2153）：新子命令，从 master secret 为指定 cell 派生签名子密钥 + 其声明 caller 的验签子密钥，输出可直接注入 split cell 进程的 env（`GOCELL_SERVICE_CELL` / `GOCELL_SERVICE_SIGNING_KEY` / `GOCELL_SERVICE_VERIFY_KEYS` [+ `_PREVIOUS`]）。轮换流程：master rotation → 重跑 derive-service-keys → 重新分发；`*_PREVIOUS` 覆盖重叠窗口。
+
 ## [0.1.1] - 2026-06-15
 
 ### Breaking Changes

@@ -1,7 +1,7 @@
 // Package auth holds the kernel-level authentication plan model: the sealed
 // AuthPlan / ListenerAuth interfaces, their five typed implementations (None,
 // JWT, JWTFromAssembly, MTLS, ServiceToken), and the narrow dependency
-// interfaces (IntentTokenVerifier, NonceStore, HMACKeyring, AuthProvider, ...)
+// interfaces (IntentTokenVerifier, NonceStore, ServiceKeyring, AuthProvider, ...)
 // that runtime/auth concrete types satisfy structurally.
 //
 // Previously these lived in kernel/cell. They were extracted in PR #615 to

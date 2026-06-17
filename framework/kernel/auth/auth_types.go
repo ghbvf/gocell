@@ -174,14 +174,36 @@ type NonceStore interface {
 	Kind() NonceStoreKind
 }
 
-// HMACKeyring supplies HMAC secrets for service token operations.
-// This is the kernel projection of runtime/auth.HMACKeyRing; *HMACKeyRing
-// satisfies it structurally (Current/Secrets methods already exist).
-type HMACKeyring interface {
-	// Current returns a copy of the active signing secret.
-	Current() []byte
-	// Secrets returns all secrets in try-order: current first, then previous.
-	Secrets() [][]byte
+// ServiceKeyring supplies per-cell HMAC subkeys for service-token sign/verify.
+// This is the kernel projection of the runtime/auth keyrings: HMACKeyRing
+// (monolith — one master, per-cell subkeys derived in-process) and
+// ProvisionedKeyring (split — master-absent, only this process's own signing
+// subkey + its declared callers' verify subkeys). Both satisfy it structurally.
+//
+// Per-cell isolation (#2153): a token signed as cell X is keyed by an HKDF subkey
+// bound to X (HKDF(parent, X)). A process that does not hold X's subkey cannot
+// forge X's caller identity — in split, a compromised cell holds neither the
+// master nor other cells' subkeys, so cross-cell forgery is cryptographically
+// fail-closed. The Hard property requires master ABSENCE at the cell; HKDF over a
+// still-shared master (monolith) provides no isolation and is documented as such.
+//
+// SigningSecrets/VerifySecrets return ordered subkeys (current first, then
+// previous) so master/key rotation still verifies in-flight tokens.
+type ServiceKeyring interface {
+	// SigningSecrets returns the subkeys used to sign tokens as ownCell. The
+	// returned slice is ordered: index 0 MUST be the current signing key (the one
+	// used to sign new tokens); any previous-generation keys follow at index ≥1.
+	// Returns an error if this process is not authorized to sign as ownCell
+	// (split: ownCell != this process's cell identity).
+	SigningSecrets(ownCell string) ([][]byte, error)
+	// VerifySecrets returns the subkeys used to verify a token claiming
+	// callerCell (current first, then previous). Returns an error if callerCell
+	// is not in this process's authorized caller set (split least-privilege —
+	// fail-closed, not a silent empty set).
+	VerifySecrets(callerCell string) ([][]byte, error)
+	// Validate reports whether the key material is well-formed (every subkey is
+	// at least MinHMACKeyBytes). Called once at AuthServiceToken construction.
+	Validate() error
 }
 
 // AuthProvider is an optional cell-level interface that exposes an

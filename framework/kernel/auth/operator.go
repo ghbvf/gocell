@@ -9,7 +9,7 @@ package auth
 // (runtime/bootstrap/auth_plan_apply.go) constructs the concrete
 // runtime/auth.NewBootstrapMiddleware from them, so kernel/auth holds no
 // net/http machinery. OperatorRateLimiter follows the same kernel-projection
-// idiom as NonceStore / HMACKeyring in auth_types.go.
+// idiom as NonceStore / ServiceKeyring in auth_types.go.
 //
 // This is the listener-level operator gate. It is distinct from the route-level
 // runtime/auth.Route.BootstrapAuth used by the per-cell setup/admin endpoint
@@ -39,7 +39,7 @@ const operatorMinPasswordLen = 8
 // client IP) should be allowed. It is the kernel projection of
 // runtime/auth.BootstrapRateLimiter so that the AuthOperator plan can hold its
 // limiter as a kernel-level interface, keeping kernel/ free of runtime/ imports
-// (same idiom as NonceStore / HMACKeyring in auth_types.go). The composition
+// (same idiom as NonceStore / ServiceKeyring in auth_types.go). The composition
 // root injects a concrete per-IP limiter (e.g. adapters/ratelimit.TokenBucket);
 // there is deliberately no built-in allow-all implementation — operator
 // credentials must always be rate-limited to defeat brute-force enumeration.

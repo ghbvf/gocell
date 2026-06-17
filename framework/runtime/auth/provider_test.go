@@ -80,7 +80,10 @@ func TestEnvKeyProvider_HMACKeyRing_ReturnsLoadedRing(t *testing.T) {
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	require.NotNil(t, ring)
-	assert.Equal(t, []byte(hmacKey), ring.Current())
+	require.NoError(t, ring.Validate())
+	secrets, err := ring.SigningSecrets("gocell")
+	require.NoError(t, err)
+	assert.Len(t, secrets, 1)
 }
 
 func TestEnvKeyProvider_HMACKeyRing_WithPrevious(t *testing.T) {
@@ -92,7 +95,8 @@ func TestEnvKeyProvider_HMACKeyRing_WithPrevious(t *testing.T) {
 	p := NewEnvKeyProvider(clock.Real())
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
-	secrets := ring.Secrets()
+	secrets, err := ring.SigningSecrets("gocell")
+	require.NoError(t, err)
 	assert.Len(t, secrets, 2)
 }
 

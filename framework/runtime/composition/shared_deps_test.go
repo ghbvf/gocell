@@ -54,7 +54,7 @@ func testInMemNonceStore(t *testing.T, clk *clockmock.FakeClock) kauth.NonceStor
 
 // buildTestSharedDeps creates a dev-mode SharedDeps with all validate()-required
 // fields populated — including the always-on internal-listener guard
-// (InternalHTTPAddr + InternalHMACRing) and the verbose-endpoint waiver
+// (InternalHTTPAddr + InternalServiceKeyring) and the verbose-endpoint waiver
 // (VerboseDisabled) — using in-memory / fake implementations. The control-plane
 // production checks are skipped in dev adapter mode; buildValidRealModeSharedDeps
 // flips the topology and the fields those checks require.
@@ -75,19 +75,19 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	s, err := NewSharedDeps(SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		JWTIssuer:            issuer,
-		JWTVerifier:          verifier,
-		MetricsProvider:      mp,
-		Publisher:            eb,
-		Subscriber:           eb,
-		ConfigEventCollector: cec,
-		ConsumerClaimer:      claimer,
-		InternalHMACRing:     testHMACRing(t),
-		NonceStore:           testInMemNonceStore(t, clk),
-		InternalHTTPAddr:     "127.0.0.1:9090",
-		VerboseDisabled:      true,
+		Clock:                  clk,
+		Topology:               topo,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        mp,
+		Publisher:              eb,
+		Subscriber:             eb,
+		ConfigEventCollector:   cec,
+		ConsumerClaimer:        claimer,
+		InternalServiceKeyring: testHMACRing(t),
+		NonceStore:             testInMemNonceStore(t, clk),
+		InternalHTTPAddr:       "127.0.0.1:9090",
+		VerboseDisabled:        true,
 	})
 	require.NoError(t, err)
 	return s
@@ -376,8 +376,8 @@ func TestSharedDeps_Validate_ControlPlane(t *testing.T) {
 		{
 			name:    "IL2 internal HMAC ring nil rejected in every mode",
 			base:    buildTestSharedDeps,
-			mutate:  func(_ *testing.T, s *SharedDeps) { s.InternalHMACRing = nil },
-			wantErr: true, errSub: "InternalHMACRing", errCode: errcode.ErrControlplaneServiceSecretMissing,
+			mutate:  func(_ *testing.T, s *SharedDeps) { s.InternalServiceKeyring = nil },
+			wantErr: true, errSub: "InternalServiceKeyring", errCode: errcode.ErrControlplaneServiceSecretMissing,
 		},
 		{
 			name:    "V2 verbose unconfigured rejected in every mode",

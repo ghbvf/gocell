@@ -64,19 +64,19 @@ func externalRealModeDeps(t *testing.T, mutate func(*composition.SharedDeps)) co
 	eb := eventbus.New(clk)
 
 	d := composition.SharedDeps{
-		Clock:                clk,
-		Topology:             topo,
-		JWTIssuer:            issuer,
-		JWTVerifier:          verifier,
-		MetricsProvider:      mp,
-		Publisher:            eb,
-		Subscriber:           eb,
-		ConfigEventCollector: cec,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(clk),
-		InternalHMACRing:     ring,
-		NonceStore:           nonce, // single-pod in-memory is valid baseline
-		InternalHTTPAddr:     "127.0.0.1:9090",
-		HealthHTTPAddr:       ":9091", // non-loopback (real mode requires Pod-reachable)
+		Clock:                  clk,
+		Topology:               topo,
+		JWTIssuer:              issuer,
+		JWTVerifier:            verifier,
+		MetricsProvider:        mp,
+		Publisher:              eb,
+		Subscriber:             eb,
+		ConfigEventCollector:   cec,
+		ConsumerClaimer:        idempotency.NewInMemClaimer(clk),
+		InternalServiceKeyring: ring,
+		NonceStore:             nonce, // single-pod in-memory is valid baseline
+		InternalHTTPAddr:       "127.0.0.1:9090",
+		HealthHTTPAddr:         ":9091", // non-loopback (real mode requires Pod-reachable)
 	}
 	// Set the token guards via field assignment (not composite-literal keys) to
 	// mirror buildValidRealModeSharedDeps and avoid a gosec G101 false positive on

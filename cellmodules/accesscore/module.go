@@ -268,11 +268,12 @@ func accessPostgresOptions(
 		accesscell.WithRefreshStore(pgRefreshStore),
 	}
 	// Wire the ConfigGetter through the CellTransport seam (US4 #1963 / US5 #1966).
-	// signing uses shared.InternalHMACRing (promoted from cmd-private
+	// signing uses shared.InternalServiceKeyring (promoted from cmd-private
 	// internalGuard.ring onto composition.SharedDeps); the transport carries the
-	// signed request to configcore's internal handler.
+	// signed request to configcore's internal handler. accesscore signs with its
+	// own per-cell subkey (#2153) — the keyring resolves "accesscore" internally.
 	var resources []kernellifecycle.ManagedResource
-	if shared.InternalHMACRing != nil {
+	if shared.InternalServiceKeyring != nil {
 		opts, res, err := wireConfigGetter(shared, accessOpts)
 		if err != nil {
 			return nil, nil, nil, err
@@ -319,7 +320,7 @@ func wireConfigGetter(
 		return nil, nil, fmt.Errorf("accesscore: celltransport.Resolve: %w", err)
 	}
 	return append(accessOpts,
-		configgetter.WithTransport(ct, shared.InternalHMACRing, shared.Clock)), resources, nil
+		configgetter.WithTransport(ct, shared.InternalServiceKeyring, shared.Clock)), resources, nil
 }
 
 // resolveAccessStorageOpts selects postgres or memory storage options. It also

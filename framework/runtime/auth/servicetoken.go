@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -140,8 +141,41 @@ func WithServiceTokenMetrics(m *AuthMetrics) ServiceTokenOption {
 	return func(c *serviceTokenConfig) { c.metrics = m }
 }
 
-// HMACKeyRing holds an ordered pair of HMAC secrets for service token operations.
-// Position 0 (current) is used for signing; verification tries all secrets in order.
+// serviceTokenHKDFInfo is the HKDF info-prefix for per-cell service-token subkey
+// derivation; the cell id is appended to form info = prefix + cellID. The "/v1/"
+// segment namespaces the scheme so a future derivation change is a distinct,
+// non-colliding key space.
+//
+// BREAKING: changing this constant (even the version segment) re-derives every
+// per-cell subkey → all previously provisioned split cells must re-run
+// `gocell derive-service-keys` and redeploy atomically, or cross-cell verification
+// fails. Treat any edit as a wire-affecting key rotation.
+//
+//nolint:gosec // G101: not a credential — this is a fixed HKDF domain-separation label.
+const serviceTokenHKDFInfo = "gocell/service-token/v1/caller-cell:"
+
+// deriveCellSecret derives a per-cell HMAC subkey from a parent secret using
+// HKDF-SHA256 (RFC 5869) with the cell id as info context. Distinct cell ids
+// yield independent subkeys, and knowledge of one subkey reveals neither the
+// parent nor any sibling subkey — the cryptographic basis for per-cell caller
+// isolation (#2153). The output is MinHMACKeyBytes long (HMAC-SHA256 strength).
+//
+// ref: RFC 5869 §2 (HKDF-Expand with per-context info)
+func deriveCellSecret(parent []byte, cellID string) ([]byte, error) {
+	return hkdf.Key(sha256.New, parent, nil, serviceTokenHKDFInfo+cellID, MinHMACKeyBytes)
+}
+
+// HMACKeyRing is the monolith (single trust domain) ServiceKeyring: it holds the
+// master secret(s) and derives per-cell subkeys on demand via HKDF. Position 0
+// (current) is the active master; previous (optional) covers a rotation overlap
+// window — verification tries both in order.
+//
+// SECURITY: in a monolith every cell runs in one process that holds the master,
+// so a process compromise yields the master and thus any per-cell subkey — HKDF
+// here provides NO cross-cell isolation. Per-cell isolation (a compromised cell
+// cannot forge another cell) is delivered only by ProvisionedKeyring (split:
+// master-absent, only this cell's signing subkey + its declared callers' verify
+// subkeys). See kauth.ServiceKeyring godoc and ADR 202606131142-1423 §#2153.
 //
 // ref: zeromicro/go-zero rest/token/tokenparser.go — dual-key [current, previous] model
 // ref: gorilla/securecookie — DecodeMulti try-all-keys pattern
@@ -150,9 +184,12 @@ type HMACKeyRing struct {
 	previous []byte
 }
 
-// NewHMACKeyRing creates an HMACKeyRing. current must be at least MinHMACKeyBytes
-// (32 bytes). previous may be nil for single-secret mode; if set, it must also
-// meet the minimum length.
+// Compile-time assertion: HMACKeyRing implements the kernel ServiceKeyring.
+var _ kauth.ServiceKeyring = (*HMACKeyRing)(nil)
+
+// NewHMACKeyRing creates an HMACKeyRing master keyring. current must be at least
+// MinHMACKeyBytes (32 bytes). previous may be nil for single-secret mode; if set,
+// it must also meet the minimum length.
 func NewHMACKeyRing(current, previous []byte) (*HMACKeyRing, error) {
 	if len(current) == 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
@@ -173,25 +210,55 @@ func NewHMACKeyRing(current, previous []byte) (*HMACKeyRing, error) {
 	}, nil
 }
 
-// Current returns a copy of the active signing secret.
-// The returned slice is a fresh allocation; callers cannot mutate the ring's
-// internal state.
-func (r *HMACKeyRing) Current() []byte {
-	c := make([]byte, len(r.current))
-	copy(c, r.current)
-	return c
+// SigningSecrets returns the per-cell subkeys (current first, then previous) for
+// signing as ownCell, derived from the master via HKDF. A monolith may sign as
+// any cell, so ownCell is never rejected here (only the empty id is invalid).
+func (r *HMACKeyRing) SigningSecrets(ownCell string) ([][]byte, error) {
+	return r.deriveAll(ownCell)
 }
 
-// Secrets returns a copy of all secrets in try-order: current first, then previous (if set).
-// The returned slice is a fresh allocation; callers cannot mutate the ring's internal state.
-func (r *HMACKeyRing) Secrets() [][]byte {
-	if len(r.previous) == 0 {
-		return [][]byte{append([]byte(nil), r.current...)}
+// VerifySecrets returns the per-cell subkeys (current first, then previous) for
+// verifying a token claiming callerCell, derived from the master via HKDF.
+func (r *HMACKeyRing) VerifySecrets(callerCell string) ([][]byte, error) {
+	return r.deriveAll(callerCell)
+}
+
+// deriveAll derives the cell subkey from current (and previous, when set),
+// returning them in verification try-order.
+func (r *HMACKeyRing) deriveAll(cellID string) ([][]byte, error) {
+	if cellID == "" {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+			"service keyring derivation requires a non-empty cell id")
 	}
-	return [][]byte{
-		append([]byte(nil), r.current...),
-		append([]byte(nil), r.previous...),
+	cur, err := deriveCellSecret(r.current, cellID)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthKeyInvalid, "derive current cell subkey", err)
 	}
+	out := [][]byte{cur}
+	if len(r.previous) > 0 {
+		prev, err := deriveCellSecret(r.previous, cellID)
+		if err != nil {
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthKeyInvalid, "derive previous cell subkey", err)
+		}
+		out = append(out, prev)
+	}
+	return out, nil
+}
+
+// Validate reports whether the master secret(s) meet MinHMACKeyBytes. Derived
+// subkeys are always exactly MinHMACKeyBytes, so validating the master suffices.
+func (r *HMACKeyRing) Validate() error {
+	if len(r.current) < MinHMACKeyBytes {
+		return errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+			"current HMAC master secret is too short",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%d min=%d", len(r.current), MinHMACKeyBytes))))
+	}
+	if len(r.previous) > 0 && len(r.previous) < MinHMACKeyBytes {
+		return errcode.New(errcode.KindInternal, errcode.ErrAuthKeyInvalid,
+			"previous HMAC master secret is too short",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("got=%d min=%d", len(r.previous), MinHMACKeyBytes))))
+	}
+	return nil
 }
 
 const (
@@ -246,14 +313,14 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
 //
-// ring accepts kauth.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
-// it structurally and remains the canonical production implementation.
+// ring accepts kauth.ServiceKeyring (the kernel interface); *HMACKeyRing
+// (monolith master-derived) and *ProvisionedKeyring (split) both satisfy it.
 //
 // Misconfiguration paths (nil ring, sub-strength HMAC, missing/Noop NonceStore,
 // authenticator build failure) return an error middleware that serves 500 on every
 // request. All misconfiguration paths share the same errorMiddlewareInternal helper
 // so the 500 behavior is consistent and observable via the "internal" metric label.
-func ServiceTokenMiddleware(ring kauth.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+func ServiceTokenMiddleware(ring kauth.ServiceKeyring, clk clock.Clock, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	clock.MustHaveClock(clk, "auth.ServiceTokenMiddleware")
 	cfg := serviceTokenConfig{
 		clk:    clk,
@@ -268,13 +335,12 @@ func ServiceTokenMiddleware(ring kauth.HMACKeyring, clk clock.Clock, opts ...Ser
 	}
 
 	// Defense-in-depth strength check (PR269 round-3 F5): auth.NewAuthServiceToken
-	// already enforces MinHMACKeyBytes at construction time, but ServiceTokenMiddleware
-	// is also reachable via direct call paths (tests, custom wiring) that bypass
-	// the kernel constructor. Reject sub-strength rings here so no path leaks a
-	// short HMAC secret into hmac.New.
-	if got := len(ring.Current()); got < MinHMACKeyBytes {
-		return errorMiddlewareInternal(cfg,
-			fmt.Sprintf("HMAC ring secret shorter than minimum (%d < %d bytes)", got, MinHMACKeyBytes))
+	// already enforces key strength at construction time via Validate(), but
+	// ServiceTokenMiddleware is also reachable via direct call paths (tests,
+	// custom wiring) that bypass the kernel constructor. Reject invalid rings here
+	// so no path leaks a short HMAC secret into hmac.New.
+	if err := ring.Validate(); err != nil {
+		return errorMiddlewareInternal(cfg, "HMAC ring invalid: "+err.Error())
 	}
 
 	if cfg.nonceStore == nil {
@@ -508,9 +574,16 @@ func classifyServiceTokenVerifyError(err error) string {
 }
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message
-// under any of the secrets in the key ring.
-func verifyServiceTokenMAC(ring kauth.HMACKeyring, message string, providedMAC []byte) bool {
-	for _, secret := range ring.Secrets() {
+// under the per-cell verify subkeys for callerCell (current, then previous).
+// Returns false fail-closed when the keyring does not authorize callerCell
+// (split least-privilege: the callee holds verify subkeys only for its declared
+// callers) or derivation fails.
+func verifyServiceTokenMAC(ring kauth.ServiceKeyring, callerCell, message string, providedMAC []byte) bool {
+	secrets, err := ring.VerifySecrets(callerCell)
+	if err != nil {
+		return false
+	}
+	for _, secret := range secrets {
 		mac := hmac.New(sha256.New, secret)
 		_, _ = mac.Write([]byte(message))
 		if hmac.Equal(providedMAC, mac.Sum(nil)) {
@@ -584,19 +657,29 @@ func canonicalQuery(rawQuery string) string {
 // X-Gocell-Principal header invalidates the MAC. Pass "" when no business
 // principal is propagated — the MAC then binds an empty principal segment.
 //
+// The token is signed with the per-cell HKDF subkey for callerCell (derived from
+// the ring's signing material), so the MAC is keyed to the originating cell — a
+// process lacking callerCell's subkey cannot produce a valid token (#2153).
+//
 // Production code MUST use SignInternalRequest instead of calling this function
 // directly. The SVCTOKEN-CALLER-CELL-REQUIRED-01 archtest enforces this.
 func GenerateServiceToken(
-	ring *HMACKeyRing, callerCell, method, path, rawQuery string,
+	ring kauth.ServiceKeyring, callerCell, method, path, rawQuery string,
 	tenantID tenant.TenantID, principalHeader string, ts time.Time,
 ) string {
-	if ring == nil {
+	if validation.IsNilInterface(ring) {
 		return ""
 	}
 	if callerCell == "" {
 		return ""
 	}
 	if strings.Contains(callerCell, ":") {
+		return ""
+	}
+
+	// Sign with the per-cell subkey for callerCell (current = position 0).
+	secrets, err := ring.SigningSecrets(callerCell)
+	if err != nil || len(secrets) == 0 {
 		return ""
 	}
 
@@ -610,7 +693,7 @@ func GenerateServiceToken(
 	nonce := hex.EncodeToString(nonceBytes)
 
 	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell, tenantID.String(), principalHeader)
-	mac := hmac.New(sha256.New, ring.Current())
+	mac := hmac.New(sha256.New, secrets[0])
 	_, _ = mac.Write([]byte(message))
 	return tsStr + ":" + nonce + ":" + callerCell + ":" + hex.EncodeToString(mac.Sum(nil))
 }

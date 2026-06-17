@@ -44,11 +44,17 @@ type applyNoopNonceStore struct{}
 func (s *applyNoopNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
 func (s *applyNoopNonceStore) Kind() kauth.NonceStoreKind                     { return kauth.NonceStoreKindNoop }
 
-// applyStubHMACKeyring satisfies kauth.HMACKeyring.
+// applyStubHMACKeyring satisfies kauth.ServiceKeyring.
 type applyStubHMACKeyring struct{}
 
-func (k *applyStubHMACKeyring) Current() []byte   { return []byte("secret-32-bytes-padding-here----") }
-func (k *applyStubHMACKeyring) Secrets() [][]byte { return [][]byte{k.Current()} }
+func (k *applyStubHMACKeyring) SigningSecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("secret-32-bytes-padding-here----")}, nil
+}
+
+func (k *applyStubHMACKeyring) VerifySecrets(string) ([][]byte, error) {
+	return [][]byte{[]byte("secret-32-bytes-padding-here----")}, nil
+}
+func (k *applyStubHMACKeyring) Validate() error { return nil }
 
 // Compile-time guard: kauth.AssemblyRef must expose Cell(id string) cell.Cell
 // so that runtime/bootstrap can resolve registered cells by ID without an
