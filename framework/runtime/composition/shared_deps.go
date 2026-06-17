@@ -1,6 +1,7 @@
 package composition
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -204,6 +205,15 @@ type SharedDeps struct {
 	// celltransport.Resolve then fails closed only for a non-loopback https peer.
 	// Caller input (composition root); zero is the valid no-mTLS state.
 	RemoteClientTLS tlsutil.ClientIdentity
+
+	// InternalListenerServerTLS is the cell's server-side mTLS config for the
+	// internal listener (#2263), resolved alongside RemoteClientTLS by
+	// cellmodules/celltls.Resolve. When non-nil the composition root wires it via
+	// celltls.InternalListenerSecurity (prepends kauth.AuthMTLS{} +
+	// bootstrap.WithListenerTLS). Nil = no server mTLS (service-token-only, demo /
+	// loopback). Caller input; nil is the valid no-mTLS state. A *tls.Config (not
+	// a celltls type) keeps this package free of a cellmodules import (layer rule).
+	InternalListenerServerTLS *tls.Config
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener.
 	HealthHTTPAddr string

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
@@ -116,4 +117,29 @@ func Resolve(topo bootstrap.DeploymentTopology, cfg Config) (Deps, error) {
 		return Deps{}, fmt.Errorf("celltls: build server mTLS config: %w", err)
 	}
 	return Deps{ClientIdentity: clientID, ServerTLS: serverTLS}, nil
+}
+
+// InternalListenerSecurity augments an internal-listener service-token auth chain
+// with transport-layer mTLS when serverTLS is non-nil (split topology with TLS
+// material). It is the SINGLE place composition roots wire server-side cross-cell
+// mTLS, so corebundle and ssobff cannot drift in chain shape.
+//
+//   - serverTLS == nil → returns base unchanged + no listener options (demo /
+//     loopback / no-material: service-token-only, as before).
+//   - serverTLS != nil → prepends kauth.AuthMTLS{} (handshake enforces
+//     RequireAndVerifyClientCert + installs middleware.MTLS via auth_plan_apply)
+//     and returns bootstrap.WithListenerTLS(serverTLS). The resulting
+//     "mtls+service-token" chain layers transport peer auth (outer) over the
+//     message-layer service-token guard (inner) — they compose, not conflict
+//     (auth_plan_describe already names this combination).
+//
+// base is not mutated (a fresh slice is returned).
+func InternalListenerSecurity(serverTLS *tls.Config, base []kauth.ListenerAuth) ([]kauth.ListenerAuth, []bootstrap.ListenerOption) {
+	if serverTLS == nil {
+		return base, nil
+	}
+	chain := make([]kauth.ListenerAuth, 0, len(base)+1)
+	chain = append(chain, kauth.AuthMTLS{})
+	chain = append(chain, base...)
+	return chain, []bootstrap.ListenerOption{bootstrap.WithListenerTLS(serverTLS)}
 }

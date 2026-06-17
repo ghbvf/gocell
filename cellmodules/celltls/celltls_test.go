@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cellmodules/celltls"
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
@@ -126,6 +128,29 @@ func TestResolve_Configured(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, deps.ClientIdentity.IsZero())
 		assert.NotNil(t, deps.ServerTLS)
+	})
+}
+
+func TestInternalListenerSecurity(t *testing.T) {
+	t.Parallel()
+	base := []kauth.ListenerAuth{kauth.AuthNone{}} // stand-in for the service-token plan
+
+	t.Run("nil serverTLS -> chain unchanged, no options", func(t *testing.T) {
+		t.Parallel()
+		chain, opts := celltls.InternalListenerSecurity(nil, base)
+		assert.Len(t, chain, 1)
+		assert.Empty(t, opts)
+		_, isMTLS := chain[0].(kauth.AuthMTLS)
+		assert.False(t, isMTLS, "no AuthMTLS prepended when serverTLS is nil")
+	})
+
+	t.Run("non-nil serverTLS -> prepends AuthMTLS + WithListenerTLS opt", func(t *testing.T) {
+		t.Parallel()
+		chain, opts := celltls.InternalListenerSecurity(&tls.Config{MinVersion: tls.VersionTLS13}, base)
+		require.Len(t, chain, 2, "AuthMTLS prepended to base")
+		_, isMTLS := chain[0].(kauth.AuthMTLS)
+		assert.True(t, isMTLS, "AuthMTLS must be the outer (first) plan")
+		assert.Len(t, opts, 1, "WithListenerTLS option contributed")
 	})
 }
 
