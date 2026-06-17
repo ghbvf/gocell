@@ -64,6 +64,9 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {
 					firstErr = err
 				}
 			}
+			mux.Route("/decide", func(s cell.RouteMux) {
+				captureErr(c.decideHandler.RegisterRoutes(s))
+			})
 			mux.Route("/policies", func(s cell.RouteMux) {
 				captureErr(c.policyHandler.RegisterRoutes(s))
 			})

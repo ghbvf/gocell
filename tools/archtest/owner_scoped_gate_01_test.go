@@ -7,12 +7,17 @@
 // #1894, which migrated their auth.SelfOr gates to RequirePermissionForResource).
 // An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
+// one of the two sanctioned owner-scoped gate shapes:
 //
-//	auth.RequirePermissionForResource("<pathParam>", authz.Perm*())
+//	auth.RequirePermissionForResource("<pathParam>", authz.Perm*())  // resource = path param
+//	auth.RequirePermissionForSelf(authz.Perm*())                     // resource = caller's own subject (#1863)
 //
-// which canonicalizes the path-param resource id and forwards it to the PDP as the
-// `resource` argument. The frozen expected set (ownerScopedGateExpectedSet) is the
-// exact list of (handler, pathParam, permission-accessor) triples.
+// Both forward a canonical resource id to the PDP as the `resource` argument
+// (RequirePermissionForResource canonicalizes the path-param id; RequirePermissionForSelf
+// forwards the caller's own subject — used by POST /api/v1/access/decide, which has no
+// path param). The frozen expected set (ownerScopedGateExpectedSet) is the exact list of
+// (handler, param, permission-accessor) triples, where param is the path-param name or the
+// literal "self".
 //
 // The threat this closes (PR #2025 review F1): tenancy.md mandates this gate shape,
 // but PERMISSION-BASED-AUTHZ-01 only BANS role-literal gates — it cannot detect an
@@ -60,11 +65,12 @@
 //   - Guards gate CONSTRUCTION, not route→gate WIRING: a correctly-constructed gate that
 //     is never mounted (or mounted on the wrong handler) is not caught here — the
 //     contract serve tests + e2e cover wiring.
-//   - Only the named handler files are scanned (accesscore identitymanage/rbaccheck +
-//     examples ordercell/cell.go, devicecell/cell.go, devicecommand/handler.go); a NEW
-//     owner-scoped endpoint in a new file must be added to ownerScopedGateHandlerKey +
-//     ownerScopedGateExpectedSet (the UNEXPECTED-triple check forces this consciously for
-//     the already-guarded files).
+//   - Only the named handler files are scanned (accesscore identitymanage/rbaccheck/
+//     authorizationdecide + examples ordercell/cell.go, devicecell/cell.go,
+//     devicecommand/handler.go); a NEW owner-scoped endpoint in a new file must be added
+//     to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple
+//     check forces this consciously for the already-guarded files). A RequirePermissionForSelf
+//     callsite in an unlisted file is likewise not frozen.
 package archtest
 
 import (
@@ -101,6 +107,12 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	"todoorder-order|id|PermOrderUpdate": {},
 	"iotdevice-device|id|PermDeviceRead": {},
 	"devicecommand|id|PermDeviceConsume": {},
+	// #1863: the PDP self-introspection gate. RequirePermissionForSelf has no path
+	// param (the caller's own subject is the resource), so the param slot is the
+	// literal "self". A regression to plain auth.RequirePermission would forward
+	// r.URL.Path instead of the subject, breaking the access:decide self rule → this
+	// triple goes MISSING → CI red.
+	"authorizationdecide|self|PermAccessDecide": {},
 }
 
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
@@ -111,6 +123,10 @@ func ownerScopedGateHandlerKey(rel string) string {
 		return "identitymanage"
 	case strings.HasSuffix(rel, "slices/rbaccheck/handler.go"):
 		return "rbaccheck"
+	// #1863: the authorizationdecide HTTP surface gates on RequirePermissionForSelf
+	// (access:decide), the self-resource owner-scoped gate variant.
+	case strings.HasSuffix(rel, "slices/authorizationdecide/handler.go"):
+		return "authorizationdecide"
 	// examples (PR-10d #1894). todoorder get+confirm owner gates both live in
 	// ordercell/cell.go — one handler key, the two triples differ by permission
 	// (PermOrderRead/PermOrderUpdate). iotdevice's status owner gate lives in
@@ -137,34 +153,60 @@ func ownerScopedGateConstString(p *Pass, expr ast.Expr) (string, bool) {
 	return constant.StringVal(tv.Value), true
 }
 
-// collectOwnerScopedGates scans one file for auth.RequirePermissionForResource
-// callsites, returning a "<handler>|<pathParam>|<permAccessor>" key for each. Only
-// calls whose receiver resolves to runtime/auth and whose second argument is a call
-// to a pkg/authz accessor are recognized; a non-const param or non-authz accessor is
-// recorded with a sentinel so it surfaces as an UNEXPECTED triple rather than being
-// silently skipped.
+// ownerScopedGateAccessor returns the pkg/authz Perm*() accessor name of arg, or
+// the "<non-authz-accessor>" sentinel when arg is not a call to a pkg/authz
+// accessor (so a wrong permission argument surfaces as a changed triple rather
+// than being silently skipped).
+func ownerScopedGateAccessor(p *Pass, arg ast.Expr) string {
+	if argCall, ok := arg.(*ast.CallExpr); ok {
+		if apath, aname, ok := ResolvePackageRef(p.TypesInfo, argCall.Fun); ok && apath == authzImportPath {
+			return aname
+		}
+	}
+	return "<non-authz-accessor>"
+}
+
+// collectOwnerScopedGates scans one file for the two owner-scoped gate shapes and
+// returns a "<handler>|<param>|<permAccessor>" key for each:
+//
+//   - auth.RequirePermissionForResource(pathParam, authz.Perm*()) → param is the
+//     canonicalized path-param name (resource id forwarded to the PDP);
+//   - auth.RequirePermissionForSelf(authz.Perm*()) → param is the literal "self"
+//     (#1863: the gate forwards the caller's OWN subject as resource, no path
+//     param; the canonical use is POST /api/v1/access/decide gated on access:decide).
+//
+// Both forward a canonical resource id to the PDP so the baseline
+// subject.sub == resource.id rule decides ownership; a silent regression of either
+// to plain auth.RequirePermission (which forwards r.URL.Path) drops the triple →
+// MISSING → CI red. Only calls whose receiver resolves to runtime/auth are
+// recognized; a non-const param, wrong arity, or non-authz accessor is recorded
+// with a sentinel so it surfaces as an UNEXPECTED triple rather than being silently
+// skipped.
 func collectOwnerScopedGates(p *Pass, f *ast.File, handler string) []string {
 	var out []string
 	EachInSubtree[ast.CallExpr](f, func(call *ast.CallExpr) {
 		pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-		if !ok || pkgPath != authRuntimeImportPath || name != "RequirePermissionForResource" {
+		if !ok || pkgPath != authRuntimeImportPath {
 			return
 		}
-		if len(call.Args) != 2 {
-			out = append(out, handler+"|<bad-arity>|<bad-arity>")
-			return
-		}
-		param, ok := ownerScopedGateConstString(p, call.Args[0])
-		if !ok {
-			param = "<non-const-param>"
-		}
-		accessor := "<non-authz-accessor>"
-		if argCall, ok := call.Args[1].(*ast.CallExpr); ok {
-			if apath, aname, ok := ResolvePackageRef(p.TypesInfo, argCall.Fun); ok && apath == authzImportPath {
-				accessor = aname
+		switch name {
+		case "RequirePermissionForResource":
+			if len(call.Args) != 2 {
+				out = append(out, handler+"|<bad-arity>|<bad-arity>")
+				return
 			}
+			param, ok := ownerScopedGateConstString(p, call.Args[0])
+			if !ok {
+				param = "<non-const-param>"
+			}
+			out = append(out, handler+"|"+param+"|"+ownerScopedGateAccessor(p, call.Args[1]))
+		case "RequirePermissionForSelf":
+			if len(call.Args) != 1 {
+				out = append(out, handler+"|<bad-arity>|<bad-arity>")
+				return
+			}
+			out = append(out, handler+"|self|"+ownerScopedGateAccessor(p, call.Args[0]))
 		}
-		out = append(out, handler+"|"+param+"|"+accessor)
 	})
 	return out
 }
@@ -263,6 +305,14 @@ func TestOwnerScopedGate_ReverseFixture(t *testing.T) {
 	// RequirePermissionForResource triple → in production it would be a MISSING entry.
 	assert.NotContains(t, collected, "redfixture|userID|PermRoleRead",
 		"reverse fixture: a regression to plain auth.RequirePermission must NOT be collected as an owner gate (so production reports it MISSING)")
+	// #1863: a well-formed RequirePermissionForSelf gate is collected as a "self" triple
+	// (proves the self-branch extraction is exercised, not vacuous).
+	assert.Contains(t, collected, "redfixture|self|PermSystemRead",
+		"reverse fixture: a well-formed RequirePermissionForSelf gate must be collected as a self triple")
+	// A self-gate regressed to plain RequirePermission is NOT collected as a self triple
+	// → in production it would be a MISSING entry, identical to the RequirePermissionForResource regression.
+	assert.NotContains(t, collected, "redfixture|self|PermConfigRead",
+		"reverse fixture: a self-gate regressed to plain auth.RequirePermission must NOT be collected as a self triple")
 	for k := range collected {
 		assert.False(t, strings.Contains(k, "PermRoleRead"),
 			"reverse fixture: the plain RequirePermission(PermRoleRead) gate must not produce any owner-gate triple, got %q", k)

@@ -116,9 +116,10 @@ var frozenAdminCondition = abac.Condition{
 // action (no broadening), and carries EXACTLY the frozen owner condition. Its values are
 // also the closed set of owner-scoped actions whose entire allow surface is frozen.
 var ownerScopedBaselineSelfRules = map[string]string{
-	"baseline-user-read-self":  authz.PermUserRead().String(),
-	"baseline-user-write-self": authz.PermUserWrite().String(),
-	"baseline-role-read-self":  authz.PermRoleRead().String(),
+	"baseline-user-read-self":     authz.PermUserRead().String(),
+	"baseline-user-write-self":    authz.PermUserWrite().String(),
+	"baseline-role-read-self":     authz.PermRoleRead().String(),
+	"baseline-access-decide-self": authz.PermAccessDecide().String(),
 }
 
 // conditionMatches reports field-by-field equality of two abac.Conditions, including the
