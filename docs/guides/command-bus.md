@@ -1,11 +1,15 @@
 # Command Bus Guide
 
-The **synchronous command bus** lets one in-process, first-party caller invoke a
-typed business operation owned by a cell, by a stable command id, without an HTTP
-round-trip. A `contract.yaml` of `kind: command` (with `codegen: true`) is the
-single source: codegen derives a typed `Handler` interface plus `Register` /
-`Dispatch` functions, and the cell implements the `Handler` and registers it into
-a process-wide `command.Registry`.
+The **command bus** lets first-party code route a typed business operation owned
+by a cell through a stable command id. The synchronous fast-path calls a
+registered handler in-process, without an HTTP round-trip. The async path writes a
+command outbox entry and lets the relay invoke the generated dispatcher under the
+same registry.
+
+A `contract.yaml` of `kind: command` is the single source: codegen derives a
+typed `Handler` interface plus `Register`, `Dispatch`, `DispatchAsync`,
+`EmitAsync`, and `EmitAsyncFromIdempotencyKey` functions. The cell implements the
+`Handler` and registers it into a process-wide `command.Registry`.
 
 > Design authority: ADR
 > [`docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md`](../architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md).
@@ -19,38 +23,45 @@ a process-wide `command.Registry`.
 | An external client to call an endpoint over the network | `kind: http` | Untrusted boundary: auth, JSON validation, status codes. |
 | To react to something that already happened, decoupled, at-least-once | `kind: event` (subscribe) | Async fan-out; producer and consumer are independent. |
 | To run a multi-step, cross-cell workflow with compensation | `kind: saga` (orchestrate) | Durable state machine + reverse-idempotent compensation. |
-| One in-process caller to invoke a typed cell operation by command id, synchronously | **`kind: command`** | Typed, in-process, registry-routed; no wire, no serialization. |
+| First-party code to invoke one typed cell operation by command id | **`kind: command`** | Typed registry route; sync is in-process, async goes through outbox relay. |
 
 The command bus is **not** a second HTTP layer and **not** an event bus:
 
-- It is **synchronous and in-process** — `Dispatch` calls the registered handler
-  directly (no JSON round-trip, no broker). Per ADR §D4/§D6, the request schema
-  *sources the typed `*Request` signature*; it is **not** re-validated at runtime
-  on the sync path (the caller is trusted first-party code). Value validation
-  belongs at the untrusted entry points that *front* the command bus (HTTP→command,
-  async outbox→command) — those bridges are later PRs.
+- Its sync fast-path is **synchronous and in-process** — `Dispatch` calls the
+  registered handler directly (no JSON round-trip, no broker). Per ADR §D4/§D6,
+  the request schema *sources the typed `*Request` signature*; it is **not**
+  re-validated at runtime on the sync path (the caller is trusted first-party
+  code). Value validation belongs at untrusted entry points: generated HTTP
+  handlers validate incoming bodies before service calls, and generated
+  `DispatchAsync` validates outbox entry payload bytes before invoking the
+  handler.
 - It is **one handler per command id** (`Register` rejects a duplicate with
   `ErrConflict`), unlike event fan-out where every consumer group gets a copy.
+- Its async path is **outbox-backed and relay-routed** — generated `EmitAsync`
+  writes a command entry whose routing topic is the command `DispatchID`; the
+  relay's `WithCommandDispatch` map routes matching entries to the generated
+  `DispatchAsync` instead of publishing them to the broker.
 
 ## The three-step flow
 
-### 1. Declare the contract (`kind: command`, `codegen: true`)
+### 1. Declare the contract (`kind: command`)
 
 ```yaml
 # examples/iotdevice/contracts/command/devicecommand/enqueue/v1/contract.yaml
 id: command.devicecommand.enqueue.v1
 kind: command
-codegen: true          # emits command_gen.go (Handler / Register / Dispatch)
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
 endpoints:
   handler: devicecell
-  invokers: []
+  invokers: [devicecell]
 schemaRefs:
   request: request.schema.json    # sources the typed *Request DTO
   response: response.schema.json   # sources the typed *Response DTO
 ```
+
+`codegen` defaults to enabled; set `codegen: false` only to opt out explicitly.
 
 `gocell generate contract` (run `go run ./cmd/gocell generate contract --all`)
 derives, into `generated/contracts/command/devicecommand/enqueue/v1/`:
@@ -64,13 +75,22 @@ type Handler interface {
 
 func Register(reg *command.Registry, h Handler) error
 func Dispatch(ctx context.Context, reg *command.Registry, req *Request) (*Response, error)
+func DispatchAsync(ctx context.Context, reg *command.Registry, entry outbox.Entry) error
+func EmitAsync(ctx context.Context, clk clock.Clock, emitter outbox.Emitter,
+    subject, commandID string, req *Request, opts ...command.EmitOption) error
+func EmitAsyncFromIdempotencyKey(ctx context.Context, clk clock.Clock,
+    emitter outbox.Emitter, subject string, req *Request,
+    opts ...command.EmitOption) error
 ```
 
-The typed `Handler` is the **sole** sanctioned target of `Register`/`Dispatch`;
-hand-writing an equivalent trio elsewhere is rejected by archtest
+The typed `Handler` and generated free functions are the sanctioned command
+surface. Hand-writing an equivalent funnel elsewhere is rejected by archtest
 `COMMAND-GEN-FUNNEL-SOLE-EMITTER-01`. Calling `command.Registry.RegisterHandler`
 directly (bypassing the generated `Register`) is rejected by
-`COMMAND-DISPATCH-REGISTER-CALLER-01`.
+`COMMAND-DISPATCH-REGISTER-CALLER-01`; wiring relay command dispatch with anything
+other than the generated `DispatchID`/`DispatchAsync` pair is rejected by
+`COMMAND-ASYNC-DISPATCH-CALLER-01`; bypassing the generated emit wrappers is
+rejected by `COMMAND-ASYNC-EMIT-CALLER-01`.
 
 ### 2. Implement the generated `Handler` in a cell slice
 
@@ -99,7 +119,7 @@ func (a EnqueueCommandAdapter) HandleEnqueue(
 cell type implementing its generated `Handler` — an unimplemented codegen command
 is CI-red, not dead-but-compiles.
 
-### 3. Wire the registry: cell option + `Register` in `Init`, registry in the root
+### 3. Wire the registry and relay
 
 The cell holds a **required** `*command.Registry`, injected via a `With*` option,
 and calls the generated `Register` during `Init`:
@@ -140,6 +160,20 @@ The registry is **required, not optional** — an `if registry != nil { Register
 skip would let the funnel silently regress to dead-but-compiles. An assembly that
 forgets to wire it fails fast in `Init`.
 
+The async path also wires the generated dispatcher into the outbox relay:
+
+```go
+// examples/iotdevice/run.go
+relay.WithCommandDispatch(commandReg, map[commandruntime.CommandID]commandruntime.AsyncDispatchFunc{
+    cmdenqueue.DispatchID: cmdenqueue.DispatchAsync,
+}, claimer)
+```
+
+The map key and value must come from the same generated command package. The
+required `claimer` wraps command dispatch in `Claim`/`Commit`/`Release`, using the
+entry's tenant, aggregate subject, and command instance id to deduplicate async
+redelivery.
+
 ## Dispatching
 
 A trusted in-process caller invokes the operation through the same registry:
@@ -163,21 +197,26 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 > parameter (mapped to the HTTP `Request.ID`), not a body field. A bridge that
 > translates HTTP→command must extract the path param and set `DeviceID`.
 
-> **⚠️ Authz and validation are the caller's job — the sync path runs neither.**
+> **Authz and validation are the caller's job on the sync path.**
 > Per ADR §D8, `Dispatch` does **not** authenticate, authorize, or value-validate
-> the request: the registered handler delegates straight to the domain service
-> (the devicecommand handler runs with **no role check** — the role gate
-> `auth.AnyRole(admin, operator)` only exists on the HTTP enqueue *handler*, not on
-> the command path). Any production front-end for this command bus (HTTP→command,
-> async outbox→command) **MUST**, before calling `Dispatch`: (a) authenticate +
-> authorize the caller, including device-ownership/IDOR checks, and (b) validate
-> request values (e.g. non-empty `commandType`) against the request schema. When a
-> bridge lands, populate the contract's `endpoints.invokers` so callers are
-> accountable.
+> the request: the registered handler delegates straight to the domain service.
+> A sync production caller must enforce authn/authz, ownership/IDOR checks, and
+> request value constraints before calling `Dispatch`.
 
-As of this writing there is **no production `Dispatch` caller** for devicecommand
-enqueue: the production entry points that front the command bus — an
-HTTP→command bridge and an async outbox→command relay — are planned future work described in ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md` §5. The wiring is exercised end-to-end by `examples/iotdevice/cells/devicecell/command_wiring_test.go`.
+There is still no production code that directly calls synchronous
+`cmdenqueue.Dispatch`; that path is exercised by wiring tests. Production command
+traffic for device enqueue is async:
+
+- HTTP `http.device.command.enqueue-async.v1` validates the incoming request and
+  calls `Service.EnqueueAsync`, which emits through
+  `cmdenqueue.EmitAsyncFromIdempotencyKey`.
+- `devicebootstrap` reacts to `event.device-registered.v1` and emits the generated
+  command with `cmdenqueue.EmitAsync`.
+- `devicecertrenewal` uses the same generated emit path for reconcile-driven
+  certificate rotation commands.
+- the relay dispatches matching command entries through `cmdenqueue.DispatchAsync`,
+  which validates the outbox payload bytes before restoring context and invoking
+  the registered `Handler`.
 
 ## How it differs from saga and event consumers
 
@@ -186,7 +225,7 @@ HTTP→command bridge and an async outbox→command relay — are planned future
 | Invocation | synchronous, in-process, by command id | async, broker-delivered | durable workflow steps |
 | Registration | `<gen>.Register(reg, h)` (hand-written today) | `reg.Subscribe(...)` derived by cellgen from `role: subscribe` | saga definition + step funcs |
 | Multiplicity | exactly one handler per command id | one per consumer group; fan-out across groups | one coordinator per saga |
-| Idempotency | caller's responsibility (sync, no retry) | `ConsumerBase` Claim/Commit/Release | journal + lease CAS |
+| Idempotency | caller responsibility on sync; relay Claimer wraps async entries | `ConsumerBase` Claim/Commit/Release | journal + lease CAS |
 | Failure | error returned to caller | Ack / Requeue / Reject → DLX | compensation (reverse, idempotent) |
 | Validation | typed struct only (sync path); JSON-schema at the fronting boundary | consumer decodes + validates payload | step output schema |
 
@@ -200,13 +239,15 @@ See ADR `docs/architecture/202606040550-1044-adr-command-bus-dispatch-funnel.md`
 
 ## Checklist
 
-- [ ] `contract.yaml`: `kind: command`, `codegen: true`, `ownerCell`, both `schemaRefs`.
+- [ ] `contract.yaml`: `kind: command`, `ownerCell`, handler/invoker endpoints, both `schemaRefs`.
 - [ ] `go run ./cmd/gocell generate contract --all` and commit the generated package.
 - [ ] Implement the generated `Handler` in a cell slice (adapter → domain service).
 - [ ] Cell holds a required `*command.Registry`; `Init` calls `<gen>.Register`.
 - [ ] Composition root constructs `command.NewRegistry()` and injects it via `With*`.
+- [ ] Async command producers use generated `<gen>.EmitAsync` or
+      `<gen>.EmitAsyncFromIdempotencyKey`; the relay wires
+      `<gen>.DispatchID: <gen>.DispatchAsync` through `WithCommandDispatch`.
 - [ ] `slice.yaml` `verify.contract` has `contract.<id>.handle`; add an executable test.
 - [ ] `go run ./cmd/gocell validate` + the command archtests pass.
-- [ ] (When the first production `Dispatch` caller / bridge lands) the bridge
-      enforces authz + value validation before `Dispatch`; populate
-      `endpoints.invokers`; update this guide to drop the "no production caller" caveat.
+- [ ] Sync `Dispatch` callers enforce authz + value validation before dispatch;
+      async HTTP entry points rely on generated HTTP validation before emitting.
