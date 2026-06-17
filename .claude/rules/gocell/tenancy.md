@@ -117,15 +117,15 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   series（无 transport 标签，registerOrReuse 共享 family）。机制/评级/威胁矩阵见 grpc-transport-adapter ADR
   §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + archtest
   `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` + 治理 `FMT-41`。
-- **HTTP 授权 contract-derived 化（#2205，PR-13 起步波）**：HTTP route gate 与 gRPC 同源——
+- **HTTP 授权 contract-derived 化（#2205）**：HTTP route gate 与 gRPC 同源——
   transport-neutral `authz.MethodPolicyResolver`（gRPC `ServiceRegistrar` 与 HTTP cell 级
   `auth.NewStaticMethodPolicyResolver` 双实现），HTTP route→permission 由契约 `endpoints.http.permission`
   overlay 经 cellgen 派生入 cell 级 resolver，生成 handler 经 `auth.RequirePermissionForContract`
   解析（复用 `RequirePermission` 单一 PDP 路径，不新增第二入口）。来源合法性由治理 `FMT-42` 验证
   （present-only：∈ closed authz registry + 与 public/bootstrap/clientsOnly/serviceOwned 互斥），
   resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。overlay 现为
-  sparse optional（迁移期 transient，未迁路由保留手写 gate）；configcore 已全量迁移，其余 cell +
-  「standard route MUST 声明 permission」Hard 化为 PR-13 后续波（off #2205）。
+  sparse optional（迁移期 transient，未迁路由保留手写 gate）；configcore 已全量迁移，其余 cell 迁移 +
+  「standard route MUST 声明 permission」mandatory 化见 #2355 / #2358。
 
 相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
 （`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。
