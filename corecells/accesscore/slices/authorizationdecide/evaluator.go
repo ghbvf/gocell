@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/corecells/accesscore/internal/abac"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 )
 
 // Sentinel matched-rule ids for the two evaluate outcomes that are not the id of
@@ -64,7 +65,9 @@ func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action 
 	if err != nil {
 		// An invalid combined obligation is a programmer/config error; deny
 		// rather than emit an Allow that the PEP cannot enforce (fail-closed).
-		s.logger.Error("authorization-decide: invalid combined obligations, denying", slog.Any("error", err))
+		s.logger.Error("authorization-decide: invalid combined obligations, denying",
+			slog.String("action", action),
+			slog.Any("error", redaction.RedactError(err)))
 		return authz.Deny("authorization-decide: invalid obligations"), ruleIDInvalidObligations
 	}
 	return dec, firstPermitID

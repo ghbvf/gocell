@@ -24,6 +24,20 @@ package archtest
 // structure that do not exist in an external module. Running against an
 // external repo produces vacuous-green or false-red. Enforced in GoCell via
 // the corresponding Test* functions.
+//
+// # Runtime-registered contracts — VACUOUS BY DESIGN (epic #303 / #2234)
+//
+// Every invariant in this file statically enumerates contracts from
+// contract.yaml + generated/contracts paths at BUILD time. Contracts registered
+// at RUNTIME via the contract registry (epic #303, out-of-tree cells) do not
+// exist at build time, so DEAD-CONTRACT-01 / IMPL-DECL-COVER-01 /
+// EMIT-DECL-COVER-01 / DEAD-CODE-01 (and HANDLER-DECL-COVER-01) are VACUOUS over
+// them. This is the dual-track design declared in ADR 202606162119-303
+// §"与扇出 archtest 的关系" — NOT a coverage gap. The equivalent runtime
+// compensation is the governance registration gate's REG-01 fanout-completeness
+// check (kernel/governance.(*Validator).runtimeFanoutCompleteness, #2234), which
+// validates publisher/subscriber/owner completeness at register time. Do not read
+// these archtests' silence on runtime-registered contracts as coverage.
 
 import (
 	"go/ast"

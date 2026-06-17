@@ -1,0 +1,22 @@
+id: J-accessdecision
+goal: 前端 <Can> 组件经 PDP 查询当前登录用户对某 action（可选 resource）的授权决策（BR-004）
+lifecycle: experimental
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - accesscore
+contracts:
+  # PDP self-introspection endpoint (#1863). The decision subject is the
+  # authenticated JWT principal; the access:decide baseline self rule
+  # (subject.sub == resource.id) lets any authenticated user query their own
+  # decisions. A future J-rbac/J-authz journey may absorb this alongside
+  # role.check/role.list (today owned by J-useronboarding).
+  - http.auth.decide.v1
+passCriteria:
+  - text: 已认证用户查询自身可执行的 action 返回 200 且 data.allowed=true；无匹配规则返回 200 且 data.allowed=false（deny 非 HTTP 错误）
+    mode: manual
+  - text: 未注册的 action 返回 400；缺少已认证 principal 返回 401（subject 取 JWT，请求体不接受 subject）
+    mode: manual
+  - text: 策略存储不可用时 PDP fail-closed 返回 503，不静默 allow/deny
+    mode: manual
