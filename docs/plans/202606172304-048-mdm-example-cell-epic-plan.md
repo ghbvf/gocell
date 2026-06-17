@@ -1,7 +1,7 @@
 # MDM 示例 Cell — Epic 规划（探索 + 任务/PR 编排）
 
 > 状态：Draft（探索产出，待评审定 Phase 边界）
-> 目标：新建 `externalcells/mdm`（外部 module 示例根，见 §0′），最大化复用 GoCell 已有能力，端到端串起 MDM 本质流水线，
+> 目标：新建 `externalcells/mdm`（外部 cell（Operator-SDK 模式），见 §0′），最大化复用 GoCell 已有能力，端到端串起 MDM 本质流水线，
 > 为后续 MDM 产品打基础；同时暴露并分类框架缺口，严格区分「框架该补」vs「MDM 该自建」。
 > 关联：#1895（device-cert framework pivot）、#1939（framework-owned contract）、
 > `examples/iotdevice`（最接近的现有 L4 设备示例）、`examples/orderfulfillment`（saga+projection 参考）。
@@ -139,8 +139,10 @@ level-triggered + leader-elect + `LeaseToken.Epoch` fencing。阶段 1–6 喂�
 > **框架 vs 产品域判据（防 MDM/厂商能力混入框架）**：进框架 `adapters/` / `runtime/` 必须**同时**满足
 > ① **provider-agnostic**——标准协议/通用接口、无厂商特征（EST / MQTT / OIDC / softca ✓；
 > APNs=Apple、FCM=Google、WSTEP 等厂商专有 API ✗）；② **非单一产品线专属**——≥2 消费方或设计上可复用。
-> 任一不满足 → 归消费方模块（MDM 等）自建。此判据的 durable 落点是 PR-18 的 MDM ADR；其**结构性硬保证**
-> 是模块边界：`externalcells/mdm` 自有 module，framework module 不可 import 它 → 厂商 provider 进不了框架。
+> 任一不满足 → 归消费方模块（MDM 等）自建。此判据的 durable 落点是 PR-18 的 MDM ADR。**评级诚实分层**：
+> 模块边界是 **Hard** 但只锁一个向量——`externalcells/mdm` 自有 module，framework module 不可 import 它
+> （go module 依赖不可循环）；「有人直接往 framework `adapters/`/`cellmodules/` 新增厂商 wrapper」这一向量靠
+> review / depguard 拦（**Medium**），不由模块边界自动保证。判据 markdown 本身只是 **Soft** 辅助。
 
 ### 3.1 框架该补 → 拆独立 backlog epic（**不混进示例 PR**）
 
