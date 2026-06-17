@@ -1,6 +1,6 @@
 ---
 name: issues
-description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 滚动排序：OPEN 重排、已完成不动、超窗不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /ship 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
+description: "GitHub Issues + Project v2 #3 项目管理单源技能。Part A：epic 拆解 + wave 实施顺序调度（找子任务 → blocked-by DAG → wave 1-4 容量装箱排序：每 wave ≤4、pri 优先、wave 内切并行组/串行链、OPEN 重排、已完成不动、超窗/溢出不入字段 → 写 Project Wave 字段 + 回填 epic body + 回评）。Part B：issue/PR 原子操作（建/改 backlog issue、area/type/pri label、PR 双轴状态 label 流转、统一 PR 评论格式 + 冲突预检/CI watch 跟进，ship/fix 共用）。非 epic issue 号 → 查代码判状态（只判不修，建议 /ship 或 close）。当用户要整理 epic 排 wave、建/改 backlog issue、贴 label、切 PR 状态、给 PR 留评论、核一个 issue 是否还成立时使用。"
 argument-hint: "<epic #N | #issue（非epic→状态核查）| create-issue | edit-labels | pr-status | comment> [...]"
 allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
 ---
@@ -40,36 +40,41 @@ allowed-tools: [Read, Grep, Bash, Agent, AskUserQuestion]
    ```
 4. **汇总子 issues**：`gh api repos/ghbvf/gocell/issues/<epic#>/sub_issues --jq '.[]|{number,title,state}'`（含新关联）；对每个 OPEN 子任务读 label（area/type/pri）+ body 的 `Blocked-by: #NNN`（多行/逗号分隔，无声明=无前置）。
 
-> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 核实归属 / 状态 / `Blocked-by` 再汇总（**wave 内实施顺序的并行分析在 A2 第 6 步，见下**）。
+> 子任务跨 3+ 包或描述模糊时，用 `Agent(Explore)` 核实归属 / 状态 / `Blocked-by` 再汇总（**wave 内冲突分区 + 实施顺序的分析在 A2 第 6 步，见下**）。
 
-## A2. 建 blocked-by DAG + wave 滚动排序（Wave 1-4 有界）
+## A2. 建 blocked-by DAG + wave 容量装箱排序（每 wave ≤4，Wave 1-4 有界）
 
-**滚动 + 有界算法**（每次更新 epic 都重跑；longest-path layering，作用域 = epic 的 **OPEN** 子任务）：
+**滚动 + 有界 + 容量装箱算法**（每次更新 epic 都重跑；作用域 = epic 的 **OPEN** 子任务）。wave 不再纯=依赖深度，而是「依赖约束 + 每 wave ≤4 容量」的贪心 list-scheduling——**pri 决定容量受限时谁进早 wave**：
 
 1. **节点 = OPEN 子任务**；CLOSED（已完成）子任务**排除**——不参与排序、不动其 Wave 字段（见 A3）。
 2. 有向边 `blocker → dependent`（来自 `Blocked-by`），**仅当 blocker 也 OPEN**；blocker 已 close = 依赖已满足 → 删该边。**这是「滚动」的来源**：前置完成后 dependent 自动前移到更早 wave。
 3. 检测环：若有环，AskUserQuestion 让用户裁定断哪条边（不静默）。
-4. **wave 分层**（longest-path layering，`v` = OPEN 节点）：
-   - `wave(v) = 1` 若 v 无 OPEN blocker；
-   - `wave(v) = 1 + max(wave(b) for b in OPEN blockers(v))` 否则。
-5. **有界 cap = Wave 4**：`wave(v) > 4` 的节点标记 **超窗**——不落 Project Wave 字段（A3 清空/不写）。Project Wave 只有 1-4 四档。
-6. **wave 内排序 = 对每个 Wave 内任务并行分析，确认实施顺序**：跨 wave 顺序已由依赖锁定；wave 内无硬 `Blocked-by`，顺序是自由度。对每个 Wave（成员 ≥2）**并行**派 `Agent(Explore)` 分析其中每个任务的 scope / 触碰文件 / 产出↔消费 / 风险，主 agent 汇总后定该 wave 实施顺序：**基础性产出**（被同 wave 他者隐式消费）先 → **同文件任务相邻**防写冲突 → 默认 `pri`(p0>p1>p2>p3) → `Cx`(小先，由 `cx-X` label 提供、REST 可查) → issue#。单任务 wave 跳过分析。
-7. 输出每个 OPEN 子任务的 `(wave, wave 内序)` 或「超窗」。
+4. **逐 wave w=1..4 贪心装箱**（每 wave 至多 **4** 个 issue）：
+   - `ready 集` = 全部 blocker 都已分到**更早** wave 的未分配 OPEN 节点（无 blocker 的节点天然 ready）。
+   - ready 集按 `pri`(p0>p1>p2>p3) → **基础性产出先** → `Cx`(小先，由 `cx-X` label 提供) → issue# 排序，取前 **≤4** 入 wave w。
+   - 其余（含同深度溢出、blocker 刚入本 wave 而本轮未 ready 的）**留待下一 wave**（溢出顺延）。
+5. **有界 cap = Wave 4**：装箱到 Wave 4 仍未分配的节点标记 **超窗**——不落 Project Wave 字段（A3 清空/不写）。Project Wave 只有 1-4 四档。
+6. **wave 内冲突分区**（确认「真并行」vs「须串行」）：对每个 wave（成员 ≥2）**并行**派 `Agent(Explore)` 分析其中每个任务的 scope / 触碰文件 / 产出↔消费 / 风险，主 agent 汇总后切：
+   - **并行组**：两两**无文件重叠 + 无隐式产出↔消费 + 无资源冲突** → 可同时跑（≤4 并行 agent）。「可并行」= 经冲突分析确认无冲突，**非**仅「无 `Blocked-by`」。
+   - **串行链**：有上述任一冲突 → 须串行，链内按 `pri` → 基础性产出先 → `Cx` → issue# 定序，并注明冲突原因（如「同改 foo.go」）。
+   - 单任务 wave 跳过分析。
+7. 输出每个 OPEN 子任务的 `(wave, 并行组/串行链, 链内序)` 或「超窗」。
 
 呈现给用户的 dry-run 表（只列 OPEN；超窗与已完成单列）：
 
 ```
-Wave 1: #aaa(P1/Cx1) #bbb(P2/Cx2)
-Wave 2: #ccc(P1/Cx2, blocked-by #aaa)
-Wave 3: #ddd(P2/Cx3)
-Wave 4: #eee(P2/Cx2)
-超窗(>W4，不写字段): #fff(依赖链 >4)
-已完成(不动): #ggg #hhh
+Wave 1（依赖深度1，取 pri 前4）:
+  并行组 A（零冲突，可同时）: #a(p0·Cx1)  #b(p0·Cx2)
+  串行链 B（#c→#d 同改 foo.go，按 pri）: [1] #c(p1·Cx2)  [2] #d(p2·Cx1)
+Wave 2（深度1溢出 + 依赖 Wave 1）:
+  并行组 A: #e(p3·Cx1 深度1溢出)  #g(p1·Cx2 ←blocked-by #a)
+超窗(>W4，不写字段): #z(依赖链/装箱 >4)
+已完成(不动): #y
 ```
 
 ## A3. 写 Project v2 Wave 字段（单源真值，滚动）
 
-> Wave 字段是 epic 子任务排序的**机器单源**；epic body 段是派生视图。**只写 OPEN 子任务的 Wave 1-4**；CLOSED 不动；超窗清空。写前确认字段 / option / item 合法。
+> Wave 字段是 epic 子任务排序的**机器单源**（wave 号来源 = A2 容量装箱结果，每 wave ≤4；并行组 / 串行链是 epic body 派生视图，不入字段）；epic body 段是派生视图。**只写 OPEN 子任务的 Wave 1-4**；CLOSED 不动；超窗清空。写前确认字段 / option / item 合法。
 
 ```bash
 # 发现 Wave 字段 id + option id（single-select；固定 Wave 1-4 四档）
@@ -101,13 +106,13 @@ project（无 item）时先 `gh project item-add 3 --owner ghbvf --url <issue-ur
 ## A4. 回填 epic body 实施顺序段 + 回评
 
 ```bash
-# epic body 的「实施顺序」段重生成（派生视图：仅 OPEN 的 Wave 1-4 + 超窗/已完成注记）
+# epic body 的「实施顺序」段重生成（派生视图：仅 OPEN 的 Wave 1-4，每 wave ≤4，含并行组 / 串行链 / pri / 溢出注记 + 超窗/已完成注记）
 gh issue edit <epic#> --body "$(...更新 ## 实施顺序 段...)"
 
 # 回评通知（一行 + 标记）
 gh issue comment <epic#> --body "$(cat <<'C'
 <!-- pm:epic-wave -->
-🌊 Wave 滚动更新：OPEN 重排 Wave 1-4，已完成不动，超窗(>W4)暂不入字段。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
+🌊 Wave 滚动更新：每 wave ≤4 容量装箱，OPEN 按 pri 排 Wave 1-4（并行组可同时跑 / 串行链按序），已完成不动，超窗(>W4 或装箱溢出)暂不入字段。Wave 字段 = 单源，详见 Project #3 / 本 issue body 实施顺序段。
 C
 )"
 ```
