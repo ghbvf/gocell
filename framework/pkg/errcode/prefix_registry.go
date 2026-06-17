@@ -252,6 +252,7 @@ var gocellPlatformPrefixes = []string{
 	"ERR_READYZ_",
 	"ERR_RECONCILE_",
 	"ERR_REFRESH_",
+	"ERR_REGISTRATION_",
 	"ERR_SESSION_",
 	"ERR_VALIDATION_",
 
