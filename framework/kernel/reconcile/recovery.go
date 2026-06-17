@@ -73,7 +73,13 @@ func recoverReconcile(ctx context.Context, rec Reconciler, req Request, logger *
 	return rec.Reconcile(ctx, req)
 }
 
-func structuredPanicValue(v any) any {
+func structuredPanicValue(v any) (out any) {
+	defer func() {
+		if recover() != nil {
+			out = safeRedactPanicFallback(v)
+		}
+	}()
+
 	switch v.(type) {
 	case nil, error, fmt.Stringer, string:
 		return redaction.RedactAny(v)
@@ -87,6 +93,15 @@ func structuredPanicValue(v any) any {
 		return redaction.RedactAny(v)
 	}
 	return redactDecodedPanicValue(decoded)
+}
+
+func safeRedactPanicFallback(v any) (out any) {
+	defer func() {
+		if recover() != nil {
+			out = redaction.Mask
+		}
+	}()
+	return redaction.RedactAny(v)
 }
 
 func redactDecodedPanicValue(v any) any {

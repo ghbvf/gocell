@@ -22,6 +22,12 @@ func (p panicReconciler) Reconcile(_ context.Context, _ Request) (Result, error)
 	panic(p.payload)
 }
 
+type panicMarshaler struct{}
+
+func (panicMarshaler) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
+}
+
 // successReconciler always returns a fixed Result and nil error.
 type successReconciler struct{ result Result }
 
@@ -155,6 +161,19 @@ func TestRecovery_PanicValueRedactsSensitiveFields(t *testing.T) {
 	assert.Equal(t, "bad-state", panicValue["code"])
 	assert.Equal(t, redaction.Mask, panicValue["password"])
 	assert.NotContains(t, buf.String(), "hunter2")
+}
+
+func TestRecovery_PanicValueMarshalPanicStillConvertsToError(t *testing.T) {
+	t.Parallel()
+	rec := panicReconciler{payload: panicMarshaler{}}
+	req := Request{EntityID: "marshal-panic-entity"}
+
+	require.NotPanics(t, func() {
+		res, err := recoverReconcile(context.Background(), rec, req, slog.Default(), "test_reconciler")
+		require.Error(t, err)
+		assert.Equal(t, Result{}, res)
+		assert.Equal(t, resultTransient, classify(err))
+	})
 }
 
 func TestStructuredPanicValue_RedactsNestedArraysAndStrings(t *testing.T) {
