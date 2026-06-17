@@ -49,56 +49,40 @@ func TestCellTLSMaterialFunnel_RedFixtureDetected(t *testing.T) {
 			"if the fixture changes intentionally, update the expected count")
 }
 
-// TestIsCellTLSSanctionedSite locks the platform-identity bind on the
-// sanctioned-site allowlist: the exemption only applies to the exact two
-// sanctioned package paths (cellmodules/celltls and adapters/grpc). A consumer
-// module that wires this importable rule via cfg.ExtraRules and forges the
-// same relative package name must NOT be exempt.
-func TestIsCellTLSSanctionedSite(t *testing.T) {
+// TestIsCellTLSSanctionedCall locks the (pkg, ctor) granularity (#2263 F4): the
+// exemption applies per exact package path AND per constructor. cellmodules/celltls
+// may call both ctors; adapters/grpc only NewServerMTLSConfig — crucially NOT
+// NewClientIdentity (a cross-cell client identity is celltls-only). A consumer
+// module forging the same relative package name is NOT exempt.
+func TestIsCellTLSSanctionedCall(t *testing.T) {
 	t.Parallel()
+	celltlsPkg := PlatformModulePath + "/cellmodules/celltls"
+	grpcPkg := PlatformModulePath + "/adapters/grpc"
 	cases := []struct {
 		name    string
 		pkgPath string
+		ctor    string
 		want    bool
 	}{
+		{name: "celltls + NewClientIdentity", pkgPath: celltlsPkg, ctor: "NewClientIdentity", want: true},
+		{name: "celltls + NewServerMTLSConfig", pkgPath: celltlsPkg, ctor: "NewServerMTLSConfig", want: true},
+		{name: "grpc + NewServerMTLSConfig", pkgPath: grpcPkg, ctor: "NewServerMTLSConfig", want: true},
+		{name: "grpc + NewClientIdentity → NOT sanctioned (F4)", pkgPath: grpcPkg, ctor: "NewClientIdentity", want: false},
+		{name: "consumer forges celltls path", pkgPath: "consumer.example/cellmodules/celltls", ctor: "NewClientIdentity", want: false},
+		{name: "consumer forges grpc path", pkgPath: "consumer.example/adapters/grpc", ctor: "NewServerMTLSConfig", want: false},
 		{
-			name:    "sanctioned platform celltls package",
-			pkgPath: PlatformModulePath + "/cellmodules/celltls",
-			want:    true,
+			name: "platform non-sanctioned package", pkgPath: PlatformModulePath + "/cellmodules/celltransport",
+			ctor: "NewClientIdentity", want: false,
 		},
-		{
-			name:    "sanctioned platform grpc adapter",
-			pkgPath: PlatformModulePath + "/adapters/grpc",
-			want:    true,
-		},
-		{
-			name:    "consumer module forges celltls path",
-			pkgPath: "consumer.example/cellmodules/celltls",
-			want:    false,
-		},
-		{
-			name:    "consumer module forges grpc adapter path",
-			pkgPath: "consumer.example/adapters/grpc",
-			want:    false,
-		},
-		{
-			name:    "platform package, non-sanctioned path",
-			pkgPath: PlatformModulePath + "/cellmodules/celltransport",
-			want:    false,
-		},
-		{
-			name:    "unresolved package",
-			pkgPath: "",
-			want:    false,
-		},
+		{name: "unresolved package", pkgPath: "", ctor: "NewClientIdentity", want: false},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := isCellTLSSanctionedSite(tc.pkgPath); got != tc.want {
-				t.Errorf("isCellTLSSanctionedSite(%q) = %v, want %v",
-					tc.pkgPath, got, tc.want)
+			if got := isCellTLSSanctionedCall(tc.pkgPath, tc.ctor); got != tc.want {
+				t.Errorf("isCellTLSSanctionedCall(%q, %q) = %v, want %v",
+					tc.pkgPath, tc.ctor, got, tc.want)
 			}
 		})
 	}

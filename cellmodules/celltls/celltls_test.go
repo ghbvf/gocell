@@ -23,6 +23,10 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
+// testCAValidity is the validity window for test CA certs (TEST-TIME-LITERAL-01:
+// site-specific test deadline as a file-local const, not an inline literal).
+const testCAValidity = 2 * time.Hour
+
 // writeCellMaterial generates a CA + a cell leaf (with a SPIFFE URI SAN) and
 // writes cert/key/ca PEM files into a temp dir, returning their paths.
 func writeCellMaterial(t *testing.T) (certFile, keyFile, caFile string) {
@@ -35,7 +39,7 @@ func writeCellMaterial(t *testing.T) (certFile, keyFile, caFile string) {
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "test-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(2 * time.Hour),
+		NotAfter:              time.Now().Add(testCAValidity),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,

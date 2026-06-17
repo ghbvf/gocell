@@ -94,10 +94,21 @@ const (
 )
 
 // cellTLSBannedCtors is the closed set of tlsutil mTLS-material constructors
-// that may only be called from the sanctioned packages.
+// whose callers are funneled.
 var cellTLSBannedCtors = map[string]struct{}{
 	"NewClientIdentity":   {},
 	"NewServerMTLSConfig": {},
+}
+
+// cellTLSSanctionedCalls maps each sanctioned caller package to the EXACT set of
+// tlsutil mTLS-material constructors it may call — (pkg, ctor) granularity, not
+// whole-package (#2263 review F4). cellmodules/celltls mints both the client
+// identity and the server config; adapters/grpc may build only the gRPC listener
+// server config (NewServerMTLSConfig) and must NOT mint a cross-cell client
+// identity (NewClientIdentity is celltls-only). Any other (pkg, ctor) is a hit.
+var cellTLSSanctionedCalls = map[string]map[string]struct{}{
+	cellTLSSanctionedCellTLSPkg: {"NewClientIdentity": {}, "NewServerMTLSConfig": {}},
+	cellTLSSanctionedGRPCPkg:    {"NewServerMTLSConfig": {}},
 }
 
 // CheckCellTLSMaterialFunnel enforces CELLTLS-MATERIAL-FUNNEL-01: the
@@ -128,46 +139,59 @@ func scanCellTLSMaterialViolations(p *Pass) []Diagnostic {
 		if strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		if isCellTLSSanctionedSite(pkgPath) {
-			continue
-		}
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			calleePkg, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
-			if !ok {
-				return
+			if d, ok := cellTLSCallViolation(p, pkgPath, rel, call); ok {
+				out = append(out, d)
 			}
-			if calleePkg != cellTLSUtilImportPath {
-				return
-			}
-			if _, banned := cellTLSBannedCtors[name]; !banned {
-				return
-			}
-			line := p.Fset.Position(call.Pos()).Line
-			out = append(out, Diagnostic{
-				Rel:  rel,
-				Line: line,
-				Message: fmt.Sprintf(
-					"tlsutil.%s is a mTLS-material constructor; "+
-						"production callers are restricted to cellmodules/celltls and adapters/grpc "+
-						"(%s). "+
-						"For cell-to-cell HTTP mTLS use celltls.Resolve; "+
-						"for gRPC transport-layer mTLS use adapters/grpc.TLSConfig",
-					name, cellTLSFunnelRuleID,
-				),
-			})
 		})
 	}
 	return out
 }
 
-// isCellTLSSanctionedSite reports whether pkgPath is one of the two sanctioned
-// callers of the tlsutil mTLS-material constructors. Binding the exemption to
-// the exact package path (not a relative file path) means a consumer module
-// that wires this importable rule via cfg.ExtraRules and forges the same
-// relative package name is NOT exempt — its pkgPath is under the consumer's
-// own module, not PlatformModulePath. Extracted as a pure function for unit
-// testability (TestIsCellTLSSanctionedSite).
-func isCellTLSSanctionedSite(pkgPath string) bool {
-	return pkgPath == cellTLSSanctionedCellTLSPkg ||
-		pkgPath == cellTLSSanctionedGRPCPkg
+// cellTLSCallViolation returns the diagnostic for a single CallExpr if it is an
+// unsanctioned call to a tlsutil mTLS-material constructor — ok=false when the
+// call is not such a constructor or the (pkg, ctor) pair is sanctioned. Extracted
+// from the scan loop to keep cognitive complexity ≤15.
+func cellTLSCallViolation(p *Pass, pkgPath, rel string, call *ast.CallExpr) (Diagnostic, bool) {
+	calleePkg, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+	if !ok || calleePkg != cellTLSUtilImportPath {
+		return Diagnostic{}, false
+	}
+	if _, banned := cellTLSBannedCtors[name]; !banned {
+		return Diagnostic{}, false
+	}
+	// (pkg, ctor) sanctioned check: celltls may call both ctors; adapters/grpc
+	// only NewServerMTLSConfig (#2263 F4).
+	if isCellTLSSanctionedCall(pkgPath, name) {
+		return Diagnostic{}, false
+	}
+	return Diagnostic{
+		Rel:  rel,
+		Line: p.Fset.Position(call.Pos()).Line,
+		Message: fmt.Sprintf(
+			"tlsutil.%s is a mTLS-material constructor; "+
+				"production callers are restricted to cellmodules/celltls and adapters/grpc "+
+				"(%s). "+
+				"For cell-to-cell HTTP mTLS use celltls.Resolve; "+
+				"for gRPC transport-layer mTLS use adapters/grpc.TLSConfig",
+			name, cellTLSFunnelRuleID,
+		),
+	}, true
+}
+
+// isCellTLSSanctionedCall reports whether package pkgPath may call the tlsutil
+// mTLS-material constructor ctorName — (pkg, ctor) granularity (#2263 F4).
+// Binding the exemption to the EXACT package path (not a relative file path)
+// means a consumer module that wires this importable rule via cfg.ExtraRules and
+// forges the same relative package name is NOT exempt — its pkgPath is under the
+// consumer's own module, not PlatformModulePath. The per-ctor inner set rejects
+// e.g. adapters/grpc calling NewClientIdentity (only NewServerMTLSConfig is
+// sanctioned there). Pure function for unit testability (TestIsCellTLSSanctionedCall).
+func isCellTLSSanctionedCall(pkgPath, ctorName string) bool {
+	allowed, ok := cellTLSSanctionedCalls[pkgPath]
+	if !ok {
+		return false
+	}
+	_, ok = allowed[ctorName]
+	return ok
 }

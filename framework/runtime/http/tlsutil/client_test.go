@@ -19,6 +19,10 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
 )
 
+// testRootCAValidity is the validity window for test root CA certs (TEST-TIME-LITERAL-01:
+// site-specific test deadline as a file-local const, not an inline literal).
+const testRootCAValidity = 2 * time.Hour
+
 // cellChain holds a self-signed root + a cell leaf carrying a SPIFFE URI SAN.
 type cellChain struct {
 	rootCertPEM []byte
@@ -39,7 +43,7 @@ func genCellChain(t *testing.T, uris []*url.URL, eku []x509.ExtKeyUsage, notAfte
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "test-root"},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(2 * time.Hour),
+		NotAfter:              time.Now().Add(testRootCAValidity),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,

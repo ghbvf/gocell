@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -40,6 +41,10 @@ import (
 
 const mtlsTrustDomain = "example.org"
 
+// testMTLSCAValidity is the validity window for the test CA/leaf certs
+// (TEST-TIME-LITERAL-01: site-specific test deadline as a const, not inline).
+const testMTLSCAValidity = 2 * time.Hour
+
 // mtlsCA holds a self-signed CA and the pool that verifies certs it signs.
 type mtlsCA struct {
 	cert   *x509.Certificate
@@ -58,7 +63,7 @@ func newMTLSCA(t *testing.T) mtlsCA {
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "mtls-test-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(2 * time.Hour),
+		NotAfter:              time.Now().Add(testMTLSCAValidity),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
@@ -156,6 +161,81 @@ func mtlsClientTransport(t *testing.T, ca mtlsCA, clientCell, expectedPeerCell, 
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: clientCfg}}
 	resolver := transport.NewStaticResolver(map[string]string{"configcore": serverURL})
 	return transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, httpClient, nil, nil)
+}
+
+// transportFromTLSConfig wraps an arbitrary client *tls.Config into a
+// RemoteHTTPTransport pointing at serverURL — used by the negative cases that
+// need a non-standard client config (no client cert / wrong-CA client cert).
+func transportFromTLSConfig(serverURL string, clientCfg *tls.Config) *transport.RemoteHTTPTransport {
+	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: clientCfg}}
+	resolver := transport.NewStaticResolver(map[string]string{"configcore": serverURL})
+	return transport.NewRemoteHTTP(clock.Real(), "configcore", resolver, httpClient, nil, nil)
+}
+
+// clientConfigFor builds a SPIFFE-verifying client *tls.Config (via tlsutil, so
+// no bare InsecureSkipVerify in this test file) presenting the given cell's cert
+// issued by `ca`, authorizing the server as configcore.
+func clientConfigFor(t *testing.T, ca mtlsCA, clientCell string) *tls.Config {
+	t.Helper()
+	certPEM, keyPEM := ca.issueCellLeaf(t, clientCell)
+	expected, err := spiffeid.ForCell(mtlsTrustDomain, "configcore")
+	if err != nil {
+		t.Fatalf("ForCell: %v", err)
+	}
+	cfg, err := tlsutil.NewClientMTLSConfig(certPEM, keyPEM, ca.pool, expected)
+	if err != nil {
+		t.Fatalf("NewClientMTLSConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestRemoteMTLS_NoClientCert_ServerRejects: the client verifies the server but
+// presents NO certificate; the server's RequireAndVerifyClientCert aborts the
+// handshake (server-side client-cert enforcement, end-to-end). The business
+// handler never runs (DoContract returns a transport error). (F5)
+func TestRemoteMTLS_NoClientCert_ServerRejects(t *testing.T) {
+	t.Parallel()
+	ca := newMTLSCA(t)
+	srv := startMTLSServer(t, ca, mustRing(t), mustNonceStore(t))
+
+	cfg := clientConfigFor(t, ca, "accesscore")
+	cfg.Certificates = nil // present no client certificate
+	tr := transportFromTLSConfig(srv.URL, cfg)
+	req := signedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x", mustRing(t), mustTenantID(t), clock.Real())
+
+	_, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req)
+	if err == nil {
+		t.Fatal("expected handshake error when the client presents no certificate")
+	}
+}
+
+// TestRemoteMTLS_WrongCAClientCert_ServerRejects: the client presents a cert
+// issued by an UNTRUSTED CA (not in the server's ClientCAs); the server rejects
+// the chain at handshake. The client still verifies the (trusted) server, so the
+// only failure cause is the server-side client-cert CA enforcement. (F5)
+func TestRemoteMTLS_WrongCAClientCert_ServerRejects(t *testing.T) {
+	t.Parallel()
+	serverCA := newMTLSCA(t)
+	srv := startMTLSServer(t, serverCA, mustRing(t), mustNonceStore(t))
+
+	wrongCA := newMTLSCA(t) // independent CA, not in the server's ClientCAs
+	wrongCertPEM, wrongKeyPEM := wrongCA.issueCellLeaf(t, "accesscore")
+	expected, err := spiffeid.ForCell(mtlsTrustDomain, "configcore")
+	if err != nil {
+		t.Fatalf("ForCell: %v", err)
+	}
+	// RootCAs = serverCA so the client still verifies the trusted server; the
+	// client cert is wrongCA-signed so the server's ClientCAs rejects it.
+	cfg, err := tlsutil.NewClientMTLSConfig(wrongCertPEM, wrongKeyPEM, serverCA.pool, expected)
+	if err != nil {
+		t.Fatalf("NewClientMTLSConfig: %v", err)
+	}
+	tr := transportFromTLSConfig(srv.URL, cfg)
+	req := signedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x", mustRing(t), mustTenantID(t), clock.Real())
+
+	if _, derr := tr.DoContract(context.Background(), "http.config.internal.get.v1", req); derr == nil {
+		t.Fatal("expected handshake error when the client cert is signed by an untrusted CA")
+	}
 }
 
 // TestRemoteMTLS_Happy: client accesscore ↔ server configcore, token caller

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -24,6 +25,14 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
+)
+
+// Test-time durations as file-local consts (TEST-TIME-LITERAL-01: site-specific
+// test deadlines, not inline literals).
+const (
+	testReadinessProbeDeadline = 200 * time.Millisecond // short ctx so a silent peer handshake fails fast
+	testCAValidity             = 2 * time.Hour          // test CA cert validity window
+	testSNICaptureWait         = 2 * time.Second        // upper bound waiting for the captured ClientHello SNI
 )
 
 func assertKindInternal(t *testing.T, err error) {
@@ -384,7 +393,7 @@ func TestResolve_MTLSReadiness_CompletesHandshake(t *testing.T) {
 	}
 	probe := res[0].Probes()[0]
 	// Short deadline so the handshake against a silent raw-TCP peer fails fast.
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testReadinessProbeDeadline)
 	defer cancel()
 	if err := probe.Check(ctx); err == nil {
 		t.Error("mTLS readiness probe against a non-TLS peer = nil, want error (handshake must complete)")
@@ -405,7 +414,7 @@ func genClientIdentity(t *testing.T) tlsutil.ClientIdentity {
 	must(err)
 	caTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ca"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(2 * time.Hour),
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(testCAValidity),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
@@ -490,6 +499,78 @@ func TestResolve_HTTPNonLoopback_FailsClosed(t *testing.T) {
 		t.Fatal("expected fail-closed for explicit http:// non-loopback peer, got nil")
 	}
 	assertKindInternal(t, err)
+}
+
+// TestResolve_MaterialButPlaintextEndpoint_FailsClosed: TLS material provisioned
+// (non-zero ClientIdentity) but a plaintext loopback endpoint → fail-closed
+// (#2263 F2: material present ⇒ endpoint must be https, so server/client TLS
+// modes agree).
+func TestResolve_MaterialButPlaintextEndpoint_FailsClosed(t *testing.T) {
+	t.Parallel()
+	topo := remoteTopo(t, "127.0.0.1:9090") // bare loopback, plaintext
+	inProc := transport.NewInProcess(nil)
+	_, _, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, genClientIdentity(t)) // material present
+	if err == nil {
+		t.Fatal("expected fail-closed when TLS material is provisioned but endpoint is plaintext")
+	}
+	assertKindInternal(t, err)
+}
+
+// TestResolve_Readiness_SendsSNI: the mTLS readiness probe sends the dial host as
+// SNI (ServerName), matching http.Transport (#2263 F3) — so an SNI-routed peer
+// is probed the same way real requests reach it. A raw TLS listener captures the
+// ClientHello ServerName; a hostname endpoint is used because Go omits SNI for IP
+// literals.
+func TestResolve_Readiness_SendsSNI(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	sniCh := make(chan string, 1)
+	go func() {
+		conn, accErr := ln.Accept()
+		if accErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		// GetConfigForClient runs on receipt of the ClientHello — capture SNI then
+		// abort (no real cert needed; the handshake fails afterwards, which is fine).
+		_ = tls.Server(conn, &tls.Config{
+			MinVersion: tls.VersionTLS13,
+			GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+				select {
+				case sniCh <- h.ServerName:
+				default:
+				}
+				return nil, errors.New("capture-only server")
+			},
+		}).HandshakeContext(context.Background())
+	}()
+
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	topo := remoteTopo(t, "https://localhost:"+port)
+	inProc := transport.NewInProcess(nil)
+	_, res, err := celltransport.Resolve(topo, "configcore", inProc, clock.Real(),
+		transport.CrossCellObs{}, genClientIdentity(t))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testReadinessProbeDeadline)
+	defer cancel()
+	_ = res[0].Probes()[0].Check(ctx) // handshake will fail (capture server), but SNI is sent first
+
+	select {
+	case sni := <-sniCh:
+		if sni != "localhost" {
+			t.Errorf("readiness ClientHello ServerName = %q, want %q", sni, "localhost")
+		}
+	case <-time.After(testSNICaptureWait):
+		t.Fatal("readiness probe did not send a ClientHello (no SNI captured)")
+	}
 }
 
 // --- local test tracer (celltransport_test cannot reach transport's internal one) ---

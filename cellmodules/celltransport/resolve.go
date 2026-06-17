@@ -54,6 +54,14 @@ const (
 	// provisioned — fail-closed rather than silently dial without a client cert.
 	msgMissingClientTLS = "celltransport.Resolve: https remote peer requires a client mTLS identity, but none was provisioned;" +
 		" set GOCELL_TRANSPORT_TLS_* + GOCELL_SPIFFE_TRUST_DOMAIN (see cellmodules/celltls)"
+	// msgMaterialButPlaintextEndpoint rejects a remote peer whose endpoint is
+	// plaintext (bare host:port or http://) while transport mTLS material IS
+	// provisioned (#2263 review F2). Server-side TLS is driven by material
+	// presence and client-side by the endpoint scheme; if material exists the
+	// endpoint MUST be https so both sides agree — otherwise the server would
+	// require mTLS while the client dials plaintext. Single-sourced fail-fast.
+	msgMaterialButPlaintextEndpoint = "celltransport.Resolve: transport mTLS material is provisioned but the remote peer" +
+		" endpoint is plaintext; use an https:// endpoint (or clear GOCELL_TRANSPORT_TLS_* for a plaintext loopback peer)"
 )
 
 // Resolve selects the [transport.CellTransport] for cellID based on the sealed
@@ -146,10 +154,19 @@ func Resolve(
 //   - non-loopback, non-https endpoint → fails closed: plaintext across a network
 //     boundary is forbidden (the gocell validate TOPO gate also rejects this at
 //     build time; this is the runtime defense-in-depth).
-//   - loopback, non-https endpoint → nil: plaintext is allowed for local
-//     multi-process dev / demo.
+//   - non-https endpoint + TLS material provisioned → fails closed: the server
+//     enables mTLS from material while the client would dial plaintext (#2263
+//     review F2). Material present ⇒ endpoint MUST be https.
+//   - loopback, non-https endpoint, no material → nil: plaintext is allowed for
+//     local multi-process dev / demo.
 func remoteClientTLSConfig(cellID, endpoint string, clientTLS tlsutil.ClientIdentity) (*tls.Config, error) {
 	if !strings.HasPrefix(endpoint, "https://") {
+		if !clientTLS.IsZero() {
+			// Material provisioned but endpoint is plaintext → server/client TLS
+			// modes would disagree. Fail-fast (single source for the TLS-mode split).
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgMaterialButPlaintextEndpoint,
+				errcode.WithInternal(errcode.InternalAttr("cellID", cellID), errcode.InternalAttr("endpoint", endpoint)))
+		}
 		if !netutil.IsLoopbackEndpoint(endpoint) {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPlaintextNonLoopback,
 				errcode.WithInternal(errcode.InternalAttr("cellID", cellID), errcode.InternalAttr("endpoint", endpoint)))
@@ -204,8 +221,21 @@ func remoteReadiness(cellID, endpoint string, tlsCfg *tls.Config) (lifecycle.Man
 	if err != nil {
 		return nil, fmt.Errorf("celltransport: remote readiness probe name for cell %q: %w", cellID, err)
 	}
+	// Mirror http.Transport's TLS client behavior: set ServerName from the dial
+	// host so the readiness handshake sends the same SNI a real request would
+	// (#2263 review F3). Without it, an SNI-routed / cert-selecting peer could
+	// accept real requests but fail the bare readiness handshake and shed traffic.
+	// Clone so the per-peer config shared with the real transport is not mutated.
+	// (Verification is still by SPIFFE-ID via VerifyConnection, not ServerName.)
+	probeCfg := tlsCfg
+	if tlsCfg != nil {
+		probeCfg = tlsCfg.Clone()
+		if host, _, splitErr := net.SplitHostPort(target); splitErr == nil {
+			probeCfg.ServerName = host
+		}
+	}
 	probe := healthz.NewProbe(name, func(ctx context.Context) error {
-		return dialPeerReadiness(ctx, target, tlsCfg)
+		return dialPeerReadiness(ctx, target, probeCfg)
 	})
 	return remoteReadinessResource{probe: probe}, nil
 }
