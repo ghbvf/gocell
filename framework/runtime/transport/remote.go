@@ -65,8 +65,9 @@ type RemoteHTTPTransport struct {
 //   - resolver nil → panicregister.Approved("remote-transport-nil-resolver")
 //   - client nil → panicregister.Approved("remote-transport-nil-client")
 //
-// metrics and tracer are optional: nil metrics records nothing; nil tracer
-// degrades to wrapper.NoopTracer{}.
+// metrics and tracer are optional: nil metrics records nothing; a nil or
+// typed-nil tracer degrades to wrapper.NoopTracer{} (via validation.IsNilInterface,
+// so a non-nil interface wrapping a nil pointer never reaches t.tracer.Start).
 func NewRemoteHTTP(
 	clk clock.Clock,
 	targetCellID string,
@@ -95,7 +96,7 @@ func NewRemoteHTTP(
 			errcode.Assertion(msgRemoteNilClient),
 		))
 	}
-	if tracer == nil {
+	if validation.IsNilInterface(tracer) {
 		tracer = wrapper.NoopTracer{}
 	}
 	return &RemoteHTTPTransport{

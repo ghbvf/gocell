@@ -5,6 +5,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // CrossCellObs is the sealed cross-cell observability bundle: the metrics +
@@ -23,11 +24,15 @@ type CrossCellObs struct {
 	tracer  wrapper.Tracer
 }
 
-// NewCrossCellObs mints a bundle. A nil tracer is normalized to
+// NewCrossCellObs mints a bundle. A nil OR typed-nil tracer is normalized to
 // wrapper.NoopTracer{} (same contract as [NewRemoteHTTP]) so a minted bundle
-// never carries a nil tracer. A nil metrics is preserved (records nothing).
+// never carries a tracer that would panic on Start. The typed-nil case (a
+// non-nil wrapper.Tracer interface wrapping a nil pointer) is caught by
+// validation.IsNilInterface — a bare `tracer == nil` would miss it and ship the
+// typed-nil into the remote transport (#2251 review F2). A nil metrics is
+// preserved (records nothing).
 func NewCrossCellObs(metrics *Metrics, tracer wrapper.Tracer) CrossCellObs {
-	if tracer == nil {
+	if validation.IsNilInterface(tracer) {
 		tracer = wrapper.NoopTracer{}
 	}
 	return CrossCellObs{metrics: metrics, tracer: tracer}

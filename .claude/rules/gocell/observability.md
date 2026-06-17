@@ -61,12 +61,18 @@ dial→503，见 P2.8）。`error.type` 超出该有界 kind 的细节留在 tra
 须同步 `allTransportOutcomes` 注册表（anti-vacuity，`TestTransportOutcome_FrozenRegistry`）+ 本节。
 
 **span tracer 单源（#2251 P1.3，D4 span 半闭合）**：remote 调用的 span 与 metrics 同源——
-metrics + tracer 由 sealed `transport.CrossCellObs`（unexported 字段，唯一 minter =
-`composition.Builder`）捆绑承载，`celltransport.Resolve` 收**一个**预建捆绑参（非分离的 metrics +
-tracer），故「接 metrics 忘 tracer」在 Resolve 边界类型级不可表达（Hard）。tracer 单源 = `SharedDeps.Tracer`：
-Builder 同时 append `bootstrap.WithTracer`（router + in-proc + event-router）并注入捆绑（remote），
-保证 remote 与 in-proc span 用同一 tracer。`SharedDeps.Tracer` 可为 nil（无 tracing，降级 NoopTracer）；
-今生产 seam-only（未接真 otel）。
+metrics + tracer 由 sealed `transport.CrossCellObs`（unexported 字段）捆绑承载，`celltransport.Resolve`
+收**一个**预建捆绑参（非分离的 metrics + tracer），故「接 metrics 忘 tracer」在 Resolve 边界类型级
+不可表达（Hard sealed-param）。tracer 单源 = `SharedDeps.Tracer`：Builder 同时 append
+`bootstrap.WithTracer`（router + in-proc + event-router）并注入捆绑（remote），保证 remote 与 in-proc
+span 用同一 tracer。`SharedDeps.Tracer` 可为 nil 或 typed-nil（无 tracing，经 `validation.IsNilInterface`
+归一降级 NoopTracer——构造边界统一用该 helper，bare `== nil` 会漏 typed-nil 致 remote `Start` panic）；
+今生产 seam-only（未接真 otel）。**「remote 与 in-proc span 同源」的 minter 评级分层**
+（funnel 双向锁）：下游 = **Hard**（`CrossCellObs` 字段 unexported，包外不可 struct-literal 伪造，唯一 mint
+路径是构造器）；上游「唯一 minter = `composition.Builder`」= **Medium**，由 caller-funnel
+`CROSSCELLOBS-MINTER-FUNNEL-01`（type-aware AST scan，allowlist 仅 `framework/runtime/composition`）守——
+`NewCrossCellObs` 是跨模块 exported 构造器，Go 可见性不可表达「只 composition mint」，同
+`EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01` 族的文档化 Go 天花板。
 
 **remote peer readiness（#2251 P2.7）**：split topology 下 `celltransport.Resolve` 的 remote 分支
 经 `ModuleResult.Resources` 注册一个 `<cell>_remote_ready` readiness probe（typed

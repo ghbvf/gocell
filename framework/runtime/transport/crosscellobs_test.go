@@ -26,19 +26,38 @@ func TestNewCrossCellObs_RetainsBoth(t *testing.T) {
 	}
 }
 
-// TestNewCrossCellObs_NilTracerDegradesToNoop asserts a nil tracer is normalized
-// to wrapper.NoopTracer{} at construction (same contract as NewRemoteHTTP), so a
-// bundle never carries a nil tracer that would panic on Start.
+// TestNewCrossCellObs_NilTracerDegradesToNoop asserts a nil OR typed-nil tracer
+// is normalized to wrapper.NoopTracer{} at construction (same contract as
+// NewRemoteHTTP), so a minted bundle never carries a tracer that would panic on
+// Start. The typed-nil case (a non-nil wrapper.Tracer interface wrapping a nil
+// *recordingTracer) is the #2251 review F2 regression: a bare `tracer == nil`
+// check misses it and ships the typed-nil into the remote transport, which then
+// panics at DoContract's t.tracer.Start. validation.IsNilInterface catches both.
 func TestNewCrossCellObs_NilTracerDegradesToNoop(t *testing.T) {
 	t.Parallel()
 
-	obs := NewCrossCellObs(nil, nil)
+	var typedNil *recordingTracer // typed-nil: non-nil wrapper.Tracer wrapping a nil pointer
 
-	if obs.Metrics() != nil {
-		t.Errorf("Metrics() = %p, want nil (no recording)", obs.Metrics())
+	cases := []struct {
+		name   string
+		tracer wrapper.Tracer
+	}{
+		{"bare nil", nil},
+		{"typed nil", typedNil},
 	}
-	if _, ok := obs.Tracer().(wrapper.NoopTracer); !ok {
-		t.Errorf("Tracer() = %T, want wrapper.NoopTracer for a nil input", obs.Tracer())
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			obs := NewCrossCellObs(nil, tc.tracer)
+
+			if obs.Metrics() != nil {
+				t.Errorf("Metrics() = %p, want nil (no recording)", obs.Metrics())
+			}
+			if _, ok := obs.Tracer().(wrapper.NoopTracer); !ok {
+				t.Errorf("Tracer() = %T, want wrapper.NoopTracer for a %s input", obs.Tracer(), tc.name)
+			}
+		})
 	}
 }
 

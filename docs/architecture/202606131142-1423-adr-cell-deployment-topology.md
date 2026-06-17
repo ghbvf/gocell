@@ -338,12 +338,21 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
 
 - **span tracer 单源（P1.3，D4 span 半闭合）**：放弃「remote 须复制 in-proc phase5 late-bind」的方向
   ——remote transport 不依赖 phase5 才存在的 handler（只需 tracer），故构造期即可注入。tracer + metrics
-  收敛进 sealed `transport.CrossCellObs`（unexported 字段，唯一 minter = `composition.Builder`）；
-  `SharedDeps` 以输入 `Tracer` + 派生 `TransportObs` **替换**松散 `TransportMetrics` 字段，Builder 同时
-  `bootstrap.WithTracer`（router/in-proc/event-router）+ 注入捆绑（remote），故 remote 与 in-proc span
-  **同源**。`celltransport.Resolve` 收**一个**预建捆绑参——边界上无可省略/可 nil 的 tracer 参数，「接
-  metrics 忘 tracer」**类型级不可表达**（Hard sealed-construction，取代原拟 Medium AST 守卫）。范围 seam-only：
-  `SharedDeps.Tracer` 可 nil（降级 NoopTracer），生产暂未接真 otel（见 EPIC）。
+  收敛进 sealed `transport.CrossCellObs`（unexported 字段）；`SharedDeps` 以输入 `Tracer` + 派生
+  `TransportObs` **替换**松散 `TransportMetrics` 字段，Builder 同时 `bootstrap.WithTracer`
+  （router/in-proc/event-router）+ 注入捆绑（remote），故 remote 与 in-proc span **同源**。
+  `celltransport.Resolve` 收**一个**预建捆绑参——边界上无可省略/可 nil 的 tracer 参数，「接 metrics 忘
+  tracer」**类型级不可表达**（Hard sealed-construction）。范围 seam-only：`SharedDeps.Tracer` 可 nil 或
+  typed-nil（经 `validation.IsNilInterface` 归一降级 NoopTracer，#2251 review F2），生产暂未接真 otel（见 EPIC）。
+  - **评级分层（AI-robust「funnel 双向锁」，#2251 review F1）**：「remote 与 in-proc span 同源」依赖
+    「唯一 minter = `composition.Builder`」，须分上下游评级。**下游 = Hard**：`CrossCellObs` 字段 unexported，
+    包外不可 struct-literal 伪造，唯一 mint 路径是构造器。**上游「只 composition mint」= Medium**：由
+    caller-funnel `CROSSCELLOBS-MINTER-FUNNEL-01`（type-aware AST scan + RED fixture）守。**原 amendment 把
+    整句标 Hard 是 overclaim**——`NewCrossCellObs` 是 exported 构造器；bundle 类型在 `framework/runtime/transport`、
+    minter 在 `framework/runtime/composition`、consumer 在 `cellmodules/celltransport`，三包跨两模块、字段所有权
+    属 transport，sealed mint token 会成跨模块 import cycle，故 Go 可见性**不可**表达「只 composition mint」。
+    这是与 `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01` / `COMMAND-ASYNC-EMIT-CALLER-01` / RowScopeAll minter
+    同族的文档化永久 Go/module 天花板，不开 fake Hard-upgrade issue。
 - **remote peer readiness（P2.7）**：`celltransport.Resolve` 的 remote 分支经 `ModuleResult.Resources`
   注册 `<cell>_remote_ready`（typed `healthz.RemoteCellReadyProbeName`）。probe 只对 resolved endpoint 做
   **TCP dial**（`transport.EndpointDialTarget` 解析，与 `rewriteToAbsolute` 同源），**不**打远端 `/readyz`
