@@ -97,12 +97,17 @@ var sharedDepsFrozenExportedFields = map[string]string{
 	"InProcessTransport":     "*transport.InProcessTransport",
 	"Tracer":                 "wrapper.Tracer",
 	"TransportObs":           "transport.CrossCellObs",
-	"HealthHTTPAddr":         "string",
-	"MetricsToken":           "string",
-	"VerboseToken":           "string",
-	"VerboseDisabled":        "bool",
-	"HealthLocalOnly":        "bool",
-	"ProjectRoot":            "string",
+	// #2263 split-topology cross-cell mTLS material (cross-cutting: consumed by
+	// celltransport.Resolve for the client side and the composition root's
+	// internal-listener wiring for the server side).
+	"RemoteClientTLS":           "tlsutil.ClientIdentity",
+	"InternalListenerServerTLS": "*tls.Config",
+	"HealthHTTPAddr":            "string",
+	"MetricsToken":              "string",
+	"VerboseToken":              "string",
+	"VerboseDisabled":           "bool",
+	"HealthLocalOnly":           "bool",
+	"ProjectRoot":               "string",
 }
 
 // exportedFieldTypeStrings returns the {name → type-string} map of the exported

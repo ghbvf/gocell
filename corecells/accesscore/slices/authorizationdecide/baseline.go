@@ -26,6 +26,19 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermSystemRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	{
+		// session:verify gates the accesscore sessionverifyrpc gRPC service
+		// (grpc.auth.session.verify.v1, #1154 — first platform-cell gRPC service).
+		// Token introspection is an admin/super-admin baseline action — same
+		// action-scoped + role-conditioned shape as the system-read rule above. A
+		// non-admin service caller is granted session:verify via a tenant policy
+		// overlay, not the baseline.
+		ID:         "baseline-session-verify-admin",
+		Name:       "Baseline: allow admin/super-admin to introspect session tokens (#1154)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermSessionVerify().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 	// configcore baseline (PR-10b #1348): one allow rule per migrated slice via
 	// the shared adminOrSuperAdmin() condition. NOTE: the old configcore gates were
 	// auth.AnyRole(RoleAdmin) — admin-only — so this WIDENS them to admit super-admin

@@ -256,6 +256,45 @@ type Store interface {
 	// cross-tenant HTTP surface.
 	GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq int64) (*Entry, error)
 
+	// GetByID fetches a single entry by its opaque store id (the wire identifier
+	// projected as `id` by http.audit.list.v1 / http.audit.get.v1). TWO orthogonal
+	// axes are enforced, both collapsing to ErrAuditLedgerNotFound (IDOR-safe —
+	// existence is not leaked):
+	//
+	//   - TENANT axis (#1618): t is the MANDATORY typed tenant scope (param[1],
+	//     TENANT-REPO-PARAM-FUNNEL-01), passed by the auditquery handler from the
+	//     authenticated principal — UNLIKE GetBySeq, which derives its chain from
+	//     the ctx scope because it has no post-auth HTTP caller. GetByID is the
+	//     single-entry read for the post-auth http.audit.get.v1 surface, so it
+	//     takes the explicit typed tenant exactly like Query (whose funnel it
+	//     shares). Results are restricted to t's own rows PLUS tenant-less
+	//     system/framework rows (tenant_id == ""), NEVER another tenant's rows. On
+	//     PG the explicit `(tenant_id = '' OR tenant_id = $t)` predicate is the
+	//     app-layer half; FORCE RLS on the app.tenant_id GUC is the DB-Hard primary.
+	//     The id column is a globally-unique UUID primary key, so the tenant
+	//     predicate decides VISIBILITY of the (at most one) matching row, never
+	//     introduces ambiguity.
+	//   - OWNER axis: the vis obligation is enforced on the actor_id column. If the
+	//     entry exists in t's scope but vis.Allows(entry.ActorID) is false, the
+	//     implementation returns ErrAuditLedgerNotFound (IDOR-safe collapse).
+	//
+	// vis must be valid (NewRowVisibility must succeed). A vis carrying RowScopeAll
+	// is fail-closed on every serving-pool backend (RowScopeAllUnsupportedError):
+	// the NOBYPASSRLS serving role cannot read cross-tenant; the sanctioned
+	// super-admin cross-tenant single-entry read is served by the admin-pool-backed
+	// CrossTenantQueryStore.GetByIDCrossTenant (#1810), not via this path.
+	//
+	// id is an OPAQUE, GLOBALLY-UNIQUE store handle, NOT necessarily a canonical UUID
+	// at this boundary: the PG LedgerStore assigns a random uuid primary key on
+	// Append, while the in-memory demo MemStore assigns a deterministic hash of
+	// (namespace, tenant, eventID) — globally unique (so a cross-tenant read never
+	// confuses two entries that merely share an EventID) yet deterministic (so the
+	// keyset tie-break by id ASC stays stable across test runs). Backends therefore
+	// validate id shape as they see fit (PG parse-guards it as a uuid so a malformed
+	// id collapses to not-found rather than a 22P02 cast error); the contract treats
+	// it as a backend-agnostic SafeID string, validated at the wire boundary.
+	GetByID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*Entry, error)
+
 	// Query lists entries matching AuditFilters using keyset cursor pagination
 	// defined by params (Limit + decoded CursorValues + Sort). It returns up to
 	// params.FetchLimit() (Limit+1) rows for N+1 hasMore detection, ordered by

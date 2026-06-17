@@ -12,6 +12,8 @@ package bootstrap
 //      — middleware injected at server build time.
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
 	"sort"
@@ -20,10 +22,19 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/http/middleware"
 	"github.com/ghbvf/gocell/framework/runtime/http/router"
+)
+
+// Cross-bind wiring message constants — MESSAGE-CONST-LITERAL-01.
+const (
+	msgCrossBindNoServerCert = "bootstrap: listener combines AuthMTLS + AuthServiceToken but has no server certificate;" +
+		" the cross-bind guard needs the server cert's SPIFFE trust domain (set WithListenerTLS with a cell cert)"
+	msgCrossBindServerCertNoID = "bootstrap: listener server certificate carries no cell SPIFFE ID" +
+		" (URI SAN spiffe://<td>/cell/<cell>); the cross-bind guard cannot derive the expected peer trust domain"
 )
 
 // kauth.AuthProvider is the kernel-defined interface for auth provider cells.
@@ -100,8 +111,77 @@ func (b *Bootstrap) applyListenerAuthChain(
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("listener=%q type=%T", ref.String(), plan))))
 		}
 	}
+	mws, err = b.appendCrossBindMiddleware(mws, ref, chain)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	describe = describeAuthChain(chain)
 	return mws, routerOpts, describe, nil
+}
+
+// appendCrossBindMiddleware installs the #2263 peer-cell cross-bind guard LAST
+// when a listener combines AuthMTLS (transport peer auth) with a service-token
+// plan (message-layer caller identity), so it runs after both middlewares —
+// binding the client cert's full cell SPIFFE ID to the service-token caller cell.
+// Auto-appending at this single AuthPlan→middleware assembly point means an
+// internal listener cannot enable mTLS+service-token yet forget the cross-bind.
+//
+// The expected peer trust domain is the listener's own server-cert trust domain
+// (peers must share it), derived here so it is bound to the actual server
+// identity with no extra wiring. A server cert without a cell SPIFFE ID fails
+// fast. Returns mws unchanged when the combination is absent.
+func (b *Bootstrap) appendCrossBindMiddleware(
+	mws []func(http.Handler) http.Handler, ref cell.ListenerRef, chain []kauth.ListenerAuth,
+) ([]func(http.Handler) http.Handler, error) {
+	if !chainContainsAuthMTLS(chain) || !chainContainsServiceToken(chain) {
+		return mws, nil
+	}
+	td, err := serverCertTrustDomain(b.listenerConfigs[ref].tls)
+	if err != nil {
+		return nil, err
+	}
+	return append(mws, auth.PeerCellCrossBindMiddleware(td)), nil
+}
+
+// chainContainsServiceToken reports whether any plan in the chain is
+// AuthServiceToken (companion to chainContainsAuthMTLS).
+func chainContainsServiceToken(chain []kauth.ListenerAuth) bool {
+	for _, p := range chain {
+		if _, ok := p.(kauth.AuthServiceToken); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// serverCertTrustDomain extracts the SPIFFE trust domain from a listener's server
+// certificate (the leaf's cell SPIFFE ID URI SAN). It is the expected peer trust
+// domain for the cross-bind guard: a peer must present a cert in the SAME trust
+// domain as the server. Fails closed if there is no TLS config / no server cert /
+// the leaf carries no cell SPIFFE ID — a mTLS+service-token listener whose server
+// cert lacks a cell identity cannot bind peer identities safely (#2263).
+//
+// phase0 validateAuthPlanMTLSBindings has already ensured an AuthMTLS listener
+// has a non-nil TLS config with a client-CA pool, so the nil/empty paths here are
+// defense-in-depth.
+func serverCertTrustDomain(tlsCfg *tls.Config) (string, error) {
+	if tlsCfg == nil || len(tlsCfg.Certificates) == 0 || len(tlsCfg.Certificates[0].Certificate) == 0 {
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindNoServerCert)
+	}
+	leaf := tlsCfg.Certificates[0].Leaf
+	if leaf == nil {
+		parsed, err := x509.ParseCertificate(tlsCfg.Certificates[0].Certificate[0])
+		if err != nil {
+			return "", errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				msgCrossBindServerCertNoID, err)
+		}
+		leaf = parsed
+	}
+	id, ok, err := spiffeid.FromURIs(leaf.URIs)
+	if err != nil || !ok {
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertNoID)
+	}
+	return id.TrustDomain(), nil
 }
 
 // runAuthPlanValidateHooks iterates over all listener chains and, for any

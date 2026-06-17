@@ -16,7 +16,9 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/ratelimit"
 	cellsecrets "github.com/ghbvf/gocell/cellmodules/cellsecrets"
+	celltls "github.com/ghbvf/gocell/cellmodules/celltls"
 	eventtransport "github.com/ghbvf/gocell/cellmodules/eventtransport"
+	grpclistener "github.com/ghbvf/gocell/cellmodules/grpclistener"
 	replaydeps "github.com/ghbvf/gocell/cellmodules/replaydeps"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	accesspg "github.com/ghbvf/gocell/corecells/accesscore/postgres"
@@ -40,6 +42,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/auth/session"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
@@ -267,8 +271,9 @@ func buildSSOBFFBootstrapOptions(
 	asm *assembly.CoreAssembly,
 	cb *outbox.ConsumerBase,
 	primaryAuth kauth.ListenerAuth,
-	authzOpt bootstrap.Option,
+	authGRPCOpts []bootstrap.Option,
 	internalAuthChain []kauth.ListenerAuth,
+	internalTLSOpts []bootstrap.ListenerOption,
 	relayWorker *outboxruntime.Relay,
 	pool *adapterpg.Pool,
 ) []bootstrap.Option {
@@ -294,15 +299,17 @@ func buildSSOBFFBootstrapOptions(
 	for _, mr := range infra.rd.Resources {
 		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
+	// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
+	opts = append(opts, bootstrap.WithRelay(relayWorker))
+	// ABAC PDP injector for the primary listener (#1348 PR-10a) + the mandatory gRPC
+	// listener (accesscore registers grpc.auth.session.verify.v1 unconditionally, #1154).
+	opts = append(opts, authGRPCOpts...)
 	return append(opts,
-		// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
-		bootstrap.WithRelay(relayWorker),
-		authzOpt, // ABAC PDP injector for the primary listener (#1348 PR-10a).
 		listenerOption(cell.PrimaryListener, cfg.primary, []kauth.ListenerAuth{primaryAuth}),
 		// internal defaults to loopback (see defaultSSOBFFAppConfig); the cell→cell
 		// control plane is never all-interfaces. Override GOCELL_SSOBFF_INTERNAL_ADDR
 		// + add a NetworkPolicy for a VPC deployment (docs/ops/listener-topology.md).
-		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
+		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain, internalTLSOpts...),
 		listenerOption(cell.HealthListener, cfg.health, []kauth.ListenerAuth{kauth.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthRouteOptions()...),
 	)
@@ -368,6 +375,22 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
+	// #2263: layer transport-level mTLS over the service-token chain when split
+	// TLS material is provisioned (operator opt-in via GOCELL_TRANSPORT_TLS_*).
+	// ssobff declares no remote cells; passing an empty spec (all-colocated) means
+	// celltls.Resolve never fires the non-loopback fail-closed gate, so the only
+	// effect of setting TLS material is wiring ServerTLS onto the internal listener
+	// (server-side mTLS only — no client identity is used since ssobff has no
+	// remote peers to dial). No material → chain unchanged (service-token-only).
+	emptyTopo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{})
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: build deployment topology: %w", err)
+	}
+	celltlsDeps, err := celltls.Resolve(emptyTopo, celltls.LoadConfigFromEnv())
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: resolve transport TLS material: %w", err)
+	}
+	internalAuthChain, internalTLSOpts := celltls.InternalListenerSecurity(celltlsDeps.ServerTLS, internalAuthChain)
 
 	// Resolve setup/admin bootstrap credentials BEFORE the DB pool (same
 	// fail-fast posture as the internal auth chain): real topology must supply
@@ -419,7 +442,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, err
 	}
 
-	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFCore(ssobffCoreParams{
+	asm, cb, primaryAuth, authGRPCOpts, err := buildSSOBFFCore(ssobffCoreParams{
 		clk: clk, cfg: cfg, infra: infra, pool: pool, txMgr: txMgr,
 		pgOutboxWriter: pgOutboxWriter, jwtIssuer: jwtIssuer, jwtVerifier: jwtVerifier,
 		auc: auc, bootstrapCreds: bootstrapCreds,
@@ -433,7 +456,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	relayWorker := outboxruntime.NewRelay(clk, pgOutboxStore, infra.transport.Publisher, outboxruntime.DefaultRelayConfig())
 
 	b := bootstrap.New(clk, buildSSOBFFBootstrapOptions(
-		infra, cfg, asm, cb, primaryAuth, authzOpt, internalAuthChain, relayWorker, pool,
+		infra, cfg, asm, cb, primaryAuth, authGRPCOpts, internalAuthChain, internalTLSOpts, relayWorker, pool,
 	)...)
 
 	loaded = true
@@ -462,7 +485,7 @@ type ssobffCoreParams struct {
 
 // buildSSOBFFCore wires the session protocol, bootstrap middleware, and assembly.
 // Extracted to keep NewSSOBFFApp ≤ gocognit 15.
-func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error) {
+func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, []bootstrap.Option, error) {
 	// Bootstrap auth-fail observer (Wave-1 #1423 event-based decoupling).
 	var acPtr *accesscore.AccessCore
 	// IP-hash salt is topology-gated (mirrors cellmodules/accesscore): demo falls
@@ -499,7 +522,7 @@ func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.Consum
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: session.NewProtocol: %w", err)
 	}
 
-	asm, cb, primaryAuth, authzOpt, err := buildSSOBFFAssembly(p.clk, ssobffBuildParams{
+	asm, cb, primaryAuth, authGRPCOpts, err := buildSSOBFFAssembly(p.clk, ssobffBuildParams{
 		pool: p.pool, txMgr: p.txMgr, eb: p.infra.transport.Publisher, pgOutboxWriter: p.pgOutboxWriter,
 		jwtIssuer: p.jwtIssuer, jwtVerifier: p.jwtVerifier,
 		bootstrapMW: bootstrapMW, sessionProto: sessionProto, logger: p.cfg.logger,
@@ -509,7 +532,7 @@ func buildSSOBFFCore(p ssobffCoreParams) (*assembly.CoreAssembly, *outbox.Consum
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	return asm, cb, primaryAuth, authzOpt, nil
+	return asm, cb, primaryAuth, authGRPCOpts, nil
 }
 
 // resolveSSOBFFBootstrapCreds selects the setup/admin Basic Auth credentials by
@@ -767,7 +790,7 @@ type ssobffBuildParams struct {
 // CoreAssembly, and constructs the ConsumerBase and primary listener auth.
 // Extracted from NewSSOBFFApp to reduce cognitive complexity.
 func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
-	*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, bootstrap.Option, error,
+	*assembly.CoreAssembly, *outbox.ConsumerBase, kauth.ListenerAuth, []bootstrap.Option, error,
 ) {
 	accessStorageOpts, err := buildSSOBFFAccessCoreStorageOpts(clk, p.pool, p.txMgr, p.sessionProto)
 	if err != nil {
@@ -836,15 +859,42 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	if err := registerSSOBFFCells(asm, ac, auc, cc); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	// Wire the ABAC PDP into the primary listener (accesscore provides it). Post
+	// Wire the ABAC PDP (accesscore provides it) + the mandatory gRPC listener. Post
 	// #1348 PR-10a the auditquery route gate is permission-based, so an
 	// empty-actorId/cross-actor audit read fails closed without a PDP in context;
-	// every auditquery-serving assembly must wire it. Shared discovery+lazy logic
-	// lives in bootstrap.PrimaryAuthorizerOption (also used by cmd/corebundle,
-	// corebundlestarter).
-	authzOpt, err := bootstrap.PrimaryAuthorizerOption([]cell.Cell{ac, auc, cc})
+	// every auditquery-serving assembly must wire it. One lazy authorizer feeds BOTH
+	// the HTTP primary listener and the gRPC gate (shared discovery in
+	// bootstrap.AuthorizerFromCells, also used by cmd/corebundle, corebundlestarter).
+	authorizer, err := bootstrap.AuthorizerFromCells([]cell.Cell{ac, auc, cc})
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: primary authorizer wiring: %w", err)
+	}
+	// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1
+	// unconditionally (cell_gen.go, PR-11 #1154); without it bootstrap fail-fasts
+	// (checkOrphanGRPCServices). Durability mode is topology-derived: real/postgres
+	// topology passes DurabilityDurable (TLS enforced by grpclistener.ServerFromEnv),
+	// demo/dev topology passes DurabilityDemo (plaintext default; set GOCELL_GRPC_TLS_*
+	// for TLS in demo). This mirrors the assembly's own DurabilityDurable posture and
+	// ensures real-mode TLS fail-closed gate is not bypassed.
+	grpcCollector, err := obmetrics.NewGRPCProviderCollector(metrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: grpc metrics collector: %w", err)
+	}
+	grpcAddr := grpclistener.AddrFromEnv()
+	grpcServer, err := grpclistener.ServerFromEnv(ssobffGRPCDurability(p.adapterMode), grpcAddr, interceptor.Deps{
+		Verifier:        p.jwtVerifier,
+		Clock:           clk,
+		Collector:       grpcCollector,
+		Authorizer:      authorizer,
+		MetricsProvider: metrics.NopProvider{},
+		CellIDClosedSet: asm.CellIDs(),
+	})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("ssobff: grpc server: %w", err)
+	}
+	authGRPCOpts := []bootstrap.Option{
+		bootstrap.WithPrimaryAuthorizer(authorizer),
+		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
 	}
 	// Use the topology-gated claimer from replaydeps: in-memory for demo,
 	// Redis-backed for real multi-pod (guards #825 at-most-once across replicas).
@@ -860,7 +910,7 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: primary listener auth plan: %w", err)
 	}
-	return asm, cb, primaryAuth, authzOpt, nil
+	return asm, cb, primaryAuth, authGRPCOpts, nil
 }
 
 // newSSOBFFPool opens a PG pool and runs all pending migrations. Callers own
@@ -956,6 +1006,18 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	}
 }
 
+// ssobffGRPCDurability derives the gRPC listener durability mode from adapterMode.
+// Real topology (cellsecrets.RealAdapterMode) uses DurabilityDurable so that
+// grpclistener.ServerFromEnv enforces TLS fail-closed. Demo/dev uses DurabilityDemo
+// (plaintext default). This mirrors the assembly's own DurabilityDurable posture and
+// prevents real-mode gRPC from silently running plaintext (F3 security fix).
+func ssobffGRPCDurability(adapterMode string) outbox.DurabilityMode {
+	if adapterMode == cellsecrets.RealAdapterMode {
+		return outbox.DurabilityDurable
+	}
+	return outbox.DurabilityDemo
+}
+
 // newSSOBFFJWT builds the JWT issuer and verifier from a topology-gated key set.
 //
 // The key source is resolved by cellsecrets.LoadKeySet (the same shared resolver
@@ -985,8 +1047,11 @@ func newSSOBFFJWT(topo bootstrap.Topology, clk clock.Clock) (*auth.JWTIssuer, *a
 	return jwtIssuer, jwtVerifier, nil
 }
 
-func listenerOption(ref cell.ListenerRef, binding listenerBinding, authChain []kauth.ListenerAuth) bootstrap.Option {
-	var opts []bootstrap.ListenerOption
+func listenerOption(
+	ref cell.ListenerRef, binding listenerBinding, authChain []kauth.ListenerAuth,
+	extra ...bootstrap.ListenerOption,
+) bootstrap.Option {
+	opts := append([]bootstrap.ListenerOption{}, extra...)
 	if binding.ln != nil {
 		opts = append(opts, bootstrap.WithListenerNet(binding.ln))
 	}

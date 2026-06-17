@@ -581,6 +581,121 @@ func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 	}
 }
 
+func TestDeploymentTopologyHasNonLoopbackRemoteCells(t *testing.T) {
+	cases := []struct {
+		name string
+		spec DeploymentTopologySpec
+		want bool
+	}{
+		{name: "zero value → false", spec: DeploymentTopologySpec{}, want: false},
+		{
+			name: "only colocated → false",
+			spec: DeploymentTopologySpec{Colocated: []string{"cellA"}},
+			want: false,
+		},
+		{
+			name: "loopback ipv4 remote → false (local dev split)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "127.0.0.1:9090"}}},
+			want: false,
+		},
+		{
+			name: "loopback localhost URL remote → false",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "https://localhost:8443"}}},
+			want: false,
+		},
+		{
+			name: "non-loopback dns remote → true (network boundary)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "cellB", Endpoint: "https://cell-b.svc:8443"}}},
+			want: true,
+		},
+		{
+			name: "mixed loopback + non-loopback → true (any non-loopback triggers)",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "127.0.0.1:9090"},
+				{CellID: "cellC", Endpoint: "cell-c:9090"},
+			}},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dt, err := newDeploymentTopology(tc.spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: unexpected error: %v", err)
+			}
+			if got := dt.HasNonLoopbackRemoteCells(); got != tc.want {
+				t.Errorf("HasNonLoopbackRemoteCells() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeploymentTopologySharedNonLoopbackRemoteEndpoint(t *testing.T) {
+	cases := []struct {
+		name      string
+		spec      DeploymentTopologySpec
+		wantFound bool
+		wantEP    string
+		wantCells []string
+	}{
+		{name: "no remote → none", spec: DeploymentTopologySpec{}, wantFound: false},
+		{
+			name: "unique non-loopback endpoints → none",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellA", Endpoint: "https://a.svc:8443"},
+				{CellID: "cellB", Endpoint: "https://b.svc:8443"},
+			}},
+			wantFound: false,
+		},
+		{
+			name: "two cells share a non-loopback endpoint → found",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "https://shared.svc:8443"},
+				{CellID: "cellC", Endpoint: "https://shared.svc:8443"},
+			}},
+			wantFound: true, wantEP: "https://shared.svc:8443", wantCells: []string{"cellB", "cellC"},
+		},
+		{
+			name: "shared LOOPBACK endpoint is exempt → none",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "127.0.0.1:9090"},
+				{CellID: "cellC", Endpoint: "127.0.0.1:9090"},
+			}},
+			wantFound: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSharedNonLoopbackRemoteEndpoint(t, tc.spec, tc.wantFound, tc.wantEP, tc.wantCells)
+		})
+	}
+}
+
+// assertSharedNonLoopbackRemoteEndpoint resolves spec and checks
+// SharedNonLoopbackRemoteEndpoint against the expectations. Extracted from the
+// table loop so neither function exceeds cognitive-complexity limits.
+func assertSharedNonLoopbackRemoteEndpoint(t *testing.T, spec DeploymentTopologySpec, wantFound bool, wantEP string, wantCells []string) {
+	t.Helper()
+	dt, err := newDeploymentTopology(spec)
+	if err != nil {
+		t.Fatalf("newDeploymentTopology: %v", err)
+	}
+	ep, cells, found := dt.SharedNonLoopbackRemoteEndpoint()
+	if found != wantFound {
+		t.Fatalf("found = %v, want %v", found, wantFound)
+	}
+	if !found {
+		return
+	}
+	if ep != wantEP {
+		t.Errorf("endpoint = %q, want %q", ep, wantEP)
+	}
+	if strings.Join(cells, ",") != strings.Join(wantCells, ",") {
+		t.Errorf("cells = %v, want %v", cells, wantCells)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // validateSplitTopologyBroker — phase0 broker-mandatory gate
 // ---------------------------------------------------------------------------

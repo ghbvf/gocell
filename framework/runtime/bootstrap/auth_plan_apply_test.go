@@ -6,8 +6,11 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"testing"
 
@@ -194,16 +197,10 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			wantAuthInstalled: false,
 			wantDescribe:      "operator",
 		},
-		{
-			name: "MultiPlan_MTLSAndServiceToken",
-			chain: []kauth.ListenerAuth{
-				kauth.AuthMTLS{},
-				authtest.MustAuthServiceToken(store, ring),
-			},
-			wantMWCount:       2,
-			wantAuthInstalled: false,
-			wantDescribe:      "mtls+service-token",
-		},
+		// #2263: the AuthMTLS + AuthServiceToken combination is covered by the
+		// dedicated TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind
+		// below — it needs a server cert (for the cross-bind trust-domain
+		// derivation), which this minimal-bootstrap table cannot supply.
 	}
 
 	for _, tc := range tests {
@@ -221,6 +218,78 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			assert.Equal(t, tc.wantAuthInstalled, routerInstallsAuthMiddleware(t, routerOpts),
 				"auth middleware installation")
 		})
+	}
+}
+
+// ─── TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind ─────────────
+
+// TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind is the #2263
+// cross-bind wiring guard: a chain combining AuthMTLS + AuthServiceToken must
+// auto-append the peer-cell cross-bind middleware LAST, with its expected peer
+// trust domain derived from the listener's own server certificate. A server cert
+// without a cell SPIFFE ID (or no TLS config) fails closed at wiring.
+func TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind(t *testing.T) {
+	t.Parallel()
+	chain := []kauth.ListenerAuth{
+		kauth.AuthMTLS{},
+		authtest.MustAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{}),
+	}
+	ref := cell.InternalListener
+
+	t.Run("appends cross-bind LAST", func(t *testing.T) {
+		t.Parallel()
+		b := bootstrapWithListener(ref, chain, mtlsConfigWithCellURI(t, "spiffe://example.org/cell/configcore"))
+		b.clock = clock.Real() // applyListenerAuthChain's ServiceToken middleware needs a clock
+		mws, _, describe, err := b.applyListenerAuthChain(ref, chain)
+		require.NoError(t, err)
+		require.Len(t, mws, 3, "MTLS + service-token + cross-bind")
+		assert.Equal(t, "mtls+service-token", describe, "cross-bind is not a chain plan → describe unchanged")
+		// The LAST middleware is the cross-bind: invoked in isolation with no peer
+		// identity in ctx it returns 401 (its no-peer-cert branch) — proving mws[2]
+		// is the cross-bind guard, not some other middleware.
+		guarded := mws[2](http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		rec := httptest.NewRecorder()
+		guarded.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/internal/v1/x", nil))
+		assert.Equal(t, http.StatusUnauthorized, rec.Code,
+			"last middleware must be the cross-bind (401 on a request with no peer certificate)")
+	})
+
+	t.Run("fails closed: server cert has no cell SPIFFE id", func(t *testing.T) {
+		t.Parallel()
+		b := bootstrapWithListener(ref, chain, mtlsConfigWithCellURI(t, "")) // leaf with no URI SAN
+		b.clock = clock.Real()
+		_, _, _, err := b.applyListenerAuthChain(ref, chain)
+		require.Error(t, err, "cross-bind cannot derive a trust domain → fail closed at wiring")
+	})
+
+	t.Run("fails closed: no server TLS config", func(t *testing.T) {
+		t.Parallel()
+		b := bootstrapWithListener(ref, chain, nil)
+		b.clock = clock.Real()
+		_, _, _, err := b.applyListenerAuthChain(ref, chain)
+		require.Error(t, err)
+	})
+}
+
+// mtlsConfigWithCellURI builds a *tls.Config whose server certificate's parsed
+// Leaf carries the given URI SAN (none when uri==""). Wiring-only fake: no real
+// signed cert / handshake (that path is the integration test) — the cross-bind
+// trust-domain derivation reads Certificates[0].Leaf.URIs.
+func mtlsConfigWithCellURI(t *testing.T, uri string) *tls.Config {
+	t.Helper()
+	leaf := &x509.Certificate{}
+	if uri != "" {
+		u, err := url.Parse(uri)
+		require.NoError(t, err)
+		leaf.URIs = []*url.URL{u}
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    x509.NewCertPool(),
+		Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}, Leaf: leaf}},
 	}
 }
 

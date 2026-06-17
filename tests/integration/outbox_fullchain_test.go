@@ -428,7 +428,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	assert.True(t, got.entry.OccurredAt().Before(got.entry.CreatedAt()),
 		"the producer-domain occurredAt should precede the seal createdAt, as constructed")
 
-	// The relay serialises the full outbox.Entry (including entry.Observability)
+	// The relay serializes the full outbox.Entry (including entry.Observability)
 	// as the AMQP body. NewEntry injects observability from the producer context into
 	// entry.Observability at construction time; the consumer middleware restores it into
 	// the handler context. Business metadata and observability are now distinct columns.
@@ -453,7 +453,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		"trace_id should be restored into consumer handler context")
 
 	// Principal family (issue #1229 B-fullchain proof): NewEntry injected the
-	// principal from publishCtx into entry.Principal; the relay serialised it via
+	// principal from publishCtx into entry.Principal; the relay serialized it via
 	// MarshalEnvelope; the consumer UnmarshalEnvelope + SubscriberWithMiddleware
 	// restored it into the handler ctx. Same producer-ctx → entry → PG → relay →
 	// consumer-ctx path as observability above.

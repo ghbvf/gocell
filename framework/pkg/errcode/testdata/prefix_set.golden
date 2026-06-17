@@ -47,6 +47,7 @@ ERR_READYZ_	github.com/ghbvf/gocell
 ERR_RECONCILE_	github.com/ghbvf/gocell
 ERR_REFERENCE_BROKEN	github.com/ghbvf/gocell
 ERR_REFRESH_	github.com/ghbvf/gocell
+ERR_REGISTRATION_	github.com/ghbvf/gocell
 ERR_RELAY_	github.com/ghbvf/gocell
 ERR_SAGA_	github.com/ghbvf/gocell
 ERR_SCAFFOLD_	github.com/ghbvf/gocell

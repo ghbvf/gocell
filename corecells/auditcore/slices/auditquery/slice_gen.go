@@ -18,6 +18,7 @@ var sliceMeta = &metadata.SliceMeta{
 	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.audit.list.v1", Role: "serve"},
+		{Contract: "http.audit.get.v1", Role: "serve"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
@@ -25,6 +26,7 @@ var sliceMeta = &metadata.SliceMeta{
 		},
 		Contract: []string{
 			"contract.http.audit.list.v1.serve",
+			"contract.http.audit.get.v1.serve",
 		},
 	},
 	AllowedFiles: []string{

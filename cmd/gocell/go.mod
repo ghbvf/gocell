@@ -35,6 +35,8 @@ replace github.com/ghbvf/gocell/tools => ../../tools
 // even though lazy `go build ./...` passes. Guarded by hack/verify-workspace.sh.
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
 
+replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
+
 replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres

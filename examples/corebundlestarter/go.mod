@@ -7,7 +7,13 @@ require (
 	github.com/stretchr/testify v1.11.1
 )
 
-require github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+require (
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/grpc v1.81.1 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
 
 require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
@@ -67,6 +73,8 @@ replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 replace github.com/ghbvf/gocell/corecells => ../../corecells
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterutil
+
+replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 

@@ -68,6 +68,7 @@ func TestAccesscorePermissions_String(t *testing.T) {
 		{"PermUserWrite", PermUserWrite(), "user:write"},
 		{"PermRoleRead", PermRoleRead(), "role:read"},
 		{"PermAccessDecide", PermAccessDecide(), "access:decide"},
+		{"PermSessionVerify", PermSessionVerify(), "session:verify"},
 	}
 	for _, tc := range cases {
 		if got := tc.perm.String(); got != tc.want {
@@ -179,6 +180,7 @@ func TestAccesscorePermissions_StableIdentity(t *testing.T) {
 		{"PermUserWrite", PermUserWrite(), permUserWrite},
 		{"PermRoleRead", PermRoleRead(), permRoleRead},
 		{"PermAccessDecide", PermAccessDecide(), permAccessDecide},
+		{"PermSessionVerify", PermSessionVerify(), permSessionVerify},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.singleton {
@@ -205,18 +207,19 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// Pin the closed set. A new Perm* var that forgets to enroll in allPermissions
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
 	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
-	// (PR-10b) + 6 accesscore (PR-10c + access:decide #1863) + 4 iotdevice + 4 todoorder
-	// (PR-10d #1894).
-	if len(perms) != 21 {
-		t.Fatalf("Permissions() len = %d, want 21 "+
-			"(2 platform + 5 configcore + 6 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
+	// (PR-10b) + 7 accesscore (PR-10c + session:verify #1154 + access:decide #1863) +
+	// 4 iotdevice + 4 todoorder (PR-10d #1894).
+	if len(perms) != 22 {
+		t.Fatalf("Permissions() len = %d, want 22 "+
+			"(2 platform + 5 configcore + 7 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
 		"config:read": true, "config:write": true, "config:publish": true,
 		"flag:read": true, "flag:write": true,
 		"policy:read": true, "policy:write": true,
-		"user:read": true, "user:write": true, "role:read": true, "access:decide": true,
+		"user:read": true, "user:write": true, "role:read": true,
+		"access:decide": true, "session:verify": true,
 		"device:command": true, "device:consume": true, "device:read": true, "device:list": true,
 		"order:create": true, "order:list": true, "order:read": true, "order:update": true,
 	}

@@ -175,6 +175,8 @@ func newSetupPGHarness(t *testing.T, pgOutboxWriter outbox.Writer) *setupPGHarne
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
 		setupAuthzOpt,
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{ac}, asm.CellIDs()),
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -500,6 +502,8 @@ func newSessionPGHarnessWithWriter(t *testing.T, pgOutboxOverride outbox.Writer)
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
 		sessionAuthzOpt,
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{ac}, asm.CellIDs()),
 	)
 
 	runCtx, cancel := context.WithCancel(context.Background())

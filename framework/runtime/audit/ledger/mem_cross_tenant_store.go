@@ -58,12 +58,6 @@ func NewMemCrossTenantStore(stores ...*MemStore) (*MemCrossTenantStore, error) {
 	return &MemCrossTenantStore{stores: cp}, nil
 }
 
-// errMsgCrossTenantObligation is the const-literal fail-close message
-// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
-// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
-// is a server-side invariant break, not client input — mirrors the service PEP.
-const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
-
 // QueryCrossTenant enumerates ALL tenants across ALL backing MemStores, applies
 // AuditFilters, merge-sorts by params.Sort (callers pass QuerySort —
 // timestamp DESC, id ASC), and keyset-paginates via query.ApplyCursor.
@@ -88,7 +82,7 @@ func (m *MemCrossTenantStore) QueryCrossTenant(
 ) ([]*Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ErrMsgCrossTenantObligation)
 	}
 	if err := ValidateQueryFilters(filters); err != nil {
 		return nil, err
@@ -144,4 +138,53 @@ func collectFromMemStore(store *MemStore, filters AuditFilters) []*Entry {
 		}
 	}
 	return out
+}
+
+// GetByIDCrossTenant scans ALL chains of ALL backing MemStores for the entry with
+// the given opaque id and returns a defensive copy of the first match, or
+// ErrAuditLedgerNotFound when none exists. The single-entry counterpart of
+// QueryCrossTenant: NO tenant predicate (the read spans every tenant by
+// construction) and NO owner predicate (the RowScopeAll obligation makes every
+// actor_id visible). The opaque id is globally unique on every backend (mem assigns
+// a deterministic namespace+tenant+eventID hash, PG a uuid primary key), so the
+// first match IS the only match — the cross-tenant lookup is unambiguous even when
+// two tenants share an EventID (#2288 review F1).
+//
+// ctv carries the sealed RowScopeAll obligation. This method re-validates it
+// fail-closed (ctv.Validate) before reading — the data-layer PEP (F2): the typed
+// param makes "forge/forget the grant" a compile error, and this runtime check
+// rejects Go's constructable zero value, so a zero/invalid obligation can never
+// produce a cross-tenant read.
+func (m *MemCrossTenantStore) GetByIDCrossTenant(
+	_ context.Context,
+	ctv tenant.CrossTenantVisibility,
+	id string,
+) (*Entry, error) {
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			ErrMsgCrossTenantObligation)
+	}
+	for _, store := range m.stores {
+		if e := findByIDInMemStore(store, id); e != nil {
+			return e, nil
+		}
+	}
+	return nil, auditEntryNotFoundByID()
+}
+
+// findByIDInMemStore returns a defensive copy of the entry with the given id from
+// a single MemStore under its lock, or nil when absent. Extracted to avoid nested
+// locking and keep GetByIDCrossTenant's cognitive complexity low (mirrors
+// collectFromMemStore).
+func findByIDInMemStore(store *MemStore, id string) *Entry {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, chain := range store.chains {
+		for _, e := range chain.entries {
+			if e.ID == id {
+				return copyEntry(e)
+			}
+		}
+	}
+	return nil
 }

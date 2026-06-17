@@ -17,6 +17,13 @@ contracts:
   # Adding a query criterion here without closing that backlog entry is
   # a silent carryover and forbidden.
   - http.audit.list.v1
+  # http.audit.get.v1 (#1852, FE-CRUD audit detail) is listed for journey scope
+  # alongside http.audit.list.v1 — same JOURNEY-CONTRACT-EXISTENCE-01 reverse cover.
+  # It has no corresponding passCriteria below; criteria expansion is tracked by the
+  # same backlog JOURNEY-AUDITLOGINTRAIL-CRITERIA-EXPANSION-01. Adding a get-by-id
+  # criterion here without closing that backlog entry is a silent carryover and
+  # forbidden.
+  - http.audit.get.v1
   # event.auth.bootstrap-failed.v1: accesscore publishes on 401/429 from
   # setup/admin; auditcore subscribes and writes bootstrap hash chain.
   # Part of Epic #1423 Wave-1 BootstrapLedgerStore decoupling.

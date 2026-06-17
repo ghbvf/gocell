@@ -2,7 +2,7 @@
 
 **Feature ID**: `661-kernel-reconcile`
 **Date**: 2026-05-26
-**Status**: **PARKED-ON-TRIGGER**（trigger 未满足，本计划冻结，等触发后激活）
+**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史计划；A1-A10 已由 ADR-661 / ADR-1895 amendments + develop 代码闭环）
 **Spec**: [202605262359-661-kernel-reconcile-spec.md](./202605262359-661-kernel-reconcile-spec.md)
 **Issue**: [#661](https://github.com/ghbvf/gocell/issues/661)
 
@@ -17,8 +17,8 @@
 **Language/Version**: Go 1.22+（与 GoCell 一致）
 **Primary Dependencies**: 标准库 + `pkg/errcode` + `pkg/validation` + `kernel/metautil`（kernel 层依赖收口）
 **Storage**:
-- Reconciler 状态：消费方自管（pkicell/mdmcell DB schema）
-- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（pg_try_advisory_lock）；lease store 维护单调 `Epoch`（fencing token）
+- Reconciler 状态：消费方自管（`runtime/certlifecycle` / mdmcell 等各自持久化 schema）
+- LeaderElector lease：adapters/redis（SETNX + EXPIRE）/ adapters/postgres（`reconcile_leases` row-TTL UPSERT CAS）；lease store 维护单调 `Epoch`（fencing token）
 - Fencing：消费方写经 epoch-bound `FencedWriter`，资源行记「已见最高 epoch」+ CAS 拒 stale（leader election 非 fencing，见 ADR §4.3）
 **Testing**:
 - table-driven test 覆盖率 kernel/ ≥ 90% / 其余 ≥ 80%（CLAUDE.md）
@@ -35,7 +35,7 @@
 - LeaderElector 接口在 kernel 声明 / 实现在 adapter
 - 不向后兼容（`SweeperLifecycle` 命名整体删除；name-frozen 由类型删除 Hard 守——引用即编译错误，非 standing archtest，见 enforcement 表 A8 won't-do）
 **Scale/Scope**:
-- 短期消费方 ≤ 5（pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore + example）
+- 短期消费方 ≤ 5（runtime/certlifecycle / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore + example）
 - 单 reconciler 处理 entity 上限：1M 行（与 PG/Redis 上限对齐，不引入额外限制）
 
 ## Constitution Check（GATE）
@@ -65,7 +65,7 @@ docs/plans/later/
 └── 202605262359-661-kernel-reconcile-tasks.md  # PR 级 task list
 ```
 
-### Source Code Layout（trigger 满足后实施）
+### Source Code Layout（历史计划；当前已实施）
 
 ```text
 kernel/
@@ -92,7 +92,7 @@ adapters/
 ├── redis/
 │   └── reconcile_leader.go              # 新增：SETNX-based LeaderElector
 └── postgres/
-    └── reconcile_leader.go              # 新增：pg_try_advisory_lock-based LeaderElector
+    └── reconcile_leader.go              # 新增：reconcile_leases row-TTL UPSERT CAS LeaderElector
 
 runtime/
 └── command/
@@ -250,7 +250,7 @@ B1 (PR-A1) ────────────────────┐
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| 新建 kernel/ 子包（kernel/reconcile） | 真消费方 ≥ 4（pkicell/mdmcell/devicelifecycle/zerotrust），现有 kernel/command 强耦合命令实体无法复用 | 在 kernel/command 内泛化：会让 command 包暴露与命令无关的接口，破坏单一职责；且 kernel/command 已 PR-A8 迁出 |
+| 新建 kernel/ 子包（kernel/reconcile） | `runtime/certlifecycle` 证明框架证书底座需要通用 L4 loop；后续业务消费方按 ADR-1895 口径跟踪 mdmcell/devicelifecycle/zerotrust，不再把历史 pkicell 触发项计入当前业务 cell 数 | 在 kernel/command 内泛化：会让 command 包暴露与命令无关的接口，破坏单一职责；且 kernel/command 已 PR-A8 迁出 |
 | Builder DSL（PR-A7） | funnel 上游 Hard：消费方构造 Loop 必经 Builder，使「裸 NewLoop 直构」编译期不可表达（Loop 构造函数私有化 + Builder 是唯一公开入口） | 直接 NewLoop(opts) public 构造：funnel 上游 Soft，无法防止消费方绕过 metric/leader/backoff wiring |
 | 新建 archtest invariants × 5+ | 接口字段 frozen + carve-out + funnel 三类 enforcement 均需 archtest 兜底；ai-robust 评级 Medium-Hard | 不写 archtest：消费方可随意改 Request/Result 字段集，本 spec 的接口最小性 SC-001 立即失守 |
 | LeaderElector 接口在 kernel 层声明 / 实现在 adapter | 接口归属遵循 kernel-driven adapter-implements 模式（对齐 outbox.Emitter / persistence.CellTxManager） | 接口下沉到 adapter：kernel/reconcile 无法在 Loop 内调用 lease 抽象，需要消费方在每个 cell 重复 wiring |
@@ -262,7 +262,7 @@ B1 (PR-A1) ────────────────────┐
 
 | 风险 | 影响 | 缓解 |
 |------|------|------|
-| trigger 满足前 `kernel/command` 不兼容重构 | 本计划 baseline 偏移，PR-A8 迁移成本高 | spec.md A2 假设已声明；trigger 启动时先 amend spec/plan，再执行 |
+| `kernel/command` baseline 漂移 | 本计划历史 baseline 与 trunk 现实不一致 | 已由 A8 迁移闭环；后续以 ADR-661 最新 amendment + develop 代码为准 |
 | controller-runtime 在 trigger 前接口大改 | 对标失效，PR-A2/A3 设计要调 | 本计划锁定 controller-runtime 当前形态作为对标快照（ref hash 在 PR-A1 ADR 中固定）；调整成本接受 |
 | LeaderElector 在 Redis/PG 之外有新需求（如 etcd） | adapter 层需扩展 | 接口设计抽象到 LeaseToken 中立形态，扩 adapter 不改 kernel；扩 adapter 时再开新 issue |
 | examples/iotdevice 迁移破坏端到端 | PR-A9 阻塞 | 在 PR-A9 前先在 fake adapter 里跑过 conformance；PR-A9 单独 e2e test 守 |
@@ -270,12 +270,11 @@ B1 (PR-A1) ────────────────────┐
 
 ---
 
-## 激活前 Checklist（trigger 满足时执行）
+## 历史激活 Checklist（已完成）
 
-- [ ] 核验 trigger T1/T2/T3/T4 满足条件（≥ 2 个生产 cell 落地或 T4 + 任一）
-- [ ] 核验 `kernel/command` baseline 未发生不兼容重构（无则 amend spec）
-- [ ] 核验 controller-runtime 对标快照仍有效（无大变则 OK，否则 PR-A1 ADR 修订）
-- [ ] 开发者拉本目录文档 + 创建新 implementation plan（引用本计划，加 active 时间戳）
-- [ ] 按 PR-A1 到 PR-A10 顺序执行（B4/B7 内可并行）
-- [ ] 每 PR 满足"PR 切分判定"6 条
-- [ ] PR-A10 merge 后关闭 issue #661
+- [x] 核验 trigger 语义已由 ADR-661 amendments 收窄；A1-A8 不再受业务 cell gate 阻塞
+- [x] 核验 `kernel/command` baseline 并完成 A8 迁移
+- [x] 核验 controller-runtime 对标快照并保留 pinned ref
+- [x] 按 PR-A1 到 PR-A10 顺序执行（A9 被 A8 吸收，#1170 关闭为 spec reconciliation）
+- [x] 每 PR 满足"PR 切分判定"6 条或在对应 review 中记录偏离理由
+- [x] 文档闭环状态由 ADR-661 最新 amendment 维护；后续业务 cell 接入不重启本历史计划

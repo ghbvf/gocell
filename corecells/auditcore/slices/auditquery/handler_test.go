@@ -19,11 +19,14 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	auditget "github.com/ghbvf/gocell/generated/contracts/http/audit/get/v1"
+	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 )
 
 const bootstrapAuditEntryOffset = 2 * time.Hour
@@ -1859,6 +1862,15 @@ func (f *filterCaptureCTStore) QueryCrossTenant(
 	return []*ledger.Entry{}, nil
 }
 
+// GetByIDCrossTenant satisfies CrossTenantQueryStore; the single-entry cross-tenant
+// path has its own dedicated handler tests, so this stub just returns not-found.
+func (f *filterCaptureCTStore) GetByIDCrossTenant(
+	_ context.Context, _ tenant.CrossTenantVisibility, _ string,
+) (*ledger.Entry, error) {
+	return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		"audit ledger: entry not found")
+}
+
 // TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough asserts that every
 // query filter (actorId, subjectId, traceId, eventType, from, to) reaches the
 // CrossTenantQueryStore unchanged on the 200 path (F10, Codex review).
@@ -2187,4 +2199,280 @@ func TestList_NilLogger_AdminQuery_NoPanic(t *testing.T) {
 	require.NotPanics(t, func() { mux.ServeHTTP(w, req) },
 		"admin audit query must not panic when the Service was built with a nil logger")
 	assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+}
+
+// --- http.audit.get.v1 (#1852) single-entry detail ---
+
+// seedAuditEntry appends an entry and returns its store-assigned id (= EventID on
+// the mem store, written back by Append). Used by the GetByID handler tests.
+func seedAuditEntry(t *testing.T, store *ledger.MemStore, e *ledger.Entry) string {
+	t.Helper()
+	require.NoError(t, store.Append(context.Background(), e))
+	require.NotEmpty(t, e.ID, "Append must write back the store id")
+	return e.ID
+}
+
+func getByIDService(t *testing.T, store *ledger.MemStore, opts ...ServiceOption) http.Handler {
+	t.Helper()
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(),
+		query.RunModeProd, opts...)
+	require.NoError(t, err)
+	return newHandlerMux(svc)
+}
+
+func getByID(mux http.Handler, ctx context.Context, id string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries/"+id, nil)
+	mux.ServeHTTP(w, req.WithContext(ctx))
+	return w
+}
+
+func TestHandleGetByID_Admin_Found(t *testing.T) {
+	store := newHandlerStore(t)
+	occurred := time.Date(2026, 6, 1, 2, 3, 4, 123456789, time.UTC)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-1", EventType: "audit.detail.v1", ActorID: "usr-actor",
+		TenantID: auditQueryTestTenant, CorrelationID: "corr-visible",
+		OccurredAt: occurred, Timestamp: time.Now().UTC(), Payload: []byte(`{"k":"v"}`),
+	})
+	mux := getByIDService(t, store)
+
+	w := getByID(mux, auditTestCtx("admin-user", []string{"admin"}), id)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp struct {
+		Data struct {
+			ID            string `json:"id"`
+			EventID       string `json:"eventId"`
+			ActorID       string `json:"actorId"`
+			CorrelationID string `json:"correlationId"`
+			OccurredAt    string `json:"occurredAt"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, id, resp.Data.ID)
+	assert.Equal(t, "evt-detail-1", resp.Data.EventID)
+	assert.Equal(t, "usr-actor", resp.Data.ActorID)
+	// admin (RowScopeTenant) → identity mask → diagnostic columns visible.
+	assert.Equal(t, "corr-visible", resp.Data.CorrelationID,
+		"admin must see the correlationId column unmasked")
+	// Non-zero OccurredAt is projected as RFC3339Nano (toGetResponseDataItem).
+	assert.Equal(t, occurred.Format(time.RFC3339Nano), resp.Data.OccurredAt)
+}
+
+func TestHandleGetByID_NotFound(t *testing.T) {
+	store := newHandlerStore(t)
+	mux := getByIDService(t, store)
+	w := getByID(mux, auditTestCtx("admin-user", []string{"admin"}),
+		"00000000-0000-0000-0000-000000000000")
+	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleGetByID_MalformedID_BadRequest(t *testing.T) {
+	store := newHandlerStore(t)
+	mux := getByIDService(t, store)
+	// '@' is outside the idutil.SafeID charset → 400 at the adapter charset gate.
+	w := getByID(mux, auditTestCtx("admin-user", []string{"admin"}), "bad@id")
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleGetByID_EmptyTenant_Forbidden(t *testing.T) {
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-nt", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	// Principal with empty TenantID; allow authorizer so the gate passes and the
+	// adapter's tenant-isolation check is what fail-closes (403).
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "u", Roles: []string{"admin"}, AuthMethod: "test"}
+	ctx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
+	w := getByID(mux, ctx, id)
+	require.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleGetByID_AuditReadDenied_Forbidden(t *testing.T) {
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-deny", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	// Deny authorizer: the flat audit:read route gate denies → 403 (no actorId-self
+	// exemption like the list, because the path param is the entry id).
+	ctx := withDenyAuthorizer(auditTestCtxNoAuthz("usr", []string{"user"}), "no audit:read")
+	w := getByID(mux, ctx, id)
+	require.Equal(t, http.StatusForbidden, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleGetByID_SelfReadsOtherActor_NotFound(t *testing.T) {
+	// IDOR-safe: a RowScopeSelf caller (non-admin) with audit:read granted passes the
+	// gate but only resolves entries whose actor_id is itself; another actor's entry
+	// collapses to 404 (not 403), never leaking existence (D3: the flat gate does not
+	// widen data access — RowScope governs it).
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-alice", EventType: "audit.detail.v1", ActorID: "alice",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	// subject "bob" with audit:read granted (allow), role user → RowScope=self.
+	w := getByID(mux, auditTestCtx("bob", []string{"user"}), id)
+	require.Equal(t, http.StatusNotFound, w.Code, "body=%s", w.Body.String())
+}
+
+func TestHandleGetByID_SelfFieldMaskApplied(t *testing.T) {
+	// A self caller reading its OWN entry sees the diagnostic columns
+	// (correlationId, traceId) masked, identical to the list read.
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-mask", EventType: "audit.detail.v1", ActorID: "alice",
+		TenantID: auditQueryTestTenant, CorrelationID: "corr-secret", TraceID: "trace-secret",
+		Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	w := getByID(mux, auditTestCtx("alice", []string{"user"}), id)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	body := w.Body.String()
+	assert.NotContains(t, body, "corr-secret", "correlationId must be masked for a self caller")
+	assert.NotContains(t, body, "trace-secret", "traceId must be masked for a self caller")
+}
+
+func TestHandleGetByID_PayloadRedacted(t *testing.T) {
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-pay", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(),
+		Payload: []byte(`{"password":"hunter2"}`),
+	})
+	mux := getByIDService(t, store)
+	w := getByID(mux, auditTestCtx("admin-user", []string{"admin"}), id)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "hunter2",
+		"sensitive payload values must be redacted in the detail response")
+}
+
+func TestHandleGetByID_SuperAdmin_CrossTenant_Found(t *testing.T) {
+	base := time.Now().UTC()
+	e := &ledger.Entry{
+		EventID: "evt-ct-detail-a1", EventType: "cross.tenant.detail.v1",
+		ActorID: "usrA", TenantID: auditQueryTestTenant, Timestamp: base, Payload: []byte(`{}`),
+	}
+	relay := newHandlerStore(t)
+	require.NoError(t, relay.Append(context.Background(), e))
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+
+	mux := getByIDService(t, newHandlerStore(t), WithCrossTenantStore(ctStore))
+	w := getByID(mux, newSuperAdminCtx("sa-user"), e.ID)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp struct {
+		Data struct {
+			EventID  string `json:"eventId"`
+			TenantID string `json:"tenantId"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "evt-ct-detail-a1", resp.Data.EventID)
+	assert.Equal(t, auditQueryTestTenant, resp.Data.TenantID)
+}
+
+func TestHandleGetByID_SuperAdmin_NoCrossTenantStore_501(t *testing.T) {
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-sa", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	// base service: no WithCrossTenantStore → super-admin RowScopeAll fail-closes 501
+	// (graceful-absent, ADR #1810), exactly like the list read.
+	mux := getByIDService(t, store)
+	w := getByID(mux, newSuperAdminCtx("sa-user"), id)
+	require.Equal(t, http.StatusNotImplemented, w.Code, "body=%s", w.Body.String())
+}
+
+// TestHandleGetByID_SuperAdmin_SingleAuditRecord pins the FR-007 mandatory
+// cross-tenant audit invariant for the detail path (mirrors the list's
+// TestHandleQuery_SuperAdmin_SingleAuditRecord): EVERY super-admin GetByID request
+// emits EXACTLY ONE FR-007 slog.Error (via deriveAuditVisibility → single-mint
+// p.CrossTenantVisibility), on BOTH the 200 (admin pool wired) and 501 (admin pool
+// absent) paths. Guards against a future double-mint regression or a 501 path that
+// skips the audit.
+func TestHandleGetByID_SuperAdmin_SingleAuditRecord(t *testing.T) {
+	capture := &testCaptureHandler{}
+	slogcapture.InstallDefault(t, slog.New(capture))
+
+	// 200 path: admin pool wired, entry resolvable cross-tenant.
+	e := &ledger.Entry{
+		EventID: "evt-fr007-detail", EventType: "cross.tenant.detail.v1",
+		ActorID: "usrA", TenantID: auditQueryTestTenant,
+		Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	}
+	relay := newHandlerStore(t)
+	require.NoError(t, relay.Append(context.Background(), e))
+	ctStore, err := ledger.NewMemCrossTenantStore(relay)
+	require.NoError(t, err)
+	muxWithStore := getByIDService(t, newHandlerStore(t), WithCrossTenantStore(ctStore))
+
+	capture.records = capture.records[:0]
+	w := getByID(muxWithStore, newSuperAdminCtx("sa-200"), e.ID)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, countAuditMandatoryRecords(capture.records),
+		"super-admin GetByID (200) must emit EXACTLY ONE FR-007 Error record; records=%v", capture.records)
+
+	// 501 path: admin pool absent — FR-007 must still fire (audit of intent).
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-fr007-501", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	muxNoStore := getByIDService(t, store)
+	capture.records = capture.records[:0]
+	w = getByID(muxNoStore, newSuperAdminCtx("sa-501"), id)
+	require.Equal(t, http.StatusNotImplemented, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, countAuditMandatoryRecords(capture.records),
+		"super-admin GetByID (501, no admin pool) must STILL emit EXACTLY ONE FR-007 Error record; records=%v", capture.records)
+}
+
+func TestHandleGetByID_NonCanonicalTenant_InternalError(t *testing.T) {
+	// A malformed (non-canonical) principal tenant is a server-side invariant break
+	// (the JWT authenticator canonicalizes the claim): getEntry's tenant.ParseTenantID
+	// fails → 500 ErrInternal (mirrors the list's TestList_NonCanonicalTenant path).
+	store := newHandlerStore(t)
+	id := seedAuditEntry(t, store, &ledger.Entry{
+		EventID: "evt-detail-nc", EventType: "audit.detail.v1", ActorID: "usr",
+		TenantID: auditQueryTestTenant, Timestamp: time.Now().UTC(), Payload: []byte(`{}`),
+	})
+	mux := getByIDService(t, store)
+	p := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "admin-user", Roles: []string{"admin"},
+		TenantID: "not-a-uuid", AuthMethod: "test",
+	}
+	ctx := withAllowAuthorizer(auth.WithPrincipal(context.Background(), p))
+	w := getByID(mux, ctx, id)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
+}
+
+// TestGetAdapter_Get_Unauthenticated_Typed401 exercises the adapter's
+// defense-in-depth auth check directly (the route gate would 401 before the adapter
+// on the mux path): no principal → KindUnauthenticated errcode → the typed-envelope
+// wrapper (mapGetError) maps it to Get401ErrorResponse, NOT a raw Go error (F3,
+// #2288 review). This pins the declared-status → typed-response contract.
+func TestGetAdapter_Get_Unauthenticated_Typed401(t *testing.T) {
+	svc, _ := newTestService()
+	a := GetAdapter{S: svc}
+	resp, err := a.Get(context.Background(), &auditget.Request{ID: "some-id"})
+	require.NoError(t, err, "declared 401 must be a typed response, not a Go error")
+	_, ok := resp.(auditget.Get401ErrorResponse)
+	assert.True(t, ok, "unauthenticated GET must map to Get401ErrorResponse, got %T", resp)
+}
+
+func TestListAdapter_List_Unauthenticated_ReturnsErrcode(t *testing.T) {
+	svc, _ := newTestService()
+	a := ListAdapter{S: svc}
+
+	resp, err := a.List(context.Background(), &auditlist.Request{})
+
+	require.Nil(t, resp)
+	errcodetest.AssertCode(t, err, errcode.ErrAuthUnauthorized)
 }

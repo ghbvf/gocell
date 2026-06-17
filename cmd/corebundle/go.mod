@@ -12,11 +12,14 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
+	google.golang.org/grpc v1.81.1
 )
 
 require (
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0 // indirect
 	github.com/rabbitmq/amqp091-go v1.11.0 // indirect
 	github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 
 require (
@@ -46,7 +49,7 @@ require (
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
 	github.com/ghbvf/gocell/framework v0.0.0
-	github.com/ghbvf/gocell/generated v0.0.0 // indirect
+	github.com/ghbvf/gocell/generated v0.0.0
 	github.com/ghbvf/gocell/tests v0.0.0
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -128,6 +131,8 @@ replace github.com/ghbvf/gocell/adapters/adapterutil => ../../adapters/adapterut
 // mqtt enters the full module graph transitively (via tools / cellmodules) but is
 // not a direct require here; Go replace is non-transitive, so it must be declared
 // for GOWORK=off `go list -m all` to resolve its unpublished v0.0.0.
+replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
+
 replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres

@@ -41,23 +41,39 @@ func TestWireConfigGetter_Colocated_InjectsGetter(t *testing.T) {
 }
 
 // TestWireConfigGetter_RemoteConfigcore_InjectsGetter: configcore declared remote
-// → the config getter is wired through a RemoteHTTPTransport (US5 #1966). This
-// replaces the old US4 fail-fast placeholder: the remote CellTransport is now
-// implemented, so a remote configcore is a valid (non-error) configuration.
+// (loopback endpoint → plaintext-eligible local-dev split) → the config getter is
+// wired through a RemoteHTTPTransport (US5 #1966). A loopback endpoint keeps this
+// the plaintext path; the #2263 mTLS gate (non-loopback / https) is covered by
+// TestWireConfigGetter_RemoteNonLoopbackPlaintext_FailsClosed and celltransport.
 func TestWireConfigGetter_RemoteConfigcore_InjectsGetter(t *testing.T) {
 	spec := bootstrap.DeploymentTopologySpec{
 		Colocated: []string{"accesscore"},
-		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "configcore", Endpoint: "configcore:9090"}},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "configcore", Endpoint: "127.0.0.1:9090"}},
 	}
 	shared := configGetterTestDeps(t, spec, transport.NewInProcess(nil))
 	opts, res, err := wireConfigGetter(shared, nil)
-	require.NoError(t, err, "remote configcore must now succeed — US5 wires the RemoteHTTPTransport")
+	require.NoError(t, err, "remote configcore (loopback) must succeed — US5 wires the RemoteHTTPTransport")
 	assert.Len(t, opts, 1, "remote configcore must append exactly the config getter option")
-	// Remote configcore contributes a TCP-dial readiness probe (#2251 P2.7).
+	// Remote configcore contributes a readiness probe (#2251 P2.7).
 	require.Len(t, res, 1, "remote configcore must contribute one readiness resource")
 	probes := res[0].Probes()
 	require.Len(t, probes, 1)
 	assert.Equal(t, "configcore_remote_ready", probes[0].Name().String())
+}
+
+// TestWireConfigGetter_RemoteNonLoopbackPlaintext_FailsClosed: a non-loopback
+// configcore reached over plaintext is rejected end-to-end through the accesscore
+// wiring — the #2263 fail-closed mTLS gate propagates through celltransport.Resolve
+// (no private-network plaintext fallback for a network-boundary peer).
+func TestWireConfigGetter_RemoteNonLoopbackPlaintext_FailsClosed(t *testing.T) {
+	spec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"accesscore"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "configcore", Endpoint: "configcore.svc:9090"}},
+	}
+	shared := configGetterTestDeps(t, spec, transport.NewInProcess(nil))
+	_, _, err := wireConfigGetter(shared, nil)
+	require.Error(t, err, "non-loopback plaintext peer must fail closed")
+	errcodetest.AssertCode(t, err, errcode.ErrCellInvalidConfig)
 }
 
 // TestWireConfigGetter_NilTransport_FailFast: colocated configcore but the

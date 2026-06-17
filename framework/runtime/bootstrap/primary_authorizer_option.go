@@ -127,6 +127,43 @@ func authorizerProviderTypeName(p authorizerProvider) string {
 // is set during Init(), which runs inside bootstrap (phase3) — after the composition
 // root builds these options.
 func PrimaryAuthorizerOption(cells []cell.Cell) (Option, error) {
+	a, err := AuthorizerFromCells(cells)
+	if err != nil {
+		return nil, err
+	}
+	return WithPrimaryAuthorizer(a), nil
+}
+
+// AuthorizerFromCells scans cells for exactly one authorizerProvider and returns a
+// lazy auth.Authorizer wrapping it (deferred Authorizer() lookup, see
+// lazyAuthorizer). It is the discovery+lazy-wrap core shared by PrimaryAuthorizerOption
+// (HTTP primary listener) and the gRPC interceptor wiring (interceptor.Deps.Authorizer):
+// both need the same single PDP provider resolved from the assembled cell list without
+// importing corecells/ (the corebundle-no-cells depguard). The returned authorizer is
+// safe to feed BOTH the HTTP WithPrimaryAuthorizer option and the gRPC Deps — sharing one
+// instance means the startup ResolveAuthorizer (HTTP router build) resolves it once and the
+// gRPC gate observes the same live PDP. Same fail-fast rules as PrimaryAuthorizerOption:
+// zero matching cells or more than one is a misconfiguration error.
+//
+// Callers SHOULD reuse the single returned value for both the HTTP
+// WithPrimaryAuthorizer and the gRPC interceptor.Deps.Authorizer wiring points.
+// Calling AuthorizerFromCells twice for the same cell list yields two independent
+// lazyAuthorizer instances: each resolves its own copy of the PDP and caches it
+// independently. This is functionally correct but wastes a resolve call at startup
+// and splits the cache — one instance resolved by HTTP router build will not warm
+// the gRPC gate's separate instance.
+func AuthorizerFromCells(cells []cell.Cell) (auth.Authorizer, error) {
+	provider, err := findAuthorizerProvider(cells)
+	if err != nil {
+		return nil, err
+	}
+	return &lazyAuthorizer{provider: provider}, nil
+}
+
+// findAuthorizerProvider returns the single cell that exposes an ABAC Authorizer,
+// erroring if zero or more than one match. Shared discovery for PrimaryAuthorizerOption
+// and AuthorizerFromCells so the "exactly one PDP" rule lives in one place.
+func findAuthorizerProvider(cells []cell.Cell) (authorizerProvider, error) {
 	var provider authorizerProvider
 	for _, c := range cells {
 		ap, ok := c.(authorizerProvider)
@@ -135,7 +172,7 @@ func PrimaryAuthorizerOption(cells []cell.Cell) (Option, error) {
 		}
 		if provider != nil {
 			return nil, fmt.Errorf(
-				"PrimaryAuthorizerOption: multiple cells implement authorizerProvider; "+
+				"AuthorizerFromCells: multiple cells implement authorizerProvider; "+
 					"exactly one PDP provider is required (duplicate: cell %T)", c,
 			)
 		}
@@ -143,10 +180,10 @@ func PrimaryAuthorizerOption(cells []cell.Cell) (Option, error) {
 	}
 	if provider == nil {
 		return nil, fmt.Errorf(
-			"PrimaryAuthorizerOption: no cell implements authorizerProvider " +
+			"AuthorizerFromCells: no cell implements authorizerProvider " +
 				"(Authorizer() auth.Authorizer); PDP wiring is mandatory — " +
 				"ensure accesscore is included in the assembly",
 		)
 	}
-	return WithPrimaryAuthorizer(&lazyAuthorizer{provider: provider}), nil
+	return provider, nil
 }

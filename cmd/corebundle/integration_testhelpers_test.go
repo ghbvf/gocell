@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -12,15 +13,61 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 
 	"github.com/stretchr/testify/require"
 
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
+	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
+
+// corebundleTestNoopVerifier is a stub gRPC bearer verifier for boot harnesses that
+// wire the (mandatory) gRPC listener but never call it. accesscore registers
+// grpc.auth.session.verify.v1 unconditionally (cell_gen.go, PR-11 #1154), so every
+// assembly that boots it MUST wire a gRPC listener or bootstrap fail-fasts
+// (checkOrphanGRPCServices). HTTP-focused integration harnesses don't exercise gRPC,
+// so a verifier that rejects every token suffices. The dedicated gRPC end-to-end test
+// uses a real verifier.
+type corebundleTestNoopVerifier struct{}
+
+func (corebundleTestNoopVerifier) VerifyIntent(context.Context, string, kauth.TokenIntent) (kauth.Claims, error) {
+	return kauth.Claims{}, errors.New("grpc bearer auth not exercised in this harness")
+}
+
+// corebundleTestGRPCListenerOption builds a WithGRPCListener option backed by an
+// ephemeral pre-bound socket + a real interceptor chain (the cells' lazy PDP
+// authorizer + a no-op bearer verifier), mirroring the production run.go gRPC wiring.
+// Every harness that boots the full corebundle assembly (which includes accesscore)
+// must include it, otherwise accesscore's unconditional grpc.auth.session.verify.v1
+// registration trips the orphan-grpc startup fail-fast. cellIDs is the metrics
+// closed set (asm.CellIDs()).
+func corebundleTestGRPCListenerOption(t *testing.T, cells []cell.Cell, cellIDs []string) bootstrap.Option {
+	t.Helper()
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = grpcLn.Close() })
+
+	authorizer, err := bootstrap.AuthorizerFromCells(cells)
+	require.NoError(t, err)
+	collector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
+	require.NoError(t, err)
+	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+		Verifier:        corebundleTestNoopVerifier{},
+		Clock:           clock.Real(),
+		Collector:       collector,
+		Authorizer:      authorizer,
+		MetricsProvider: kernelmetrics.NopProvider{},
+		CellIDClosedSet: cellIDs,
+	})
+	require.NoError(t, err)
+	return bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcLn.Addr().String(), bootstrap.WithGRPCListenerNet(grpcLn))
+}
 
 // runner is the minimal interface shared by *bootstrap.Bootstrap and
 // *composition.App, both of which expose Run(ctx) error. Tests use this to
@@ -75,13 +122,19 @@ func buildBootstrapFromShared(
 		metricsHandler := buildMetricsHandler(shared.MetricsToken, locals.registry)
 		opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
 
-		// Primary listener: JWT policy resolved from assembly (F3 round-3 collapse).
-		opts = append(opts, bootstrap.WithListener(
-			cell.PrimaryListener,
-			primaryLn.Addr().String(),
-			[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
-			bootstrap.WithListenerNet(primaryLn),
-		))
+		// Primary listener (JWT policy resolved from assembly, F3 round-3 collapse) +
+		// the mandatory gRPC listener — accesscore registers grpc.auth.session.verify.v1
+		// unconditionally (PR-11 #1154), so a gRPC listener must be wired or bootstrap
+		// fail-fasts (checkOrphanGRPCServices).
+		opts = append(opts,
+			bootstrap.WithListener(
+				cell.PrimaryListener,
+				primaryLn.Addr().String(),
+				[]kauth.ListenerAuth{authtest.MustAuthJWTFromAssembly(asm)},
+				bootstrap.WithListenerNet(primaryLn),
+			),
+			corebundleTestGRPCListenerOption(t, cells, asm.CellIDs()),
+		)
 		opts = append(opts, extra...)
 		return opts, nil
 	}

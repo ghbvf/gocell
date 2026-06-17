@@ -389,7 +389,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 
 ### PR 11 — cells/accesscore platform RPC slice
 
-- **Scope**: `cells/accesscore/slices/sessionrpc/` exposes session-token verification as an internal gRPC service for service-to-service calls; validates that a platform cell (not just example) integrates cleanly.
+- **Scope**: `cells/accesscore/slices/sessionrpc/` exposes session-token verification as a gRPC service for admin/super-admin JWT token introspection (PrimaryListener, JWT-gated); validates that a platform cell (not just example) integrates cleanly. True service-to-service (service-principal + InternalListener-gRPC + service-token) is a separate capability gap tracked as #2290.
 - **Files**:
   - `contracts/grpc/access/session/verify/v1/contract.yaml` ~40
   - `contracts/grpc/access/session/verify/v1/session_verify.proto` ~30
@@ -401,6 +401,13 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
   - `GRPC-CELL-REGISTRAR-LAYER-01` — confirm cells/ does NOT import `adapters/grpc` (Medium, scope extension)
 - **Est.**: 400 lines
 - **Risk**: real platform cell tests the `adapters/` decoupling more aggressively than examples; any leakage surfaces here.
+
+> **As-built (PR-11 #1154)** — corrections to the sketch above:
+> 1. **Paths use the `auth/` domain** (accesscore's contract namespace), not `access/`: contract `grpc.auth.session.verify.v1` at `contracts/grpc/auth/session/verify/v1/`, slice `corecells/accesscore/slices/sessionverifyrpc/` (repo uses `corecells/`, not `cells/`).
+> 2. **Forced corebundle gRPC wiring** (beyond the 5-file sketch): a cell registering a gRPC service makes `cmd/corebundle` bootstrap fail-fast (`checkOrphanGRPCServices`) without a `WithGRPCListener`, so PR-11 also wires an always-on gRPC listener (`:9095`, TLS fail-closed in durable mode) into corebundle + a shared-authorizer seam `bootstrap.AuthorizerFromCells` (corebundle can't import `corecells/`). Listener-topology + env-vars docs updated. The always-on gRPC port is a deliberate product decision: the core bundle now always exposes gRPC. The service lands on PrimaryListener (JWT) because cellgen hardwires grpc-serve to `cell.PrimaryListener` — a real InternalListener-gRPC + service-token path (allowing pure service principals to reach the RPC without JWT) is a separate framework capability gap, tracked as backlog (#2290).
+> 3. **New `session:verify` permission** minted + accesscore PDP baseline grant (admin/super-admin) — the gate keys on a fine-grained permission per the repo's per-concern convention, not a reused one.
+> 4. **Introspection response shape** (`{valid, ...claims}` uniform for success+failure; gRPC error only for infra-unavailable) — decouples PR-11 from the unshipped errcode→codes mapping (PR-12 #1155), and prevents session-state enumeration.
+> 5. **`GRPC-CELL-REGISTRAR-LAYER-01` scope-extension is already satisfied** by the existing `cells-isolation` strict-allow-list depguard (scope includes `**/corecells/**`; `adapters/` is not allow-listed, so `corecells/ → adapters/grpc` is already denied) — no new archtest added.
 
 ### PR 12 — closure: errcode mapping + remaining middleware + governance + docs ⚡
 
@@ -435,7 +442,7 @@ PR3 (adapters/grpc server) ── PR4 (interceptors) ── PR5 (bootstrap wirin
 - **PR 4 complete**: framework grpc transport runtime functional in isolation (no codegen integration yet)
 - **PR 8 complete**: ⚡ FIRST USABLE gRPC HANDLER end-to-end (spec User Story 1 **scenario 1** acceptance: cell author can ship a unary RPC — client dial → interceptor chain → handler → ack). US1 **scenario 2** (observability shape parity: metric/log/trace) defers to PR-9; **scenario 3** (errcode redaction layers / codes.Code mapping) defers to PR-12. Until then a returned `*errcode.Error` surfaces as `codes.Unknown` and grpc metrics are not exported.
 - **PR 9 complete**: spec User Story 2 acceptance (operator observability parity)
-- **PR 11 complete**: spec User Story 3 acceptance (platform-cell service-to-service)
+- **PR 11 complete**: spec User Story 3 acceptance (platform-cell admin/super-admin JWT token introspection via gRPC; service-principal path is backlog #2290)
 - **PR 10 complete**: spec User Story 4 acceptance (streaming patterns)
 - **PR 12 complete**: ⚡ FULL CAPABILITY PARITY closure (all 12 axes aligned)
 

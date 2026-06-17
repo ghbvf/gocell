@@ -18,8 +18,8 @@ import (
 
 // Service implements audit query business logic against a ledger.QueryStore.
 //
-// The narrow QueryStore interface (just Query, no Append/Tail/Verify/...) lets
-// composition roots inject a read-side aggregator like ledger.MultiStore that
+// The narrow QueryStore interface (the read methods Query + GetByID, no
+// Append/Tail/Verify/...) lets composition roots inject a read-side aggregator like ledger.MultiStore that
 // fans out reads across multiple chains (issue #1121 / ADR 202605270230 —
 // auditcore relay chain + bootstrap chain). Any concrete ledger.Store also
 // satisfies QueryStore by structural typing, so single-chain deployments need
@@ -220,7 +220,10 @@ func (s *Service) Query(
 // (MESSAGE-CONST-LITERAL-01): a zero-value or non-All CrossTenantVisibility must
 // never reach the store (F2, Codex review). The typed funnel guarantees a
 // CrossTenantVisibility is passed (forget = compile error), but the zero value is
-// constructable, so the PEP validates the obligation at runtime.
+// constructable, so the PEP validates the obligation at runtime. This is the
+// SERVICE-layer PEP message, distinct from the STORE-layer single-source
+// ledger.ErrMsgCrossTenantObligation (defense in depth — both layers re-validate
+// ctv); the two are deliberately separate so a log line names which layer rejected.
 const errMsgInvalidCrossTenantObligation = "cross-tenant audit read: invalid or zero CrossTenantVisibility obligation"
 
 func (s *Service) QueryCrossTenant(
@@ -276,4 +279,61 @@ func (s *Service) QueryCrossTenant(
 		OnCursorErr: query.LogCursorError(s.logger, "auditquery"),
 		RunMode:     s.runMode,
 	})
+}
+
+// GetByID returns a single audit entry by its opaque store id within tenant t for
+// http.audit.get.v1. t is the tenant axis (#1618) passed from the authenticated
+// principal by the handler; vis is the row-visibility obligation the store enforces
+// on the actor_id owner column (IDOR-safe collapse to ErrAuditLedgerNotFound). The
+// read runs inside a tenant-scoped RunInTx so DB-layer FORCE RLS is active (mirrors
+// Query). This is the serving-pool single-entry path; super-admin cross-tenant
+// single-entry reads go through GetByIDCrossTenant.
+func (s *Service) GetByID(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*ledger.Entry, error) {
+	// Post-auth hard boundary (#1618 F2): every serving-pool audit read is
+	// tenant-scoped. The handler rejects an empty tenant (403) before reaching here,
+	// so a non-canonical / empty t is a server-side invariant break — reject
+	// fail-closed rather than let the store's empty-t = system-chain semantics serve
+	// a user request (mirrors Query).
+	if err := t.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit get: tenant scope is not canonical", err)
+	}
+	var entry *ledger.Entry
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		e, gerr := s.store.GetByID(txCtx, t, vis, id)
+		if gerr != nil {
+			return gerr
+		}
+		entry = e
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("audit-query: get: %w", err)
+	}
+	return entry, nil
+}
+
+// GetByIDCrossTenant returns a single audit entry by its opaque store id across ALL
+// tenants, using the admin-pool-backed CrossTenantQueryStore (#1810). The
+// single-entry counterpart of QueryCrossTenant and the exclusive path for
+// super-admin cross-tenant single-entry reads; it bypasses the per-tenant RunInTx
+// (the cross-tenant store uses its own admin pool with a role-scoped permissive RLS
+// policy, not the FORCE RLS serving pool).
+//
+// Fail-closed optionality: when crossTenantStore is nil (admin pool creds not
+// provisioned), returns RowScopeAllUnsupportedError (HTTP 501) — graceful, never
+// fail-open, exactly like QueryCrossTenant. ctv is re-validated fail-closed (the
+// data-layer PEP, errMsgInvalidCrossTenantObligation) before reaching the store.
+func (s *Service) GetByIDCrossTenant(
+	ctx context.Context, ctv tenant.CrossTenantVisibility, id string,
+) (*ledger.Entry, error) {
+	if s.crossTenantStore == nil {
+		return nil, ledger.RowScopeAllUnsupportedError()
+	}
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgInvalidCrossTenantObligation)
+	}
+	return s.crossTenantStore.GetByIDCrossTenant(ctx, ctv, id)
 }

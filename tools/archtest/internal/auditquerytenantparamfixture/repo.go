@@ -24,17 +24,21 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
-// FakeGoodQueryStore is the sanctioned audit-Query shape: ctx, then the typed
-// tenant.TenantID scope at param[1], then the row-visibility obligation.
+// FakeGoodQueryStore is the sanctioned audit-read shape: ctx, then the typed
+// tenant.TenantID scope at param[1], then the row-visibility obligation — for BOTH
+// the list path (Query) and the single-entry path (GetByID, #1852).
 type FakeGoodQueryStore interface {
 	Query(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, limit int64) error
+	GetByID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) error
 }
 
-// FakeBadQueryStore drops the typed tenant param. It type-checks fine and PASSES
-// ROWSCOPE-REPO-PARAM-FUNNEL-01 (obligation at param[1] is its GoodNoTenant form),
-// so only AUDIT-QUERY-TENANT-PARAM-01 closes this tenant-axis-removal drift.
+// FakeBadQueryStore drops the typed tenant param on BOTH read methods. Each
+// type-checks fine and PASSES ROWSCOPE-REPO-PARAM-FUNNEL-01 (obligation at param[1]
+// is its GoodNoTenant form), so only AUDIT-QUERY-TENANT-PARAM-01 closes this
+// tenant-axis-removal drift — for Query and GetByID alike.
 //
 //nolint:all // intentional violation for archtest RED fixture
 type FakeBadQueryStore interface {
 	Query(ctx context.Context, vis tenant.RowVisibility, limit int64) error
+	GetByID(ctx context.Context, vis tenant.RowVisibility, id string) error
 }

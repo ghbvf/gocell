@@ -197,6 +197,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{ac}, asm.CellIDs()),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -549,6 +551,8 @@ func TestSetupAdminBootstrap_RateLimited_Returns429AndWritesAuditChain(t *testin
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
+		// gRPC listener: mandatory because accesscore registers grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, []cell.Cell{ac}, asm.CellIDs()),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

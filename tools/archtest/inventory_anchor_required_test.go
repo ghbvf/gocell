@@ -32,7 +32,7 @@
 // space stays grep-able and never silently drifts.
 //
 // Together these two invariants make the source-code anchors the canonical
-// grammar source — `scripts/audit/list-archtests.sh` is a raw-output audit
+// grammar source — `hack/scripts/audit/list-archtests.sh` is a raw-output audit
 // view and does not re-implement the grammar.
 //
 // Replaces the deleted docs/audit/archtest-inventory.md + drift gate
@@ -65,7 +65,7 @@ const (
 // shapes accepted (bare numeric, single trailing letter, uppercase sub-id).
 //
 // IMPORTANT: this is the only place in the repository that defines the
-// anchor-ID grammar. `scripts/audit/list-archtests.sh` deliberately does NOT
+// anchor-ID grammar. `hack/scripts/audit/list-archtests.sh` deliberately does NOT
 // re-implement parsing; it grep-prints raw `// INVARIANT: …` lines so there
 // is no second grammar to drift.
 var inventoryAnchorIDPattern = regexp.MustCompile(
@@ -163,7 +163,7 @@ func isTopLevelArchtestTestFileByPath(rel, absPath string) bool {
 }
 
 // archtestScope returns a Scope over tools/archtest/ that **matches the
-// `scripts/audit/list-archtests.sh` discovery model exactly** — only files
+// `hack/scripts/audit/list-archtests.sh` discovery model exactly** — only files
 // tracked by git are considered. This eliminates the gate / audit-script
 // asymmetry where an untracked local `*_test.go` would fail the gate but
 // be invisible to the audit listing (and vice-versa for an `index`-removed

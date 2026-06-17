@@ -123,7 +123,7 @@ The probe itself is **Medium**:
    constant; bare string registration is compile-time impossible.
 2. **Integration tests** assert `rolbypassrls=false` on the test DB role fixture,
    ensuring the e2e harness always runs under the correct privilege model.
-3. **Compose wiring**: `docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml`
+3. **Compose wiring**: `deploy/docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml`
    configure all three per-cell DSNs (`GOCELL_CONFIGCORE_DATABASE_URL`,
    `GOCELL_AUDITCORE_DATABASE_URL`, `GOCELL_ACCESSCORE_DATABASE_URL`) to use `gocell_app`,
    so the probe would immediately fail in CI if the restricted role were not created or
@@ -136,7 +136,7 @@ The probe itself is **Medium**:
 ### Developer impact
 
 - **New env var `GOCELL_APP_PASSWORD`** must be set alongside `PG_PASSWORD` in
-  `.env.local` and in CI. `scripts/gen-deploy-secrets.sh` emits it as a fresh
+  `.env.local` and in CI. `hack/scripts/gen-deploy-secrets.sh` emits it as a fresh
   `openssl rand -hex 16` value (URL-safe, like `PG_PASSWORD`: both are embedded in
   DSN userinfo where base64 `/`/`+`/`=` would break URL parsing).
 - **One-time volume reset**: existing local environments have a `pgdata` volume

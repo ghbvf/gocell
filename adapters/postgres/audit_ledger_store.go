@@ -90,6 +90,27 @@ WHERE namespace  = $1
   AND tenant_id  = $2
   AND seq_no     = $3`
 
+	// selectByIDSQL fetches a single entry by its opaque id (the uuid PRIMARY KEY)
+	// within tenant t for http.audit.get.v1. 15 selected columns (id + 14 entry
+	// fields). The `$2::uuid` cast matches the house pattern for comparing a uuid
+	// column to a string parameter (session_store.go subject_id = $2::uuid); the
+	// caller parse-guards id as a uuid first, so the cast never raises 22P02.
+	//
+	// The tenant predicate `(tenant_id = '' OR tenant_id = $3)` mirrors Query's
+	// app-layer half: own-tenant rows PLUS tenant-less system rows. Since id is the
+	// globally unique PRIMARY KEY at most one row matches $2, so the tenant predicate
+	// decides whether that single row is VISIBLE to the caller (a cross-tenant row is
+	// excluded → not found), never introduces ambiguity. FORCE RLS on the
+	// app.tenant_id GUC is the DB-Hard backstop.
+	selectByIDSQL = `
+SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
+       timestamp, payload, prev_hash, hash
+FROM audit_entries
+WHERE namespace  = $1
+  AND id         = $2::uuid
+  AND (tenant_id = '' OR tenant_id = $3)`
+
 	// selectRangeSQL fetches a contiguous seq_no range within a (namespace,
 	// tenant_id) chain for Verify in ascending order. 14 columns (no id needed —
 	// Verify only checks chain linkage). tenant_id ($2) is the ctx-scoped chain.
@@ -435,7 +456,7 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
@@ -448,9 +469,76 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	if !vis.Allows(e.ActorID) {
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
+	}
+	return &e, nil
+}
+
+// msgAuditEntryNotFound is the const-literal not-found message
+// (MESSAGE-CONST-LITERAL-01) shared by every LedgerStore not-found path (GetBySeq +
+// the id-keyed auditEntryNotFoundByID).
+const msgAuditEntryNotFound = "audit ledger: entry not found"
+
+// auditEntryNotFoundByID is the IDOR-safe not-found sentinel for the id-keyed
+// single-entry reads (GetByID / GetByIDCrossTenant). It carries NO public detail:
+// unlike the by-seq path (which echoes the integer seqNo), the id is a
+// caller-supplied opaque string kept off the wire and out of logs. Existence is
+// never revealed — the same code is returned for "absent", "another tenant's row",
+// and "outside owner scope".
+func auditEntryNotFoundByID() error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		msgAuditEntryNotFound)
+}
+
+// GetByID fetches a single entry by its opaque uuid id within tenant t for
+// http.audit.get.v1. Returns ErrAuditLedgerNotFound when the id does not exist,
+// belongs to another tenant (excluded by the tenant predicate / FORCE RLS), or
+// the entry exists but vis.Allows(entry.ActorID) is false (IDOR-safe collapse).
+//
+// The id column is a uuid PRIMARY KEY, so a non-uuid id can never match a row: it
+// is parse-guarded up front and collapsed to not-found rather than allowed to
+// raise a 22P02 invalid_text_representation at the DB. t is the mandatory typed
+// tenant axis (param[1], TENANT-REPO-PARAM-FUNNEL-01) — the app-layer half of the
+// dual-layer tenant isolation; FORCE RLS on the app.tenant_id GUC (set from the
+// post-auth ctxkeys.TenantID inside the auditquery RunInTx) is the DB-Hard primary.
+// A vis carrying RowScopeAll is fail-closed (RowScopeAllUnsupportedError): the
+// super-admin cross-tenant single-entry read is served by GetByIDCrossTenant.
+func (s *LedgerStore) GetByID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*ledger.Entry, error) {
+	if err := ledger.ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, ledger.RowScopeAllUnsupportedError()
+	}
+	if _, perr := uuid.Parse(id); perr != nil {
+		// A non-uuid id can never match the uuid PK; collapse to not-found
+		// (IDOR-safe) instead of letting the `$2::uuid` cast raise 22P02.
+		return nil, auditEntryNotFoundByID()
+	}
+	ns := s.namespace()
+	var e ledger.Entry
+	err := s.db.QueryRow(ctx, selectByIDSQL, ns, id, t.String()).Scan(
+		&e.ID, &e.SeqNo,
+		&e.EventID, &e.EventType, &e.ActorID,
+		&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.TraceID, &e.OccurredAt,
+		&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, auditEntryNotFoundByID()
+	}
+	if err != nil {
+		return nil, ctxcancel.WrapOrInfra(err, "get_by_id", ns,
+			ErrAdapterPGQuery, "audit ledger: get by id failed")
+	}
+	// IDOR-safe collapse: do not reveal that the entry exists when the visibility
+	// obligation is not satisfied.
+	if !vis.Allows(e.ActorID) {
+		return nil, auditEntryNotFoundByID()
 	}
 	return &e, nil
 }

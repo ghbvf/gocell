@@ -59,7 +59,7 @@ func TestHealthcheckVerifyRuntime01(t *testing.T) {
 		t.Skipf("bash not available: %v", err)
 	}
 	root := findModuleRoot(t)
-	scriptPath := filepath.Clean(filepath.Join(root, "scripts", "healthcheck-verify.sh"))
+	scriptPath := filepath.Clean(filepath.Join(root, "hack", "scripts", "healthcheck-verify.sh"))
 	if _, err := os.Stat(scriptPath); err != nil {
 		t.Fatalf("script not found: %v", err)
 	}

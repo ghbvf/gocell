@@ -2,42 +2,49 @@
 
 **Feature ID**: `661-kernel-reconcile`
 **Created**: 2026-05-26
-**Status**: **PARKED-ON-TRIGGER**（trigger 未满足；本文档冻结设计，等触发后激活）
+**Status**: **IMPLEMENTED-HISTORICAL**（已落地历史规格；原 trigger gate 已被 ADR-661 amendments + ADR-1895 重定义）
 **Issue**: [#661](https://github.com/ghbvf/gocell/issues/661) KERNEL-RECONCILE-01
 **Priority**: P3
 **Labels**: `cap-08`, `flag-cond`, `type-feat`, `backlog`
 
 ---
 
-## ⚠️ Trigger Gate（必须先满足才能进入实施）
+## Trigger Gate（历史口径；已被 ADR-661 §6 与 ADR-1895 重定义）
 
-本规格是 **trigger-gated 设计**，本文档冻结技术决策与 PR 切分，但 **不立项实施**，直到下列触发条件至少满足两条：
+本规格最初是 **trigger-gated 设计**，用于冻结技术决策与 PR 切分。后续 ADR-661 amendments 已显式
+un-park `kernel/reconcile` 基建，ADR-1895 又将证书生命周期下移为框架能力
+`runtime/certlifecycle`。因此本节保留历史 provenance，不再阻塞 `kernel/reconcile` 代码或框架
+runtime 证书能力；后续仅作为真实业务 cell 接入质量门参考。
 
-| # | 触发条件 | 来源 | 预计满足时间 |
-|---|---------|------|------------|
-| T1 | `pkicell.rotation` slice 落地（证书续期 L4 控制环） | `docs/plans/product-roadmap/202604301030-winmdm-prd-on-gocell.md` §2.1 | winmdm Stage 1，2027 Q1 |
-| T2 | `mdmcell.command` 重发逻辑落地（命令超时主动驱动） | 同上 §2.2 + §4.2 | winmdm Stage 2，2027 Q2-Q3 |
-| T3 | `devicelifecycle.cronsweep` slice 落地（设备墓碑状态机） | 同上 §4.4 | winmdm Stage 4，2027 Q4 |
+| # | 触发条件 | 来源 | 当前口径 |
+|---|---------|------|----------|
+| T1' | `runtime/certlifecycle` 框架证书生命周期 reconciler | ADR-1895 D2/D5 | v1.0 P0；证明 runtime 消费面，不计入业务 cell 数 |
+| T2 | `mdmcell.command` 重发逻辑落地（命令超时主动驱动） | winmdm PRD §2.2 + §4.2 | winmdm Stage 2，2027 Q2-Q3 |
+| T3 | `devicelifecycle.cronsweep` slice 落地（设备墓碑状态机） | winmdm PRD §4.4 | winmdm Stage 4，2027 Q4 |
 | T4 | `zerotrust.trustscore` 周期重评落地 | `docs/plans/product-roadmap/202604301100-zt-extensibility-and-mdm-decoupling.md` §2.1 | zt Phase 5，2029 Q1 |
 
-**满足判定规则**：T1/T2/T3 中至少 **两个**生产 cell 落地（不包括 example），或 T1/T2/T3 任一 + T4 同时落地。`examples/iotdevice` 不计入消费方计数。
+**满足判定规则（后续业务 cell 质量门）**：T2/T3 中至少 **两个**生产 cell 落地（不包括
+example 与 framework runtime 能力），或 T2/T3 任一 + T4 同时落地。`examples/iotdevice`
+不计入消费方计数。
 
-**激活流程**：触发满足时，开新 PR 系列引用本规格，把 plan.md / tasks.md 的 PR 序列付诸实施。本文档自身不再修改。
+**激活流程**：A1-A10 已按 ADR-661 与本规格 landed/闭环。后续新增业务 cell 消费方时引用
+ADR-661 / ADR-1895 / `kernel/reconcile/doc.go` 的当前 invariants，不重启本历史 PR 序列。
 
-**违反此 gate 的后果**：参见 issue body「plan-D §10 禁止预建 mdm/」；在 trigger 满足前合并任何 `kernel/reconcile/*.go` 代码均视为违章。
+**历史约束处置**：原「禁止预建 mdm/」约束仍适用于业务 module / 业务 cell 预建；不适用于
+已显式 un-park 的 `kernel/reconcile` 基建与 `runtime/certlifecycle` 框架能力。
 
 ---
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - 证书续期周期收敛（Priority: P1，对应 T1）
+### User Story 1 - 证书续期周期收敛（Priority: P1，对应 T1'）
 
-**Actor**: `pkicell.rotation` slice 维护者（winmdm Stage 1, 2027 Q1）
+**Actor**: `runtime/certlifecycle` 框架能力维护者（ADR-1895 D2/D5；v1.0 P0）
 
 **Plain Language**:
-作为 `pkicell` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己跑 leader election；但我**必须**保证 `Reconcile` 幂等——leader election 不是 fencing 保证，跨副本残余并发由框架 epoch fencing CAS + 我的幂等兜底（见 ADR §4.3/§4.4）。
+作为 `runtime/certlifecycle` 的维护者，我希望声明一个 reconciler 实现，框架会按指定间隔扫描所有 `cert_issued` 行；对每个 `expires_at < now + 30d` 的非终态证书，框架调我的 `Reconcile(ctx, Request{EntityID: certID})`；我返回 `Result{RequeueAfter: nextWindow}` 或 `error` 让框架决定重试。我**不**需要自己写定时器、不需要自己管退避、不需要自己跑 leader election；但我**必须**保证 `Reconcile` 幂等——leader election 不是 fencing 保证，跨副本残余并发由框架 epoch fencing CAS + 我的幂等兜底（见 ADR §4.3/§4.4）。
 
-**Why this priority**: 证书过期等同生产中断。L4 收敛是 winmdm 上线的必要前提，pkicell 是最先落地的消费方。
+**Why this priority**: 证书过期等同生产中断。ADR-1895 已将证书生命周期定义为框架 v1.0 P0 能力；winmdm 后续协议前端消费该底座，不再自建续期原语。
 
 **Independent Test**: 在 `examples/iotdevice` 用 fake `Reconciler` 验证：注入 100 条非终态实体 + ticker=1s + reconciler 返回 `RequeueAfter=5s`；observable：第 1 秒扫描 100 次，后续每秒只扫描到点的（按 RequeueAfter 排程），永不重入运行中的 entity。
 
@@ -107,7 +114,7 @@
 - **Reconcile panic**：框架 recover → 转 transient error → 走退避路径；不让单个 entity 的 panic 影响其他 entity
 - **Loop 关闭中 Reconcile 在跑**：StopTimeout 内等待，超时强制 cancel ctx；reconciler 必须响应 ctx.Done()
 - **Reconcile 阻塞超长（> 单 tick interval）**：单 entity 串行（不并发同 ID）；多 entity 按 MaxConcurrentReconciles 并发；超长被 ctx deadline 切断
-- **leader 流转期的双扫描/双写**：lease lock（Redis SETNX / PG advisory lock）只 best-effort 收窄并发窗口——leader election **非 fencing**（client-go 明示）。正确性由 monotonic-epoch 写路径 CAS（拒 `incoming_epoch < 已见最高` 的 stale 写）+ reconciler 幂等兜底（见 ADR §4.3/§4.4）；Loop 须在 lease 丢失瞬间 cancel lease-scoped ctx 收窄窗口
+- **leader 流转期的双扫描/双写**：lease lock（Redis SETNX / PG `reconcile_leases` row-TTL UPSERT CAS）只 best-effort 收窄并发窗口——leader election **非 fencing**（client-go 明示）。正确性由 monotonic-epoch 写路径 CAS（拒 `incoming_epoch < 已见最高` 的 stale 写）+ reconciler 幂等兜底（见 ADR §4.3/§4.4）；Loop 须在 lease 丢失瞬间 cancel lease-scoped ctx 收窄窗口
 - **空非终态集合**：scan 返回 0 行 → 跳过本轮，不触发 RequeueAfter（避免无意义自循环）
 - **RequeueAfter = 0**：等价于"按 default tick interval"重入，不立即重试
 - **死信 entity 复活**：reconciler 内部可重置状态把 PermanentError 实体重新激活，由消费方负责（框架不提供 unmark API）
@@ -128,9 +135,9 @@
 
 **FR-005 (Trigger 抽象)**: 框架 MUST 提供 `Trigger` 接口（`Start(ctx, chan<- Request) error`，替代 controller-runtime `Source`），最小实现 `TickerTrigger(clk clock.Clock, interval time.Duration)`（发零值 `Request{}` resync 脉冲，节拍走注入 clock——clock 为强制位置参 per `CLOCK-POSITIONAL-INJECTION-01`，原草图 `TickerTrigger(interval)` 与 TDD「注入时钟、不依赖 wall-clock」冲突，A4 落地裁决为注入 clock，详见 ADR §3.2 F4 amendment）；选配 `ChannelTrigger(<-chan Request)` 用于 outbox 事件唤醒。
 
-**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG advisory lock 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
+**FR-006 (LeaderElector 接口)**: 框架 MUST 提供 `LeaderElector` 接口（`AcquireLease(ctx, reconcilerID) (LeaseToken, error)` + `ReleaseLease(ctx, LeaseToken) error` + `RenewLease(ctx, LeaseToken) error`）；adapters/ 层提供 Redis 与 PG `reconcile_leases` row-TTL UPSERT CAS 两个实现。leader election **非 fencing 保证**（client-go 明示），故：`LeaseToken` MUST 携带**单调 fencing token** `Epoch uint64`（每次换持有者 +1，RenewLease 保持不变）；`Loop` MUST 从 lease 派生 lease-scoped ctx、在 lease 丢失瞬间 cancel 中断 in-flight Reconcile。
 
-**FR-006b (FencedRepository 写路径 CAS)**: 框架 MUST 提供 `FencedRepository`/`FencedWriter` seam——`Loop` 给每次 `Reconcile` 注入 epoch-bound 写句柄，reconciler 唯一写面经此 handle，写路径 CAS 拒绝 `incoming_epoch < 资源已见最高 epoch` 的 stale 写（Kleppmann monotonic fencing，**非** `kernel/outbox` 的 UUID identity-fencing）。绕过在 type system 不可表达（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite）。受 §6 trigger gate 封存（A6 设计，不今天建）。
+**FR-006b (FencedRepository 写路径 CAS)**: 框架 MUST 提供 `FencedRepository`/`FencedWriter` seam——`Loop` 给每次 `Reconcile` 注入 epoch-bound 写句柄，reconciler 唯一写面经此 handle，写路径 CAS 拒绝 `incoming_epoch < 资源已见最高 epoch` 的 stale 写（Kleppmann monotonic fencing，**非** `kernel/outbox` 的 UUID identity-fencing）。绕过在 type system 不可表达（上游 Hard = 唯一写面 + sealed 构造；下游 Hard = `RECONCILE-FENCED-WRITE-FUNNEL-01` callsite）。已由 A6 落地，当前实现口径见 ADR-661 §4。
 
 **FR-007 (并发度控制)**: 框架 MUST 支持 `MaxConcurrentReconciles int` 选项；同一 EntityID 串行（防止重入），不同 EntityID 按上限并发。default = 1。
 
@@ -157,7 +164,7 @@
 - **Result**: reconciler 返回给框架的调度提示；仅包含 RequeueAfter time.Duration（不带 Requeue bool 或 Priority）
 - **Loop**: 框架的调度环；持有 reconciler + trigger + leader + backoff 配置；生命周期挂在 cell registrar
 - **Trigger**: 触发源；最小实现 TickerTrigger；选配 ChannelTrigger
-- **LeaderElector**: best-effort 单 leader 选举接口（**非 fencing**，含单调 `Epoch` token）；adapter 层有 Redis / PG advisory lock 实现
+- **LeaderElector**: best-effort 单 leader 选举接口（**非 fencing**，含单调 `Epoch` token）；adapter 层有 Redis / PG `reconcile_leases` row-TTL UPSERT CAS 实现
 - **FencedWriter**: epoch-bound 写句柄；reconciler 唯一写面，写路径 CAS 拒 stale-epoch（跨副本正确性闭环，见 ADR §4.3）
 - **PermanentError**: 错误 marker，告诉框架"不要重试，记录到死信 metric"
 
@@ -191,11 +198,11 @@
 
 ## Assumptions
 
-- **A1**：trigger 满足时 GoCell v1.0 已 GA（按 #1051 gate "v1.0 GA + P0 5 项就绪"），kernel 公开 API 进入「v2 升级期」（按 `api-versioning.md`），新 kernel package 引入不需 deprecation 期
-- **A2**：`runtime/command.SweeperLifecycle` 在 trigger 满足前不会有不兼容重构（确保迁移 baseline 稳定）；如发生大重构（如 PROD-CLOCK-INJECTION-01 上游 Hard 化），本规格需先 amend 后再激活
-- **A3**：`adapters/redis` 与 `adapters/postgres` 已具备 advisory lock / SETNX 原语，可承载 LeaderElector 实现；无需额外引入 etcd / zookeeper
-- **A4**：消费方 cell（pkicell / mdmcell / devicelifecycle / zerotrust）按 PRD 时间表落地；如出现取消或 cell 边界调整，trigger 条件需重新评估
-- **A5**：`saga` (#969) 与 `projection harness` (#1079) 在 trigger 满足前已 ship，边界明确：saga 解 L3 step orchestration，projection 解 CQRS read side；reconcile 仅承担 L4 desired-state 收敛，三者不重叠
+- **A1**：本规格已进入历史 provenance 状态；当前真值以 ADR-661、ADR-1895 与 develop 代码为准
+- **A2**：`runtime/command.SweeperLifecycle` 已在 A8 删除并迁入 `kernel/reconcile.Loop`，不再作为未来 baseline 假设
+- **A3**：`adapters/redis` 与 `adapters/postgres` 已具备 SETNX / `reconcile_leases` row-TTL UPSERT CAS 原语，可承载 LeaderElector 实现；无需额外引入 etcd / zookeeper
+- **A4**：消费方边界已由 ADR-1895 调整：证书生命周期属 `runtime/certlifecycle` 框架能力；mdmcell / devicelifecycle / zerotrust 仍按 PRD 时间表作为后续业务 cell 接入
+- **A5**：`saga` (#969) 与 `projection harness` (#1079) 已 ship，边界明确：saga 解 L3 step orchestration，projection 解 CQRS read side；reconcile 仅承担 L4 desired-state 收敛，三者不重叠
 - **A6**：`kernel/reconcile` 不依赖 `runtime/` / `adapters/` / `cells/`（满足 CLAUDE.md 分层约束）；LeaderElector 接口在 kernel 层声明，实现在 adapters 层
 
 ---

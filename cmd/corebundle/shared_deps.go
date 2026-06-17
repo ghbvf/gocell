@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ghbvf/gocell/cellmodules/celltls"
 	"github.com/ghbvf/gocell/cellmodules/eventtransport"
 	"github.com/ghbvf/gocell/cellmodules/replaydeps"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -14,8 +15,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
-// SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
-// `cp .env.example .env && go run ./cmd/corebundle` works without first
+// SampleVerbosePlaceholder is the literal placeholder shipped in deploy/.env.example so
+// `cp deploy/.env.example .env && go run ./cmd/corebundle` works without first
 // minting a secret. validateControlPlane rejects this exact value in
 // adapter mode "real" — production deployments must mint their own
 // high-entropy token. Exposed (capitalised) so example/test code and the
@@ -92,16 +93,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
 	metricsHandler := buildMetricsHandler(metricsToken, metricsDeps.PromStack.registry)
 
-	// PR-A14a: surface the pre-PR-A14a env var rename so operators upgrading
-	// from a single-listener binary see a clear signal if they have only the
-	// old var set.
-	if legacy := os.Getenv("GOCELL_HTTP_ADDR"); legacy != "" {
-		if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") == "" && os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") == "" {
-			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener);"+
-				" set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
-				slog.String("legacy_value", strings.ReplaceAll(legacy, "\n", "")))
-		}
-	}
+	warnLegacyHTTPAddr()
 
 	// Build cmdLocals for cmd-private wiring (prometheus adapter types, pool MR,
 	// metrics handler). The internal-listener guard components (HMAC ring +
@@ -130,27 +122,39 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// now run inside NewSharedDeps → validate (#1410), reading the promoted
 	// InternalServiceKeyring + NonceStore + the self-reporting ConsumerClaimer.Kind().
 	// Prometheus adapter types stay in cmdLocals.
+	// #2263: resolve split-topology cross-cell mTLS material (client identity for
+	// dialing remote peers + server config for the internal listener). Fails
+	// closed when the deployment topology has a non-loopback remote cell but no
+	// TLS material is provisioned (see cellmodules/celltls).
+	deployTopoSpec := generatedDeploymentTopology()
+	celltlsDeps, err := resolveTransportTLSMaterial(deployTopoSpec)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	compShared, err := composition.NewSharedDeps(composition.SharedDeps{
-		Clock:                  clk,
-		Topology:               topo,
-		DeploymentTopology:     generatedDeploymentTopology(),
-		JWTIssuer:              jwt.issuer,
-		JWTVerifier:            jwt.verifier,
-		MetricsProvider:        metricsDeps.PromStack.metricProvider,
-		Publisher:              transport.Publisher,
-		Subscriber:             transport.Subscriber,
-		ConfigEventCollector:   metricsDeps.ConfigEventCollector,
-		ConsumerClaimer:        replay.ConsumerClaimer,
-		InternalServiceKeyring: internalKeyring,
-		NonceStore:             replay.NonceStore,
-		PrimaryHTTPAddr:        primaryAddr,
-		InternalHTTPAddr:       internalAddr,
-		HealthHTTPAddr:         healthAddr,
-		HealthLocalOnly:        healthLocalOnly,
-		MetricsToken:           metricsToken,
-		VerboseToken:           verboseToken,
-		VerboseDisabled:        verboseDisabled,
-		ProjectRoot:            os.Getenv("GOCELL_PROJECT_ROOT"),
+		Clock:                     clk,
+		Topology:                  topo,
+		DeploymentTopology:        deployTopoSpec,
+		JWTIssuer:                 jwt.issuer,
+		JWTVerifier:               jwt.verifier,
+		MetricsProvider:           metricsDeps.PromStack.metricProvider,
+		Publisher:                 transport.Publisher,
+		Subscriber:                transport.Subscriber,
+		ConfigEventCollector:      metricsDeps.ConfigEventCollector,
+		ConsumerClaimer:           replay.ConsumerClaimer,
+		InternalServiceKeyring:    internalKeyring,
+		NonceStore:                replay.NonceStore,
+		RemoteClientTLS:           celltlsDeps.ClientIdentity,
+		InternalListenerServerTLS: celltlsDeps.ServerTLS,
+		PrimaryHTTPAddr:           primaryAddr,
+		InternalHTTPAddr:          internalAddr,
+		HealthHTTPAddr:            healthAddr,
+		HealthLocalOnly:           healthLocalOnly,
+		MetricsToken:              metricsToken,
+		VerboseToken:              verboseToken,
+		VerboseDisabled:           verboseDisabled,
+		ProjectRoot:               os.Getenv("GOCELL_PROJECT_ROOT"),
 	})
 	if err != nil {
 		slog.Warn("corebundle: SharedDeps validation failed",
@@ -175,4 +179,33 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 
 	loaded = true
 	return compShared, locals, nil
+}
+
+// warnLegacyHTTPAddr surfaces the pre-PR-A14a GOCELL_HTTP_ADDR rename so an
+// operator upgrading from a single-listener binary sees a clear signal when only
+// the old var is set. Extracted to keep LoadSharedDepsFromEnv ≤ gocognit 15.
+func warnLegacyHTTPAddr() {
+	legacy := os.Getenv("GOCELL_HTTP_ADDR")
+	if legacy == "" {
+		return
+	}
+	if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") != "" || os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") != "" {
+		return
+	}
+	slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener);"+
+		" set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
+		slog.String("legacy_value", strings.ReplaceAll(legacy, "\n", "")))
+}
+
+// resolveTransportTLSMaterial resolves split-topology cross-cell mTLS material
+// (client identity + internal-listener server config) from the deployment
+// topology spec + env. Fails closed when a non-loopback remote peer is declared
+// but no TLS material is provisioned (see cellmodules/celltls). Extracted to keep
+// LoadSharedDepsFromEnv ≤ gocognit 15.
+func resolveTransportTLSMaterial(spec bootstrap.DeploymentTopologySpec) (celltls.Deps, error) {
+	topo, err := bootstrap.NewDeploymentTopology(spec)
+	if err != nil {
+		return celltls.Deps{}, err
+	}
+	return celltls.Resolve(topo, celltls.LoadConfigFromEnv())
 }

@@ -22,6 +22,14 @@
 
 set -euo pipefail
 
+# Compose file moved to deploy/ (#1781). Point bare `docker compose` calls at it
+# via COMPOSE_FILE (env, not a -f flag) so the `docker compose up/down/ps`
+# literals below stay intact for HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01.
+# deploy/docker-compose.yml uses images + named volumes only (no relative paths),
+# so no --project-directory is needed. Relies on CWD = repo root (Makefile target),
+# same assumption as the pre-#1781 bare invocation.
+export COMPOSE_FILE=deploy/docker-compose.yml
+
 TIMEOUT=30
 
 _cleanup() {
