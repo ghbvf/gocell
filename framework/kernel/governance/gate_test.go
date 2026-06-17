@@ -15,7 +15,8 @@ import (
 )
 
 // gateTestEpoch is the fixed clock instant for gate tests (deterministic
-// registrar timestamps). TEST-TIME-LITERAL-01: a package-level const.
+// registrar timestamps). TEST-TIME-LITERAL-01: a package-level var (time.Time
+// cannot be a const; injected via clockmock.New for determinism).
 var gateTestEpoch = time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC)
 
 // validTenant is a canonical lowercase dashed UUID accepted by tenant.Validate.
@@ -59,6 +60,76 @@ func TestGate_NewRegistrationGate_NilStoreFailFast(t *testing.T) {
 	clk := clockmock.New(gateTestEpoch)
 	assert.Panics(t, func() { NewRegistrationGate(nil, clk) },
 		"nil store must fail-fast at construction")
+}
+
+// TestGate_NewRegistrationGate_NilClockFailFast asserts the clock strong-dep
+// guard (clock.MustHaveClock) panics at construction.
+func TestGate_NewRegistrationGate_NilClockFailFast(t *testing.T) {
+	t.Parallel()
+	reg := registry.NewContractRegistrar(clockmock.New(gateTestEpoch))
+	assert.Panics(t, func() { NewRegistrationGate(reg, nil) },
+		"nil clock must fail-fast at construction")
+}
+
+// TestGate_NilCandidate_FailClosed: a nil candidate is a caller precondition
+// violation → fail-closed with ReasonInvalidInput (distinct from a rule failure),
+// never a panic or fail-open, for both Check and Submit.
+func TestGate_NilCandidate_FailClosed(t *testing.T) {
+	t.Parallel()
+	gate, reg := newGate(t)
+
+	checkRes := gate.Check(context.Background(), validTenant, nil)
+	assert.False(t, checkRes.Allowed)
+	assert.Equal(t, ReasonInvalidInput(), checkRes.Reason)
+	assert.Empty(t, checkRes.Result)
+
+	got, submitRes, err := gate.Submit(context.Background(), validTenant, nil, "submitter-cell")
+	require.NoError(t, err)
+	assert.False(t, submitRes.Allowed)
+	assert.Equal(t, ReasonInvalidInput(), submitRes.Reason)
+	assert.Equal(t, registry.RegistrationState{}, got.State)
+	assert.Equal(t, 0, reg.Count(), "nil candidate must not persist")
+}
+
+// TestGate_Submit_EmptySubmitter_FailClosed: a valid contract with an empty
+// submitter is rejected at the gate (ReasonInvalidInput), not via the store's
+// validate() side-effect, and is not persisted.
+func TestGate_Submit_EmptySubmitter_FailClosed(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, submitter string }{
+		{"empty", ""},
+		{"whitespace", "   "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gate, reg := newGate(t)
+			got, res, err := gate.Submit(context.Background(), validTenant, validEventContract(), tc.submitter)
+			require.NoError(t, err)
+			assert.False(t, res.Allowed)
+			assert.Equal(t, ReasonInvalidInput(), res.Reason)
+			assert.Equal(t, registry.RegistrationState{}, got.State)
+			assert.Equal(t, 0, reg.Count(), "missing submitter must not persist")
+		})
+	}
+}
+
+// TestGate_CheckThenSubmit_DryRunHasNoSideEffect closes the Check side-effect-free
+// claim end-to-end: a Check followed by a Submit of the same contract persists
+// exactly once (the Check did not pre-persist, nor block the later Submit).
+func TestGate_CheckThenSubmit_DryRunHasNoSideEffect(t *testing.T) {
+	t.Parallel()
+	gate, reg := newGate(t)
+	c := validEventContract()
+
+	checkRes := gate.Check(context.Background(), validTenant, c)
+	require.True(t, checkRes.Allowed)
+	require.Equal(t, 0, reg.Count(), "Check must not persist")
+
+	_, submitRes, err := gate.Submit(context.Background(), validTenant, c, "submitter-cell")
+	require.NoError(t, err)
+	assert.True(t, submitRes.Allowed)
+	assert.Equal(t, 1, reg.Count(), "Submit after Check persists exactly once")
 }
 
 // TestGate_Check_DeprecatedContract_AllowedWithWarning covers AC1: a wire-compliant
@@ -241,6 +312,7 @@ func TestGateReason_FrozenRegistry(t *testing.T) {
 		"validator-unavailable": 1,
 		"tenant-invalid":        1,
 		"duplicate":             1,
+		"invalid-input":         1,
 	}
 	assert.Equal(t, want, got, "GateReason value set drifted")
 	for _, r := range allGateReasons {
@@ -306,6 +378,68 @@ func TestRuntimeFanoutCompleteness_PerKind(t *testing.T) {
 				Endpoints: metadata.EndpointsMeta{Server: "c"},
 			},
 			wantFlags: false,
+		},
+		{
+			name: "command complete",
+			contract: &metadata.ContractMeta{
+				ID: "command.f.v1", Kind: "command",
+				Endpoints: metadata.EndpointsMeta{Handler: "c", Invokers: []string{"d"}},
+			},
+			wantFlags: false,
+		},
+		{
+			name: "command missing invoker flags",
+			contract: &metadata.ContractMeta{
+				ID: "command.g.v1", Kind: "command",
+				Endpoints: metadata.EndpointsMeta{Handler: "c"},
+			},
+			wantFlags: true,
+		},
+		{
+			name: "projection complete",
+			contract: &metadata.ContractMeta{
+				ID: "projection.h.v1", Kind: "projection",
+				Endpoints: metadata.EndpointsMeta{Provider: "c", Readers: []string{"d"}},
+			},
+			wantFlags: false,
+		},
+		{
+			name: "projection missing reader flags",
+			contract: &metadata.ContractMeta{
+				ID: "projection.i.v1", Kind: "projection",
+				Endpoints: metadata.EndpointsMeta{Provider: "c"},
+			},
+			wantFlags: true,
+		},
+		{
+			name: "webhook complete (provider=ownerCell via CH-01, consumer=receivers)",
+			contract: &metadata.ContractMeta{
+				ID: "webhook.j.v1", Kind: "webhook", OwnerCell: "c",
+				Endpoints: metadata.EndpointsMeta{Receivers: []string{"d"}},
+			},
+			wantFlags: false,
+		},
+		{
+			name: "webhook missing receiver flags",
+			contract: &metadata.ContractMeta{
+				ID: "webhook.k.v1", Kind: "webhook", OwnerCell: "c",
+			},
+			wantFlags: true,
+		},
+		{
+			name: "grpc complete (consumer exempt, server present)",
+			contract: &metadata.ContractMeta{
+				ID: "grpc.l.v1", Kind: "grpc",
+				Endpoints: metadata.EndpointsMeta{Server: "c"},
+			},
+			wantFlags: false,
+		},
+		{
+			name: "grpc missing server flags",
+			contract: &metadata.ContractMeta{
+				ID: "grpc.m.v1", Kind: "grpc",
+			},
+			wantFlags: true,
 		},
 	}
 	for _, tc := range cases {

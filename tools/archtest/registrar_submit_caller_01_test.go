@@ -52,7 +52,12 @@ const (
 	registrarPkgPath = PlatformFrameworkModulePath + "/kernel/registry"
 	// registrationGatePkgPath is the SOLE sanctioned caller of
 	// ContractRegistrar.Submit — the governance registration gate (gate.go).
-	registrationGatePkgPath   = PlatformFrameworkModulePath + "/kernel/governance"
+	registrationGatePkgPath = PlatformFrameworkModulePath + "/kernel/governance"
+	// registrarSubmitFixturePkg is the RED-fixture package. Its path is
+	// deliberately NOT registrationGatePkgPath, so the main scan's allowlist does
+	// not falsely exempt the fixture's bypass call. If the fixture is ever moved
+	// under kernel/governance the RED self-check would silently false-pass — keep
+	// it outside the gate package.
 	registrarSubmitFixturePkg = "./tools/archtest/internal/registrarsubmitcallerfixture"
 )
 

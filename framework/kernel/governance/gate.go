@@ -1,9 +1,13 @@
+// gate.go implements RegistrationGate — the runtime governance gate for contract
+// registration (303-US3, #2234). The AdmissionResponse-style result types
+// (GovernanceGateResult + the sealed GateReason) live in gate_result.go.
 package governance
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -116,6 +120,13 @@ func (g *RegistrationGate) Submit(
 	if !res.Allowed {
 		return registry.ContractRegistration{}, res, nil
 	}
+	if strings.TrimSpace(submitter) == "" {
+		// submitter is the required audit identity. Reject it at the gate rather
+		// than relying on the store's validate() side-effect, so the deny reason is
+		// the gate's own invalid-input — not an opaque store error a caller would
+		// have to introspect.
+		return registry.ContractRegistration{}, GovernanceGateResult{Allowed: false, Reason: reasonInvalidInput}, nil
+	}
 	reg, err := g.store.Submit(registry.SubmitInput{
 		ID:        candidate.ID,
 		Kind:      candidate.Kind,
@@ -137,7 +148,10 @@ func (g *RegistrationGate) evaluate(ctx context.Context, tnt tenant.TenantID, ca
 		return GovernanceGateResult{Allowed: false, Reason: reasonTenantInvalid}
 	}
 	if candidate == nil {
-		return GovernanceGateResult{Allowed: false, Reason: reasonValidationFailed}
+		// A nil candidate is a caller precondition violation — no rule can run on
+		// it — so it is invalid-input, NOT validation-failed (which means rules ran
+		// and a contract violated one). Keeps the two distinguishable for callers.
+		return GovernanceGateResult{Allowed: false, Reason: reasonInvalidInput}
 	}
 	findings, err := g.runRules(ctx, candidate)
 	if err != nil {
@@ -159,10 +173,19 @@ func (g *RegistrationGate) evaluate(ctx context.Context, tnt tenant.TenantID, ca
 func (g *RegistrationGate) runRules(ctx context.Context, candidate *metadata.ContractMeta) (findings []ValidationResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// A governance rule panicking is a defect, but the gate must stay
+			// fail-closed (deny, never crash/fail-open). Log it (server-side, the
+			// primary diagnostic channel — mirrors CH-04's slog usage in this
+			// package) so ReasonValidatorUnavailable is diagnosable, then deny.
+			slog.Error("governance: registration gate rule panicked; failing closed",
+				slog.Any("panic", r), slog.String("contract", candidate.ID))
 			findings = nil
 			err = errcode.Assertion("governance: registration gate validation panicked")
 		}
 	}()
+	// NewValidator is pure in-memory construction (no I/O, non-blocking), so the
+	// ctx.Err() check before the first rule fires is sufficient to honor a
+	// pre-canceled context.
 	v := NewValidator(singleContractProject(candidate), "", g.clk)
 	rules := []func() []ValidationResult{
 		v.checkCH01, v.checkCH02, v.checkCH03,
@@ -192,10 +215,15 @@ func singleContractProject(c *metadata.ContractMeta) *metadata.ProjectMeta {
 
 // denyForStoreError maps a registrar Submit error to a fail-closed verdict,
 // preserving the (passing) validation findings for context. A duplicate id is a
-// conflict (the contract was valid, just already registered); any other store
-// error is treated as a validation failure.
+// conflict (the contract was valid, just already registered → ReasonDuplicate).
+// Any OTHER store error reaches here only after the candidate already passed
+// validation and identity/submitter pre-checks, so it is an infrastructure
+// failure ("could not persist"), mapped to ReasonValidatorUnavailable (a
+// 503-class condition) rather than ReasonValidationFailed — a store-down deny
+// must not read as a rule violation. The live PG-backed store's unavailable path
+// lands in US5; the in-mem store reaches this only via the duplicate branch.
 func denyForStoreError(prior GovernanceGateResult, err error) GovernanceGateResult {
-	reason := reasonValidationFailed
+	reason := reasonValidatorUnavailable
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Code == errcode.ErrRegistrationDuplicate {
 		reason = reasonDuplicate
@@ -241,10 +269,15 @@ func (v *Validator) fanoutFindingsFor(c *metadata.ContractMeta) []ValidationResu
 			"set the contract kind (http/event/command/projection/webhook/grpc/saga)"))
 		return out // kind unknown → provider/consumer dispatch is undefined
 	}
-	if provider, err := v.contracts.Provider(c.ID); err != nil || strings.TrimSpace(provider) == "" {
-		out = append(out, v.newError(codeREG01, IssueRequired, c.File, fanoutProviderField(c.Kind),
-			fmt.Sprintf("runtime contract %q (kind %q) is missing its provider endpoint — fanout incomplete", c.ID, c.Kind),
-			"declare the provider endpoint so the registered contract has a producer"))
+	// Provider completeness. Webhook is exempt here: its "provider" IS ownerCell
+	// (ContractRegistry.Provider returns OwnerCell for webhook), already covered by
+	// CH-01 — re-checking would emit a redundant second finding for the same field.
+	if c.Kind != "webhook" {
+		if provider, err := v.contracts.Provider(c.ID); err != nil || strings.TrimSpace(provider) == "" {
+			out = append(out, v.newError(codeREG01, IssueRequired, c.File, fanoutProviderField(c.Kind),
+				fmt.Sprintf("runtime contract %q (kind %q) is missing its provider endpoint — fanout incomplete", c.ID, c.Kind),
+				"declare the provider endpoint so the registered contract has a producer"))
+		}
 	}
 	if fanoutRequiresConsumer(c.Kind) {
 		if consumers, err := v.contracts.Consumers(c.ID); err != nil || len(consumers) == 0 {
@@ -267,7 +300,7 @@ func (v *Validator) runtimeRegistrationAdvisories() []ValidationResult {
 	var out []ValidationResult
 	for _, c := range v.sortedContracts() {
 		if c.Lifecycle == "deprecated" {
-			out = append(out, v.newWarning(codeREG02, IssueForbidden, c.File, "lifecycle",
+			out = append(out, v.newWarning(codeREG02, IssueInvalid, c.File, "lifecycle",
 				fmt.Sprintf("runtime contract %q is being registered with lifecycle %q", c.ID, c.Lifecycle),
 				"register an active (non-deprecated) version of this contract, or confirm the deprecated registration is intentional"))
 		}
@@ -276,7 +309,11 @@ func (v *Validator) runtimeRegistrationAdvisories() []ValidationResult {
 }
 
 // fanoutProviderField names the YAML field carrying the provider for a kind, for
-// the REG-01 finding's Field anchor (mirrors ContractMeta.ProviderEndpoint).
+// the REG-01 finding's Field anchor. It mirrors the per-kind provider dispatch in
+// metadata.ContractMeta.ProviderEndpoint and tools/archtest
+// reverse_coverage_invariants.contractProviderFieldLabel — a new contract kind
+// must update all three in sync (the value-set is small and kind-stable; no shared
+// table is warranted).
 func fanoutProviderField(kind string) string {
 	switch kind {
 	case "event":

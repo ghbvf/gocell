@@ -61,6 +61,7 @@ var (
 	reasonValidatorUnavailable = GateReason{v: "validator-unavailable"}
 	reasonTenantInvalid        = GateReason{v: "tenant-invalid"}
 	reasonDuplicate            = GateReason{v: "duplicate"}
+	reasonInvalidInput         = GateReason{v: "invalid-input"}
 )
 
 // ReasonAllowed: the candidate passed every applicable governance rule.
@@ -83,12 +84,26 @@ func ReasonTenantInvalid() GateReason { return reasonTenantInvalid }
 // already exists (a conflict surfaced by the store at Submit).
 func ReasonDuplicate() GateReason { return reasonDuplicate }
 
+// ReasonInvalidInput: a caller precondition was violated — a nil candidate or an
+// empty submitter — rather than a governance rule failing or the validator being
+// unable to run. Distinct from ReasonValidationFailed (which means rules ran and
+// found a violation) so a caller can map malformed input to a 400-class response
+// instead of a 422-class one.
+func ReasonInvalidInput() GateReason { return reasonInvalidInput }
+
 // allGateReasons is the closed registry of every GateReason value. It backs the
 // anti-vacuity freeze (TestGateReason_FrozenRegistry): a new reason added without
 // registering it here — or a renamed wire value — is caught.
+//
+// This is a package-internal slice, not a const [N]GateReason frozen by the type
+// system — a fixed-size array would need N as a compile-time constant, and the
+// value set is hand-maintained. The drift guard is therefore Medium (value-golden
+// TestGateReason_FrozenRegistry), the documented Go ceiling for a sealed-value
+// registry, same posture as registry.allRegistrationStates /
+// transport.allTransportOutcomes.
 var allGateReasons = []GateReason{
 	reasonAllowed, reasonValidationFailed, reasonValidatorUnavailable,
-	reasonTenantInvalid, reasonDuplicate,
+	reasonTenantInvalid, reasonDuplicate, reasonInvalidInput,
 }
 
 // isRegistered reports whether r is one of the producible reasons. A zero value
