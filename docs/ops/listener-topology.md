@@ -47,6 +47,31 @@ Kubelet / Prometheus    │              health  :9091                │
 | internal | `127.0.0.1:9090`    | `GOCELL_HTTP_INTERNAL_ADDR` |
 | health   | `127.0.0.1:9091` local/dev default; use `:9091` for PodIP/Service probes | `GOCELL_HTTP_HEALTH_ADDR` |
 | admin    | `127.0.0.1:9093` (loopback; operator control-plane, optional — declared only when an admin endpoint is wired) | composition-root supplied (e.g. `127.0.0.1:9093` in the todoorder demo) |
+| grpc     | `:9095` (always-on; admin/operator JWT token introspection on `cell.PrimaryListener`, PR-11 #1154) | `GOCELL_GRPC_ADDR` |
+
+`cmd/corebundle` also binds **one always-on gRPC listener** (`:9095`) on the
+`cell.PrimaryListener` ROLE — an independent TCP socket from the HTTP primary listener, in a
+separate bootstrap namespace (the shared ref is a role, not a port). It is required because
+accesscore serves the `grpc.auth.session.verify.v1` token-introspection contract there (first
+platform-cell gRPC service); the cell registers the service unconditionally, so bootstrap fails
+fast if no gRPC listener is wired. Transport security mirrors the HTTP fail-closed posture:
+durable/real mode requires `GOCELL_GRPC_TLS_CERT_FILE` + `GOCELL_GRPC_TLS_KEY_FILE` (optionally
+`GOCELL_GRPC_TLS_CLIENT_CA_FILE` for mTLS), or an explicit `GOCELL_GRPC_ALLOW_INSECURE=true` to
+run plaintext behind a TLS-terminating sidecar. See `docs/ops/env-vars.md` § gRPC Listener.
+
+**Network-exposure note**: the gRPC listener serves admin/operator JWT token introspection
+(`grpc.auth.session.verify.v1`, requires admin or super-admin JWT) and should be cluster-internal
+— analogous to the internal listener. Do NOT expose port `9095` via a public LoadBalancer or
+Ingress. Restrict it in your NetworkPolicy to caller pods only (see
+[Kubernetes NetworkPolicy](#kubernetes-networkpolicy)).
+
+**Migration (PR-11 / gRPC)**: existing corebundle/ssobff deployments now bind an always-on gRPC
+port (`:9095`). Operators must:
+1. Expose the port in their pod/Service spec (add a `grpc: 9095` container port).
+2. Add a NetworkPolicy ingress rule for port 9095 restricted to caller pods.
+3. In durable/real mode, provide gRPC TLS material (`GOCELL_GRPC_TLS_CERT_FILE` +
+   `GOCELL_GRPC_TLS_KEY_FILE`) or set `GOCELL_GRPC_ALLOW_INSECURE=true` for plaintext
+   behind a TLS-terminating sidecar — otherwise startup fails fast.
 
 For full variable reference see `docs/ops/env-vars.md`.
 
@@ -162,6 +187,9 @@ containerPorts:
     protocol: TCP
   - name: health
     containerPort: 9091       # health — probes target this port
+    protocol: TCP
+  - name: grpc
+    containerPort: 9095       # gRPC (always-on, admin/operator JWT introspection — do NOT expose via public LB)
     protocol: TCP
 
 # Liveness probe
@@ -362,6 +390,15 @@ services:
       GOCELL_HTTP_HEALTH_ADDR: "127.0.0.1:9091"
       GOCELL_HTTP_HEALTH_LOCAL_ONLY: "1"
       GOCELL_SERVICE_SECRET: "${GOCELL_SERVICE_SECRET}"
+      # gRPC listener (PR-11 / #1154): always-on at :9095. In durable/real mode the
+      # gRPC listener requires TLS material (GOCELL_GRPC_TLS_CERT_FILE +
+      # GOCELL_GRPC_TLS_KEY_FILE; optionally GOCELL_GRPC_TLS_CLIENT_CA_FILE for mTLS),
+      # OR an explicit GOCELL_GRPC_ALLOW_INSECURE=true to run plaintext ONLY when a
+      # TLS-terminating sidecar (e.g. Envoy, Istio) is present — otherwise startup
+      # fails fast. In a real-mode deployment, prefer explicit TLS material:
+      GOCELL_GRPC_TLS_CERT_FILE: "/run/secrets/grpc/tls.crt"   # mount server cert here
+      GOCELL_GRPC_TLS_KEY_FILE: "/run/secrets/grpc/tls.key"    # mount server key here
+      # GOCELL_GRPC_ALLOW_INSECURE: "true"   # ONLY if a TLS-terminating sidecar is present
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9091/healthz"]
       interval: 10s
@@ -412,6 +449,15 @@ spec:
     - ports:
         - protocol: TCP
           port: 9091
+    # gRPC listener — admin/operator JWT token introspection only.
+    # Restrict to caller pods; do NOT expose via a public LoadBalancer or Ingress.
+    - from:
+        - podSelector:
+            matchLabels:
+              gocell.io/caller-cell: accesscore
+      ports:
+        - protocol: TCP
+          port: 9095
 ```
 
 Two operator-side caveats this example does not encode:

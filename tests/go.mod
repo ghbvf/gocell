@@ -73,6 +73,8 @@ require (
 
 replace github.com/ghbvf/gocell/framework => ../framework
 
+replace github.com/ghbvf/gocell/adapters/grpc => ../adapters/grpc
+
 replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil

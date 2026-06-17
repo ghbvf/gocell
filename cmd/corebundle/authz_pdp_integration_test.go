@@ -171,6 +171,9 @@ func startCorebundlePDPApp(t *testing.T) string {
 		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
 		authzOpt, // ABAC PDP wired — this is the system under test
+		// gRPC listener: mandatory because accesscore registers
+		// grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
+		corebundleTestGRPCListenerOption(t, cells, asm.CellIDs()),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -48,3 +48,8 @@
   risk: low
   blocker: ""
   updatedAt: 2026-06-13
+- journeyId: J-sessionverify
+  state: doing
+  risk: low
+  blocker: ""
+  updatedAt: 2026-06-17

@@ -235,6 +235,92 @@ func TestPrimaryAuthorizerOption_MultipleProviders(t *testing.T) {
 		"error must identify the ambiguous PDP so operators can resolve the misconfiguration")
 }
 
+// ---------------------------------------------------------------------------
+// AuthorizerFromCells tests
+// ---------------------------------------------------------------------------
+
+// recordingAuthorizer is a fake auth.Authorizer that records the last Authorize
+// call arguments and returns a known authz.Deny decision so the test can assert
+// that the returned authorizer actually forwards calls to the provider.
+type recordingAuthorizer struct {
+	lastSubject  string
+	lastResource string
+	lastAction   string
+}
+
+func (r *recordingAuthorizer) Authorize(_ context.Context, subject, resource, action string) (authz.Decision, error) {
+	r.lastSubject = subject
+	r.lastResource = resource
+	r.lastAction = action
+	return authz.Deny("test-sentinel"), nil
+}
+
+var _ auth.Authorizer = (*recordingAuthorizer)(nil)
+
+// TestAuthorizerFromCells_HappyPath verifies that a single authorizerProvider
+// cell returns a non-nil auth.Authorizer, and that calling Authorize on the
+// returned value forwards the call to the underlying provider's Authorizer.
+func TestAuthorizerFromCells_HappyPath(t *testing.T) {
+	t.Parallel()
+	recorder := &recordingAuthorizer{}
+	cells := []cell.Cell{
+		newFakeNonAuthorizerCell("configcore"),
+		newFakeAuthorizerCell("accesscore", recorder),
+		newFakeNonAuthorizerCell("auditcore"),
+	}
+
+	a, err := AuthorizerFromCells(cells)
+
+	require.NoError(t, err)
+	require.NotNil(t, a, "AuthorizerFromCells must return a non-nil auth.Authorizer for the happy path")
+
+	// Behavioral assertion: the returned Authorizer must forward calls to the
+	// provider's Authorizer (the recording fake) and carry back its Decision.
+	got, authErr := a.Authorize(context.Background(), "sub1", "res1", "act1")
+	require.NoError(t, authErr)
+	assert.Equal(t, authz.EffectDeny, got.Effect(),
+		"Authorize must forward to the provider and return its Decision (EffectDeny from recordingAuthorizer)")
+	assert.Equal(t, "sub1", recorder.lastSubject)
+	assert.Equal(t, "res1", recorder.lastResource)
+	assert.Equal(t, "act1", recorder.lastAction)
+}
+
+// TestAuthorizerFromCells_NoProvider verifies that an assembly with no
+// authorizerProvider cell causes AuthorizerFromCells to fail-fast with an error
+// containing "no cell implements authorizerProvider".
+func TestAuthorizerFromCells_NoProvider(t *testing.T) {
+	t.Parallel()
+	cells := []cell.Cell{
+		newFakeNonAuthorizerCell("configcore"),
+		newFakeNonAuthorizerCell("auditcore"),
+	}
+
+	a, err := AuthorizerFromCells(cells)
+
+	require.Error(t, err, "zero authorizerProvider cells must fail-fast")
+	assert.Nil(t, a)
+	assert.Contains(t, err.Error(), "no cell implements authorizerProvider",
+		"error must identify the missing provider so operators can diagnose the misconfiguration")
+}
+
+// TestAuthorizerFromCells_MultipleProviders verifies that two cells both
+// implementing authorizerProvider cause AuthorizerFromCells to fail-fast with
+// an error containing "multiple cells implement authorizerProvider".
+func TestAuthorizerFromCells_MultipleProviders(t *testing.T) {
+	t.Parallel()
+	cells := []cell.Cell{
+		newFakeAuthorizerCell("accesscore1", fakeAuthorizer{}),
+		newFakeAuthorizerCell("accesscore2", fakeAuthorizer{}),
+	}
+
+	a, err := AuthorizerFromCells(cells)
+
+	require.Error(t, err, "two authorizerProvider cells must fail-fast")
+	assert.Nil(t, a)
+	assert.Contains(t, err.Error(), "multiple cells implement authorizerProvider",
+		"error must identify the ambiguous PDP so operators can resolve the misconfiguration")
+}
+
 // TestPrimaryAuthorizerOption_NilAuthorizerFromProvider verifies that a cell
 // implementing authorizerProvider but returning a nil Authorizer produces an
 // option without error at construction time (the nil check cannot run yet

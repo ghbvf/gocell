@@ -175,6 +175,24 @@ func PermUserWrite() Permission { return permUserWrite }
 // (PR-10c) → RequirePermissionForResource (#1977).
 func PermRoleRead() Permission { return permRoleRead }
 
+// permSessionVerify is the package-private singleton backing the
+// PermSessionVerify() accessor. Unexported so no external package can reassign it.
+var permSessionVerify = newPermission("session:verify")
+
+// PermSessionVerify returns the permission authorizing service-to-service
+// introspection of an access/session token via the accesscore sessionverifyrpc
+// gRPC service (grpc.auth.session.verify.v1, #1154 — the first platform-cell gRPC
+// service). It is a first-class, enumerable action distinct from user:read /
+// system:read: token introspection reads live session state and is its own
+// auditable authorization class. The gRPC per-method PDP gate (#2008) resolves it
+// from endpoints.grpc.methods[].permission and the PDP baseline grants it to
+// admin / super-admin (see authorizationdecide baseline.go). A non-admin service
+// caller is granted it via a tenant policy overlay, not the baseline.
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermSessionVerify() Permission { return permSessionVerify }
+
 // examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its
 // own lightweight PDP (cells/devicecell/authorizer.go) whose baseline grants
 // these actions; the platform registry stays the SOLE minter (the Permission
@@ -263,6 +281,7 @@ var allPermissions = []Permission{
 	permUserRead,
 	permUserWrite,
 	permRoleRead,
+	permSessionVerify,
 	permDeviceCommand,
 	permDeviceConsume,
 	permDeviceRead,

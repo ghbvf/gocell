@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+// auth.session.verify.v1 is the accesscore cell's session-token verification RPC
+// surface — the first PLATFORM-cell gRPC contract (PR-11 #1154). It exposes
+// session-token introspection as an internal service-to-service gRPC service:
+// SessionVerifyService.VerifyToken takes an access token and returns the verified
+// claims projection (subject / tenant / session / roles), reusing the same
+// sessionvalidate domain path the HTTP auth middleware uses. The .proto is the
+// single source of the service + message set; contractgen emits no Go for
+// kind=grpc (#1688) — this buf-generated pb.<Svc>Server is the sole server
+// contract.
+package auth.session.verify.v1;
+
+option go_package = "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1;sessionverifyv1";
+
+// SessionVerifyService is served by the accesscore cell.
+service SessionVerifyService {
+  // VerifyToken introspects an access token and returns whether it is currently
+  // valid plus its verified claims projection. It is an introspection RPC: an
+  // invalid / expired / revoked token returns a response with valid=false (NOT an
+  // error), so a caller cannot enumerate WHY a token failed; only an
+  // infrastructure outage surfaces as a gRPC error.
+  rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse) {}
+}
+
+message VerifyTokenRequest {
+  // token is the access token to verify (the opaque bearer string).
+  string token = 1;
+}
+
+message VerifyTokenResponse {
+  // valid reports whether the token verified successfully (signature + session
+  // liveness + epoch checks all passed). When false, the remaining fields are
+  // unset and the caller must treat the token as unauthenticated.
+  bool valid = 1;
+  // subject is the verified principal id (the token's "sub" claim). Set only when
+  // valid is true.
+  string subject = 2;
+  // tenant_id is the verified tenant isolation boundary (the "tenant_id" claim,
+  // canonical UUID or empty in single-tenant). Set only when valid is true.
+  string tenant_id = 3;
+  // session_id is the verified session binding (the "sid" claim). Set only when
+  // valid is true.
+  string session_id = 4;
+  // roles are the verified role names carried by the token. Set only when valid is
+  // true.
+  repeated string roles = 5;
+  // expires_at_unix_nano is the token expiry, unix nanos. Set only when valid is true.
+  int64 expires_at_unix_nano = 6;
+  // password_reset_required indicates the subject must change their password before
+  // proceeding. Set only when valid is true.
+  bool password_reset_required = 7;
+}

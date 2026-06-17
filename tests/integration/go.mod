@@ -16,6 +16,14 @@ require (
 )
 
 require (
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000 // indirect
+	golang.org/x/net v0.56.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
+	google.golang.org/grpc v1.81.1 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
+)
+
+require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -100,6 +108,8 @@ replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
 
 replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
+
+replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
