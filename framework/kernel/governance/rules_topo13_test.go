@@ -88,9 +88,11 @@ func TestTOPO13_CrossProcessEvent_Split(t *testing.T) {
 	assert.NotEmpty(t, got[0].Message)
 }
 
-// TestTOPO13_ColocatedEvent_NoError is the anti-vacuity GREEN test.
-// Publisher and subscriber are in the same group (single process) → no
-// cross-process boundary → TOPO-13 must NOT fire.
+// TestTOPO13_ColocatedEvent_NoError covers the <2-group SKIP path: a single
+// group covering pub+sub has no process boundary, so validateTOPO13 skips the
+// assembly before the SameGroup predicate is ever evaluated → no finding. The
+// ≥2-group GREEN that actually exercises the SameGroup predicate (pub+sub in the
+// same group alongside another group) is TestTOPO13_SameGroup_NotFired.
 func TestTOPO13_ColocatedEvent_NoError(t *testing.T) {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB

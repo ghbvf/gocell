@@ -130,7 +130,7 @@ func TestValidateTopologyStructure(t *testing.T) {
 				// gamma missing
 			}}),
 			wantErr: true,
-			errSub:  "non-exhaustive topology",
+			errSub:  "non-exhaustive",
 		},
 
 		// ---- endpoint validation ----

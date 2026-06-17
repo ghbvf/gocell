@@ -4,7 +4,10 @@ package bootstrap
 // groups-graph → per-process DeploymentTopologySpec bridge (#1423 PR-1).
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // TestSpecForRole_EmptyRoleIsColocatedMonolith verifies that an empty role
@@ -56,5 +59,14 @@ func TestSpecForRole_NonEmptyRoleFailsClosed(t *testing.T) {
 	_, err := SpecForRole(groups, "core")
 	if err == nil {
 		t.Fatal("non-empty role must fail closed in PR-1, got nil error")
+	}
+	// fail-closed must be a typed errcode (ErrValidationFailed), not a bare error —
+	// the error type/code is the contract callers branch on.
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("fail-closed error must be *errcode.Error, got %T", err)
+	}
+	if ec.Code != errcode.ErrValidationFailed {
+		t.Fatalf("fail-closed error code = %v, want ErrValidationFailed", ec.Code)
 	}
 }

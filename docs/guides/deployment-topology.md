@@ -51,6 +51,11 @@ composition root calls `bootstrap.SpecForRole(generatedTopologyGroups(), "")`,
 which selects the zero (all-colocated) spec. Startup role selection
 (`GOCELL_CELL_ROLE` → per-process subset mounting) lands in PR-2.
 
+> **Warning — do NOT set `GOCELL_CELL_ROLE` on a PR-1 build.** Per-role process
+> selection is not yet supported; `SpecForRole` fail-closes (startup
+> `ERR_VALIDATION_FAILED`) on any non-empty role. Leave `GOCELL_CELL_ROLE` unset
+> to run the all-colocated monolith. Role selection arrives in PR-2.
+
 A split topology requires a real event broker (TOPO-13 enforces this). See the
 §Split topology requirements section below for the full infrastructure checklist.
 

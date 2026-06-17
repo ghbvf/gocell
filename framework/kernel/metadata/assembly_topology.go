@@ -73,7 +73,7 @@ const (
 	errMsgTopoEmptyCells      = "topology: group must declare at least one cell"
 	errMsgTopoDuplicateCell   = "topology: cell appears in more than one group"
 	errMsgTopoUnknownCell     = "topology: group cell not declared in assembly cells"
-	errMsgTopoNonExhaustive   = "non-exhaustive topology: assembly cell is not assigned to any group"
+	errMsgTopoNonExhaustive   = "topology: assembly cell is not assigned to any group (non-exhaustive partition)"
 	errMsgTopoEmptyEndpoint   = "topology: empty endpoint — group endpoint must be non-blank"
 	errMsgTopoInvalidEndpoint = "topology: invalid endpoint — must be host:port or http/https URL with non-empty host"
 )

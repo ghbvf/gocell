@@ -39,7 +39,8 @@ type TopologyGroup struct {
 	Endpoint string
 }
 
-const errMsgDeployTopoRoleUnsupported = "deployment topology: role selection not yet wired (GOCELL_CELL_ROLE lands in #1423 PR-2)"
+const errMsgDeployTopoRoleUnsupported = "deployment topology: per-role process selection is not supported in this build; " +
+	"leave GOCELL_CELL_ROLE empty to run the all-colocated monolith"
 
 // SpecForRole derives the per-process DeploymentTopologySpec from the full
 // topology group graph for the deployment role this process runs as.

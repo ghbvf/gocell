@@ -254,8 +254,8 @@ const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cel
 	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL so " +
 	"eventtransport.Resolve selects a real broker, and thread its Transport.Kind via " +
 	"WithEventTransportKind plus a non-nil publisher/subscriber via WithPublisher/WithSubscriber" +
-	" — or drop the remote cells from the deployment topology (assembly topology.remote / " +
-	"DeploymentTopologySpec.Remote) to keep all cells co-located (no broker needed)"
+	" — or co-locate all cells in a single deployment group (assembly topology.groups; omit topology " +
+	"entirely for the all-colocated default) to keep them in one process (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx
