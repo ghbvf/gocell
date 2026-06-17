@@ -18,11 +18,12 @@ For each non-public business endpoint:
    `auth.RequirePermissionForResource("pathParam", authz.PermXxx())`. It
    canonicalizes the path parameter and forwards it as `resource.id` for PDP
    ownership rules. Do not replace it with plain `RequirePermission`.
-4. Register the baseline grant in
-   `corecells/accesscore/slices/authorizationdecide/baseline.go` when the
-   endpoint should be available to the built-in admin/super-admin or ownership
-   model. A missing baseline means the endpoint is default-deny unless tenant
-   policy grants it.
+4. Register the baseline grant in the PDP that owns this assembly's
+   authorization rules. Platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep the matching baseline in their own
+   `Authorizer()`/PDP. A missing baseline means the endpoint is default-deny
+   unless tenant policy grants it.
 5. Wire the composition root so the primary listener gets an Authorizer:
    `bootstrap.WithPrimaryAuthorizer(authorizer)` or
    `bootstrap.PrimaryAuthorizerOption(cells)`. Without this, the route gate
@@ -48,6 +49,21 @@ Data visibility must be enforced where data is read:
 - Write endpoints generally have no RowScope dimension. Their isolation boundary
   is the typed tenant axis, ctx tenant propagation, and PostgreSQL FORCE RLS.
 
+## PDP Ownership
+
+`RequirePermission` calls the primary listener's injected Authorizer. The
+composition root decides which PDP owns baseline rules:
+
+| Assembly shape | Baseline owner | Wiring |
+|----------------|----------------|--------|
+| Platform corecells bundle | `corecells/accesscore/slices/authorizationdecide/baseline.go` | `bootstrap.PrimaryAuthorizerOption(cells)` discovers the accesscore Authorizer. |
+| Example or self-contained cell | The cell's local `Authorizer()`/PDP, beside the cell-specific policy code. | `bootstrap.PrimaryAuthorizerOption(cells)` discovers exactly one provider, or the root passes it via `bootstrap.WithPrimaryAuthorizer`. |
+| External assembly with its own PDP | The external PDP package that owns policy evaluation. | The composition root injects that PDP with `bootstrap.WithPrimaryAuthorizer`. |
+
+Do not copy platform accesscore baseline rules into examples just to satisfy the
+checklist. Keep each grant beside the PDP that will evaluate it, and keep only
+one primary Authorizer per assembly so startup can fail fast on ambiguous wiring.
+
 ## RowScope Values
 
 `tenant.RowScope` has four non-zero values:
@@ -70,6 +86,7 @@ principal-derived RowScope.
 | Failure | Symptom | Fix |
 |---------|---------|-----|
 | Permission minted but no baseline rule | Admin receives 403 from default-deny. | Add the matching baseline rule or document tenant-policy-only access. |
+| Baseline registered in the wrong PDP owner | Tests pass in one assembly but another route still denies. | Put the grant beside the PDP injected by that assembly's composition root. |
 | Handler uses `auth.AnyRole` | Authorization bypasses the PDP funnel and role-literal governance fails. | Use `auth.RequirePermission` or `auth.RequirePermissionForResource`. |
 | Owner endpoint uses plain `RequirePermission` | PDP sees the URL path instead of canonical `resource.id`; ownership rule does not match. | Use `RequirePermissionForResource` with the path-param name. |
 | Composition root omits the Authorizer | Every permission-gated request fails closed. | Install `WithPrimaryAuthorizer` / `PrimaryAuthorizerOption`. |
@@ -86,6 +103,10 @@ Positive examples:
   reads.
 - `cmd/corebundle/run.go` wires the primary Authorizer for the bundled
   accesscore/configcore/auditcore assembly.
+- `examples/todoorder/cells/ordercell/authorizer.go` keeps todoorder's
+  self-contained baseline in the example-owned PDP.
+- `examples/iotdevice/cells/devicecell/authorizer.go` does the same for
+  iotdevice device permissions.
 
 Primary rationale:
 

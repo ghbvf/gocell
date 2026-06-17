@@ -197,9 +197,11 @@ For any non-public business endpoint:
 2. Attach it to the generated handler with `auth.RequirePermission(perm)`.
 3. Use `auth.RequirePermissionForResource(pathParam, perm)` when the endpoint
    grants owner/self access through PDP ownership rules.
-4. Add the matching built-in baseline rule in
-   `corecells/accesscore/slices/authorizationdecide/baseline.go`, or document why
-   the endpoint is intentionally granted only by tenant policy.
+4. Add the matching baseline rule to the PDP that owns this assembly's policy:
+   platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep the grant in their own
+   `Authorizer()`/PDP. Document tenant-policy-only endpoints explicitly.
 5. Ensure the composition root wires the PDP into the primary listener through
    `bootstrap.WithPrimaryAuthorizer` or `bootstrap.PrimaryAuthorizerOption`.
 6. For list/get data, enforce `tenant.RowVisibility` in the data PEP; the route

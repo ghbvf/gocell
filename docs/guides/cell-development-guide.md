@@ -362,9 +362,11 @@ in handlers. The minimum checklist is:
 2. Wire the generated handler with `auth.RequirePermission(perm)`.
 3. Use `auth.RequirePermissionForResource(pathParam, perm)` for owner/self
    resources so the PDP receives the canonical resource id.
-4. Add the corresponding baseline allow rule in
-   `corecells/accesscore/slices/authorizationdecide/baseline.go`, unless the
-   endpoint is intentionally tenant-policy-only.
+4. Add the corresponding baseline allow rule in the PDP that owns this
+   assembly's rules: platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep it in their own `Authorizer()`/PDP.
+   Document tenant-policy-only endpoints explicitly.
 5. Wire the PDP from the composition root with `bootstrap.WithPrimaryAuthorizer`
    or `bootstrap.PrimaryAuthorizerOption`.
 6. Enforce `tenant.RowVisibility` in list/get data PEPs; write endpoints rely on
