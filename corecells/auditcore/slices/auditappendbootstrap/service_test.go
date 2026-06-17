@@ -103,6 +103,10 @@ func (e *errLedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility,
 	return e.inner.GetBySeq(ctx, vis, seq)
 }
 
+func (e *errLedgerStore) GetByID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*ledger.Entry, error) {
+	return e.inner.GetByID(ctx, t, vis, id)
+}
+
 func (e *errLedgerStore) Query(
 	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters ledger.AuditFilters, params query.ListParams,
 ) ([]*ledger.Entry, error) {

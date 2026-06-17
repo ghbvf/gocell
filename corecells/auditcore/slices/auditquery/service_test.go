@@ -142,6 +142,20 @@ func (s *spyQueryStore) Query(
 	return []*ledger.Entry{}, nil
 }
 
+// GetByID records whether it ran inside the tenant-scoped RunInTx, mirroring Query
+// (#1852: the single-entry serving read must also wrap the store in RunInTx so the
+// FORCE RLS app.tenant_id GUC is active). Returns a non-nil entry so the service's
+// happy path completes.
+func (s *spyQueryStore) GetByID(
+	ctx context.Context, _ tenant.TenantID, _ tenant.RowVisibility, _ string,
+) (*ledger.Entry, error) {
+	s.queried = true
+	if v, _ := ctx.Value(spyTxCtxKey{}).(bool); v {
+		s.sawTxCtx = true
+	}
+	return &ledger.Entry{}, nil
+}
+
 // TestService_Query_RunsStoreInsideRunInTx proves the store read executes inside
 // the tenant-scoped RunInTx (#1618 F3): without it, FORCE RLS's app.tenant_id GUC
 // would not be set on the read connection and the DB-Hard tenant backstop would be
@@ -746,6 +760,22 @@ func (f *fakeCtStore) QueryCrossTenant(
 	return f.entries[:limit], nil
 }
 
+// GetByIDCrossTenant returns the first seeded entry (or f.err / not-found), enough
+// for the Service.GetByIDCrossTenant unit tests (#1852) to exercise the
+// admin-pool-backed single-entry path without a real admin pool.
+func (f *fakeCtStore) GetByIDCrossTenant(
+	_ context.Context, _ tenant.CrossTenantVisibility, _ string,
+) (*ledger.Entry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.entries) == 0 {
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+			"audit ledger: entry not found")
+	}
+	return f.entries[0], nil
+}
+
 // TestService_QueryCrossTenant_NilStore_Returns501 locks the fail-closed
 // optionality contract (#1810): when crossTenantStore is nil (admin pool not
 // provisioned), QueryCrossTenant must return RowScopeAllUnsupportedError (501),
@@ -969,4 +999,105 @@ func TestWithCrossTenantStore_TypedNil_KeepsStoreNil(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.KindNotImplemented, ecErr.Kind,
 		"typed-nil store must yield RowScopeAllUnsupportedError (501), not a nil-pointer panic")
+}
+
+// --- GetByID / GetByIDCrossTenant (#1852) ---
+
+func appendSvcEntry(t *testing.T, store *ledger.MemStore, e *ledger.Entry) string {
+	t.Helper()
+	require.NoError(t, store.Append(context.Background(), e))
+	require.NotEmpty(t, e.ID)
+	return e.ID
+}
+
+func TestService_GetByID_Found(t *testing.T) {
+	svc, store := newTestService()
+	id := appendSvcEntry(t, store, &ledger.Entry{
+		EventID: "evt-svc-get-1", EventType: "svc.get.v1", ActorID: "actor-1",
+		TenantID: svcQueryTenant, Timestamp: time.Now().UTC(), Payload: []byte("{}"),
+	})
+	got, err := svc.GetByID(context.Background(), svcTenant, testTenantVis(), id)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "evt-svc-get-1", got.EventID)
+}
+
+func TestService_GetByID_NotFound(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.GetByID(context.Background(), svcTenant, testTenantVis(),
+		"00000000-0000-0000-0000-000000000000")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuditLedgerNotFound, ec.Code)
+}
+
+func TestService_GetByID_SelfScope_IDORCollapse(t *testing.T) {
+	svc, store := newTestService()
+	id := appendSvcEntry(t, store, &ledger.Entry{
+		EventID: "evt-svc-get-alice", EventType: "svc.get.v1", ActorID: "alice",
+		TenantID: svcQueryTenant, Timestamp: time.Now().UTC(), Payload: []byte("{}"),
+	})
+	// self("bob") reading alice's entry → IDOR-safe collapse to not-found.
+	_, err := svc.GetByID(context.Background(), svcTenant, testSelfVis("bob"), id)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuditLedgerNotFound, ec.Code)
+}
+
+// TestService_GetByID_RunsStoreInsideRunInTx proves the single-entry serving read
+// also wraps the store in the tenant-scoped RunInTx (#1852, same FORCE RLS GUC
+// invariant as Query #1618 F3).
+func TestService_GetByID_RunsStoreInsideRunInTx(t *testing.T) {
+	spyStore := &spyQueryStore{}
+	spyTx := &spyTxRunner{}
+	svc, err := NewService(spyStore, testCodec(), slog.Default(),
+		persistence.WrapForCell(spyTx), query.RunModeProd)
+	require.NoError(t, err)
+
+	_, err = svc.GetByID(context.Background(), svcTenant, testTenantVis(), "some-id")
+	require.NoError(t, err)
+	assert.True(t, spyTx.called, "Service.GetByID must invoke RunInTx")
+	assert.True(t, spyStore.queried, "store.GetByID must be called")
+	assert.True(t, spyStore.sawTxCtx,
+		"store.GetByID must run inside the RunInTx txCtx so FORCE RLS app.tenant_id GUC is active")
+}
+
+func TestService_GetByID_NonCanonicalTenant_FailsClosed(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.GetByID(context.Background(), tenant.TenantID("not-a-uuid"), testTenantVis(), "x")
+	require.Error(t, err, "GetByID must reject a non-canonical tenant before the store read")
+}
+
+func TestService_GetByIDCrossTenant_NilStore_Returns501(t *testing.T) {
+	svc, _ := newTestService() // no WithCrossTenantStore
+	_, err := svc.GetByIDCrossTenant(context.Background(), tenant.NewCrossTenantVisibility(), "id")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.KindNotImplemented, ec.Kind,
+		"absent admin pool must fail-closed at 501, not nil-panic")
+}
+
+func TestService_GetByIDCrossTenant_ZeroObligation_FailsClosed(t *testing.T) {
+	fake := &fakeCtStore{entries: []*ledger.Entry{{EventID: "x", TenantID: svcQueryTenant}}}
+	svc, err := NewService(newTestStore(t), testCodec(), slog.Default(),
+		outbox.DemoCellTxManager(), query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+	var zero tenant.CrossTenantVisibility // invalid obligation — data-layer PEP must reject
+	_, err = svc.GetByIDCrossTenant(context.Background(), zero, "x")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.KindInternal, ec.Kind,
+		"zero CrossTenantVisibility must fail-closed before the store read")
+}
+
+func TestService_GetByIDCrossTenant_Found(t *testing.T) {
+	want := &ledger.Entry{EventID: "evt-ct", TenantID: svcQueryTenant}
+	fake := &fakeCtStore{entries: []*ledger.Entry{want}}
+	svc, err := NewService(newTestStore(t), testCodec(), slog.Default(),
+		outbox.DemoCellTxManager(), query.RunModeProd, WithCrossTenantStore(fake))
+	require.NoError(t, err)
+	got, err := svc.GetByIDCrossTenant(context.Background(), tenant.NewCrossTenantVisibility(), "evt-ct")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "evt-ct", got.EventID)
 }

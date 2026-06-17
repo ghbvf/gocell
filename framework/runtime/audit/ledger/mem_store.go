@@ -152,11 +152,18 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 
 	// Build the stored entry (copy to prevent caller mutations from leaking).
 	stored := copyEntry(e)
-	// Assign a stable store-level ID from EventID (mirrors PG store assigning a
-	// UUID primary key on INSERT). Using EventID keeps the ID deterministic so
-	// Query tie-breaking by ID ASC is stable across test runs — random UUIDs
-	// would make same-timestamp tie ordering non-deterministic.
-	stored.ID = e.EventID
+	// Assign a GLOBALLY-UNIQUE, deterministic store id derived from the entry's
+	// (namespace, tenant, eventID) — the unique key of the audit chain
+	// (uq_audit_ns_tenant_event_id). Global uniqueness is load-bearing for the
+	// cross-tenant read: MemCrossTenantStore.GetByIDCrossTenant spans every tenant
+	// AND both namespace chains, so a bare-EventID id (EventID is unique only per
+	// (namespace, tenant)) would let two tenants sharing an EventID collide and
+	// return the wrong row (#2288 review F1). Deterministic (not a random uuid.New
+	// like the PG LedgerStore) so the keyset tie-break (id ASC) stays stable across
+	// test runs. Both backends thus assign a globally-unique opaque handle — random
+	// uuid on PG, deterministic hash here — that the wire `id` projects and GetByID
+	// resolves; the contract treats id as an opaque SafeID string either way.
+	stored.ID = deterministicEntryID(string(m.protocol.Namespace()), e.TenantID, e.EventID)
 	stored.SeqNo = int64(len(chain.entries)) + 1
 	stored.PrevHash = prevHash
 	stored.Hash = m.protocol.ComputeHash(prevHash, stored)
@@ -171,6 +178,17 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	e.Hash = stored.Hash
 
 	return nil
+}
+
+// deterministicEntryID derives a globally-unique, deterministic in-memory store id
+// from an entry's unique key (namespace, tenant, eventID). It reuses the store's
+// already-imported sha256/hex (no new dependency); the NUL separators make the
+// concatenation unambiguous (so "a","bc" and "ab","c" cannot collide). 16 bytes
+// (128-bit) of digest is ample collision resistance for a demo/test store. See the
+// Append call site for why global uniqueness (not the bare EventID) is required.
+func deterministicEntryID(namespace, tenantID, eventID string) string {
+	sum := sha256.Sum256([]byte(namespace + "\x00" + tenantID + "\x00" + eventID))
+	return hex.EncodeToString(sum[:16])
 }
 
 // Tail returns the current tail snapshot of the ctx-scoped tenant chain (the
@@ -226,6 +244,55 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 		)
 	}
 	return copyEntry(e), nil
+}
+
+// auditEntryNotFoundByID is the IDOR-safe not-found sentinel for the single-entry
+// reads that key on an opaque id (MemStore.GetByID / MemCrossTenantStore.
+// GetByIDCrossTenant); the name mirrors the PG adapter's auditEntryNotFoundByID. It carries NO public detail: unlike the by-seq path (which
+// echoes the integer seqNo), the id is a caller-supplied opaque string, so it is
+// kept off the wire and out of logs. Existence is never revealed — the same code
+// is returned for "absent", "another tenant's row", and "outside owner scope".
+func auditEntryNotFoundByID() error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		"audit ledger: entry not found")
+}
+
+// GetByID returns a defensive copy of the entry with the given opaque id within
+// tenant t. Like GetBySeq it enforces two orthogonal axes and collapses both to
+// ErrAuditLedgerNotFound (IDOR-safe — existence is not leaked). Unlike GetBySeq it
+// takes the explicit typed tenant t (the post-auth http.audit.get.v1 funnel, like
+// Query) rather than the ctx scope: it scans t's chain PLUS the "" system chain
+// (the mem analog of the PG `(tenant_id = ” OR tenant_id = $t)` predicate + FORCE
+// RLS), so a cross-tenant id read finds nothing.
+func (m *MemStore) GetByID(_ context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tenantKey := t.String()
+	for chainKey, chain := range m.chains {
+		if !tenantMatches(chainKey, tenantKey) {
+			continue
+		}
+		for _, e := range chain.entries {
+			if e.ID != id {
+				continue
+			}
+			if !vis.Allows(e.ActorID) {
+				// IDOR-safe collapse: do not reveal that the entry exists.
+				return nil, auditEntryNotFoundByID()
+			}
+			return copyEntry(e), nil
+		}
+	}
+	return nil, auditEntryNotFoundByID()
 }
 
 // validateQueryArgs validates the mandatory preconditions shared by all MemStore

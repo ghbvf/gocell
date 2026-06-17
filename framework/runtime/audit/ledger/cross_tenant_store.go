@@ -50,4 +50,33 @@ type CrossTenantQueryStore interface {
 	// owner dimension is unrestricted (every actor_id is visible), so AuditFilters
 	// (e.g. ActorID) is the only narrowing applied on top of the cross-tenant scope.
 	QueryCrossTenant(ctx context.Context, ctv tenant.CrossTenantVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+
+	// GetByIDCrossTenant fetches a single audit entry by its opaque store id across
+	// ALL tenants (and BOTH the relay and bootstrap namespace chains), the
+	// single-entry counterpart of QueryCrossTenant and the sanctioned super-admin
+	// cross-tenant read for http.audit.get.v1. Returns ErrAuditLedgerNotFound when
+	// no entry with that id exists.
+	//
+	// Unlike Store.GetByID there is NO tenant.TenantID parameter (the read spans
+	// every tenant by construction) and NO owner predicate (the RowScopeAll
+	// obligation makes every actor_id visible). The id is globally unique on every
+	// backend (PG admin pool: uuid primary key; mem: a deterministic
+	// namespace+tenant+eventID hash), so the cross-tenant lookup is unambiguous.
+	//
+	// ctv carries the sealed RowScopeAll obligation; like QueryCrossTenant this
+	// method re-validates it fail-closed (ctv.Validate) before reading — the
+	// data-layer PEP (F2): the typed param makes "forge/forget the grant" a compile
+	// error, and the runtime check rejects Go's constructable zero value, so a
+	// zero/invalid obligation can never produce a cross-tenant read.
+	GetByIDCrossTenant(ctx context.Context, ctv tenant.CrossTenantVisibility, id string) (*Entry, error)
 }
+
+// ErrMsgCrossTenantObligation is the single-source const-literal fail-close message
+// (MESSAGE-CONST-LITERAL-01) the CrossTenantQueryStore BACKENDS use when the
+// data-layer PEP rejects a zero/invalid CrossTenantVisibility (F2). Exported so the
+// mem backend (this package) and the PG AuditCrossTenantStore (adapters/postgres)
+// reference one literal — a single edit site, no cross-backend drift. The auditquery
+// Service has its OWN service-layer PEP message (errMsgInvalidCrossTenantObligation)
+// — defense in depth, deliberately distinct so a log line names which layer rejected;
+// it does NOT reuse this constant.
+const ErrMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"

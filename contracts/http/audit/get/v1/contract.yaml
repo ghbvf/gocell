@@ -1,0 +1,42 @@
+id: http.audit.get.v1
+kind: http
+ownerCell: auditcore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: auditcore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/audit/entries/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — path parameter id is malformed (contains unsafe characters or exceeds MaxMetadataIDLen). The audit entry id is an opaque store handle validated as an idutil.SafeID string, NOT format:uuid: the wire id is the store-assigned row handle (PG: a random uuid primary key; the in-memory demo store: the business EventID), so the contract treats it as a backend-agnostic opaque id exactly like the actorId/subjectId/traceId filters of http.audit.list.v1."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — the ABAC PDP denied the audit:read permission required to read an audit entry (the gate is a flat permission check; unlike http.audit.list.v1 there is no actorId-self exemption because the path parameter is the entry id, not an actor identity), or the principal carries no tenant (a tenant-scoped audit read requires a tenant; epic #1337 PR-2a)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — no audit entry with the given id is visible to the caller. Collapses three cases indistinguishably (IDOR-safe): the id does not exist, the entry belongs to another tenant (hidden by the per-tenant FORCE RLS predicate), or the entry exists in-tenant but its actor_id is outside the caller's row-visibility scope (vis.Allows is false for a RowScopeSelf/Device caller). Existence is never leaked."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      501:
+        description: "Not Implemented — super-admin cross-tenant audit read capability is not provisioned on this deployment (admin read pool creds absent; ADR #1810 §graceful-absent). The request is policy-authorized but the capability is unavailable. Distinct from 404 (a specific in-tenant row is absent)."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

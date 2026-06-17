@@ -295,3 +295,58 @@ func TestHttpAuditListV1_QueryParamsMetadata(t *testing.T) {
 		t.Fatalf("queryParams.to.format = %q, want date-time", got)
 	}
 }
+
+// TestHttpAuditGetV1Serve is the contract-level wire-schema coverage required for
+// every served contract (cell-patterns.md §Contract test): it drives the real
+// handler and asserts the 200 response conforms to http.audit.get.v1's
+// response.schema.json via the contracttest framework. The handler_test.go
+// TestHandleGetByID_* cases cover behavior; this covers the wire schema.
+func TestHttpAuditGetV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.get.v1")
+
+	e := &ledger.Entry{
+		ID: "ae-get-1", EventID: "evt-get-1", EventType: "event.test.v1",
+		ActorID: "usr-1", TenantID: auditQueryTestTenant,
+		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Payload:   []byte(`{"key":"value"}`),
+	}
+	h := newContractQueryHandler(e)
+
+	rec := httptest.NewRecorder()
+	// Append wrote back the store-assigned opaque id (backend-specific: a
+	// deterministic hash on mem, a uuid on PG); substitute it into the {id} path.
+	path := strings.Replace(c.HTTP.Path, "{id}", e.ID, 1)
+	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	// admin role passes the flat audit:read gate; tenant matches the entry's tenant.
+	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
+	h.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestHttpAuditGetV1_PathParamConstraints pins the path-param schema shape: the
+// opaque id is a string bounded to [1,256] (a SafeID, NOT format:uuid).
+func TestHttpAuditGetV1_PathParamConstraints(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.get.v1")
+	if c.HTTP == nil {
+		t.Fatal("HTTP transport metadata should be loaded")
+	}
+
+	idParam, ok := c.HTTP.PathParams["id"]
+	if !ok {
+		t.Fatal("contract http.audit.get.v1 must declare path param 'id'")
+	}
+	if idParam.Type != "string" {
+		t.Errorf("pathParams.id.type = %q, want string", idParam.Type)
+	}
+	if idParam.MinLength == nil || *idParam.MinLength != 1 {
+		t.Errorf("pathParams.id.minLength = %v, want 1", idParam.MinLength)
+	}
+	if idParam.MaxLength == nil || *idParam.MaxLength != 256 {
+		t.Errorf("pathParams.id.maxLength = %v, want 256", idParam.MaxLength)
+	}
+	if idParam.Format != "" {
+		t.Errorf("pathParams.id.format = %q, want empty (opaque SafeID, not format:uuid)", idParam.Format)
+	}
+}
