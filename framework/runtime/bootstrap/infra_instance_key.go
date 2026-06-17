@@ -55,14 +55,19 @@ type InfraInstanceKey struct {
 
 // NewInfraInstanceKey mints the key for a deduplicated infrastructure instance.
 // Composition roots call it once per distinct instance with a stable, probe-safe
-// id (e.g. a DSN-derived lowercase snake_case identifier). It panics through the
-// panic-taxonomy funnel on an empty or malformed id: minting a key with an
-// unusable instance id is a composition-time programmer error, not a runtime
-// condition. Use DefaultInstanceKey for the single colocated instance.
+// id. Prefer a SEMANTIC identifier (e.g. the owning cell id like "accesscore")
+// over a physical-resource identifier (host/role/credential fragments): the id
+// is embedded in per-instance relay probe names that surface on /readyz?verbose
+// (RelayInstanceProbeName), so a semantic id both reads better for on-call
+// attribution and avoids leaking infrastructure topology onto the health wire.
+// It panics through the panic-taxonomy funnel on an empty or malformed id:
+// minting a key with an unusable instance id is a composition-time programmer
+// error, not a runtime condition. Use DefaultInstanceKey for the single
+// colocated instance.
 func NewInfraInstanceKey(id string) InfraInstanceKey {
 	if id == "" || len(id) > infraInstanceIDMaxLen || !infraInstanceIDPattern.MatchString(id) {
 		panic(panicregister.Approved("bootstrap-infra-instance-key-invalid",
-			errcode.Assertion("bootstrap: NewInfraInstanceKey id must be a non-empty lowercase snake_case identifier (<=32 chars)")))
+			errcode.Assertion("bootstrap: NewInfraInstanceKey id %q must be a non-empty lowercase snake_case identifier (<=32 chars)", id)))
 	}
 	return InfraInstanceKey{id: id}
 }

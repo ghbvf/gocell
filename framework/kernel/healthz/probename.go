@@ -168,6 +168,9 @@ func EmitterFailOpenProbeName(cellID string) (ProbeName, error) {
 // relay registration rather than per-probe invocation. This is the SOLE
 // sanctioned composed-name constructor for relay-instance probes — a sibling of
 // EmitterFailOpenProbeName / ProjectionStoreReadyProbeName / SagaTailerReadyProbeName.
+//
+// Budget: longest relay base "outbox_relay_cleanup" (20) + "_" + instanceID
+// (≤32, runtime/bootstrap.infraInstanceIDMaxLen) = ≤53 < probeNameMaxLen (64).
 func RelayInstanceProbeName(base ProbeName, instanceID string) (ProbeName, error) {
 	if instanceID == "" {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

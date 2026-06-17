@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,4 +85,17 @@ func TestNewInfraInstanceKey_RejectsMalformedID(t *testing.T) {
 		assert.NotPanics(t, func() { _ = NewInfraInstanceKey(id) },
 			"NewInfraInstanceKey(%q) must accept a valid snake_case id", id)
 	}
+}
+
+// TestNewInfraInstanceKey_LengthBoundary pins the exact infraInstanceIDMaxLen
+// (32) edge: a 32-char id is accepted, a 33-char id panics. Without the precise
+// boundary, silently bumping the cap (which feeds the relay probe-name budget,
+// 21 + id <= 64) would not be caught.
+func TestNewInfraInstanceKey_LengthBoundary(t *testing.T) {
+	t.Parallel()
+
+	assert.NotPanics(t, func() { _ = NewInfraInstanceKey(strings.Repeat("a", infraInstanceIDMaxLen)) },
+		"a %d-char id (== infraInstanceIDMaxLen) must be accepted", infraInstanceIDMaxLen)
+	assert.Panics(t, func() { _ = NewInfraInstanceKey(strings.Repeat("a", infraInstanceIDMaxLen+1)) },
+		"a %d-char id (> infraInstanceIDMaxLen) must panic", infraInstanceIDMaxLen+1)
 }

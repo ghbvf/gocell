@@ -98,13 +98,25 @@ func TestWithRelay_DistinctInstanceKeys_BothRegistered(t *testing.T) {
 	require.Same(t, r2, b.relaysByInstance[k2], "relay r2 must be stored under key poolb")
 	require.Len(t, b.relaysByInstance, 2, "two distinct instance keys must yield two relay entries")
 
-	adapters := 0
-	for _, mr := range b.managedResources {
+	idx1, idx2, adapters := -1, -1, 0
+	for i, mr := range b.managedResources {
 		if ad, ok := mr.(*relayAdapter); ok && (ad.relay == r1 || ad.relay == r2) {
 			adapters++
+			if ad.relay == r1 {
+				idx1 = i
+			} else {
+				idx2 = i
+			}
 		}
 	}
 	require.Equal(t, 2, adapters, "each distinct-key relay must get its own relayAdapter in managedResources")
+
+	// LIFO teardown: the later-registered instance (k2) must close FIRST. The adapters
+	// are appended in registration order (k1 before k2); expandManagedResources preserves
+	// that order into managedResourceTeardowns, and Run() iterates them in reverse (the
+	// LIFO reversal itself is covered by TestRunState_Rollback_ExecutesTeardownsLIFO). So
+	// k1-before-k2 registration order is exactly what makes k2 tear down first.
+	require.Less(t, idx1, idx2, "k1 relay adapter must be registered before k2 (so LIFO teardown closes k2 first)")
 
 	// Both relays must flow through the managed-resource teardown pipeline.
 	require.NoError(t, b.expandManagedResources())

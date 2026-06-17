@@ -594,6 +594,38 @@ statuses:
 Ops diagnostics for `CompensationFailed` instances use the `saga_events` table
 (see `docs/ops/saga-runbook.md` §场景 2), not readyz.
 
+## Per-instance relay probes (relay fan-out, #2152) — `outbox_relay_<op>_<instanceID>`
+
+The outbox relay exposes three operation probes — `outbox_relay_poll`,
+`outbox_relay_reclaim`, `outbox_relay_cleanup` (see §Recent breaking changes / PR #1187).
+As of #2152 (PR-1) bootstrap supports **relay fan-out**: a deployment may register more
+than one relay, one per deduplicated infrastructure instance (`bootstrap.WithRelay(key, r)`).
+Because `/readyz` requires globally-unique probe names, the relays of NON-default instances
+get an instance-scoped name:
+
+| Instance | Probe names |
+|----------|-------------|
+| **colocated default** (`DefaultInstanceKey`, the only instance today) | `outbox_relay_poll` / `outbox_relay_reclaim` / `outbox_relay_cleanup` (**unchanged**) |
+| additional instance with id `<instanceID>` | `outbox_relay_poll_<instanceID>` / `outbox_relay_reclaim_<instanceID>` / `outbox_relay_cleanup_<instanceID>` |
+
+- The suffix `<instanceID>` is the instance id passed to `bootstrap.NewInfraInstanceKey`
+  (a lowercase snake_case identifier ≤32 chars; composition roots SHOULD use a semantic id
+  such as the owning cell id, not a physical-resource fragment). Naming is composed via the
+  sanctioned `healthz.RelayInstanceProbeName` constructor.
+- **When they appear**: only when a composition root registers ≥2 relays (distinct
+  `InfraInstanceKey`s). The default single-relay colocated deployment keeps the bare names, so
+  existing dashboards/alerts on `outbox_relay_*` are unaffected.
+- **On-call attribution**: an unhealthy `outbox_relay_poll_<id>` identifies which infra
+  instance's relay is failing (poll/reclaim/cleanup budget tripped); the bare-named probe is
+  the colocated default. Two relays can never collide — bootstrap's `expandManagedResources`
+  fails startup fast on a duplicate probe name.
+- This is an **ops contract**: the `<base>_<instanceID>` shape and the default-instance
+  bare-name invariant must stay in sync with dashboards and alerts.
+
+> NB: per-instance relays only become reachable once the composition root actually opens N
+> distinct per-cell pools (the `cellmodules/percellpg` feeder, a follow-up to #2152 PR-1).
+> Until then every deployment uses the single colocated default and the bare names only.
+
 ## Cross-cell remote-peer readiness probes (split topology) — `<cell>_remote_ready`
 
 In a **split topology** (a cell's cross-cell HTTP dependency is deployed in a

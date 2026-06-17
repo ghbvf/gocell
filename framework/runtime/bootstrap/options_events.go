@@ -177,7 +177,7 @@ func WithRelay(key InfraInstanceKey, r *runtimeoutbox.Relay) Option {
 		}
 		if _, exists := b.relaysByInstance[key]; exists {
 			panic(panicregister.Approved("bootstrap-relay-rebind",
-				errcode.Assertion("bootstrap: WithRelay called twice for the same infra instance key; one relay per instance")))
+				errcode.Assertion("bootstrap: WithRelay called twice for infra instance key %q; one relay per instance", key.id)))
 		}
 		if b.relaysByInstance == nil {
 			b.relaysByInstance = make(map[InfraInstanceKey]*runtimeoutbox.Relay, 1)
