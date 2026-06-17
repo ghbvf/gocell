@@ -58,3 +58,8 @@
   risk: low
   blocker: ""
   updatedAt: 2026-06-17
+- journeyId: J-contractregistry
+  state: doing
+  risk: low
+  blocker: ""
+  updatedAt: 2026-06-18

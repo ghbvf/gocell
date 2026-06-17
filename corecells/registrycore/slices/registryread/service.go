@@ -9,11 +9,12 @@ package registryread
 
 import (
 	"context"
+	"sort"
+	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
-	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	list "github.com/ghbvf/gocell/generated/contracts/http/registry/contract/list/v1"
 )
@@ -56,10 +57,55 @@ func effectiveLimit(reqLimit int64) int {
 	}
 }
 
-// List implements list.Service. STUB (303-US4 RED): the real pagination wiring
-// lands in the GREEN commit.
-func (s *Service) List(_ context.Context, _ *list.Request) (list.ListResponseObject, error) {
-	return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal, "registrycore: list not implemented")
+// List implements list.Service: an id-ordered, cursor-paginated view of all
+// registrations. The registrar returns ids already sorted ascending, so the
+// cursor is simply the last id of the previous page; resumption is "first id
+// strictly greater than the cursor". A list always succeeds (200) — there is no
+// tenant scoping in US4 (RLS is US5).
+func (s *Service) List(_ context.Context, req *list.Request) (list.ListResponseObject, error) {
+	limit := effectiveLimit(req.Limit)
+	ids := s.registrar.AllIDs() // sorted ascending
+
+	start := 0
+	if req.Cursor != "" {
+		start = sort.Search(len(ids), func(i int) bool { return ids[i] > req.Cursor })
+	}
+	end := start + limit
+	hasMore := end < len(ids)
+	if end > len(ids) {
+		end = len(ids)
+	}
+	page := ids[start:end]
+
+	items := make([]*list.ResponseDataItem, 0, len(page))
+	for _, id := range page {
+		reg, ok := s.registrar.Get(id)
+		if !ok {
+			continue // concurrently removed; skip (registrar is the source of truth)
+		}
+		items = append(items, toListItem(reg))
+	}
+
+	nextCursor := ""
+	if hasMore && len(page) > 0 {
+		nextCursor = page[len(page)-1]
+	}
+	return list.List200JSONResponse{Data: items, NextCursor: nextCursor, HasMore: hasMore}, nil
+}
+
+// toListItem projects a ContractRegistration onto the generated wire DTO. State is
+// the sealed RegistrationState spelling; timestamps are RFC3339 UTC.
+func toListItem(reg registry.ContractRegistration) *list.ResponseDataItem {
+	return &list.ResponseDataItem{
+		ID:            reg.ID,
+		Kind:          reg.Kind,
+		State:         reg.State.String(),
+		Submitter:     reg.Submitter,
+		Approver:      reg.Approver,
+		PayloadSchema: reg.PayloadSchema,
+		CreatedAt:     reg.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     reg.UpdatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // Handler wires the generated list.Handler with the registry:read PDP gate.

@@ -62,7 +62,7 @@ func New(clk clock.Clock) *RegistryCore {
 func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
 	registrar := registry.NewContractRegistrar(c.clk)
 
-	writeSvc, err := registrywrite.NewService(c.clk, registrar)
+	writeSvc, err := registrywrite.NewService(registrar)
 	if err != nil {
 		return fmt.Errorf("registrycore: build registrywrite service: %w", err)
 	}

@@ -9,9 +9,10 @@ package registrywrite
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
-	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -22,28 +23,73 @@ import (
 // Service implements the generated submit.Service over the shared in-mem
 // ContractRegistrar the cell injects. It is the application layer: it adapts the
 // wire Request to the kernel SubmitInput, calls the sealed state machine, and
-// projects the resulting ContractRegistration to the wire DTO.
+// projects the resulting ContractRegistration to the wire DTO. It holds no clock:
+// the registrar stamps timestamps inside its own lock with the cell's clock.
 type Service struct {
-	clk       clock.Clock
 	registrar *registry.ContractRegistrar `gocell:"required"`
 }
 
-// NewService constructs the submit service. clk is the positional clock
-// dependency (clock.Clock convention); registrar is the cell-scoped in-mem state
-// machine (required — validateRequired fail-fasts on nil).
-func NewService(clk clock.Clock, registrar *registry.ContractRegistrar) (*Service, error) {
-	clock.MustHaveClock(clk, "registrywrite.NewService")
-	s := &Service{clk: clk, registrar: registrar}
+// NewService constructs the submit service. registrar is the cell-scoped in-mem
+// state machine (required — validateRequired fail-fasts on nil).
+func NewService(registrar *registry.ContractRegistrar) (*Service, error) {
+	s := &Service{registrar: registrar}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-// Submit implements submit.Service. STUB (303-US4 RED): the real registrar wiring
-// lands in the GREEN commit.
-func (s *Service) Submit(_ context.Context, _ *submit.Request) (submit.SubmitResponseObject, error) {
-	return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal, "registrycore: submit not implemented")
+// Submit implements submit.Service: it records the submission in the sealed
+// state machine (state derives from registry.RegistrationState, never a string
+// literal) and projects the resulting registration to the wire DTO. The submitter
+// is the authenticated principal subject — the gate guarantees one, so the empty
+// fallback is a defensive path the registrar rejects (ErrValidationFailed → 400).
+func (s *Service) Submit(ctx context.Context, req *submit.Request) (submit.SubmitResponseObject, error) {
+	submitter := ""
+	if p, ok := auth.FromContext(ctx); ok && p != nil {
+		submitter = p.Subject
+	}
+	reg, err := s.registrar.Submit(registry.SubmitInput{
+		ID:            req.ID,
+		Kind:          string(req.Kind),
+		PayloadSchema: req.PayloadSchema,
+		Submitter:     submitter,
+	})
+	if err != nil {
+		return submitErrorResponse(err)
+	}
+	return submit.Submit201JSONResponse{Data: toSubmitData(reg)}, nil
+}
+
+// submitErrorResponse maps a registrar error to the contract's typed 4xx envelope:
+// a duplicate id is 409, a validation failure (e.g. missing submitter on the
+// defensive no-principal path) is 400. Anything else bubbles as an undeclared
+// framework 5xx (cell-patterns.md §Typed response envelope).
+func submitErrorResponse(err error) (submit.SubmitResponseObject, error) {
+	var ce *errcode.Error
+	if errors.As(err, &ce) {
+		switch ce.Code {
+		case errcode.ErrRegistrationDuplicate:
+			return submit.Submit409ErrorResponse{Body: *ce}, nil
+		case errcode.ErrValidationFailed:
+			return submit.Submit400ErrorResponse{Body: *ce}, nil
+		}
+	}
+	return nil, err
+}
+
+// toSubmitData projects a ContractRegistration onto the generated wire DTO. State
+// is the sealed RegistrationState spelling; timestamps are RFC3339 UTC.
+func toSubmitData(reg registry.ContractRegistration) *submit.ResponseData {
+	return &submit.ResponseData{
+		ID:            reg.ID,
+		Kind:          reg.Kind,
+		State:         reg.State.String(),
+		Submitter:     reg.Submitter,
+		PayloadSchema: reg.PayloadSchema,
+		CreatedAt:     reg.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     reg.UpdatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // Handler wires the generated submit.Handler with the registry:submit PDP gate.

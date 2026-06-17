@@ -1,0 +1,21 @@
+id: J-contractregistry
+goal: 外部 cell 向运行时契约注册中心提交契约注册并在列表中看到（提交面最小可用闭环，303-US4 #2235）
+lifecycle: experimental
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - registrycore
+contracts:
+  # registrycore 的提交面（US4 骨架，in-mem ContractRegistrar #2233 承载）。
+  # 耐久 store（US5）、admin approve/reject/retire（US7）、审计/事件（US8）落地后
+  # 本 journey 扩展对应 passCriteria 并随之转 active。
+  - http.registry.contract.submit.v1
+  - http.registry.contract.list.v1
+passCriteria:
+  - text: 已认证调用方 POST submit 合法契约（id + kind）返回 201，data.state=submitted（sealed RegistrationState）；同 id 重复提交返回 409
+    mode: manual
+  - text: GET list 返回 data/nextCursor/hasMore 分页 envelope，limit 上限 500，已提交契约按 id 序可见且可经 cursor 稳定翻页
+    mode: manual
+  - text: 缺 registry:submit 权限的提交、缺 registry:read 权限的列表分别被路由门禁拒绝（未认证 401 / 拒绝 403）
+    mode: manual

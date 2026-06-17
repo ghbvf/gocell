@@ -19,14 +19,13 @@ func mustTime(s string) time.Time {
 	return ts
 }
 
-func newService(t *testing.T) (*Service, *registry.ContractRegistrar) {
+func newService(t *testing.T) *Service {
 	t.Helper()
-	registrar := registry.NewContractRegistrar(clockmock.New(testEpoch))
-	svc, err := NewService(clockmock.New(testEpoch), registrar)
+	svc, err := NewService(registry.NewContractRegistrar(clockmock.New(testEpoch)))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return svc, registrar
+	return svc
 }
 
 func principalCtx(subject string) context.Context {
@@ -37,7 +36,7 @@ func principalCtx(subject string) context.Context {
 
 // TestNewService_NilRegistrar pins the required-dep fail-fast.
 func TestNewService_NilRegistrar(t *testing.T) {
-	if _, err := NewService(clockmock.New(testEpoch), nil); err == nil {
+	if _, err := NewService(nil); err == nil {
 		t.Fatal("NewService(nil registrar) must error (gocell:\"required\")")
 	}
 }
@@ -46,8 +45,9 @@ func TestNewService_NilRegistrar(t *testing.T) {
 // state derives from the sealed RegistrationState and whose submitter is the
 // authenticated principal subject.
 func TestSubmit_Success(t *testing.T) {
-	svc, _ := newService(t)
-	resp, err := svc.Submit(principalCtx("cell-a"), &submit.Request{ID: "http.example.foo.v1", Kind: submit.RequestKindHTTP, PayloadSchema: "sha256:abc"})
+	svc := newService(t)
+	req := &submit.Request{ID: "http.example.foo.v1", Kind: submit.RequestKindHTTP, PayloadSchema: "sha256:abc"}
+	resp, err := svc.Submit(principalCtx("cell-a"), req)
 	if err != nil {
 		t.Fatalf("Submit: unexpected error %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSubmit_Success(t *testing.T) {
 // TestSubmit_Duplicate: a second submit of the same id is a real 409 from the
 // registrar dedup, returned as the typed Submit409ErrorResponse.
 func TestSubmit_Duplicate(t *testing.T) {
-	svc, _ := newService(t)
+	svc := newService(t)
 	ctx := principalCtx("cell-a")
 	req := &submit.Request{ID: "dup.v1", Kind: submit.RequestKindEvent}
 	if _, err := svc.Submit(ctx, req); err != nil {
@@ -94,7 +94,7 @@ func TestSubmit_Duplicate(t *testing.T) {
 // the gate guarantees one in production) the registrar rejects the empty
 // submitter and the service returns the typed 400, never a panic.
 func TestSubmit_MissingSubmitter(t *testing.T) {
-	svc, _ := newService(t)
+	svc := newService(t)
 	resp, err := svc.Submit(context.Background(), &submit.Request{ID: "x.v1", Kind: submit.RequestKindHTTP})
 	if err != nil {
 		t.Fatalf("Submit: unexpected Go error %v (want typed 400)", err)

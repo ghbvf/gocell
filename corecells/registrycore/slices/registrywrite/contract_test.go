@@ -53,7 +53,7 @@ func denyAuthorizer(reason string) *mockAuthorizer {
 // hits the real dedup path.
 func newMux(t *testing.T) http.Handler {
 	t.Helper()
-	svc, err := NewService(clockmock.New(testEpoch), registry.NewContractRegistrar(clockmock.New(testEpoch)))
+	svc, err := NewService(registry.NewContractRegistrar(clockmock.New(testEpoch)))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -92,11 +92,11 @@ func TestContractSubmitServe_RequestSchema(t *testing.T) {
 	c.ValidateRequest(t, []byte(validBody))
 	c.ValidateRequest(t, []byte(`{"id":"http.example.foo.v1","kind":"event","payloadSchema":"sha256:abc"}`))
 	// Each required field / closed constraint has ≥1 rejection case.
-	c.MustRejectRequest(t, []byte(`{"kind":"http"}`))                                  // missing id
-	c.MustRejectRequest(t, []byte(`{"id":"x"}`))                                       // missing kind
-	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"nope"}`))                         // kind not in enum
-	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","extra":"field"}`))         // additionalProperties:false
-	c.MustRejectRequest(t, []byte(`{"id":"","kind":"http"}`))                          // id minLength
+	c.MustRejectRequest(t, []byte(`{"kind":"http"}`))                          // missing id
+	c.MustRejectRequest(t, []byte(`{"id":"x"}`))                               // missing kind
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"nope"}`))                 // kind not in enum
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","extra":"field"}`)) // additionalProperties:false
+	c.MustRejectRequest(t, []byte(`{"id":"","kind":"http"}`))                  // id minLength
 }
 
 // TestContractSubmitServe_OK: an authenticated principal (allow PDP) submitting a

@@ -17,6 +17,7 @@
     },
     "kind": {
       "type": "string",
+      "maxLength": 16,
       "enum": [
         "http",
         "event",

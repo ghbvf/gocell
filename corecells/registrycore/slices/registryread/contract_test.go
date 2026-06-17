@@ -62,7 +62,9 @@ func newMuxOver(t *testing.T, registrar *registry.ContractRegistrar) http.Handle
 	return mux
 }
 
-func emptyRegistrar() *registry.ContractRegistrar { return registry.NewContractRegistrar(clockmock.New(testEpoch)) }
+func emptyRegistrar() *registry.ContractRegistrar {
+	return registry.NewContractRegistrar(clockmock.New(testEpoch))
+}
 
 func adminCtx(authorizer auth.Authorizer) context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
