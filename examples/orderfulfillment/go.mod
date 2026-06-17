@@ -104,6 +104,8 @@ replace github.com/ghbvf/gocell/tools => ../../tools
 
 replace github.com/ghbvf/gocell/corecells => ../../corecells
 
+replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
+
 replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/prometheus => ../../adapters/prometheus

@@ -104,6 +104,8 @@ replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
 
+replace github.com/ghbvf/gocell/adapters/grpc => ../adapters/grpc
+
 replace github.com/ghbvf/gocell/adapters/mqtt => ../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/redis => ../adapters/redis
