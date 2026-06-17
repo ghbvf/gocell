@@ -299,6 +299,5 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 **默认按分析结果自动决策。** 仅以下情况用 AskUserQuestion：
 - 无法定位问题代码
 - 测试失败且 4 轮回退后仍无法修正
-- 修复过程中发现新问题超出原始 scope
 - **OUT_OF_SCOPE finding / /fix 派生新问题 → 默认自动 `gh issue create` + 回填 #N**（流程见 4.6 step 3：先反思确认确实 OUT_OF_SCOPE 且非 Cx1 搭车修，再无损填 backlog.md body + 派生四轴标签 → `issue-labels.sh validate` → 建单）。**不逐条问**；仅 `pri-p0`（incident）→ 停下 AskUserQuestion，或 area/type 判不定（`validate` 失败）→ 标 `deferred=labels-underivable` 回退草稿。
 - pri-p0 红线升级（incident-driven 或安全 CVE）
