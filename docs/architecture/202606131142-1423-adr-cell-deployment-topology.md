@@ -255,7 +255,7 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 |---|---|---|---|
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
-| **无 mTLS 对等认证** | 中间人 / 端点伪造 | service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS** | US6 → **defer 至 #2263**（与 token 层 per-cell 身份正交，见 §#2153 Amendment §残留）|
+| **无 mTLS 对等认证** | 中间人 / 端点伪造 | ~~service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS**~~ → **#2263 RESOLVED**：非 loopback split 强制 mTLS（TLS 1.3 + SPIFFE-ID cross-bind），fail-closed 双闸移除「private network 补偿」soft 约束，见 §#2263 Amendment | **#2263 CLOSED**（2026-06-17） |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -280,7 +280,7 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
   再 restore，业务 principal WIN 过 service 派生 actor=CallerCellID），该写入点纳入 `CTXKEYS-PRINCIPAL-WRITE-CALLER-01`
   allowlist。**in-proc 与 remote 同构闭合**（configclient 无论拓扑都经 funnel 签）——位置透明覆盖业务 principal，非仅 tenant。
 - **残留缺口不变**：本闭合**假定 keyring 在信任边界内可信**——「共享 HMAC keyring」（任何持 keyring 的 cell 可伪造任意
-  `callerCell` 及其 principal 头）仍开，per-cell HKDF 子密钥追踪在 **#2153**；「无 mTLS」仍开（**#2153**）。即 US5 把业务
+  `callerCell` 及其 principal 头）仍开，per-cell HKDF 子密钥追踪在 **#2153**；~~「无 mTLS」仍开（**#2153**）~~ → **#2263 RESOLVED**。即 US5 把业务
   principal 提升到与 `callerCell` 同等的 MAC 完整性等级，但**未**提升 keyring 的 per-cell 隔离强度——二者正交，后者归 #2153。
 - **「token replay」「upstream-cell-unavailable」行 → 已落地**（前者复用既有分布式 NonceStore；后者 `ERR_UPSTREAM_CELL_UNAVAILABLE`
   仅 transport「连不上/超时/ctx deadline」用，5xx 仍返回 response 由调用方区分，resolver miss → `KindInternal`）。
@@ -305,15 +305,16 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
   mTLS 证书），已有 OPEN tracking issue **#2153**（US6 实施）+ 上表登记，**不**塞进本 transport-shape PR。
   门删**不引入新缺口**——它使**既有登记缺口可达**，故本 amendment 的职责是把**操作边界写明、写响**，而非
   静默放行。
-- **操作约束（文档化、fail-closed-by-deployment）**：在 #2153 的 TLS/per-cell-key 落地前，`topology.remote`
-  **MUST 仅部署于可信/私有网络**，且 ① 所有 cell 进程共享同一 `GOCELL_SERVICE_SECRET`（跨进程 service token
-  验签前提）；② internal listener 绑定 pod/网络可达地址并由 NetworkPolicy/VPC 限制 ingress 至授权 caller cell；
-  ③ 服务端 `RequireCallerCell` allowlist 仍是当前补偿控制（防跳入预期外 internal endpoint）。该 checklist 落
-  `docs/guides/deployment-topology.md`（#1966 review P2.10），把「明文 + 共享 secret + 自报身份」的适用边界
-  与残留风险对运维显式可见——区别于「悄悄能跑」。残留威胁画像：明文 = wire 无机密性（私网部署补偿，mTLS 归
-  #2153）；shared keyring = 已被攻陷且持 secret 的 cell 可伪造他 cell 身份（per-cell HKDF 归 #2153）。MAC 仍
-  保证 `callerCell` + principal **完整性**（Hard）不变。**`netutil.go` 对 TLS/loopback enforcement 的 US6
-  归属注记保持不动**（不在本 PR 反转该 scope）。
+- **操作约束（文档化、fail-closed-by-deployment）**：~~在 #2153 的 TLS/per-cell-key 落地前，`topology.remote`
+  **MUST 仅部署于可信/私有网络**~~ → **此约束已被 #2263 supersede（2026-06-17）**：非 loopback split 现强制
+  mTLS（见 §#2263 Amendment），「部署在私有网络」不再是技术闸的替代品，而是额外的纵深防御。以下操作约束**
+  仍然成立**，但已不是「mTLS 缺失的全部补偿」——① internal listener 绑定 pod/网络可达地址并由
+  NetworkPolicy/VPC 限制 ingress 至授权 caller cell；② 服务端 `RequireCallerCell` allowlist 校验 callerCell
+  claim 是否在 allowlist 内（令牌层，与网络层正交，独立 fail-closed）；③ split cell 进程使用 provisioned
+  子密钥（#2153，master 不进 cell 进程）。**#2263 后残留威胁画像**：cert 自动轮换缺失（静态 PEM，手动轮换 +
+  重启，见 §#2263 Amendment §推迟项）；shared keyring 在 monolith 下仍单信任域（可接受，split 下 #2153 CLOSED）。
+  MAC 仍保证 `callerCell` + principal **完整性**（Hard）不变。**`netutil.go` 对 TLS/loopback enforcement 的
+  US6 归属注记**：已被 #2263 具体落地，见 `cellmodules/celltls.Resolve` 与 `cellmodules/celltransport.Resolve`。
 - **远程错误语义对齐既有 contract（P2.8）**：`RemoteHTTPTransport` 对 `client.Do` 失败按因分类——caller-ctx
   cancel → `KindClientClosed`(499)；deadline-exceeded / net timeout → `KindDeadlineExceeded`(504，复用既有
   `pkg/errcode/status.go` 映射)；其余 dial（refused/reset/DNS）→ `KindUnavailable`(503)。errcode Code 恒为
@@ -363,9 +364,11 @@ US6（#2153）落地 token 层 per-cell 密钥隔离，**使 split 部署可安�
   重叠窗口平滑切换，**零 wire 改动**。
 
 **残留（显式 backlog，不 silent）**：
-- **mTLS / SPIFFE-SVID 对等认证** → **#2263**。与 token 层 per-cell 身份**正交**且**不构成死锁**：token 层
-  落地后 split 已密码学 fail-closed 可上（私网部署补偿明文），mTLS 是叠加的传输层防御（端点对等认证 + wire 机密性），
-  自带独立大工作流（证书/SVID 签发/分发/轮换）—— 真正可排下一环，非循环借口。
+- ~~**mTLS / SPIFFE-SVID 对等认证** → **#2263**（defer）~~ → **#2263 RESOLVED（2026-06-17）**：非
+  loopback split 跨 cell 调用现强制 mTLS，TLS 1.3 + SPIFFE-ID（`spiffe://<td>/cell/<cellID>`）对等认证 +
+  token 层 cross-bind，fail-closed 双闸（`gocell validate` TOPO-14 + `celltls.Resolve` 启动期 guard）移除
+  「私网补偿明文」soft 约束。证书自动颁发/轮换（`runtime/certlifecycle`）+ SPIFFE Workload API（ZT-4）仍为
+  follow-up，见 §#2263 Amendment §推迟项。
 - **「remote placement 强制 provisioned」enforcement** → **#2265**（blocked-by US7 真实 process-splitting）。今
   `Topology` 无 remote/split 字段、`topology.remote` 仍单进程 loopback，无真实分进程信号；该 PR 将用本单的
   `ProvisionedKeyring` 能力 + 加该 enforcement。非本单 Hard 属性所必需（Hard 来自 cell 跑 `ProvisionedKeyring`、
@@ -431,6 +434,40 @@ relay 到 broker），此部分追踪在 **#2152** 中；在该 issue 落地前�
 进程内 per-cell publisher/subscriber 扇出（即在同一 broker 连接上为每个 cell 派生独立的 exchange /
 routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB relay 一起追踪在 **#2152** 中。
 
+
+### #2263 Amendment — split 拓扑强制 mTLS 对等认证落地（2026-06-17）
+
+#2263（ZT-1）关闭上表「无 mTLS 对等认证」残留缺口，**移除「非 loopback split 建议部署在可信私有网络」的 soft 约束**，
+代之以 fail-closed 技术边界。按 AI-robust 章程逐项重评威胁矩阵：
+
+- **「无 mTLS 对等认证」行 → CLOSED**。机制：非 loopback split 跨 cell 调用现强制 mTLS（TLS 1.3）；
+  客户端以 `VerifyConnection` 替代 hostname 检查——对 trust-root CA bundle 做完整 chain verify + 要求 leaf
+  cert 携带目标 cell 的 SPIFFE URI SAN（`spiffe://<trustDomain>/cell/<cellID>`），双重验证缺一不可。
+  服务端 `RequireAndVerifyClientCert` + trust-root CA；internal listener auth chain 的 cross-bind middleware
+  要求 client cert SPIFFE cell ID 与 service-token `callerCell` 一致（两层密码学身份交叉验证）。
+  **「InsecureSkipVerify:true 替换的是 hostname 检查，不是 chain 验证」**——这不是 fail-open，而是
+  SPIFFE 规范的标准做法（对标 go-spiffe `MTLSClientConfig + AuthorizeID`）。
+- **loopback / demo / all-colocated 不受影响**：本地多进程开发（loopback endpoint）明文可接受；demo /
+  all-colocated 不经 remote transport seam，零变化。mTLS material 存在时 loopback remote 仍 honor mTLS
+  （operator opt-in 生效）。
+- **fail-closed 双闸**：① 静态（`gocell validate` 新增 `TOPO-14`）：非 loopback remote endpoint 必须 `https`
+  scheme；② 运行时（`celltls.Resolve` 启动期 fail-fast）：topology 含非 loopback remote cell 而 TLS material
+  缺失 → 拒绝启动。逐 peer 检查由 `celltransport.Resolve` 负责。
+- **cert 供应：静态 operator PEM（本 PR）**：四 env 变量全有或全无（`GOCELL_TRANSPORT_TLS_CERT_FILE` /
+  `_KEY_FILE` / `_CA_FILE` + `GOCELL_SPIFFE_TRUST_DOMAIN`），缺任一 → 启动 fail-fast。
+  cert 自动颁发/轮换（via `runtime/certlifecycle` reconciler）是 follow-up，SPIFFE Workload API（ZT-4）
+  亦是独立 roadmap，均已在新 ADR `202606171200-2263` §推迟项显式登记。
+- **其余威胁矩阵行不变**：cert 轮换期 downtime 归「静态 PEM 的已知局限」（operator 手动 + 重启）；
+  monolith 信任模型不变（同进程单信任域，private network 补偿在 monolith 下始终成立）。
+
+**新增 enforcement（同 PR 三件套）**：
+- `CELLTLS-MATERIAL-RESOLVE-FUNNEL-01`（Medium，caller-funnel AST scan）：wiring 层唯一 minter `celltls.Resolve`。
+- `CELLTLS-CROSSBIND-WIRING-FUNNEL-01`（Medium，wiring 层 AST scan）：internal listener 必须 wire cross-bind middleware。
+- `TOPO-14`（Hard-leaning，`gocell validate` static gate）：非 loopback remote endpoint 禁 http scheme。
+- `tlsutil.ClientIdentity` sealed construction（Hard，downstream）：包外不可构造，所有「接 metrics 忘 chain check」
+  形态类型级不可表达。
+- 完整评级分层见 ADR `202606171200-2263` §AI-robust 档位表。
+
 ## Rejected alternatives
 
 | 方案 | 拒因 |
@@ -493,3 +530,6 @@ journey（单进程 ∧ 拆分+broker）全绿（epic 验收信号，spec SC-001
 - ref: ServiceWeaver/weaver `runtime/protos/config.proto`（colocate）/ `internal/weaver/remoteweavelet.go`
   （local/remote dispatch）/ `runtime/codegen/stub.go`（被拒的 method-level stub）；go-micro
   `registry/registry.go` / `selector/default.go`。
+- **#2263 Amendment 参考**：ADR `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md`
+  （ZT-1，split mTLS 对等认证，关闭「无 mTLS」威胁矩阵行）；ADR `202605290130-049`（server 侧 mTLS builder，
+  `tlsutil.NewServerMTLSConfig` / `PeerIdentity`）。

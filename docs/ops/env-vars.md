@@ -200,6 +200,34 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 > Migration note: older deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
+## Split 拓扑 mTLS 传输层安全（#2263，ZT-1）
+
+非 loopback `topology.remote` 跨 cell 调用现强制 mTLS（`celltls.Resolve` 在启动期 fail-fast）。
+以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在 topology 含非 loopback
+remote cell 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
+
+每个 cell 进程需要：一张携带 `spiffe://<trustDomain>/cell/<cellID>` URI SAN + 双 EKU
+（ServerAuth + ClientAuth）的 leaf cert、配套私钥，以及签发所有 cell cert 的 trust-root CA bundle。
+完整证书要求、SPIFFE-ID 格式和操作步骤见 `docs/guides/deployment-topology.md` §Split mTLS 配置 checklist。
+
+| 变量 | 用途 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM **文件路径**（URI SAN `spiffe://<trustDomain>/cell/<cellID>`，双 EKU）| — | topology 含非 loopback remote cell 时必填（all-or-nothing） | 框架在启动时读取文件内容到内存，不在请求路径重读。cert 必须同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——兼作 server cert 和 client cert。TLS 1.3 强制，cert 签名算法须兼容（ECDSA P-256+ 或 RSA 2048+）。|
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | `GOCELL_TRANSPORT_TLS_CERT_FILE` 配套的私钥 PEM **文件路径** | — | 同上（all-or-nothing） | 私钥必须与 cert 中的公钥匹配；不匹配导致 `tls.LoadX509KeyPair` 报错，启动 fail-fast。|
+| `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM **文件路径**（签发所有 cell leaf cert 的单根 CA） | — | 同上（all-or-nothing） | 同时作为客户端 `RootCAs`（验证 server 证书链）和服务端 `ClientCAs`（验证 client 证书链）。支持多 CA 的 bundle PEM（多个 `-----BEGIN CERTIFICATE-----` 块），但所有 leaf cert 须在同一信任根下。|
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain，不含 `spiffe://` 前缀（如 `gocell.internal`）| — | 同上（all-or-nothing） | 用于构造和验证 SPIFFE-ID：客户端 `VerifyConnection` 要求 server cert 的 URI SAN 以 `spiffe://<trustDomain>/cell/` 开头；服务端 cross-bind middleware 同样以本 env 作为 trust domain 过滤。非空 + 不含 `spiffe://` 前缀 + 不含 `/` 尾缀；违反格式启动 fail-fast。|
+
+**Fail-closed 行为要点**：
+- topology 含非 loopback remote cell + 任一变量缺失 → **启动 fail-fast**。
+- 四变量全设但无 remote cell → 仍 honor（loopback remote 亦升 mTLS）。
+- cert chain 验证失败 / SPIFFE cell ID 不匹配目标 cell → TLS 握手拒绝（client 侧 `VerifyConnection` 报错）。
+- client cert SPIFFE cell ID 与 service-token callerCell 不一致 → **401**（server 侧 cross-bind middleware）。
+
+**轮换注意**：本 PR 使用静态文件，轮换需替换文件 + 重启进程（hot-reload 是 follow-up）。
+证书自动颁发/续期追踪在 `runtime/certlifecycle` reconciler 独立 roadmap；SPIFFE Workload API
+集成（ZT-4）是另一独立 roadmap。完整说明见 ADR
+`docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项。
+
 ## HTTP Listeners (three-listener topology)
 
 > **Breaking change:** `/healthz`, `/readyz`, and `/metrics` have moved from the primary port to the health listener. Update your k8s probes and Prometheus scrape configuration accordingly. See [listener-topology](listener-topology.md) for details.
