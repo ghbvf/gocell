@@ -320,6 +320,10 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.authzSvc = authzSvc
+	// decide HTTP surface (#1863): expose the same PDP instance over
+	// POST /api/v1/access/decide. Reuses c.authzSvc (no second slice registration);
+	// gated by RequirePermissionForSelf(access:decide) inside NewHandler.
+	c.decideHandler = authorizationdecide.NewHandler(c.authzSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
 	// policymanage: L2 OutboxFact CRUD for ABAC policies (#1347 PR-9).

@@ -141,6 +141,32 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermRoleRead().String()},
 		Conditions: []abac.Condition{subjectIsResource()},
 	},
+	// access:decide self-introspection baseline (#1863, BR-004). The decide endpoint
+	// (POST /api/v1/access/decide) is gated by auth.RequirePermissionForSelf, which
+	// forwards the caller's OWN subject as resource — so the self rule
+	// (subject.sub == resource.id) grants any authenticated user the right to query
+	// the PDP about themselves. This is a CONDITIONED grant (NOT an unconditional
+	// allow-all): access:decide is registered as an owner-scoped action in
+	// baseline_freeze_test.go, so BASELINE-OWNER-RULE-TENANT-FREEZE-01 holds its
+	// allow surface to the closed {owner, admin} set — same shape as user:read /
+	// role:read. The admin rule is dormant for the current self-only endpoint (the
+	// gate always forwards resource==caller) but is required by that closed-set
+	// invariant and is what lets admin/super-admin decide about OTHER subjects once
+	// the endpoint accepts a non-self subject (ABAC §4.x).
+	{
+		ID:         "baseline-access-decide-self",
+		Name:       "Baseline: allow a user to query their own authorization decisions (subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermAccessDecide().String()},
+		Conditions: []abac.Condition{subjectIsResource()},
+	},
+	{
+		ID:         "baseline-access-decide-admin",
+		Name:       "Baseline: allow admin/super-admin to query authorization decisions",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermAccessDecide().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 }
 
 // subjectIsResource returns the cross-attribute ABAC condition that checks
@@ -195,8 +221,10 @@ func adminOrSuperAdmin() abac.Condition {
 // (PR-10b: config:read/write/publish, flag:read/write) + the 5 accesscore
 // permissions (PR-10c: policy:read/write, user:read/write, role:read) for
 // admin/super-admin; + 3 identity-ownership rules (#1977 Batch B:
-// user:read/write, role:read for subject.sub == resource.id). Each rule is
-// action-scoped so a baseline allow for one permission never leaks to another.
+// user:read/write, role:read for subject.sub == resource.id); + 2 access:decide
+// rules (#1863: self subject.sub == resource.id + admin) for the PDP
+// self-introspection endpoint. Each rule is action-scoped so a baseline allow for
+// one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {

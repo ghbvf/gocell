@@ -399,6 +399,9 @@ type AccessCore struct {
 	// +slice:route:slice=identitymanage,subPath=/users
 	identityHandler *identitymanage.Handler
 
+	// +slice:route:slice=authorizationdecide,subPath=/decide
+	decideHandler *authorizationdecide.Handler
+
 	// +slice:route:slice=sessionlogin,subPath=/sessions
 	loginHandler *sessionlogin.Handler
 

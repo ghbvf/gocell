@@ -175,6 +175,29 @@ func PermUserWrite() Permission { return permUserWrite }
 // (PR-10c) → RequirePermissionForResource (#1977).
 func PermRoleRead() Permission { return permRoleRead }
 
+// permAccessDecide is the package-private singleton backing the PermAccessDecide()
+// accessor. Unexported so no external package can reassign it.
+var permAccessDecide = newPermission("access:decide")
+
+// PermAccessDecide authorizes a caller to query the PDP about their OWN
+// authorization decisions — the gate for POST /api/v1/access/decide
+// (authorizationdecide slice, #1863, BR-004). The frontend `<Can>` component
+// asks "may the current user do <action>?"; the subject is the authenticated
+// JWT principal, never a request-body value.
+//
+// The gate is auth.RequirePermissionForSelf(PermAccessDecide()): it forwards the
+// caller's own subject to the PDP as resource, so the access:decide baseline
+// SELF rule (subject.sub == resource.id) grants any authenticated user the right
+// to introspect themselves — a conditioned grant, NOT an unconditional allow-all
+// (BASELINE-OWNER-RULE-TENANT-FREEZE-01 holds the access:decide allow surface to
+// the closed {owner, admin} set, same shape as user:read/role:read). The dormant
+// admin rule additionally lets admin/super-admin decide about other subjects once
+// the endpoint accepts a non-self subject (ABAC §4.x).
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermAccessDecide() Permission { return permAccessDecide }
+
 // examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its
 // own lightweight PDP (cells/devicecell/authorizer.go) whose baseline grants
 // these actions; the platform registry stays the SOLE minter (the Permission
@@ -263,6 +286,7 @@ var allPermissions = []Permission{
 	permUserRead,
 	permUserWrite,
 	permRoleRead,
+	permAccessDecide,
 	permDeviceCommand,
 	permDeviceConsume,
 	permDeviceRead,
