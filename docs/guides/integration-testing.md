@@ -138,7 +138,7 @@ The OTel Collector real protocol smoke runs in PR/push CI with
 `-tags=integration,otelcollector`; the nightly/manual workflow runs the broader
 package under the same tags.
 
-See `scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
+See `hack/scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
 
 ## Cross-Platform OS Smoke Matrix
 

@@ -2,7 +2,7 @@
 # verify-bucket: validate
 # verify-local-compose: assert local docker deploy artefacts stay in sync.
 #
-# Guards the docker-compose.local.yml / scripts/gen-deploy-secrets.sh /
+# Guards the docker-compose.local.yml / hack/scripts/gen-deploy-secrets.sh /
 # docs/ops/local-docker-deploy.md trio + the JWT env-set behavior of
 # tests/e2e/start-corebundle.sh that lets real-mode deployments inject a
 # fixed keypair instead of every container generating ephemeral keys.
@@ -21,7 +21,7 @@
 #      compose file has companion docs / placeholders).
 #   5. Makefile exposes local-up / local-down targets.
 #
-# Companion: hack/verify-shellcheck.sh auto-lints scripts/gen-deploy-secrets.sh
+# Companion: hack/verify-shellcheck.sh auto-lints hack/scripts/gen-deploy-secrets.sh
 #            AND tests/e2e/start-corebundle.sh (no need to invoke shellcheck here).
 #
 # Local: bash hack/verify-local-compose.sh
@@ -144,7 +144,7 @@ if ! grep -qE '^\.env\.local$|^\*\.env\.local$' .gitignore; then
 fi
 
 # 4. Companion files exist.
-for required in .env.local.example docs/ops/local-docker-deploy.md docker-compose.local.yml scripts/gen-deploy-secrets.sh tests/e2e/start-corebundle.sh; do
+for required in .env.local.example docs/ops/local-docker-deploy.md docker-compose.local.yml hack/scripts/gen-deploy-secrets.sh tests/e2e/start-corebundle.sh; do
   [[ -f "${required}" ]] || fail "missing required file: ${required}"
 done
 

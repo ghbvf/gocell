@@ -4,7 +4,7 @@ package archtest
 
 // INVARIANT: HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01
 //
-// scripts/healthcheck-verify.sh — regression guard for bugs surfaced in
+// hack/scripts/healthcheck-verify.sh — regression guard for bugs surfaced in
 // PR #9 / PR #1011 post-merge review (issue #19, backlog
 // DEVOPS-INTEGRATION-CLEANUP-WAIT-TIMEOUT-01):
 //
@@ -71,7 +71,7 @@ const ruleHealthcheckVerify01 = "HEALTHCHECK-VERIFY-CLEANUP-AND-WAIT-TIMEOUT-01"
 func TestHealthcheckVerifyScriptInvariant01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	scriptPath := filepath.Clean(filepath.Join(root, "scripts", "healthcheck-verify.sh"))
+	scriptPath := filepath.Clean(filepath.Join(root, "hack", "scripts", "healthcheck-verify.sh"))
 	data, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", scriptPath, err)
@@ -413,7 +413,7 @@ func hasToken(s, word string) bool {
 //
 // The brace may sit on the next line in some styles; this helper only
 // matches the same-line form, which is the GoCell convention for
-// scripts/*.sh. A future style change would need to extend this
+// hack/scripts/*.sh. A future style change would need to extend this
 // matcher in tandem.
 func isBashFuncOpen(trimmed string) bool {
 	if !strings.HasSuffix(trimmed, "{") {

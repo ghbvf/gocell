@@ -41,7 +41,7 @@ cd gocell
 ### Step 2: Generate secrets
 
 ```bash
-bash scripts/gen-deploy-secrets.sh
+bash hack/scripts/gen-deploy-secrets.sh
 ```
 
 The script generates 14 values in `.env.local` (see §Secrets table for the
@@ -203,7 +203,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`scripts/gen-deploy-secrets.sh` writes 14 values to `.env.local`:
+`hack/scripts/gen-deploy-secrets.sh` writes 14 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|
@@ -243,7 +243,7 @@ To rotate all secrets at once:
 
 ```bash
 rm .env.local
-bash scripts/gen-deploy-secrets.sh
+bash hack/scripts/gen-deploy-secrets.sh
 make local-down
 make local-up
 ```
@@ -289,7 +289,7 @@ is left unconfigured, causing super-admin cross-tenant audit read to return HTTP
 ### New env var: `GOCELL_APP_PASSWORD`
 
 `GOCELL_APP_PASSWORD` sets the password for the restricted role. It must be set in
-`.env.local`. The secret-generation script `scripts/gen-deploy-secrets.sh` writes
+`.env.local`. The secret-generation script `hack/scripts/gen-deploy-secrets.sh` writes
 it automatically alongside `PG_PASSWORD`. Use `.env.local.example` as a reference.
 
 ### First-time setup (new role, new data dir)
@@ -323,7 +323,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
 1. Generate core secrets if you have not already:
 
    ```bash
-   bash scripts/gen-deploy-secrets.sh
+   bash hack/scripts/gen-deploy-secrets.sh
    ```
 
 2. Append the two optional variables to `.env.local` (the password must be hex/URL-safe):
@@ -391,7 +391,7 @@ docker compose -f docker-compose.local.yml --env-file .env.local logs corebundle
 
 Common root causes:
 
-- Missing env var — corebundle prints `ERR_VALIDATION_FAILED` with the offending env name. Re-run `bash scripts/gen-deploy-secrets.sh` after deleting `.env.local`.
+- Missing env var — corebundle prints `ERR_VALIDATION_FAILED` with the offending env name. Re-run `bash hack/scripts/gen-deploy-secrets.sh` after deleting `.env.local`.
 - Wrong key format — `ERR_AUTH_KEY_INVALID` for JWT, or PEM parse errors when injecting multiline keys via `env_file` (see §Production Differences).
 - PG migration incomplete — check `docker compose -f docker-compose.local.yml --env-file .env.local logs migrate`; should exit 0 with no error output.
 - Bound port conflict on `:8080` — `lsof -i :8080` to find the offending process.

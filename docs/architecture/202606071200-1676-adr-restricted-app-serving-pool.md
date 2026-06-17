@@ -136,7 +136,7 @@ The probe itself is **Medium**:
 ### Developer impact
 
 - **New env var `GOCELL_APP_PASSWORD`** must be set alongside `PG_PASSWORD` in
-  `.env.local` and in CI. `scripts/gen-deploy-secrets.sh` emits it as a fresh
+  `.env.local` and in CI. `hack/scripts/gen-deploy-secrets.sh` emits it as a fresh
   `openssl rand -hex 16` value (URL-safe, like `PG_PASSWORD`: both are embedded in
   DSN userinfo where base64 `/`/`+`/`=` would break URL parsing).
 - **One-time volume reset**: existing local environments have a `pgdata` volume

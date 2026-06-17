@@ -226,13 +226,13 @@ down:
 	docker compose down
 
 # Local docker deploy: full stack (PG+Redis+migrate+corebundle).
-# Prereq: scripts/gen-deploy-secrets.sh to produce .env.local first.
+# Prereq: hack/scripts/gen-deploy-secrets.sh to produce .env.local first.
 local-up:
-	@test -f .env.local || (echo "missing .env.local; run scripts/gen-deploy-secrets.sh first" >&2; exit 1)
+	@test -f .env.local || (echo "missing .env.local; run hack/scripts/gen-deploy-secrets.sh first" >&2; exit 1)
 	docker compose -f docker-compose.local.yml --env-file .env.local up -d --wait
 
 local-down:
-	@test -f .env.local || (echo "missing .env.local; run scripts/gen-deploy-secrets.sh first" >&2; exit 1)
+	@test -f .env.local || (echo "missing .env.local; run hack/scripts/gen-deploy-secrets.sh first" >&2; exit 1)
 	docker compose -f docker-compose.local.yml --env-file .env.local down -v
 
 # ---------------------------------------------------------------------------
@@ -286,8 +286,8 @@ test-examples-smoke:
 
 # ---------------------------------------------------------------------------
 # Healthcheck verification  (T09)
-# Delegates to scripts/healthcheck-verify.sh
+# Delegates to hack/scripts/healthcheck-verify.sh
 # ---------------------------------------------------------------------------
 
 healthcheck-verify:
-	bash scripts/healthcheck-verify.sh
+	bash hack/scripts/healthcheck-verify.sh
