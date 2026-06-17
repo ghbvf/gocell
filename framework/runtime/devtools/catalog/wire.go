@@ -271,6 +271,7 @@ type JourneyPassCrit struct {
 // AssemblySpec is Document.Entities[Kind=="Assembly"].Spec.
 type AssemblySpec struct {
 	Cells               []string              `json:"cells,omitempty"               yaml:"cells,omitempty"`
+	FrameworkContracts  []string              `json:"frameworkContracts,omitempty"  yaml:"frameworkContracts,omitempty"`
 	Owner               CellSpecOwner         `json:"owner"                         yaml:"owner"`
 	MaxConsistencyLevel string                `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
 	Build               AssemblySpecBuild     `json:"build"                         yaml:"build"`

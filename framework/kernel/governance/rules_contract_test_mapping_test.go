@@ -93,6 +93,26 @@ func TestCONTRACTENDPOINTTESTMAPPING01_NonHTTPExempt(t *testing.T) {
 	assert.Empty(t, got, "non-serve-style (event) contracts must not trigger this rule")
 }
 
+// TestCONTRACTENDPOINTTESTMAPPING01_FrameworkOwnedExempt: an active framework-owned
+// (ownerCell: _framework) http contract is structurally exempt — it has no cell
+// slice (ADR 202606130635-1939 D4), so the "slice in the server cell declares
+// contract.<id>.serve" mapping is inapplicable. Serving is governed by
+// FRAMEWORK-OWNED-CONTRACT-SCOPED-01 (serving-scan) + the bootstrap startup
+// fail-fast, not by cell-slice verify.contract. Anti-vacuity is held by
+// _MissingServe above (a cell-owned active http contract WITHOUT a serve slice
+// still fires), proving this exemption is not "trivially no input".
+func TestCONTRACTENDPOINTTESTMAPPING01_FrameworkOwnedExempt(t *testing.T) {
+	pm := minimalHTTPProject()
+	c := pm.Contracts["http.auth.login.v1"]
+	c.OwnerCell = metadata.FrameworkOwnerSentinel
+	c.Endpoints.Server = metadata.FrameworkOwnerSentinel
+	// No serve entry added — must still produce no findings (framework exempt).
+
+	val := NewValidator(pm, "", clock.Real())
+	got := findByCode(val.validateCONTRACTENDPOINTTESTMAPPING01(), codeCONTRACTENDPOINTTESTMAPPING01)
+	assert.Empty(t, got, "framework-owned active http contracts must not require cell-slice serve coverage")
+}
+
 // TestCONTRACTENDPOINTTESTMAPPING01_SliceServeMissingContract guards direction B
 // (slice → contract) case 1: slice declares "contract.X.serve" but contract X
 // does not exist in the project. Previously silent — review F4 fixed.

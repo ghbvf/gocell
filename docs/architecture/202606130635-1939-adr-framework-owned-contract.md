@@ -78,9 +78,14 @@ cell-owner 引用规则**经 `Owner().Cell()` 自然只作用于 Cell owner**，
 1. **eligible kind**：只有 http/event 可框架归属（中立 provider-agnostic wire 面）。command/projection/
    saga/webhook/grpc 带 Cell-内部语义，必须 Cell owner。新 kind 经扩展 allow-set + red case 准入，
    未 vet 的 kind 今天 fail-closed。
-2. **fail-closed lifecycle**：框架契约必须 draft|deprecated。active 框架 **serving**（框架 RouteGroup
-   挂载契约）尚未 wire，active 框架契约会静默 dead，故 active 拒绝。serving wire 后本规则扩展为扫描
-   serving RouteGroup 放行已 serve 的 active 框架契约（DEAD-CONTRACT-01 的框架版）。
+2. **serving-scan lifecycle**（#2037 起 serving 已 wire，见下 §Serving + §Amendment 2026-06-18）：框架契约
+   draft|deprecated 始终放行。active 框架契约放行**当且仅当**其 id ∈ 某 assembly 的 `frameworkContracts`
+   （per-deployment serving opt-in）——这是 metadata 侧 serving-scan，DEAD-CONTRACT-01 的框架版；active 但
+   无任何 assembly serve = fail-closed（声明 active 却无人 serve 的静默 dead 契约）。**双向闭环**：规则同时
+   校验每个 `assembly.frameworkContracts` 条目是存在的、active 的、framework-owned 的 http/event 契约
+   （堵手写 list drift）。实际 Go 挂载完整性（active 框架契约必有 bootstrap 框架 RouteGroup）由 bootstrap
+   启动期 fail-fast（`validateFrameworkServing`）守——metadata 看不到 RouteGroup，故 wiring 完整性是 runtime
+   边界（对标 SPIRE `catalog.Load` / controller-runtime `Builder.Build` / 本仓 gRPC #2204）。
 
 ### D4 — codegen owner-agnostic（无 fence 代码，自动）
 
@@ -94,12 +99,22 @@ archtest 禁止 kernel/governance 直接 `*.Cells[*.OwnerCell]` 索引（旁路 
 cell-存在假设、把 `_framework` 当缺失 cell）。合法的 `.OwnerCell` 读（CCE-01 的相等比较、
 kernel/registry.ByOwner 的分组）不受影响；只禁危险的 Cells-索引-by-OwnerCell shape。带 synthetic red case。
 
-### Serving 延后（不预设需求，优雅简洁）
+### Serving（本 ADR 延后；#2037 落地）
 
-本 ADR **不** wire 框架 serving（`NewFrameworkHTTP` 派生自 contract.yaml）：本 PR 无 active 框架契约，
-提前建 serving 是 speculative。当 #1899 设备契约需转 active（EST/serving wire PR）时，那个 PR 同时落
-serving + 把 D3 的 lifecycle 规则扩展为 serving 扫描。health/metrics 等 schemaless 运维端点**不迁移**
-contract.yaml（无版本化 wire 契约需求，opt-out 是恰当分层，与 Pattern X 并存非冲突）。
+本 ADR 起初 **不** wire 框架 serving（无 active 框架契约，提前建 serving 是 speculative）。**#2037（PR-8a）
+落地了 serving harness**，机制（与本 ADR 原计划一致，但 serving-scan 选 runtime fail-fast 而非静态 RouteGroup
+扫描，见 §Amendment 2026-06-18）：
+
+- `assembly.yaml` 新增 `frameworkContracts: [...]` —— per-deployment serving opt-in（framework 契约无 cell，
+  boundary 派生不可见，故 assembly 显式声明）；codegen 派生 `generatedFrameworkServedContracts()`（modules_gen.go，
+  generatedverify 守 drift）。
+- composition root 构造 Service（`cellmodules/deviceserving`）+ `bootstrap.WithFrameworkHTTPServing(expected, routes)`；
+  bootstrap phase5 把框架 RouteGroup（CellID=""）挂到声明 listener，phase0 `validateFrameworkServing` reconcile
+  expected（codegen）vs wired routes，不匹配启动期 fail-fast。
+- `NewFrameworkHTTP` **不**用于业务框架契约（它继续只服务 `http.framework.*` schemaless 运维端点）；generated
+  handler 已内嵌 codegen 派生的 contractSpec，serving 复用它，无平行 ContractSpec 构造。
+
+health/metrics 等 schemaless 运维端点仍**不迁移** contract.yaml（无版本化 wire 契约需求，与 Pattern X 并存非冲突）。
 
 ## 威胁矩阵
 
@@ -107,9 +122,9 @@ contract.yaml（无版本化 wire 契约需求，opt-out 是恰当分层，与 P
 |---|---|---|
 | 包外伪造框架 owner | sealed `ContractOwner`（unexported 字段，唯一 `Owner()` 构造） | Hard |
 | 把 framework 当 cell（越权解析为缺失/存在 cell） | `ContractOwner.Cell()` 对框架返回 ok=false，类型级不可表达 | Hard |
-| `ownerCell: _framework` 逃出所有治理 | `FRAMEWORK-OWNED-CONTRACT-SCOPED-01`（kind + fail-closed lifecycle）；FMT 格式规则照常作用 | Medium |
+| `ownerCell: _framework` 逃出所有治理 | `FRAMEWORK-OWNED-CONTRACT-SCOPED-01`（kind + serving-scan lifecycle + assembly 条目校验）；FMT 格式规则照常作用 | Medium |
 | 旁路 `Owner()` 直接 `Cells[OwnerCell]` | `CONTRACT-OWNER-CELL-FUNNEL-01` archtest（typed scan + red case） | Medium |
-| active 框架契约静默 dead（serving 未 wire） | D3 fail-closed 拒绝 active 框架契约（draft-only） | Medium |
+| active 框架契约静默 dead（声明 active 却无人 serve） | 双层（#2037）：① metadata serving-scan（active 框架契约须 ∈ 某 `assembly.frameworkContracts`，validate 期 fail-closed）；② bootstrap 启动期 `validateFrameworkServing`（声明 served 但无 wired RouteGroup → fail-fast，对标 gRPC #2204 / SPIRE / controller-runtime）。「must-wire」方向是文档化 Go 天花板（#851/#893/#1282 族） | Medium |
 | 框架契约误生成 Cell 注册胶水 | cellgen slice-driven，无 slice 引用 ⇒ 结构性不产胶水（D4） | Hard（结构性） |
 
 每条 enforcement 与实现同 PR 闭环（sealed 类型 + 治理 + archtest + 反向 red case + 本 ADR）。无 Soft。
@@ -131,15 +146,44 @@ contract.yaml（无版本化 wire 契约需求，opt-out 是恰当分层，与 P
   （非散落 escape）。serving 延后到 active 化 PR。
 - **后续**：#1899 用框架 owner 落 deviceidentity/devicestate（draft）；framework serving + D3 active 扩展在
   EST wire PR；command/其它 kind 的框架归属按需扩展 D3 allow-set。
-- **framework 契约 draft→active 迁移 PR 必须同步**：(1) wire 框架 serving RouteGroup（`NewFrameworkHTTP`
-  派生自 contract.yaml + bootstrap 挂载）；(2) 扩展 D3 lifecycle 规则为 serving 扫描（`FRAMEWORK-OWNED-CONTRACT-SCOPED-01`
-  放行已 serve 的 active 框架契约，DEAD-CONTRACT-01 的框架版）；(3) 补 Journey coverage
-  （`JOURNEY-CONTRACT-EXISTENCE-01` 对 active 平台契约生效，迁 active 的框架契约必须有对应 Journey 引用）。
+- **framework 契约 draft→active 迁移 PR 必须同步**（#2037 落地此清单，机制见 §Amendment 2026-06-18）：
+  (1) wire 框架 serving RouteGroup（assembly.frameworkContracts → codegen `generatedFrameworkServedContracts()`
+  → composition root `bootstrap.WithFrameworkHTTPServing` + bootstrap phase5 挂载；**不**用 `NewFrameworkHTTP`，
+  复用 generated handler 内嵌 contractSpec）；(2) 扩展 D3 lifecycle 规则为 serving-scan（active 框架契约须 ∈ 某
+  assembly.frameworkContracts + 条目校验）+ bootstrap 启动期 fail-fast；(3) 补 Journey coverage（迁 active 的
+  框架契约必须有 Journey 引用；framework-serving journey 用 `cells: [_framework]`，REF-06 结构性豁免 sentinel）。
+
+## Amendment 2026-06-18 — #2037（PR-8a：framework HTTP serving harness）
+
+落地 §Serving 与 Consequences 迁移清单。**与本 ADR 原计划的一处偏离 + 理由**：原 D3 设想 serving-scan = 静态
+「扫描 serving RouteGroup」。但 governance 是 metadata-only，看不到 Go RouteGroup；开源对标（cert-manager
+issuerRef condition / k8s APIService Available 是 runtime；SPIRE `catalog.Load` Constraints.Check /
+controller-runtime `Builder.Build` 是 startup 构造期 error）一致表明「已声明但无 serving 后端」的检测在成熟框架是
+**runtime/startup**，不是静态扫描——且本仓 gRPC PDP gate（#2204）与 HTTP `ResolveAuthorizer` 已是同款启动期
+fail-fast idiom。故 serving-scan 分两层落地：
+
+- **metadata serving-scan**（`FRAMEWORK-OWNED-CONTRACT-SCOPED-01`，validate 期，Medium）：active 框架契约须 ∈ 某
+  `assembly.frameworkContracts`；双向校验 assembly 条目是 active framework http/event 契约。
+- **bootstrap 启动期 fail-fast**（`validateFrameworkServing`，phase0，Medium）：codegen 派生的 must-serve 集
+  （`generatedFrameworkServedContracts()`）与 wired 框架 RouteGroup 不匹配即 fail-fast（must-wire 方向是文档化
+  Go 天花板，同 #851/#893/#1282）。**不**新增 archtest（runtime 查实际挂载强于 AST 扫描，无间接持有盲区）。
+
+**`CONTRACT-ENDPOINT-TEST-MAPPING-01` 框架豁免**：该 active-only 规则原假设有 serving cell slice；框架契约无 cell
+（D4），故 `isActiveServeStylePlatformContract` 结构性排除 `Owner().IsFramework()`（同 REF-03/13/CCE-01 模式）——
+framework 契约的契约级覆盖是 bootstrap/cellmodules 框架层测试，非 cell-slice verify.contract。
+
+**首个 active 锚点**：`http.devicestate.v1`（L0 只读）draft→active；`cellmodules/deviceserving` 提供诚实 baseline
+（无 presence 后端时 `state=unknown` + observedAt=判定时刻，schema 明文「unknown 时 observedAt 仍必填」，绝不臆造
+online/offline）。写路径 + status.v1 留各自 PR 经本 harness active 化。威胁矩阵「active 框架契约静默 dead」行已重评。
 
 ## 参考
 
-- 对标：cert-manager Issuer/CertificateRequest + external-issuer；SPIFFE Workload API + GOVERNANCE；
-  k8s CSI/CNI/Gateway-API；smallstep/certificates provisioner。
-- 内部：`kernel/metadata/owner.go`、`kernel/governance/rules_framework_owned.go`、
-  `tools/archtest/contract_owner_cell_funnel_01_test.go`、ADR `202606121500-1895`、
+- 对标：cert-manager Issuer/CertificateRequest + external-issuer；SPIFFE/SPIRE Workload API +
+  `pkg/common/catalog` Constraints.Check（startup fail-fast）；controller-runtime `pkg/builder` Build（构造期 error）；
+  k8s kube-aggregator APIService `Available` condition；smallstep/certificates provisioner。
+  `ref: spiffe/spire pkg/common/catalog/catalog.go`、`ref: kubernetes-sigs/controller-runtime pkg/builder/controller.go`。
+- 内部：`kernel/metadata/owner.go`、`kernel/metadata/types.go`（AssemblyMeta.FrameworkContracts）、
+  `kernel/governance/rules_framework_owned.go`、`kernel/governance/rules_contract_test_mapping.go`、
+  `kernel/assembly/generator.go`（generatedFrameworkServedContracts）、`runtime/bootstrap/framework_serving.go`、
+  `cellmodules/deviceserving/`、`tools/archtest/contract_owner_cell_funnel_01_test.go`、ADR `202606121500-1895`、
   `202605261620-adr-cqrs-projection-lifecycle-harness.md`、`.claude/rules/gocell/contract-fanout.md`。

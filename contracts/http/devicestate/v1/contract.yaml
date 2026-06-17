@@ -2,7 +2,7 @@ id: http.devicestate.v1
 kind: http
 ownerCell: _framework
 consistencyLevel: L0
-lifecycle: draft
+lifecycle: active
 description: |
   Device presence state query — neutral provider-agnostic query for device online/offline state.
   ref: docs/plans/specs/1895-device-identity-cert-framework/spec.md FR-013

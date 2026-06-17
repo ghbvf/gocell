@@ -1,0 +1,25 @@
+id: J-deviceidentity
+goal: 框架以 provider 中立方式服务设备身份/状态查询契约（framework-owned serving）
+lifecycle: experimental
+owner:
+  team: platform
+  role: journey-owner
+# Framework-owned serving journey: the device contracts are owned by the
+# framework (ownerCell: _framework, ADR 202606130635-1939), not a cell, so the
+# routing anchor is the framework sentinel (REF-06 exempts _framework as the
+# legitimate serving anchor for framework-served journeys).
+cells:
+  - _framework
+# Acceptance curation for JOURNEY-CONTRACT-EXISTENCE-01: http.devicestate.v1 is
+# the first active framework-owned contract (PR-8a / #2037), served via the
+# bootstrap framework RouteGroup. The write paths (enroll/renew/revoke) and the
+# certificate status query active-ize in their own PRs and extend this journey.
+contracts:
+  - http.devicestate.v1
+passCriteria:
+  - text: 设备状态查询经 device:read 鉴权放行后返回 200；无 presence 后端时诚实报告 state=unknown + observedAt（判定时刻），绝不臆造 online/offline
+    mode: manual
+  - text: 未携带凭据返回 401，凭据缺 device:read 权限返回 403（fail-closed）
+    mode: manual
+  - text: 声明 active 的框架契约若未被 bootstrap 框架 RouteGroup 挂载，启动期 fail-fast（DEAD-CONTRACT 框架版）
+    mode: manual

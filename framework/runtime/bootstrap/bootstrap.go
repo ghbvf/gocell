@@ -274,6 +274,16 @@ type Bootstrap struct {
 	// endpoint not mounted (rebuild remains programmatic-only).
 	projectionRebuildEnabled bool
 
+	// frameworkServedContractIDs is the codegen-derived must-serve expectation set
+	// (generatedFrameworkServedContracts(), single-sourced from assembly.yaml
+	// frameworkContracts) and frameworkServingRoutes are the wired framework
+	// RouteGroups; both set by WithFrameworkHTTPServing. phase0
+	// (validateFrameworkServing) reconciles them: an expected id with no wired
+	// route fails fast (the DEAD-CONTRACT analog for framework serving). phase5
+	// mounts frameworkServingRouteGroups() on each route's listener (CellID=="").
+	frameworkServedContractIDs []string
+	frameworkServingRoutes     []FrameworkServedRoute
+
 	// --- saga-journal projection: Tailer harness dependencies (EPIC #1609 PR-05) ---
 	// Injected via WithSagaJournalReader / WithSagaProjectionOwnerCheckpointStore /
 	// WithSagaProjectionLocker (+ optional WithSagaTailerConfig); the TxRunner is

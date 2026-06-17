@@ -194,7 +194,9 @@ func TestFrameworkOwnedContractScoped_ActiveRejected(t *testing.T) {
 // lifecycle only rejects "active": a deprecated framework contract is permitted
 // (on its way out, not silently dead).
 func TestFrameworkOwnedContractScoped_DeprecatedPermitted(t *testing.T) {
-	pm := frameworkOwnedProject(fwHTTPContract("http.deviceidentity.enroll.v1", "deprecated"))
+	// A distinct framework http contract id (devicestate) — deprecated framework
+	// contracts are permitted regardless of id.
+	pm := frameworkOwnedProject(fwHTTPContract("http.devicestate.v1", "deprecated"))
 	val := NewValidator(pm, ".", clock.Real())
 
 	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), "FRAMEWORK-OWNED-CONTRACT-SCOPED-01")
@@ -322,5 +324,239 @@ func TestCCE01_CellOwnerAntiVacuity(t *testing.T) {
 	got := findByCode(val.validateCONTRACTCONSISTENCYEMIT01(), "CONTRACT-CONSISTENCY-EMIT-01")
 	if len(got) == 0 {
 		t.Fatal("CCE-01 must still fire constraint-1 for a cell-owned L2 HTTP contract with no triggers")
+	}
+}
+
+// frameworkOwnedProjectWithAssembly builds an isolated project with the given contracts
+// and a corebundle assembly that serves the given framework contract IDs.
+func frameworkOwnedProjectWithAssembly(servedIDs []string, contracts ...*metadata.ContractMeta) *metadata.ProjectMeta {
+	pm := frameworkOwnedProject(contracts...)
+	pm.Assemblies = map[string]*metadata.AssemblyMeta{
+		"corebundle": {
+			ID:                 "corebundle",
+			FrameworkContracts: servedIDs,
+			File:               "assemblies/corebundle/assembly.yaml",
+		},
+	}
+	return pm
+}
+
+// --- Serving-scan tests (task 1 + 2) ---
+
+// TestFrameworkOwnedContractScoped_ActiveServedByAssembly proves an active framework
+// http contract that appears in an assembly's frameworkContracts is permitted (green).
+func TestFrameworkOwnedContractScoped_ActiveServedByAssembly(t *testing.T) {
+	const id = "http.deviceidentity.enroll.v1"
+	pm := frameworkOwnedProjectWithAssembly(
+		[]string{id},
+		fwHTTPContract(id, "active"),
+	)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 0 {
+		t.Errorf("active framework http contract served by assembly must produce 0 findings, got %d: %v", len(got), got)
+	}
+}
+
+// TestFrameworkOwnedContractScoped_ActiveNotServed proves an active framework http
+// contract absent from all assembly.frameworkContracts is rejected (serving-scan red).
+func TestFrameworkOwnedContractScoped_ActiveNotServed(t *testing.T) {
+	const id = "http.deviceidentity.enroll.v1"
+	// Project has an assembly, but it does not list the contract.
+	pm := frameworkOwnedProjectWithAssembly(
+		[]string{}, // no contracts served
+		fwHTTPContract(id, "active"),
+	)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 1 {
+		t.Fatalf("active framework contract not served by any assembly must produce 1 finding, got %d: %v", len(got), got)
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("expected error severity, got %v", got[0].Severity)
+	}
+	if got[0].Field != "lifecycle" {
+		t.Errorf("finding must anchor at lifecycle, got %q", got[0].Field)
+	}
+}
+
+// TestFrameworkOwnedContractScoped_ActiveNoAssemblies proves that an active framework
+// http contract with no assemblies at all (Assemblies is nil) is rejected.
+func TestFrameworkOwnedContractScoped_ActiveNoAssemblies(t *testing.T) {
+	const id = "http.deviceidentity.enroll.v1"
+	// frameworkOwnedProject does not set Assemblies — nil map.
+	pm := frameworkOwnedProject(fwHTTPContract(id, "active"))
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 1 {
+		t.Fatalf("active framework contract with no assemblies must produce 1 finding, got %d: %v", len(got), got)
+	}
+}
+
+// TestFrameworkOwnedContractScoped_DraftStillPermittedWithAssembly proves that a
+// draft framework contract is not affected by the serving-scan: draft → 0 findings
+// regardless of assembly.frameworkContracts (draft is not active serving).
+func TestFrameworkOwnedContractScoped_DraftStillPermittedWithAssembly(t *testing.T) {
+	const id = "http.deviceidentity.enroll.v1"
+	pm := frameworkOwnedProjectWithAssembly(
+		[]string{}, // empty — irrelevant for draft
+		fwHTTPContract(id, "draft"),
+	)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 0 {
+		t.Errorf("draft framework contract must produce 0 findings, got %d: %v", len(got), got)
+	}
+}
+
+// --- Assembly frameworkContracts entry-validation tests (task 2) ---
+
+// TestAssemblyFrameworkContracts_UnknownID proves that an assembly referencing a
+// non-existent contract ID produces 1 error.
+func TestAssemblyFrameworkContracts_UnknownID(t *testing.T) {
+	pm := frameworkOwnedProjectWithAssembly(
+		[]string{"http.does.not.exist.v1"},
+		// no matching contract in the project
+	)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 1 {
+		t.Fatalf("unknown contract id in frameworkContracts must produce 1 finding, got %d: %v", len(got), got)
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("expected error severity, got %v", got[0].Severity)
+	}
+	if got[0].Field != "frameworkContracts" {
+		t.Errorf("finding must anchor at frameworkContracts, got %q", got[0].Field)
+	}
+}
+
+// TestAssemblyFrameworkContracts_CellOwnedContract proves that listing a cell-owned
+// contract in frameworkContracts produces 1 error.
+func TestAssemblyFrameworkContracts_CellOwnedContract(t *testing.T) {
+	const id = "http.auth.login.v1"
+	cellContract := &metadata.ContractMeta{
+		ID:               id,
+		Kind:             "http",
+		OwnerCell:        metadatatest.CellIDAccessCore, // cell-owned, not framework
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints:        metadata.EndpointsMeta{Server: metadatatest.CellIDAccessCore},
+		File:             "contracts/http/auth/login/v1/contract.yaml",
+		Dir:              "contracts/http/auth/login/v1",
+	}
+	pm := frameworkOwnedProjectWithAssembly([]string{id}, cellContract)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 1 {
+		t.Fatalf("cell-owned contract in frameworkContracts must produce 1 finding, got %d: %v", len(got), got)
+	}
+	if got[0].Field != "frameworkContracts" {
+		t.Errorf("finding must anchor at frameworkContracts, got %q", got[0].Field)
+	}
+}
+
+// TestAssemblyFrameworkContracts_DraftFrameworkContract proves that listing a draft
+// framework contract in frameworkContracts (only active is valid) produces 1 error.
+func TestAssemblyFrameworkContracts_DraftFrameworkContract(t *testing.T) {
+	const id = "http.deviceidentity.enroll.v1"
+	pm := frameworkOwnedProjectWithAssembly(
+		[]string{id},
+		fwHTTPContract(id, "draft"), // draft — only active should appear in frameworkContracts
+	)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	if len(got) != 1 {
+		t.Fatalf("draft framework contract in frameworkContracts must produce 1 finding, got %d: %v", len(got), got)
+	}
+	if got[0].Field != "frameworkContracts" {
+		t.Errorf("finding must anchor at frameworkContracts, got %q", got[0].Field)
+	}
+}
+
+// TestAssemblyFrameworkContracts_IneligibleKindInList proves that listing a framework
+// command contract (ineligible kind) in frameworkContracts produces an error.
+func TestAssemblyFrameworkContracts_IneligibleKindInList(t *testing.T) {
+	const id = "command.deviceidentity.rotate.v1"
+	cmd := &metadata.ContractMeta{
+		ID:               id,
+		Kind:             "command",
+		OwnerCell:        metadata.FrameworkOwnerSentinel,
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Endpoints:        metadata.EndpointsMeta{Handler: metadata.FrameworkOwnerSentinel},
+		File:             "contracts/command/deviceidentity/rotate/v1/contract.yaml",
+	}
+	pm := frameworkOwnedProjectWithAssembly([]string{id}, cmd)
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateFRAMEWORKOWNEDCONTRACTSCOPED01(), codeFRAMEWORKOWNEDCONTRACTSCOPED01)
+	// At least 1 finding from checkAssemblyFrameworkContracts (kind not eligible),
+	// plus 1 from checkFrameworkOwnedKind. Total ≥ 2.
+	if len(got) < 1 {
+		t.Fatalf("ineligible kind in frameworkContracts must produce findings, got %d: %v", len(got), got)
+	}
+	// The assembly-level finding must anchor at frameworkContracts.
+	var hasAssemblyFinding bool
+	for _, r := range got {
+		if r.Field == "frameworkContracts" {
+			hasAssemblyFinding = true
+		}
+	}
+	if !hasAssemblyFinding {
+		t.Errorf("at least one finding must anchor at frameworkContracts; got: %v", got)
+	}
+}
+
+// --- REF-06 framework sentinel tests (task 3) ---
+
+// TestREF06_FrameworkSentinelPermitted proves that a journey declaring
+// cells: [_framework] produces 0 REF-06 findings — _framework is the
+// legitimate serving anchor for framework-serving journeys.
+func TestREF06_FrameworkSentinelPermitted(t *testing.T) {
+	pm := frameworkOwnedProject()
+	pm.Journeys = map[string]*metadata.JourneyMeta{
+		"J-fw-enroll": {
+			ID:        "J-fw-enroll",
+			Goal:      "Device enrolls via framework endpoint",
+			Lifecycle: "experimental",
+			Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
+			Cells:     []string{metadata.FrameworkOwnerSentinel}, // _framework serving anchor
+			File:      "journeys/J-fw-enroll.yaml",
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateREF06(), codeREF06)
+	if len(got) != 0 {
+		t.Errorf("_framework cell ref in journey must produce 0 REF-06 findings, got %d: %v", len(got), got)
+	}
+}
+
+// TestREF06_NonexistentCellStillFails is the anti-vacuity / preservation test:
+// a truly nonexistent cell still produces a REF-06 error even after the
+// _framework skip is applied.
+func TestREF06_NonexistentCellStillFails(t *testing.T) {
+	pm := frameworkOwnedProject()
+	pm.Journeys = map[string]*metadata.JourneyMeta{
+		"J-ghost": {
+			ID:    "J-ghost",
+			Goal:  "Ghost journey",
+			Cells: []string{metadatatest.NewCellID("ghostcell")}, // format-valid but absent from the project
+			File:  "journeys/J-ghost.yaml",
+		},
+	}
+	val := NewValidator(pm, ".", clock.Real())
+
+	got := findByCode(val.validateREF06(), codeREF06)
+	if len(got) != 1 {
+		t.Fatalf("nonexistent cell in journey must produce 1 REF-06 finding, got %d: %v", len(got), got)
 	}
 }

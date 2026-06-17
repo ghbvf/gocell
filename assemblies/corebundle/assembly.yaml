@@ -7,5 +7,12 @@ cells:
 owner:
   team: platform-core
   role: maintainer
+# Per-deployment serving opt-in for framework-owned contracts (ownerCell: _framework).
+# corebundle is the platform assembly that serves the neutral device contracts.
+# http.devicestate.v1 (L0 device presence query) is the first active framework
+# contract (PR-8a / #2037); the framework RouteGroup is mounted at bootstrap and
+# this list is the codegen/governance single source (ADR 202606130635-1939).
+frameworkContracts:
+  - http.devicestate.v1
 build:
   compositionAPI: true

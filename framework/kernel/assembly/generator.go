@@ -153,6 +153,18 @@ type modulesCompositionContext struct {
 	// The template ALWAYS emits generatedPostgresCells() (nil when empty) so the
 	// composition root can call it unconditionally (#1964 per-cell infra seam).
 	PostgresCells []string
+	// FrameworkServedContracts is the sorted list of framework-owned contract ids
+	// (ownerCell: _framework) this assembly explicitly opts in to serving, sourced
+	// directly from assembly.yaml `frameworkContracts`. A framework-owned contract
+	// has no cell and therefore cannot be derived from the assembly's cell set; the
+	// assembly must declare it explicitly. The composition root consumes this list as
+	// the bootstrap must-serve expectation set: it fail-fasts (Init-done / before-serve)
+	// if any id listed here has no mounted framework RouteGroup (the DEAD-CONTRACT
+	// analog for framework serving). The template ALWAYS emits
+	// generatedFrameworkServedContracts() (nil when empty) so the composition root can
+	// call it unconditionally. Derived by `gocell generate assembly`; `--verify`
+	// red-flags stale output (#2037).
+	FrameworkServedContracts []string
 }
 
 // deploymentTopologyTemplateData is the flattened template-serialisable form of
@@ -549,15 +561,18 @@ func (g *Generator) generateModulesGenComposition(
 	}
 	topoData := buildDeploymentTopologyData(asm.Topology)
 	postgresCells := g.collectPostgresCells(asm.Cells)
+	frameworkServed := append([]string(nil), asm.FrameworkContracts...)
+	sort.Strings(frameworkServed)
 	ctx := modulesCompositionContext{
-		AssemblyID:             assemblyID,
-		SourcePath:             asm.File,
-		Modules:                moduleCalls,
-		ModuleImports:          importLines,
-		Capabilities:           capConsts,
-		ProjectionSourceTopics: projTopics,
-		DeploymentTopology:     topoData,
-		PostgresCells:          postgresCells,
+		AssemblyID:               assemblyID,
+		SourcePath:               asm.File,
+		Modules:                  moduleCalls,
+		ModuleImports:            importLines,
+		Capabilities:             capConsts,
+		ProjectionSourceTopics:   projTopics,
+		DeploymentTopology:       topoData,
+		PostgresCells:            postgresCells,
+		FrameworkServedContracts: frameworkServed,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
 }

@@ -322,6 +322,7 @@ func buildJourneyEntity(j *metadata.JourneyMeta, inc IncludeOptions) Entity {
 func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 	spec := AssemblySpec{
 		Cells:               metadata.CellIDs(a.Cells),
+		FrameworkContracts:  a.FrameworkContracts,
 		Owner:               CellSpecOwner{Team: a.Owner.Team, Role: a.Owner.Role},
 		MaxConsistencyLevel: a.MaxConsistencyLevel,
 		Build: AssemblySpecBuild{

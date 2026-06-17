@@ -1054,6 +1054,18 @@ func deadContractDefaultDiag(c contractDoc, rel string) []Diagnostic {
 func deadContractDiagsForKind(c contractDoc, rel string, idx *deadContractIndexes,
 	implementedPkgPaths, commandImplementedPkgPaths map[string]bool,
 ) []Diagnostic {
+	// Framework-owned contracts (ownerCell: _framework) are structurally exempt
+	// from the cell-implementation check: a framework-owned contract has no cell
+	// (ADR 202606130635-1939 D4), so its generated Service/Handler is implemented
+	// at the composition root (cellmodules/deviceserving), not in a cell package.
+	// Serving liveness is instead governed by FRAMEWORK-OWNED-CONTRACT-SCOPED-01
+	// (serving-scan: an active framework contract must appear in some
+	// assembly.frameworkContracts) + the bootstrap startup fail-fast
+	// (validateFrameworkServing) — the framework-side DEAD-CONTRACT analog. This
+	// mirrors the governance CONTRACT-ENDPOINT-TEST-MAPPING-01 framework exemption.
+	if c.OwnerCell == metadata.FrameworkOwnerSentinel {
+		return nil
+	}
 	switch c.Kind {
 	case "http":
 		return deadContractHTTPDiag(c, rel, idx.contractPathToHTTPGenPkg, implementedPkgPaths)

@@ -35,6 +35,13 @@ var synthesisFieldExemptions = map[string]string{
 	// valued by design. The zero value is the intended scaffold output.
 	"topology.colocated": "scaffold emits no explicit topology; empty = all-colocated default (#1962)",
 	"topology.remote":    "scaffold emits no explicit topology; empty = all-colocated default (#1962)",
+
+	// frameworkContracts lists the framework-owned contracts (ownerCell: _framework)
+	// that an assembly explicitly opts in to serving (#2037). Newly scaffolded
+	// assemblies do not serve any framework-owned contracts by default (the empty
+	// list is the correct scaffold output). This field is a hand-edit / future
+	// scaffold flag; AssemblyScaffoldSpec has no input for it.
+	"frameworkContracts": "scaffold emits no frameworkContracts; empty = no framework serving by default (#2037)",
 }
 
 // TestAssemblyMetaSynthesisFieldGuard uses reflection to assert that

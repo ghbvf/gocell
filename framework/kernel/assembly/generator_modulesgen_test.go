@@ -453,3 +453,89 @@ func TestGenerateModulesGen_CompositionForm_PartialPostgresCells(t *testing.T) {
 	assert.NotContains(t, pgFnBody[:strings.Index(pgFnBody, "}")+1], `"accesscore"`,
 		"accesscore does not require postgres and must not appear in generatedPostgresCells()")
 }
+
+// ---------------------------------------------------------------------------
+// generatedFrameworkServedContracts — codegen function tests (#2037)
+// ---------------------------------------------------------------------------
+
+// TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_WithContracts verifies
+// that when assembly.yaml declares frameworkContracts, the composition form emits
+// generatedFrameworkServedContracts() returning them sorted.
+func TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_WithContracts(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// Intentionally unsorted to verify output is sorted.
+	asm.FrameworkContracts = []string{"http.devicestate.v1", "http.deviceidentity.v1"}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	// Function must be emitted.
+	assert.Contains(t, content, "func generatedFrameworkServedContracts() []string")
+	// Both contract IDs must appear.
+	assert.Contains(t, content, `"http.deviceidentity.v1"`)
+	assert.Contains(t, content, `"http.devicestate.v1"`)
+	// Sorted: deviceidentity < devicestate alphabetically.
+	posIdentity := indexOfStr(content, `"http.deviceidentity.v1"`)
+	posState := indexOfStr(content, `"http.devicestate.v1"`)
+	assert.Less(t, posIdentity, posState,
+		"http.deviceidentity.v1 must precede http.devicestate.v1 (sorted output)")
+}
+
+// TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_Empty verifies that
+// when assembly.yaml declares no frameworkContracts, generatedFrameworkServedContracts()
+// is still ALWAYS emitted (like generatedPostgresCells / generatedProjectionSourceTopics)
+// but returns nil.
+func TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_Empty(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// No FrameworkContracts declared.
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	// Function must always be emitted.
+	assert.Contains(t, content, "func generatedFrameworkServedContracts() []string")
+	// When empty, must return nil.
+	fnIdx := indexOfStr(content, "func generatedFrameworkServedContracts()")
+	require.GreaterOrEqual(t, fnIdx, 0, "generatedFrameworkServedContracts() not found")
+	fnBody := content[fnIdx:]
+	// Find the closing brace of the function.
+	closeBrace := strings.Index(fnBody, "\n}")
+	if closeBrace < 0 {
+		t.Fatal("could not find closing brace of generatedFrameworkServedContracts()")
+	}
+	body := fnBody[:closeBrace+2]
+	assert.Contains(t, body, "return nil",
+		"empty frameworkContracts must emit 'return nil'")
+}
+
+// TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_Sorted verifies that
+// multiple framework contracts are always emitted sorted regardless of input order,
+// mirroring the generatedPostgresCells sorted guarantee.
+func TestGenerateModulesGen_CompositionForm_FrameworkServedContracts_Sorted(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// Three entries, intentionally reverse-sorted.
+	asm.FrameworkContracts = []string{"http.zzz.v1", "http.aaa.v1", "http.mmm.v1"}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	assert.Contains(t, content, "func generatedFrameworkServedContracts() []string")
+	// Verify strict sort order: aaa < mmm < zzz.
+	posAAA := indexOfStr(content, `"http.aaa.v1"`)
+	posMMM := indexOfStr(content, `"http.mmm.v1"`)
+	posZZZ := indexOfStr(content, `"http.zzz.v1"`)
+	assert.Less(t, posAAA, posMMM, "http.aaa.v1 must precede http.mmm.v1 (sorted)")
+	assert.Less(t, posMMM, posZZZ, "http.mmm.v1 must precede http.zzz.v1 (sorted)")
+}
