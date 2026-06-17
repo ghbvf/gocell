@@ -388,6 +388,24 @@ func Run(t *testing.T, factory Factory, protocol *ledger.Protocol) {
 	t.Run("Query_VisibilityObligations", func(t *testing.T) { runQueryVisibilityObligations(t, factory) })
 	t.Run("GetBySeq_VisibilityObligations", func(t *testing.T) { runGetBySeqVisibilityObligations(t, factory) })
 	t.Run("Query_InvalidCharFilter_Rejected", func(t *testing.T) { runQueryInvalidCharFilterRejected(t, factory) })
+	t.Run("GetByID_NotFound", func(t *testing.T) {
+		store, _, _, cleanup := factory(t)
+		defer cleanup()
+		_, err := store.GetByID(context.Background(), tenant.TenantID(conformanceTenant),
+			mustRowVisibility(t, tenant.RowScopeTenant, ""), getByIDMissingID)
+		errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
+	})
+	t.Run("GetByID_MalformedID_NotFound", func(t *testing.T) {
+		// A non-uuid id collapses to not-found on every backend (PG parse-guards it
+		// off the $::uuid cast; mem finds no matching id) — never a 22P02 / 500 leak.
+		store, _, _, cleanup := factory(t)
+		defer cleanup()
+		_, err := store.GetByID(context.Background(), tenant.TenantID(conformanceTenant),
+			mustRowVisibility(t, tenant.RowScopeTenant, ""), getByIDMalformedID)
+		errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
+	})
+	t.Run("GetByID_VisibilityObligations", func(t *testing.T) { runGetByIDVisibilityObligations(t, factory) })
+	t.Run("GetByID_CrossTenantHidden", func(t *testing.T) { runGetByIDCrossTenantHidden(t, factory) })
 }
 
 // runAppendTailRoundTrip: Append persists entry; Tail advances; GetBySeq returns entry.
@@ -1697,6 +1715,132 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 	}
 }
 
+// getByIDMissingID is a syntactically valid UUID the conformance never seeds, so
+// every backend's GetByID / GetByIDCrossTenant returns ErrAuditLedgerNotFound for
+// it (PG: no row; mem: no matching id). Valid uuid form so the PG `$N::uuid`
+// cast / parse-guard treats it as "absent", not "malformed".
+const getByIDMissingID = "00000000-0000-0000-0000-000000000000"
+
+// getByIDMalformedID is NOT a valid uuid; both backends must still collapse it to
+// ErrAuditLedgerNotFound (PG parse-guards it off the uuid cast → not-found; mem
+// finds no matching id), never a 500 / 22P02 leak.
+const getByIDMalformedID = "not-a-uuid"
+
+// visGetByIDCase mirrors visGetCase but for GetByID (keyed on the opaque id rather
+// than seq_no). The id is captured from the seeded entry's Append write-back, so
+// one case table works across mem (id=EventID) and PG (id=uuid) backends.
+type visGetByIDCase struct {
+	name    string
+	scope   tenant.RowScope
+	subject string
+	wantOK  bool
+	wantErr errcode.Code
+}
+
+// run executes one GetByID visibility case against store for the captured id of
+// the seeded alice entry (tenant=conformanceTenant). Like visGetCase it asserts
+// the IDOR-safe collapse / RowScopeAll fail-close, plus the id round-trip on OK.
+func (tc visGetByIDCase) run(t *testing.T, store ledger.Store, id string) {
+	t.Helper()
+	vis := mustRowVisibility(t, tc.scope, tc.subject)
+	got, err := store.GetByID(context.Background(), tenant.TenantID(conformanceTenant), vis, id)
+	if tc.wantOK {
+		if err != nil {
+			t.Fatalf("GetByID(vis=%v subject=%q): got error %v, want entry", tc.scope, tc.subject, err)
+		}
+		if got.ActorID != "alice" {
+			t.Errorf("GetByID: got ActorID=%q, want %q", got.ActorID, "alice")
+		}
+		return
+	}
+	// Non-OK: must return tc.wantErr (IDOR-safe collapse → ErrAuditLedgerNotFound;
+	// RowScopeAll → ErrInternal code / KindNotImplemented → HTTP 501), not the entry.
+	errcodetest.AssertCode(t, err, tc.wantErr)
+	if got != nil {
+		t.Errorf("GetByID(vis=%v): expected nil entry, got %+v", tc.scope, got)
+	}
+}
+
+// runGetByIDVisibilityObligations mirrors runGetBySeqVisibilityObligations for the
+// id-keyed path (#1852): it pins the IDOR-safe owner collapse + the RowScopeAll
+// fail-close AND the id ROUND-TRIP — the opaque id the store writes back on Append
+// is exactly the id GetByID resolves (the same id http.audit.list.v1 projects and
+// http.audit.get.v1 looks up). Seeds one entry (ActorID="alice", tenant=
+// conformanceTenant), captures its store-assigned id, then asserts the table.
+func runGetByIDVisibilityObligations(t *testing.T, factory Factory) {
+	store, _, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e := &ledger.Entry{
+		EventID:   "vis-getbyid-1",
+		EventType: "vis.getbyid.test",
+		ActorID:   "alice",
+		TenantID:  conformanceTenant,
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	// id round-trip: Append wrote back the opaque store id; GetByID must resolve that
+	// exact id (mem id=EventID, PG id=uuid — captured, never hardcoded).
+	id := e.ID
+	if id == "" {
+		t.Fatal("Append did not write back a store id")
+	}
+
+	cases := []visGetByIDCase{
+		{"self-alice-found", tenant.RowScopeSelf, "alice", true, ""},
+		{"self-bob-idor-collapse", tenant.RowScopeSelf, "bob", false, errcode.ErrAuditLedgerNotFound},
+		{"device-alice-found", tenant.RowScopeDevice, "alice", true, ""},
+		{"device-bob-idor-collapse", tenant.RowScopeDevice, "bob", false, errcode.ErrAuditLedgerNotFound},
+		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
+		// RowScopeAll is fail-closed on every serving backend (Code ErrInternal,
+		// Kind KindNotImplemented → HTTP 501); distinct from the IDOR-collapse 404.
+		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { tc.run(t, store, id) })
+	}
+}
+
+// runGetByIDCrossTenantHidden pins the TENANT axis of GetByID: an entry seeded in
+// tenant-A is NOT resolvable by a GetByID scoped to tenant-B (the explicit tenant
+// predicate excludes it → ErrAuditLedgerNotFound, IDOR-safe), the single-entry
+// counterpart of runQueryTenantIsolation.
+func runGetByIDCrossTenantHidden(t *testing.T, factory Factory) {
+	store, _, fc, cleanup := factory(t)
+	defer cleanup()
+
+	e := &ledger.Entry{
+		EventID:   "ti-getbyid-a1",
+		EventType: "tenant.iso.getbyid",
+		ActorID:   "actor",
+		TenantID:  isoTenantA,
+		Timestamp: fc.Now(),
+		Payload:   []byte(`{}`),
+	}
+	if err := store.Append(context.Background(), e); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	idA := e.ID
+
+	// tenant-A resolves its own entry by id.
+	gotA, err := store.GetByID(context.Background(), tenant.TenantID(isoTenantA),
+		mustRowVisibility(t, tenant.RowScopeTenant, ""), idA)
+	if err != nil {
+		t.Fatalf("GetByID(tenant-A, idA): %v", err)
+	}
+	if gotA.EventID != "ti-getbyid-a1" {
+		t.Errorf("GetByID(tenant-A): got EventID=%q, want ti-getbyid-a1", gotA.EventID)
+	}
+
+	// tenant-B must NOT resolve tenant-A's entry by the same id (cross-tenant hidden).
+	_, errB := store.GetByID(context.Background(), tenant.TenantID(isoTenantB),
+		mustRowVisibility(t, tenant.RowScopeTenant, ""), idA)
+	errcodetest.AssertCode(t, errB, errcode.ErrAuditLedgerNotFound)
+}
+
 // assertErrCode asserts err wraps an *errcode.Error with the given Code.
 func assertErrCode(t *testing.T, err error, want errcode.Code) {
 	t.Helper()
@@ -1772,6 +1916,49 @@ func RunCrossTenantQueryConformance(t *testing.T, factory CrossTenantFactory) {
 	t.Run("CrossTenant_InvalidCharFilter_Rejected", func(t *testing.T) {
 		runCTInvalidCharFilterRejected(t, factory)
 	})
+	t.Run("CrossTenant_GetByID_Found", func(t *testing.T) {
+		runCTGetByIDFound(t, factory)
+	})
+	t.Run("CrossTenant_GetByID_NotFound", func(t *testing.T) {
+		runCTGetByIDNotFound(t, factory)
+	})
+}
+
+// runCTGetByIDFound: GetByIDCrossTenant resolves a seeded entry by its store id
+// across tenants (the single-entry counterpart of runCTMultiTenantMultiNamespace).
+// The id is discovered from a QueryCrossTenant result so the test is independent of
+// the backend's id-assignment scheme (mem EventID vs PG uuid).
+func runCTGetByIDFound(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	store, cleanup := factory(t, ctSeed(epochAnchor))
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("seed query: err=%v rows=%d", err, len(rows))
+	}
+	want := rows[0]
+	got, err := store.GetByIDCrossTenant(context.Background(), ctv, want.ID)
+	if err != nil {
+		t.Fatalf("GetByIDCrossTenant(%q): %v", want.ID, err)
+	}
+	if got.EventID != want.EventID || got.TenantID != want.TenantID {
+		t.Errorf("GetByIDCrossTenant: got (EventID=%q,TenantID=%q), want (%q,%q)",
+			got.EventID, got.TenantID, want.EventID, want.TenantID)
+	}
+}
+
+// runCTGetByIDNotFound: GetByIDCrossTenant for an unseeded id returns
+// ErrAuditLedgerNotFound on every cross-tenant backend.
+func runCTGetByIDNotFound(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	store, cleanup := factory(t, ctSeed(epochAnchor))
+	defer cleanup()
+	_, err := store.GetByIDCrossTenant(context.Background(),
+		tenant.NewCrossTenantVisibility(), getByIDMissingID)
+	errcodetest.AssertCode(t, err, errcode.ErrAuditLedgerNotFound)
 }
 
 // conformance tenant UUIDs for cross-tenant tests (distinct from the existing
@@ -2015,6 +2202,23 @@ func runCTZeroObligationRejected(t *testing.T, factory CrossTenantFactory) {
 	errcodetest.AssertCode(t, err, errcode.ErrInternal)
 	if len(rows) != 0 {
 		t.Errorf("zero-obligation cross-tenant read returned %d rows; must fail-closed with none", len(rows))
+	}
+
+	// The single-entry path (GetByIDCrossTenant, #1852) enforces the SAME F2 PEP.
+	// Discover a REAL seeded id under a valid obligation, then prove the ZERO
+	// obligation still fail-closes for that real id (anti-vacuity: the rejection is
+	// the obligation check, KindInternal/ErrInternal, NOT a not-found — a store that
+	// skipped ctv.Validate would return the real entry).
+	valid := tenant.NewCrossTenantVisibility()
+	realRows, qErr := store.QueryCrossTenant(context.Background(), valid, ledger.AuditFilters{},
+		query.ListParams{Limit: 1, Sort: ledger.QuerySort()})
+	if qErr != nil || len(realRows) == 0 {
+		t.Fatalf("seed query under valid obligation: err=%v rows=%d", qErr, len(realRows))
+	}
+	gotEntry, idErr := store.GetByIDCrossTenant(context.Background(), zero, realRows[0].ID)
+	errcodetest.AssertCode(t, idErr, errcode.ErrInternal)
+	if gotEntry != nil {
+		t.Errorf("zero-obligation cross-tenant get-by-id returned a real entry; must fail-closed")
 	}
 }
 

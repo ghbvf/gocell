@@ -152,10 +152,15 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 
 	// Build the stored entry (copy to prevent caller mutations from leaking).
 	stored := copyEntry(e)
-	// Assign a stable store-level ID from EventID (mirrors PG store assigning a
-	// UUID primary key on INSERT). Using EventID keeps the ID deterministic so
-	// Query tie-breaking by ID ASC is stable across test runs — random UUIDs
-	// would make same-timestamp tie ordering non-deterministic.
+	// Assign a stable store-level ID from EventID. This DIVERGES from the PG
+	// LedgerStore, which assigns a fresh random uuid.New() primary key on INSERT:
+	// MemStore reuses the EventID so the keyset tie-break (id ASC) is DETERMINISTIC
+	// across test runs — a random UUID would make same-timestamp tie ordering flaky.
+	// Consequence: the mem id is unique only within (namespace, tenant) — it inherits
+	// EventID's uniqueness scope — whereas the PG id is globally unique. Both are the
+	// opaque row handle the wire `id` field projects and GetByID resolves; the
+	// serving GetByID is tenant-scoped so the narrower mem uniqueness suffices, and
+	// in a real (PG) deployment the EventID is itself a canonical UUID.
 	stored.ID = e.EventID
 	stored.SeqNo = int64(len(chain.entries)) + 1
 	stored.PrevHash = prevHash
@@ -226,6 +231,55 @@ func (m *MemStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, seq i
 		)
 	}
 	return copyEntry(e), nil
+}
+
+// auditEntryNotFound is the IDOR-safe not-found sentinel for the single-entry
+// reads that key on an opaque id (MemStore.GetByID / MemCrossTenantStore.
+// GetByIDCrossTenant). It carries NO public detail: unlike the by-seq path (which
+// echoes the integer seqNo), the id is a caller-supplied opaque string, so it is
+// kept off the wire and out of logs. Existence is never revealed — the same code
+// is returned for "absent", "another tenant's row", and "outside owner scope".
+func auditEntryNotFound() error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
+		"audit ledger: entry not found")
+}
+
+// GetByID returns a defensive copy of the entry with the given opaque id within
+// tenant t. Like GetBySeq it enforces two orthogonal axes and collapses both to
+// ErrAuditLedgerNotFound (IDOR-safe — existence is not leaked). Unlike GetBySeq it
+// takes the explicit typed tenant t (the post-auth http.audit.get.v1 funnel, like
+// Query) rather than the ctx scope: it scans t's chain PLUS the "" system chain
+// (the mem analog of the PG `(tenant_id = ” OR tenant_id = $t)` predicate + FORCE
+// RLS), so a cross-tenant id read finds nothing.
+func (m *MemStore) GetByID(_ context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
+	if err := vis.Validate(); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tenantKey := t.String()
+	for chainKey, chain := range m.chains {
+		if !tenantMatches(chainKey, tenantKey) {
+			continue
+		}
+		for _, e := range chain.entries {
+			if e.ID != id {
+				continue
+			}
+			if !vis.Allows(e.ActorID) {
+				// IDOR-safe collapse: do not reveal that the entry exists.
+				return nil, auditEntryNotFound()
+			}
+			return copyEntry(e), nil
+		}
+	}
+	return nil, auditEntryNotFound()
 }
 
 // validateQueryArgs validates the mandatory preconditions shared by all MemStore

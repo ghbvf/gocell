@@ -145,3 +145,50 @@ func collectFromMemStore(store *MemStore, filters AuditFilters) []*Entry {
 	}
 	return out
 }
+
+// GetByIDCrossTenant scans ALL chains of ALL backing MemStores for the entry with
+// the given opaque id and returns a defensive copy of the first match, or
+// ErrAuditLedgerNotFound when none exists. The single-entry counterpart of
+// QueryCrossTenant: NO tenant predicate (the read spans every tenant by
+// construction) and NO owner predicate (the RowScopeAll obligation makes every
+// actor_id visible). In a real (PG) deployment the id is a globally-unique uuid,
+// so the cross-tenant lookup is unambiguous; mem fixtures use distinct ids.
+//
+// ctv carries the sealed RowScopeAll obligation. This method re-validates it
+// fail-closed (ctv.Validate) before reading — the data-layer PEP (F2): the typed
+// param makes "forge/forget the grant" a compile error, and this runtime check
+// rejects Go's constructable zero value, so a zero/invalid obligation can never
+// produce a cross-tenant read.
+func (m *MemCrossTenantStore) GetByIDCrossTenant(
+	_ context.Context,
+	ctv tenant.CrossTenantVisibility,
+	id string,
+) (*Entry, error) {
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			errMsgCrossTenantObligation)
+	}
+	for _, store := range m.stores {
+		if e := findByIDInMemStore(store, id); e != nil {
+			return e, nil
+		}
+	}
+	return nil, auditEntryNotFound()
+}
+
+// findByIDInMemStore returns a defensive copy of the entry with the given id from
+// a single MemStore under its lock, or nil when absent. Extracted to avoid nested
+// locking and keep GetByIDCrossTenant's cognitive complexity low (mirrors
+// collectFromMemStore).
+func findByIDInMemStore(store *MemStore, id string) *Entry {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, chain := range store.chains {
+		for _, e := range chain.entries {
+			if e.ID == id {
+				return copyEntry(e)
+			}
+		}
+	}
+	return nil
+}

@@ -28,4 +28,13 @@ type QueryStore interface {
 	// read-only subset exists so read-side aggregators (MultiStore) implement only
 	// Query, not the write path.
 	Query(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, filters AuditFilters, params query.ListParams) ([]*Entry, error)
+
+	// GetByID has identical semantics to Store.GetByID — see that method's godoc
+	// for the full contract (the t tenant.TenantID tenant axis, the vis
+	// row-visibility obligation enforced on the actor_id owner column with the
+	// IDOR-safe ErrAuditLedgerNotFound collapse, and the RowScopeAll fail-closed
+	// rule). Declared here too so read-side aggregators (MultiStore) and the
+	// auditquery Service can fetch a single entry by its opaque store id through
+	// the narrow read interface, without depending on the write path.
+	GetByID(ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string) (*Entry, error)
 }

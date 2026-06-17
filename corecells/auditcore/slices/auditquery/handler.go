@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	auditget "github.com/ghbvf/gocell/generated/contracts/http/audit/get/v1"
 	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 )
 
@@ -488,21 +489,124 @@ func (a ListAdapter) executeQuery(
 	return a.S.Query(ctx, tid, vis, filters, pageReq)
 }
 
+// GetAdapter wraps Service to implement auditget.Service for http.audit.get.v1.
+// It is the single-entry read counterpart of ListAdapter: it fetches one audit
+// entry by its opaque path-param id, reusing the SAME tenant/RLS + row-visibility
+// + column-masking + payload-redaction machinery as the list read.
+//
+// Authorization model (flat audit:read, #1852): the route gate is
+// auth.RequirePermission(authz.PermAuditRead()) — there is NO actorId-self
+// exemption like the list's auditQueryPolicy, because the path param is the ENTRY
+// id, not an actor identity, so "is the caller asking only for its own actor rows?"
+// cannot be answered at the gate. A non-admin's own-entry detail is served by the
+// list (?actorId=<self>, which returns the full row = the detail). Self-scoping is
+// still enforced independently at the data layer by the principal's RowScope (a
+// RowScopeSelf caller only resolves entries whose actor_id is itself; others
+// collapse to 404 IDOR-safe), so the flat gate does not widen data access (D3).
+type GetAdapter struct {
+	S *Service
+}
+
+// Get implements auditget.Service. The path-param id is already length-bounded
+// (1..256) by handler_gen; this adapter additionally validates it as an
+// idutil.SafeID (charset) — the audit entry id is an opaque backend-agnostic handle
+// treated exactly like the list's actorId/subjectId/traceId filters, NOT a
+// format:uuid, so a malformed id is a 400 here (the store separately parse-guards
+// the PG uuid lookup). Exactly ONE visibility mint per request (mirrors ListAdapter
+// via deriveAuditVisibility): super-admin routes to GetByIDCrossTenant, all others
+// to the tenant-scoped GetByID.
+func (a GetAdapter) Get(ctx context.Context, req *auditget.Request) (auditget.GetResponseObject, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	// Tenant isolation fail-closed (epic #1337 PR-2a, F1), mirrors ListAdapter: a
+	// tenant-scoped audit read REQUIRES a concrete tenant.
+	if p.TenantID == "" {
+		return nil, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+			"audit query requires a tenant-scoped principal")
+	}
+	// Wire-boundary validation (CWE-117): the opaque id is validated as a SafeID
+	// before any store access or logging. Empty/over-length is already rejected by
+	// handler_gen; this adds the charset check (consistent with validateIDFilters).
+	if err := idutil.SafeID(req.ID).Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"invalid path parameter: id format",
+			errcode.WithInternal(errcode.InternalAttr("field", "id")))
+	}
+
+	vr, err := deriveAuditVisibility(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	vis := vr.vis
+
+	entry, err := a.getEntry(ctx, p, vr, vis, req.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Discharge the column mask derived from the row-visibility scope onto the
+	// single row (same obligation/funnel as the list — NewProjection is the single
+	// counterpart). For RowScopeAll (super-admin) auditFieldMask is the identity
+	// mask (full view), same as RowScopeTenant.
+	mask := auditFieldMask(vis.Scope())
+	data, err := projection.NewProjection(mask, toGetResponseDataItem(entry).ToMap())
+	if err != nil {
+		// A mask this PEP cannot discharge is a server-side misconfiguration — fail
+		// closed (maps to 500) rather than serve an un-masked column.
+		return nil, err
+	}
+	return auditget.Get200JSONResponse{Data: data}, nil
+}
+
+// getEntry dispatches the single-entry read to the correct service method:
+// cross-tenant (super-admin + admin pool) or tenant-scoped (all others). Extracted
+// from Get to keep cognitive complexity ≤ 15 (mirrors executeQuery).
+func (a GetAdapter) getEntry(
+	ctx context.Context, p *auth.Principal, vr auditVisibilityResult,
+	vis tenant.RowVisibility, id string,
+) (*ledger.Entry, error) {
+	if vr.isCrossTenant {
+		// F1: the cross-tenant path ALWAYS requires audit:read from the PDP,
+		// independent of and additive to the route-level gate (mirrors executeQuery).
+		if err := requireAuditReadForCrossTenant(ctx, p.Subject); err != nil {
+			return nil, err
+		}
+		return a.S.GetByIDCrossTenant(ctx, vr.ctv, id)
+	}
+	// Tenant axis (#1618): typed tenant scope re-parsed from the authenticated
+	// principal (guaranteed non-empty — the empty case is rejected in Get).
+	tid, err := tenant.ParseTenantID(p.TenantID)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrInternal,
+			"audit get: principal tenant is not canonical", err)
+	}
+	return a.S.GetByID(ctx, tid, vis, id)
+}
+
 // Handler is the composite route handler for the auditquery slice.
 type Handler struct {
 	listH *auditlist.Handler
+	getH  *auditget.Handler
 }
 
-// NewHandler creates an auditquery Handler with the generated list handler.
+// NewHandler creates an auditquery Handler with the generated list and get
+// handlers. The get route uses a flat audit:read gate (see GetAdapter): unlike the
+// list's auditQueryPolicy there is no actorId-self exemption.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{
 		listH: auditlist.NewHandler(ListAdapter{svc}, auditQueryPolicy),
+		getH:  auditget.NewHandler(GetAdapter{svc}, auth.RequirePermission(authz.PermAuditRead())),
 	}
 }
 
-// RegisterRoutes mounts the audit list contract on mux.
+// RegisterRoutes mounts the audit list and get contracts on mux.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
-	return h.listH.RegisterRoutes(mux)
+	if err := h.listH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	return h.getH.RegisterRoutes(mux)
 }
 
 // toListResponseDataItem converts a ledger.Entry to auditlist.ResponseDataItem.
@@ -563,6 +667,40 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// includes it and json.Marshal fails with "unexpected end of JSON input"
 	// (#2199). Leaving Payload nil means ToMap omits the key entirely via the
 	// `if i.Payload != nil` guard in generated/contracts/http/audit/list/v1/types_gen.go.
+	if raw := redaction.RedactPayload(e.Payload); len(raw) > 0 {
+		item.Payload = json.RawMessage(raw)
+	}
+	return item
+}
+
+// toGetResponseDataItem converts a ledger.Entry to auditget.ResponseData for
+// http.audit.get.v1. It is the single-entry counterpart of toListResponseDataItem
+// and applies the SAME field projection, RFC3339Nano timestamp formatting, and
+// payload redaction — the field set is identical to the list item (the generated
+// DTO types differ per contract, so the converter is duplicated rather than sharing
+// a Go type, per the cell-patterns DTO-scope-A rule). See toListResponseDataItem
+// for the per-field exposure rationale (SessionID excluded, CorrelationID/TenantID
+// surfaced behind the column-masking funnel, etc.).
+func toGetResponseDataItem(e *ledger.Entry) *auditget.ResponseData {
+	occurredAt := ""
+	if !e.OccurredAt.IsZero() {
+		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
+	}
+	item := &auditget.ResponseData{
+		ID:            e.ID,
+		EventID:       e.EventID,
+		EventType:     e.EventType,
+		ActorID:       e.ActorID,
+		SubjectID:     e.SubjectID,
+		TenantID:      e.TenantID,
+		CorrelationID: e.CorrelationID,
+		TraceID:       e.TraceID,
+		OccurredAt:    occurredAt,
+		Timestamp:     e.Timestamp.Format(time.RFC3339Nano),
+		Scope:         rowScope(e.TenantID),
+	}
+	// Only set Payload when redacted bytes are non-empty (#2199) — see
+	// toListResponseDataItem.
 	if raw := redaction.RedactPayload(e.Payload); len(raw) > 0 {
 		item.Payload = json.RawMessage(raw)
 	}
