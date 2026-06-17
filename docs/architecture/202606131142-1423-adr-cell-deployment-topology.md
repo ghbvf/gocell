@@ -459,8 +459,9 @@ kubernetes `cmd/kube-controller-manager` ControllerDescriptor；spring-projects/
 **D1 amendment — topology 载体增 `groups`（全图），取代单进程 `colocated/remote` authoring**：
 - assembly.yaml `topology.groups: [{role, cells, endpoint}]` 声明**完整部署分区图**（每组的 cell 集 + 对端可达
   endpoint）；`ValidateTopologyStructure` 重写为 groups 的**穷尽 + 互斥分区**校验（每 cell 恰在一组、role 唯一、
-  endpoint 合法）。**删除**现有 `TopologyMeta.{Colocated,Remote}` **authoring** 字段 + 单进程视图校验 +
-  `ClassifyCell` 单视图分支（#1962 引入，生产零 assembly 使用，pre-GA 窗口允许原地删除，无 shim/双 schema）。
+  endpoint 合法）。**PR-1 删除**现有 `TopologyMeta.{Colocated,Remote}` **authoring** 字段 + 单进程视图校验 +
+  `ClassifyCell` 单视图分支（本 amendment 是决策记录，删除动作在 PR-1 落地，非本 docs PR 已执行；#1962 引入，
+  生产零 assembly 使用，pre-GA 窗口允许原地删除，无 shim/双 schema）。
 - 启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生本进程 `bootstrap.DeploymentTopologySpec`
   （colocated = 本组 cells，remote = 其余组 cells × 各自 endpoint）——**运行期 `DeploymentTopologySpec{Colocated,
   Remote}` 作派生形态保留**（仍被 `celltransport.Resolve` 消费，#1966 接线不变，喂入值变真）。未设 role + 多 group
@@ -475,11 +476,13 @@ kubernetes `cmd/kube-controller-manager` ControllerDescriptor；spring-projects/
   「枚举全部、实例化 enabled 子集」/ Akka role-match-or-proxy）；`validateClosedSet` 代码不变（仍校验 New==With，
   在 role 过滤后 New/With 同为 colocated，双射天然成立）。
 - **新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`：本进程已挂 cell 集 == active topology colocated 集
-  ∧ **remote cell 一律不得被挂载**，违反 fail-fast。配单一 sealed 入口 `composition.NewForRole(topo, role,
-  allModules...)`（内部 filter+New+With+封 spec，happy-path 下「挂 remote cell」经 funnel 不可表达）作 downstream
-  收紧。**AI-robust 评级 Medium**（运行期 bijection 守卫；cellID 是运行期字符串，Hard 不可达——同 M12a /
-  broker-mandatory闸 的诚实天花板）；funnel 双向 = `NewForRole` 单入口（downstream，包内 sealed）+ phase guard
-  （upstream backstop，捕获绕过入口的直挂）。red/green fixture + anti-vacuity。
+  ∧ **remote cell 一律不得被挂载**，违反 fail-fast。配 `composition.NewForRole(topo, role, allModules...)`
+  收口派生+挂载（内部 filter+New+With+封 spec）。**funnel 强度分层**：`NewForRole` 是 **exported 跨包构造器**
+  （`cmd/corebundle` 调用），Go 可见性不可表达「只本 root mint」，故 caller-funnel 仅 **Medium** archtest（同
+  `CELLTRANSPORT-SELECT-FUNNEL-01` / `CROSSCELLOBS-MINTER-FUNNEL-01` 族的文档化 Go 天花板，非 Hard 包内 sealed）；
+  **真正的 fail-closed enforcement = `MOUNTED-EQUALS-COLOCATED` phase guard**（不依赖调用方走 funnel，捕获任何绕过
+  入口的直挂——upstream backstop）。`MOUNTED-EQUALS-COLOCATED` **AI-robust 评级 Medium**（运行期 bijection 守卫；
+  cellID 运行期字符串，Hard 不可达——同 M12a / broker-mandatory闸 诚实天花板）+ red/green fixture + anti-vacuity。
 
 **缺失依赖启动期闸（SC-002 sync 维补全）**：消费 contract 的 provider cell ∉ colocated ∪ remote map → fail-fast
 （区分「本地依赖缺失」vs「拓扑漏声明」）+ `gocell validate` 静态 arm。**注**：该静态检查原属 US2 T011（计划但未落地）
