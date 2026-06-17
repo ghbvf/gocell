@@ -52,7 +52,7 @@
           "minimum": 0
         },
         "renewalTime": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "date-time",
           "maxLength": 64
         }

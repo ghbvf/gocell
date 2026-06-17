@@ -238,6 +238,57 @@ func TestHttpAuditListV1Serve_PrincipalProjection(t *testing.T) {
 	}
 }
 
+// TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates is the wire-schema gate
+// for #1875: a row with a zero producer-clock time (OccurredAt time.Time{}) must
+// render occurredAt as JSON null AND validate against the response schema. The
+// column is declared nullable (`type: ["string","null"]`), so null is schema-valid
+// while the key stays present (stable column set). Before the nullable change the
+// wire either omitted the key (presence side channel) or emitted "" (format:
+// date-time violation) — this test pins that the schema and the full-column-set
+// ToMap agree on the null representation.
+func TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
+
+	const projTenant = auditQueryTestTenant
+	h := newContractQueryHandler(&ledger.Entry{
+		ID: "ae-zero-oc", EventID: "evt-zero-oc", EventType: "event.test.v1",
+		ActorID:   "usr-actor",
+		TenantID:  projTenant,
+		Timestamp: time.Date(2026, 1, 2, 3, 4, 6, 987654321, time.UTC),
+		// OccurredAt left zero (legacy row predating #1229).
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
+	req = req.WithContext(withAllowAuthorizer(auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    "usr-actor",
+		TenantID:   projTenant,
+		AuthMethod: "test",
+	})))
+	h.ServeHTTP(rec, req)
+	// The nullable schema must accept occurredAt: null.
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v\nbody=%s", err, rec.Body.String())
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("want 1 row, got %d\nbody=%s", len(resp.Data), rec.Body.String())
+	}
+	oc, has := resp.Data[0]["occurredAt"]
+	if !has {
+		t.Errorf("occurredAt key must be present (stable column set)\nbody=%s", rec.Body.String())
+	}
+	if oc != nil {
+		t.Errorf("zero OccurredAt must render as JSON null, got %v\nbody=%s", oc, rec.Body.String())
+	}
+}
+
 func TestHttpAuditListV1Serve_Empty(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")

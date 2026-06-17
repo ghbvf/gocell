@@ -33,7 +33,7 @@
           "description": "Time this presence reading was determined (freshness anchor); always present even when state is unknown."
         },
         "lastSeenAt": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "date-time",
           "maxLength": 64
         },

@@ -34,7 +34,7 @@
           "description": "Operator-diagnostic column: opaque distributed trace identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
         },
         "occurredAt": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "date-time"
         },
         "timestamp": {

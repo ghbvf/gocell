@@ -15,6 +15,7 @@ import (
 // PropertyOrder preserves the source order of properties keys for stable diffs.
 type Schema struct {
 	Type                 string             // "string" | "integer" | "number" | "boolean" | "object" | "array"
+	Nullable             bool               // true when the source declared `type: ["<scalar>", "null"]` (JSON-Schema 2020-12 nullable form); Type holds the scalar and the column also accepts JSON null (#1875).
 	Format               string             // "uuid" | "date-time" | "int64" | ""
 	Properties           map[string]*Schema // type=object
 	PropertyOrder        []string           // source order of property keys
@@ -236,18 +237,59 @@ func fillScalars(s *Schema, rawNode map[string]any, loc string) error {
 }
 
 // fillType sets s.Type from rawNode["type"], failing on unsupported forms.
+//
+// The ONLY accepted array form is `["<scalar>", "null"]` (order-independent) —
+// the JSON-Schema 2020-12 nullable idiom. It sets s.Type to the scalar and
+// s.Nullable=true; the column then accepts JSON null in addition to the scalar.
+// This is the authoring surface for an optional column whose "no value" must be
+// schema-valid `null` rather than "" (which would violate a `format` constraint)
+// while the column stays present in the masked projection view (#1875). Any
+// other array `type` (two real types, a single element, "null" alone) stays an
+// unsupported-keyword error.
 func fillType(s *Schema, rawNode map[string]any, loc string) error {
 	switch tv := rawNode["type"].(type) {
 	case string:
 		s.Type = tv
 	case []any:
-		return fmt.Errorf("contractgen/jsonschema: unsupported keyword \"type\" as array at %s", loc)
+		scalar, ok := nullableScalarType(tv)
+		if !ok {
+			return fmt.Errorf("contractgen/jsonschema: unsupported keyword \"type\" as array at %s "+
+				"(only [\"<scalar>\", \"null\"] is accepted)", loc)
+		}
+		s.Type = scalar
+		s.Nullable = true
 	case nil:
 		// type may be omitted
 	default:
 		return fmt.Errorf("contractgen/jsonschema: unexpected \"type\" value at %s", loc)
 	}
 	return nil
+}
+
+// nullableScalarType returns the non-"null" scalar of a 2-element `type` array
+// exactly one of whose members is "null" (e.g. ["string","null"]), reporting ok.
+// Any other shape returns ok=false so fillType rejects it.
+func nullableScalarType(tv []any) (scalar string, ok bool) {
+	if len(tv) != 2 {
+		return "", false
+	}
+	var scalars []string
+	nullCount := 0
+	for _, e := range tv {
+		s, isStr := e.(string)
+		if !isStr {
+			return "", false
+		}
+		if s == "null" {
+			nullCount++
+			continue
+		}
+		scalars = append(scalars, s)
+	}
+	if nullCount != 1 || len(scalars) != 1 || scalars[0] == "null" {
+		return "", false
+	}
+	return scalars[0], true
 }
 
 // fillEnum parses the "enum" keyword into s.Enum (#1935). Only string enums are

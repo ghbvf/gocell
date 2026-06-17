@@ -5,26 +5,23 @@ import (
 	"testing"
 )
 
-// TestOmitEmpty_JSONTag_Invariant verifies that DTOField.OmitEmpty and the
-// presence of ",omitempty" in DTOField.JSONTag are always co-derived: both come
-// from !required in the JSON schema (via collectDTOs / schemaToDTOs). A field
-// that is in the schema required list must have OmitEmpty=false and a JSONTag
-// without ",omitempty", and vice versa for optional fields.
-//
-// This round-trip test guards against future divergence if nullable fields or a
-// new schema concept introduces a path where one is set without the other.
-func TestOmitEmpty_JSONTag_Invariant(t *testing.T) {
+// TestNullableField_JSONTag_GoType pins the nullable-column codegen (#1875): a
+// column declared `type: ["<scalar>", "null"]` becomes a POINTER GoType and DROPS
+// the ",omitempty" tag suffix (it is always present on the wire, serializing as
+// JSON null when nil), while a plain optional column keeps ",omitempty" and its
+// value GoType. This is the source signal that lets the full-column-set ToMap emit
+// a schema-valid null for a format-constrained optional column without re-opening
+// the masking presence side channel.
+func TestNullableField_JSONTag_GoType(t *testing.T) {
 	t.Parallel()
 	root := &Schema{
 		Type:          "object",
-		Required:      []string{"id", "score"},
-		PropertyOrder: []string{"id", "score", "label", "count", "tags"},
+		Required:      []string{"id"},
+		PropertyOrder: []string{"id", "label", "occurredAt"},
 		Properties: map[string]*Schema{
-			"id":    {Type: "string"},
-			"score": {Type: "integer"},
-			"label": {Type: "string"},
-			"count": {Type: "integer"},
-			"tags":  {Type: "array", Items: &Schema{Type: "string"}},
+			"id":         {Type: "string"},
+			"label":      {Type: "string"},                              // plain optional → ",omitempty", string
+			"occurredAt": {Type: "string", Format: "date-time", Nullable: true}, // nullable → *string, no omitempty
 		},
 	}
 	dtos, err := schemaToDTOs("ResponseData", root)
@@ -34,12 +31,17 @@ func TestOmitEmpty_JSONTag_Invariant(t *testing.T) {
 	if len(dtos) == 0 {
 		t.Fatal("expected at least one DTO")
 	}
+	byName := map[string]DTOField{}
 	for _, f := range dtos[0].Fields {
-		hasOmitEmpty := strings.Contains(f.JSONTag, ",omitempty")
-		if f.OmitEmpty != hasOmitEmpty {
-			t.Errorf("field %s: OmitEmpty=%v but JSONTag %q has omitempty=%v — both must co-derive from !required",
-				f.Name, f.OmitEmpty, f.JSONTag, hasOmitEmpty)
-		}
+		byName[f.Name] = f
+	}
+	if f := byName["OccurredAt"]; f.GoType != "*string" || f.Nullable != true || strings.Contains(f.JSONTag, ",omitempty") {
+		t.Errorf("OccurredAt: GoType=%q Nullable=%v JSONTag=%q — want *string, Nullable=true, no omitempty",
+			f.GoType, f.Nullable, f.JSONTag)
+	}
+	if f := byName["Label"]; f.GoType != "string" || f.Nullable != false || !strings.Contains(f.JSONTag, ",omitempty") {
+		t.Errorf("Label: GoType=%q Nullable=%v JSONTag=%q — want string, Nullable=false, ,omitempty",
+			f.GoType, f.Nullable, f.JSONTag)
 	}
 }
 
@@ -195,74 +197,17 @@ func TestIndexOfDTO(t *testing.T) {
 	}
 }
 
-// TestCollectDTOs_OmitEmptyField verifies that DTOField.OmitEmpty is set for
-// non-required fields and unset for required fields. This is the source signal
-// that drives the conditional ToMap entry generation.
-func TestCollectDTOs_OmitEmptyField(t *testing.T) {
-	root := &Schema{
-		Type:          "object",
-		Required:      []string{"id"},
-		PropertyOrder: []string{"id", "label", "count"},
-		Properties: map[string]*Schema{
-			"id":    {Type: "string"},
-			"label": {Type: "string"},
-			"count": {Type: "integer"},
-		},
-	}
-	dtos, err := schemaToDTOs("ResponseData", root)
-	if err != nil {
-		t.Fatalf("schemaToDTOs: %v", err)
-	}
-	if len(dtos) == 0 {
-		t.Fatal("expected at least one DTO")
-	}
-	byName := map[string]DTOField{}
-	for _, f := range dtos[0].Fields {
-		byName[f.Name] = f
-	}
-	cases := []struct {
-		field         string
-		wantOmitEmpty bool
-	}{
-		{"ID", false},   // in required → no omitempty
-		{"Label", true}, // not required → omitempty
-		{"Count", true}, // not required → omitempty
-	}
-	for _, c := range cases {
-		f, ok := byName[c.field]
-		if !ok {
-			t.Errorf("field %s not found", c.field)
-			continue
-		}
-		if f.OmitEmpty != c.wantOmitEmpty {
-			t.Errorf("field %s: OmitEmpty=%v, want %v", c.field, f.OmitEmpty, c.wantOmitEmpty)
-		}
-	}
-}
+// TestToMap_FullColumnSet verifies the generated ToMap emits the FULL, STABLE
+// column set: a single `return map[string]any{ … }` literal with EVERY field
+// present unconditionally and NO `if` guard. This is the Decision-2 stable-column
+// invariant restored after the #2159 omitempty-fission regression (#1875): the
+// masking funnel can only redact a key it can see, so an always-present column set
+// is what keeps field presence from leaking whether a masked column held data.
+// Nullable columns are pointers whose nil marshals to JSON null (schema-valid "no
+// value" with the key still present and maskable).
+func TestToMap_FullColumnSet(t *testing.T) {
+	t.Parallel()
 
-// TestToMap_OmitEmptyBehavior verifies that the generated ToMap omits zero-value
-// optional fields, matching the struct json.Marshal serialization path (the delta
-// bug in #2159). This test operates at the render level: it builds a spec that has
-// an EmitToMap DTO with mixed required/optional fields, renders types.tmpl, and
-// checks the rendered output for conditional guards.
-//
-// Covered types:
-//   - string (required and optional)
-//   - []T slice (optional) → len() > 0 guard
-//   - *T pointer (optional) → != nil guard
-//   - int64 optional (zero value 0) → != 0 guard
-//   - any optional (nil is zero value) → != nil guard
-//
-// Masking compatibility: ToMap omitting zero-value optional keys is semantically
-// identical to json.Marshal with omitempty, so the masking funnel
-// (projection.NewProjection / NewProjectionList) receives a map where absent
-// optional keys match the wire-serialized struct. Masking is an allowlist filter
-// (only removes disallowed keys, never adds), so a "missing key" cannot be
-// misinterpreted as "key present but masked" — projection omitempty is a safe
-// wire-alignment, not a masking bypass.
-func TestToMap_OmitEmptyBehavior(t *testing.T) {
-	// Build a minimal spec with an EmitToMap DTO that covers all type branches of
-	// omitEmptyCheck: string, []T, *T, int64, any.
 	spec := &ContractGenSpec{
 		PackageName: "testpkg",
 		ContractID:  "http.test.x.v1",
@@ -279,14 +224,12 @@ func TestToMap_OmitEmptyBehavior(t *testing.T) {
 				Name:      "ResponseData",
 				EmitToMap: true,
 				Fields: []DTOField{
-					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string", OmitEmpty: false},
-					{Name: "Description", JSONTag: "description,omitempty", BareJSONTag: "description", GoType: "string", OmitEmpty: true},
-					{Name: "Tags", JSONTag: "tags,omitempty", BareJSONTag: "tags", GoType: "[]string", OmitEmpty: true},
-					{Name: "Meta", JSONTag: "meta,omitempty", BareJSONTag: "meta", GoType: "*ResponseDataMeta", OmitEmpty: true},
-					// int64 optional: zero value is 0, must use != 0 guard.
-					{Name: "Count", JSONTag: "count,omitempty", BareJSONTag: "count", GoType: "int64", OmitEmpty: true},
-					// any optional: nil is the zero value, must use != nil guard.
-					{Name: "Payload", JSONTag: "payload,omitempty", BareJSONTag: "payload", GoType: "any", OmitEmpty: true},
+					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string"},                                     // required
+					{Name: "Description", JSONTag: "description,omitempty", BareJSONTag: "description", GoType: "string"}, // plain optional
+					{Name: "Tags", JSONTag: "tags,omitempty", BareJSONTag: "tags", GoType: "[]string"},                   // optional slice
+					{Name: "Count", JSONTag: "count,omitempty", BareJSONTag: "count", GoType: "int64"},                   // optional int64
+					{Name: "Payload", JSONTag: "payload,omitempty", BareJSONTag: "payload", GoType: "any"},               // optional any
+					{Name: "OccurredAt", JSONTag: "occurredAt", BareJSONTag: "occurredAt", GoType: "*string", Nullable: true}, // nullable
 				},
 			},
 		},
@@ -296,111 +239,28 @@ func TestToMap_OmitEmptyBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderTypes: %v", err)
 	}
-	rendered := string(out)
+	// gofmt aligns map-literal values with padding, so normalize whitespace to
+	// single spaces before substring matching.
+	norm := strings.Join(strings.Fields(string(out)), " ")
 
-	// Required field must be unconditional in the initial map literal.
-	if !strings.Contains(rendered, `"id": i.ID,`) {
-		t.Error(`want unconditional "id": i.ID, in map literal`)
-	}
-	// Optional string field must use != "" guard.
-	if !strings.Contains(rendered, `i.Description != ""`) {
-		t.Error(`want conditional guard i.Description != ""`)
-	}
-	// Optional slice field must use len() > 0 guard.
-	if !strings.Contains(rendered, `len(i.Tags) > 0`) {
-		t.Error(`want conditional guard len(i.Tags) > 0`)
-	}
-	// Optional pointer field must use != nil guard.
-	if !strings.Contains(rendered, `i.Meta != nil`) {
-		t.Error(`want conditional guard i.Meta != nil`)
-	}
-	// Optional int64 field must use != 0 guard (zero value is 0, not nil).
-	if !strings.Contains(rendered, `i.Count != 0`) {
-		t.Error(`want conditional guard i.Count != 0 for int64 optional field`)
-	}
-	// Optional any field must use != nil guard (nil is the zero value for any).
-	if !strings.Contains(rendered, `i.Payload != nil`) {
-		t.Error(`want conditional guard i.Payload != nil for any optional field`)
-	}
-	// Optional fields must NOT appear unconditionally in the map literal.
-	if strings.Contains(rendered, `"description": i.Description,`) {
-		t.Error(`must not have unconditional "description" entry in map literal`)
-	}
-	if strings.Contains(rendered, `"count": i.Count,`) {
-		t.Error(`must not have unconditional "count" entry in map literal`)
-	}
-	if strings.Contains(rendered, `"payload": i.Payload,`) {
-		t.Error(`must not have unconditional "payload" entry in map literal`)
-	}
-}
-
-// TestToMap_MaskingCompatibility verifies that ToMap omitting optional zero-value
-// keys is compatible with the masking funnel (projection.NewProjection /
-// NewProjectionList). The masking funnel is an allowlist filter: it removes keys
-// NOT in the allowed set, but never adds keys. Therefore:
-//
-//   - A key absent from ToMap (omitted because the field is zero) cannot be
-//     "unmasked" by the funnel — the funnel only deletes, never inserts.
-//   - A key present in ToMap (non-zero optional or required) follows normal masking.
-//
-// This confirms that omitEmptyCheck behavior is a safe wire-alignment with
-// json.Marshal omitempty semantics, not a masking bypass or a masking gap.
-// The generated ToMap and json.Marshal both omit zero optional keys, so the
-// projected field set via the masking funnel equals the json-serialized set.
-func TestToMap_MaskingCompatibility(t *testing.T) {
-	t.Parallel()
-
-	// Render a spec with required + optional fields across types.
-	spec := &ContractGenSpec{
-		PackageName: "testpkg",
-		ContractID:  "http.test.masking.v1",
-		Kind:        "http",
-		Endpoint:    &httpEndpointSpec{ResponseProjection: true},
-		DTOs: []DTOSpec{
-			{
-				Name: "Response",
-				Fields: []DTOField{
-					{Name: "Data", JSONTag: "data", BareJSONTag: "data", GoType: "projection.ResourceProjection"},
-				},
-			},
-			{
-				Name:      "ResponseData",
-				EmitToMap: true,
-				Fields: []DTOField{
-					{Name: "ID", JSONTag: "id", BareJSONTag: "id", GoType: "string", OmitEmpty: false},
-					{Name: "Label", JSONTag: "label,omitempty", BareJSONTag: "label", GoType: "string", OmitEmpty: true},
-					{Name: "Score", JSONTag: "score,omitempty", BareJSONTag: "score", GoType: "int64", OmitEmpty: true},
-				},
-			},
-		},
+	// Every field — required, plain optional, AND nullable — is an unconditional entry.
+	for _, want := range []string{
+		`"id": i.ID,`,
+		`"description": i.Description,`,
+		`"tags": i.Tags,`,
+		`"count": i.Count,`,
+		`"payload": i.Payload,`,
+		`"occurredAt": i.OccurredAt,`,
+	} {
+		if !strings.Contains(norm, want) {
+			t.Errorf("ToMap must contain unconditional entry %q (full column set)", want)
+		}
 	}
 
-	out, err := renderTypes(spec)
-	if err != nil {
-		t.Fatalf("renderTypes: %v", err)
-	}
-	rendered := string(out)
-
-	// The required key is always in the map — masking can allow or deny it.
-	if !strings.Contains(rendered, `"id": i.ID,`) {
-		t.Error(`required field "id" must be unconditional in ToMap`)
-	}
-
-	// Optional keys are conditionally present — the masking funnel receives
-	// a key only when the field is non-zero, matching json.Marshal omitempty.
-	// Masking then filters this set; it cannot add a key that ToMap omitted.
-	if !strings.Contains(rendered, `i.Label != ""`) {
-		t.Error(`optional string field must use != "" guard for masking-compatible omitempty`)
-	}
-	if !strings.Contains(rendered, `i.Score != 0`) {
-		t.Error(`optional int64 field must use != 0 guard for masking-compatible omitempty`)
-	}
-
-	// Sanity: optional fields must NOT appear unconditionally (would bypass omitempty).
-	if strings.Contains(rendered, `"label": i.Label,`) {
-		t.Error(`optional "label" must not be unconditional in ToMap — would diverge from json.Marshal omitempty`)
-	}
-	if strings.Contains(rendered, `"score": i.Score,`) {
-		t.Error(`optional "score" must not be unconditional in ToMap — would diverge from json.Marshal omitempty`)
+	// NO conditional omission anywhere in the generated ToMap — the omitempty
+	// fission shape (#2159) must never reappear.
+	tomap := norm[strings.Index(norm, "func (i ResponseData) ToMap()"):]
+	if strings.Contains(tomap, "if ") {
+		t.Error("ToMap must not contain any `if` guard — full column set is unconditional (#1875)")
 	}
 }
