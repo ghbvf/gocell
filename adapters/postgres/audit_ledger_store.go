@@ -456,7 +456,7 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
@@ -469,12 +469,17 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 	if !vis.Allows(e.ActorID) {
 		return nil, errcode.New(
 			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found",
+			msgAuditEntryNotFound,
 			errcode.WithDetails(errcode.PublicInt("seqNo", seq)),
 		)
 	}
 	return &e, nil
 }
+
+// msgAuditEntryNotFound is the const-literal not-found message
+// (MESSAGE-CONST-LITERAL-01) shared by every LedgerStore not-found path (GetBySeq +
+// the id-keyed auditEntryNotFoundByID).
+const msgAuditEntryNotFound = "audit ledger: entry not found"
 
 // auditEntryNotFoundByID is the IDOR-safe not-found sentinel for the id-keyed
 // single-entry reads (GetByID / GetByIDCrossTenant). It carries NO public detail:
@@ -484,7 +489,7 @@ func (s *LedgerStore) GetBySeq(ctx context.Context, vis tenant.RowVisibility, se
 // and "outside owner scope".
 func auditEntryNotFoundByID() error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-		"audit ledger: entry not found")
+		msgAuditEntryNotFound)
 }
 
 // GetByID fetches a single entry by its opaque uuid id within tenant t for

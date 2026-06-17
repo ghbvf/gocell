@@ -1669,7 +1669,7 @@ func runQueryVisibilityObligations(t *testing.T, factory Factory) {
 		// #1618 FORCE RLS; no silent degrade to tenant scope) — see
 		// RowScopeAllUnsupportedError. Code = ErrInternal (5xx wire-collapse);
 		// Kind = KindNotImplemented → HTTP 501 at the handler (review F5).
-		{"all-fail-closed", tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
+		{caseAllFailClosed, tenant.RowScopeAll, "", 0, "", errcode.ErrInternal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, store, filters, params) })
@@ -1709,12 +1709,16 @@ func runGetBySeqVisibilityObligations(t *testing.T, factory Factory) {
 		// RowScopeAll is fail-closed on every backend (deferred to backlog under
 		// #1618 FORCE RLS; distinct from the IDOR-collapse NotFound: it is a
 		// deferred CAPABILITY, KindNotImplemented → HTTP 501, Code ErrInternal).
-		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
+		{caseAllFailClosed, tenant.RowScopeAll, "", false, errcode.ErrInternal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, store) })
 	}
 }
+
+// caseAllFailClosed is the shared subtest name for the RowScopeAll fail-close case
+// across the Query / GetBySeq / GetByID visibility-obligation tables.
+const caseAllFailClosed = "all-fail-closed"
 
 // getByIDMissingID is a syntactically valid UUID the conformance never seeds, so
 // every backend's GetByID / GetByIDCrossTenant returns ErrAuditLedgerNotFound for
@@ -1798,7 +1802,7 @@ func runGetByIDVisibilityObligations(t *testing.T, factory Factory) {
 		{"tenant-wide-found", tenant.RowScopeTenant, "", true, ""},
 		// RowScopeAll is fail-closed on every serving backend (Code ErrInternal,
 		// Kind KindNotImplemented → HTTP 501); distinct from the IDOR-collapse 404.
-		{"all-fail-closed", tenant.RowScopeAll, "", false, errcode.ErrInternal},
+		{caseAllFailClosed, tenant.RowScopeAll, "", false, errcode.ErrInternal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, store, id) })
