@@ -49,8 +49,12 @@ func NewService(clk clock.Clock) *Service {
 // it never fabricates online/offline.
 func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devicestate.DevicestateResponseObject, error) {
 	rd := devicestate.ResponseData{
-		DeviceID:   req.DeviceID,
-		State:      devicestate.ResponseDataStateUnknown,
+		DeviceID: req.DeviceID,
+		State:    devicestate.ResponseDataStateUnknown,
+		// TenantID is intentionally left empty: without a device→tenant binding data
+		// source, back-filling the caller's JWT tenant claim would be misleading (that
+		// is the caller's tenant, not the device's tenant). Honest omission until a
+		// real provider supplies the device tenant context.
 		ObservedAt: s.clock.Now().UTC().Format(time.RFC3339),
 	}
 	// Identity projection: no field masking obligation on this read (matches the
@@ -68,6 +72,14 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 // ABAC PDP decides (baseline grants admin/super-admin). The composition root
 // passes generatedFrameworkServedContracts() as the must-serve expectation set
 // alongside this route; bootstrap reconciles the two at startup.
+//
+// TODO(#2037-followup, PR-8b): device ownership + tenant scoping before real presence data.
+// This baseline uses a coarse device:read gate (deviceId is a query param, not a path
+// param, so RequirePermissionForResource is not used here). Before real presence data is
+// wired, the device ownership / tenant-scoping access control model must be established
+// (MDM/zero-trust: a device A bearer must not be able to enumerate device B state).
+// Currently the endpoint always returns unknown with no real data, so there is no actual
+// data leakage — but this gate must be tightened before a real presence provider is wired.
 func (s *Service) Route() bootstrap.FrameworkServedRoute {
 	h := devicestate.NewHandler(s, auth.RequirePermission(authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{

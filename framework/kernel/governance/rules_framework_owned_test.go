@@ -12,6 +12,55 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
 
+// TestValidProject_WithActiveFrameworkContract_ZeroErrors is the integration
+// sanity net for the serving-scan path: starting from the known-clean
+// validProject (0 errors), adding an active framework-owned http contract
+// that is listed in assembly.frameworkContracts + referenced by a journey must
+// produce 0 errors under ValidateStrict — proving lifecycle=active is permitted
+// when the assembly serving opt-in is satisfied.
+func TestValidProject_WithActiveFrameworkContract_ZeroErrors(t *testing.T) {
+	pm := validProject()
+	const fwID = "http.devicestate.v1"
+	pm.Contracts[fwID] = &metadata.ContractMeta{
+		ID:               fwID,
+		Kind:             "http",
+		OwnerCell:        metadata.FrameworkOwnerSentinel,
+		ConsistencyLevel: "L0",
+		Lifecycle:        "active",
+		Transports:       []string{"http"},
+		Endpoints: metadata.EndpointsMeta{
+			Server: metadata.FrameworkOwnerSentinel,
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "GET",
+				Path:          "/api/v1/devicestate",
+				SuccessStatus: 200,
+			},
+		},
+		Dir:  "contracts/http/devicestate/v1",
+		File: "contracts/http/devicestate/v1/contract.yaml",
+	}
+	// Per-deployment serving opt-in: the existing corebundle assembly must
+	// declare frameworkContracts so FRAMEWORK-OWNED-CONTRACT-SCOPED-01 passes.
+	pm.Assemblies["corebundle"].FrameworkContracts = []string{fwID}
+	// JOURNEY-CONTRACT-EXISTENCE-01: every active platform contract must be
+	// referenced by at least one journey. Add a framework-serving journey with
+	// cells: [_framework] (REF-06 exempts the sentinel per TestREF06_FrameworkSentinelPermitted).
+	pm.Journeys["J-devicestate"] = &metadata.JourneyMeta{
+		ID:        "J-devicestate",
+		Goal:      "framework serves device state query",
+		Lifecycle: "experimental",
+		Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
+		Cells:     []string{metadata.FrameworkOwnerSentinel},
+		Contracts: []string{fwID},
+		File:      "journeys/J-devicestate.yaml",
+	}
+	val := NewValidator(pm, "", clock.Real())
+	results, err := val.ValidateStrict(t.Context(), false, false)
+	require.NoError(t, err)
+	errs := FilterErrors(results)
+	assert.Empty(t, errs, "active framework-owned contract served by assembly must add 0 errors, got: %v", errs)
+}
+
 // TestValidProject_WithFrameworkContracts_ZeroErrors is the integration safety
 // net: starting from the known-clean validProject (0 errors), adding draft
 // framework-owned http + event contracts must not introduce ANY error from ANY

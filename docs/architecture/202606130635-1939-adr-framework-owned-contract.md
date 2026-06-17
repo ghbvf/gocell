@@ -175,6 +175,7 @@ framework 契约的契约级覆盖是 bootstrap/cellmodules 框架层测试，�
 **首个 active 锚点**：`http.devicestate.v1`（L0 只读）draft→active；`cellmodules/deviceserving` 提供诚实 baseline
 （无 presence 后端时 `state=unknown` + observedAt=判定时刻，schema 明文「unknown 时 observedAt 仍必填」，绝不臆造
 online/offline）。写路径 + status.v1 留各自 PR 经本 harness active 化。威胁矩阵「active 框架契约静默 dead」行已重评。
+威胁矩阵其余行（Hard sealed ContractOwner / Hard D4 结构性 / Medium CONTRACT-OWNER-CELL-FUNNEL-01）在本 amendment 中评级不变，仅「active 框架契约静默 dead」行重评。
 
 ## 参考
 

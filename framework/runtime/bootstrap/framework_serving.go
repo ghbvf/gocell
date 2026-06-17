@@ -82,13 +82,19 @@ func (b *Bootstrap) validateFrameworkServing() error {
 	}
 	sort.Strings(missing)
 	sort.Strings(extra)
+	var opts []errcode.Option
+	if len(missing) > 0 {
+		opts = append(opts, errcode.WithInternal(errcode.InternalAttr("missing_contracts", fmt.Sprintf("%v", missing))))
+	}
+	if len(extra) > 0 {
+		opts = append(opts, errcode.WithInternal(errcode.InternalAttr("extra_routes", fmt.Sprintf("%v", extra))))
+	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"bootstrap: WithFrameworkHTTPServing: the codegen-derived framework served-contract "+
-			"set (generatedFrameworkServedContracts) does not match the wired framework RouteGroups; "+
+		"bootstrap: WithFrameworkHTTPServing: the assembly.frameworkContracts (codegen-derived must-serve set) "+
+			"does not match the wired framework RouteGroups; "+
 			"every active framework contract declared in assembly.frameworkContracts must have a "+
 			"mounted RouteGroup, and every wired route must be declared",
-		errcode.WithInternal(errcode.InternalAttr("_",
-			fmt.Sprintf("missing_routes=%v extra_routes=%v", missing, extra))))
+		opts...)
 }
 
 // frameworkServingProvidedSet validates each wired route's shape (non-empty

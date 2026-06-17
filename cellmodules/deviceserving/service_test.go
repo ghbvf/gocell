@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +113,46 @@ func TestDevicestate_Forbidden(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=dev-1", nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+}
+
+// TestDevicestate_EmptyDeviceID: deviceId query param present but empty string
+// → 400. This is distinct from the missing-param case (no key at all): the
+// generated handler treats "" as validation failure regardless of key presence.
+func TestDevicestate_EmptyDeviceID(t *testing.T) {
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
+	})
+	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=", nil).WithContext(ctx)
+	newMux(t).ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+}
+
+// TestDevicestate_DeviceIDMaxLength: deviceId exactly 256 chars (upper bound) → 200.
+func TestDevicestate_DeviceIDMaxLength(t *testing.T) {
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
+	})
+	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	rec := httptest.NewRecorder()
+	deviceID := strings.Repeat("a", 256)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId="+deviceID, nil).WithContext(ctx)
+	newMux(t).ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+}
+
+// TestDevicestate_DeviceIDTooLong: deviceId of 257 chars → 400 (len > 256 branch).
+func TestDevicestate_DeviceIDTooLong(t *testing.T) {
+	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
+	})
+	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	rec := httptest.NewRecorder()
+	deviceID := strings.Repeat("a", 257)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId="+deviceID, nil).WithContext(ctx)
+	newMux(t).ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 }
 
 // TestService_Devicestate_HonestUnknown asserts the Service contract directly:

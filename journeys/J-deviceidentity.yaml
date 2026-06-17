@@ -1,4 +1,5 @@
 id: J-deviceidentity
+# 此 journey 为机制锚点（serving harness 验证），完整产品验收待 presence 后端接入（PR-8b）后扩展。
 goal: 框架以 provider 中立方式服务设备身份/状态查询契约（framework-owned serving）
 lifecycle: experimental
 owner:
