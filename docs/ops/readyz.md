@@ -594,6 +594,33 @@ statuses:
 Ops diagnostics for `CompensationFailed` instances use the `saga_events` table
 (see `docs/ops/saga-runbook.md` §场景 2), not readyz.
 
+## Cross-cell remote-peer readiness probes (split topology) — `<cell>_remote_ready`
+
+In a **split topology** (a cell's cross-cell HTTP dependency is deployed in a
+SEPARATE process, not co-located), the consuming cell registers one readiness
+probe **per remote peer**, named `<peerCellID>_remote_ready` (e.g. accesscore →
+remote configcore produces `configcore_remote_ready`). It appears in the
+`/readyz?verbose` `dependencies` map exactly like adapter probes (#2251 P2.7).
+
+- **Semantics: TCP dial only, NOT an HTTP `/readyz` call.** The probe opens a TCP
+  connection to the peer's resolved endpoint (`host:port`) and closes it
+  immediately. It proves the peer's listener is reachable — it does **not** call
+  the peer's `/readyz`, deliberately, to avoid an A↔B readiness cascade
+  (mutual `/readyz` probing can deadlock both endpoints). So a peer whose TCP
+  listener is up but whose own dependencies are down still reports `healthy` here;
+  deeper peer-health is a tracked EPIC follow-up.
+- **Failure impact: readiness degrade, never liveness kill.** Peer unreachable →
+  this cell's `/readyz` goes 503 (kubelet/LB sheds traffic). The probe joins the
+  readiness aggregator only; it never trips a liveness gate, so the pod is not
+  restarted (avoids a dependency-cycle restart storm).
+- **Only present in split topology.** Co-located peers (same process) register no
+  such probe — absence of `<cell>_remote_ready` means the peer is in-process.
+- **Backstop dial timeout 3s** (`remoteReadinessDialTimeout`), bounded further by
+  the `/readyz` aggregator deadline (`-readyz-deadline`) when tighter.
+- Alert authors: this probe family is split-topology-only; do not hard-require it
+  in single-process deployments. The probe name is a typed funnel
+  (`healthz.RemoteCellReadyProbeName`); renames sync here + dashboards/alerts.
+
 ## Concurrent probe storms
 
 Concurrent `/readyz` requests (kubelet + LB + manual curl) are

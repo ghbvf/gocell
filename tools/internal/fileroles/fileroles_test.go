@@ -114,7 +114,7 @@ func TestIsProductionCode(t *testing.T) {
 		{"locktest helper", "runtime/distlock/locktest/fake_clock.go", false},
 		{"commandtest helper", "kernel/command/commandtest/inmem.go", false},
 
-		{"examples (test or prod)", "examples/ssobff/main.go", false},
+		{"examples production", "examples/ssobff/main.go", true},
 		{"examples test", "examples/ssobff/walkthrough_test.go", false},
 
 		{"archtest self", "tools/archtest/test_time_literal_test.go", false},

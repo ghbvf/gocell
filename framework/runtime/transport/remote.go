@@ -65,8 +65,9 @@ type RemoteHTTPTransport struct {
 //   - resolver nil → panicregister.Approved("remote-transport-nil-resolver")
 //   - client nil → panicregister.Approved("remote-transport-nil-client")
 //
-// metrics and tracer are optional: nil metrics records nothing; nil tracer
-// degrades to wrapper.NoopTracer{}.
+// metrics and tracer are optional: nil metrics records nothing; a nil or
+// typed-nil tracer degrades to wrapper.NoopTracer{} (via validation.IsNilInterface,
+// so a non-nil interface wrapping a nil pointer never reaches t.tracer.Start).
 func NewRemoteHTTP(
 	clk clock.Clock,
 	targetCellID string,
@@ -95,7 +96,7 @@ func NewRemoteHTTP(
 			errcode.Assertion(msgRemoteNilClient),
 		))
 	}
-	if tracer == nil {
+	if validation.IsNilInterface(tracer) {
 		tracer = wrapper.NoopTracer{}
 	}
 	return &RemoteHTTPTransport{
@@ -158,7 +159,7 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 	// The request host was rewritten from the resolver's endpoint, which derives
 	// from the operator-configured (sealed) deployment topology — not user input.
 	// This is the intended cross-cell dial, not an SSRF sink.
-	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G704: see rationale above (operator-configured endpoint)
+	resp, err := t.client.Do(req.WithContext(ctx)) //nolint:gosec // G107: sealed-topology endpoint, not user input (see above)
 	if err != nil {
 		dialErr := classifyDialError(contractID, t.targetCellID, err)
 		t.metrics.Record(ctx, modeRemote, dialOutcome(err))
@@ -192,40 +193,43 @@ func (t *RemoteHTTPTransport) DoContract(ctx context.Context, contractID string,
 // Returns KindInternal on an unparseable endpoint (a static wiring error, not
 // a transient network condition).
 func rewriteToAbsolute(req *http.Request, endpoint string) error {
-	rewriteErr := func() error {
+	scheme, host, ok := parseEndpoint(endpoint)
+	if !ok {
 		return errcode.New(errcode.KindInternal, errcode.ErrInternal, msgRemoteURLRewriteFail,
 			errcode.WithInternal(errcode.InternalAttr("endpoint", endpoint)))
 	}
+	req.URL.Scheme = scheme
+	req.URL.Host = host
+	return nil
+}
+
+// parseEndpoint splits a topology endpoint into its (scheme, authority) parts.
+// It is the SINGLE source shared by [rewriteToAbsolute] (request URL rewrite) and
+// [EndpointDialTarget] (readiness TCP dial) so the two can never drift (#2251 P2.7).
+//
+// Accepted forms (ok=true):
+//   - "http(s)://host[:port]" → (u.Scheme, u.Host).
+//   - bare "host:port" → ("http", endpoint); TLS enforcement is US6 #1964.
+//
+// Any path (beyond an optional root "/"), query, or fragment, or an empty
+// endpoint, is rejected (ok=false) rather than silently truncated (#1966 review
+// P2.9; netutil.IsValidNetworkAddress already rejects these at config time — this
+// is defense-in-depth, aligned on the same root-"/" tolerance).
+func parseEndpoint(endpoint string) (scheme, host string, ok bool) {
 	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
 		u, err := url.Parse(endpoint)
 		if err != nil {
-			return rewriteErr()
+			return "", "", false
 		}
-		// Endpoints are scheme+host[:port] only. A path (beyond an optional root
-		// "/")/query/fragment would be silently dropped here (only Scheme+Host are
-		// copied), so reject it rather than truncate (#1966 review P2.9;
-		// netutil.IsValidNetworkAddress already rejects these at config time — this
-		// is defense-in-depth, aligned on the same root-"/" tolerance).
 		if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
-			return rewriteErr()
+			return "", "", false
 		}
-		req.URL.Scheme = u.Scheme
-		req.URL.Host = u.Host
-		return nil
+		return u.Scheme, u.Host, true
 	}
-	// Bare host:port — default to http (TLS enforcement is US6 #1964).
-	// Security note: postgres topology bare host:port walks over plaintext HTTP,
-	// so bearer/principal headers are confidential only within a private network.
-	// MAC (X-Gocell-ServiceToken) ensures integrity but NOT confidentiality;
-	// mTLS confidentiality is wired by US6 #1964.
-	// A bare endpoint carrying a path/query/fragment (e.g. "host:port/foo") would
-	// likewise be truncated, so reject it (#1966 review P2.9, defense-in-depth).
-	if strings.ContainsAny(endpoint, "/?#") {
-		return rewriteErr()
+	if endpoint == "" || strings.ContainsAny(endpoint, "/?#") {
+		return "", "", false
 	}
-	req.URL.Scheme = "http"
-	req.URL.Host = endpoint
-	return nil
+	return "http", endpoint, true
 }
 
 // classifyDialError wraps a client.Do transport-level error (no HTTP response
