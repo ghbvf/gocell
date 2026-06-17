@@ -14,10 +14,13 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
+// defaultTokenTTL is the default lifetime for locally-issued development tokens.
+const defaultTokenTTL = 8 * time.Hour
+
 func main() {
 	subject := flag.String("subject", "todoorder-local-customer", "JWT subject")
 	roles := flag.String("roles", ordercell.RoleCustomer, "comma-separated roles")
-	ttl := flag.Duration("ttl", 8*time.Hour, "token TTL")
+	ttl := flag.Duration("ttl", defaultTokenTTL, "token TTL")
 	flag.Parse()
 
 	token, err := issueToken(*subject, *roles, *ttl)

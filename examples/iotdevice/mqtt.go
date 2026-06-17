@@ -42,6 +42,9 @@ const (
 	// before fail-fast, leaving headroom for transient network jitter without
 	// hanging startup indefinitely.
 	defaultMQTTConnectDeadline = 30 * time.Second
+	// mqttPublishTimeout is the per-publish deadline passed to mqtt.NewConfig and
+	// used for the connection close fallback on publisher-init failure.
+	mqttPublishTimeout = 5 * time.Second
 )
 
 // mqttConnectDeadline resolves the bootstrap connect deadline from
@@ -180,7 +183,7 @@ func buildMQTTDirectPublisher(
 	// timing/backoff use NewConfig defaults; see adapters/mqtt.With* for TLS/auth/etc.
 	cfg, err := mqtt.NewConfig(clientID, brokers,
 		mqtt.WithConnectDeadline(connectDeadline),
-		mqtt.WithPublishTimeout(5*time.Second),
+		mqtt.WithPublishTimeout(mqttPublishTimeout),
 	)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("mqtt config: %w", err)
@@ -196,7 +199,7 @@ func buildMQTTDirectPublisher(
 
 	pub, err := mqtt.NewPublisher(clk, conn, ns)
 	if err != nil {
-		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		closeCtx, cancel := context.WithTimeout(context.Background(), mqttPublishTimeout)
 		defer cancel()
 		if cerr := conn.Close(closeCtx); cerr != nil {
 			logger.Warn("iotdevice: mqtt connection close after publisher-init failure",

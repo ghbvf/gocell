@@ -92,6 +92,19 @@ var clockAllowedRealCallerPaths = []string{
 	"tests/e2e/internal/clients/clients.go",   // e2e suite composition root
 	"corecells/accesscore/internal/testutil/", // SessionRepoForTest / RealSessionRepo
 	"corecells/configcore/configcoretest/",    // BuildWriteService / BuildSubscribeService default clock
+	// Example composition roots (#2149): demo entrypoints mint the real clock
+	// once and inject it downward, exactly like cmd/ above. File-level (not
+	// directory-level) so deep-component example files (auth.go, cells/…) stay
+	// governed and must accept an injected clock.Clock.
+	"examples/corebundlestarter/run.go",
+	"examples/demo/run.go",
+	"examples/iotdevice/run.go",
+	"examples/iotdevice/localtoken/main.go",
+	"examples/orderfulfillment/run.go",
+	"examples/ssobff/app.go",
+	"examples/todoorder/run.go",
+	"examples/todoorder/localtoken/main.go",
+	"examples/webhookdemo/run.go",
 }
 
 // clockIsAllowedRealCallerPath reports whether rel is exempt from the gate.

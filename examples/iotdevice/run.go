@@ -73,18 +73,18 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	_ = mods // cell construction is done directly below; mods only validates drift
 
-	internalAuthChain, err := newInternalAuthChainFromEnv()
-	if err != nil {
-		return fmt.Errorf("configure internal listener auth: %w", err)
-	}
-	jwtVerifier, err := newJWTVerifierFromEnv()
-	if err != nil {
-		return fmt.Errorf("configure JWT verifier: %w", err)
-	}
-
 	// Single root clock shared by assembly, bootstrap, eventbus, and cell.
 	// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 	clk := clock.Real()
+
+	internalAuthChain, err := newInternalAuthChainFromEnv(clk)
+	if err != nil {
+		return fmt.Errorf("configure internal listener auth: %w", err)
+	}
+	jwtVerifier, err := newJWTVerifierFromEnv(clk)
+	if err != nil {
+		return fmt.Errorf("configure JWT verifier: %w", err)
+	}
 
 	// In-memory event bus for demo mode.
 	eb := eventbus.New(clk)

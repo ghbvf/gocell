@@ -24,7 +24,7 @@ const testServiceKey = "test-service-secret-at-least-32-bytes!!"
 func TestInternalAuthChainMissingServiceSecretFailsFast(t *testing.T) {
 	t.Setenv(todoorderServiceSecretEnv, "")
 
-	_, err := newInternalAuthChainFromEnv()
+	_, err := newInternalAuthChainFromEnv(clock.Real())
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), todoorderServiceSecretEnv)
@@ -33,7 +33,7 @@ func TestInternalAuthChainMissingServiceSecretFailsFast(t *testing.T) {
 func TestInternalAuthChainContainsServiceToken(t *testing.T) {
 	t.Setenv(todoorderServiceSecretEnv, testServiceKey)
 
-	chain, err := newInternalAuthChainFromEnv()
+	chain, err := newInternalAuthChainFromEnv(clock.Real())
 
 	require.NoError(t, err)
 	require.NotEmpty(t, chain)
@@ -43,13 +43,13 @@ func TestInternalAuthChainContainsServiceToken(t *testing.T) {
 func TestJWTVerifierFromEnvRequiresIssuerAndAudience(t *testing.T) {
 	t.Setenv(jwtIssuerEnv, "")
 	t.Setenv(jwtAudienceEnv, "gocell")
-	_, err := newJWTVerifierFromEnv()
+	_, err := newJWTVerifierFromEnv(clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), jwtIssuerEnv)
 
 	t.Setenv(jwtIssuerEnv, "todoorder-local")
 	t.Setenv(jwtAudienceEnv, "")
-	_, err = newJWTVerifierFromEnv()
+	_, err = newJWTVerifierFromEnv(clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), jwtAudienceEnv)
 }
@@ -59,7 +59,7 @@ func TestJWTVerifierFromEnvAcceptsRS256AndRejectsDemoOrHS256Tokens(t *testing.T)
 	t.Setenv(jwtIssuerEnv, "todoorder-local")
 	t.Setenv(jwtAudienceEnv, "gocell")
 
-	verifier, err := newJWTVerifierFromEnv()
+	verifier, err := newJWTVerifierFromEnv(clock.Real())
 	require.NoError(t, err)
 
 	keySet, err := auth.LoadKeySetFromEnv(clock.Real())

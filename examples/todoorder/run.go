@@ -106,11 +106,15 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		return nil, err
 	}
 
-	internalAuthChain, err := newInternalAuthChainFromEnv()
+	// Single root clock shared by assembly, bootstrap, eventbus, claimer, and cell.
+	// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
+	clk := clock.Real()
+
+	internalAuthChain, err := newInternalAuthChainFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure internal listener auth: %w", err)
 	}
-	jwtVerifier, err := newJWTVerifierFromEnv()
+	jwtVerifier, err := newJWTVerifierFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure JWT verifier: %w", err)
 	}
@@ -126,7 +130,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// Events are validated by NoopWriter then discarded. In production, inject
 	// a real outbox.Writer (e.g., postgres.OutboxWriter) + persistence.TxRunner
 	// (e.g., postgres.TxManager) for durable event delivery via relay.
-	oc := ordercell.NewOrderCell(
+	oc := ordercell.NewOrderCell(clk,
 		ordercell.WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		ordercell.WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 		ordercell.WithCursorCodec(cursorCodec),
@@ -134,7 +138,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(clock.Real(), assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
+	asm := assembly.New(clk, assembly.Config{ID: assemblyID, DurabilityMode: outbox.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
 		return nil, fmt.Errorf("register ordercell: %w", err)
 	}
@@ -160,7 +164,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// Operator control-plane (AdminListener) — configured only when operator
 	// credentials are present in the environment, so the demo still starts out
 	// of the box (the projection rebuild endpoint then stays programmatic-only).
-	operatorAuth, operatorEnabled, err := newOperatorAuthFromEnv()
+	operatorAuth, operatorEnabled, err := newOperatorAuthFromEnv(clk)
 	if err != nil {
 		return nil, fmt.Errorf("configure admin listener auth: %w", err)
 	}
@@ -180,8 +184,8 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 	// without it bootstrap fails fast at startup. Demo uses an in-memory
 	// idempotency claimer (single-process only); production would inject a
 	// distributed claimer (e.g. Redis).
-	claimer := idempotency.NewInMemClaimer(clock.Real())
-	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	claimer := idempotency.NewInMemClaimer(clk)
+	consumerBase, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clk)
 	if err != nil {
 		return nil, fmt.Errorf("consumer base: %w", err)
 	}
@@ -228,7 +232,7 @@ func buildTodoorderBootstrap(assemblyID string, assemblyCellIDs []string, addrs 
 		)
 	}
 
-	return bootstrap.New(clock.Real(), opts...), nil
+	return bootstrap.New(clk, opts...), nil
 }
 
 // runTodoorderModules validates that assembly.yaml cells (assemblyCellIDs)

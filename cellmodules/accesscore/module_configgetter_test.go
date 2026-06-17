@@ -34,9 +34,10 @@ func configGetterTestDeps(t *testing.T, spec bootstrap.DeploymentTopologySpec, t
 // → the config getter is wired through the in-process transport.
 func TestWireConfigGetter_Colocated_InjectsGetter(t *testing.T) {
 	shared := configGetterTestDeps(t, bootstrap.DeploymentTopologySpec{}, transport.NewInProcess(nil))
-	opts, err := wireConfigGetter(shared, nil)
+	opts, res, err := wireConfigGetter(shared, nil)
 	require.NoError(t, err)
 	assert.Len(t, opts, 1, "colocated configcore must append exactly the config getter option")
+	assert.Empty(t, res, "colocated configcore has no remote peer → no readiness resource")
 }
 
 // TestWireConfigGetter_RemoteConfigcore_InjectsGetter: configcore declared remote
@@ -49,16 +50,21 @@ func TestWireConfigGetter_RemoteConfigcore_InjectsGetter(t *testing.T) {
 		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "configcore", Endpoint: "configcore:9090"}},
 	}
 	shared := configGetterTestDeps(t, spec, transport.NewInProcess(nil))
-	opts, err := wireConfigGetter(shared, nil)
+	opts, res, err := wireConfigGetter(shared, nil)
 	require.NoError(t, err, "remote configcore must now succeed — US5 wires the RemoteHTTPTransport")
 	assert.Len(t, opts, 1, "remote configcore must append exactly the config getter option")
+	// Remote configcore contributes a TCP-dial readiness probe (#2251 P2.7).
+	require.Len(t, res, 1, "remote configcore must contribute one readiness resource")
+	probes := res[0].Probes()
+	require.Len(t, probes, 1)
+	assert.Equal(t, "configcore_remote_ready", probes[0].Name().String())
 }
 
 // TestWireConfigGetter_NilTransport_FailFast: colocated configcore but the
 // composition root failed to mint the in-process transport → fail-fast.
 func TestWireConfigGetter_NilTransport_FailFast(t *testing.T) {
 	shared := configGetterTestDeps(t, bootstrap.DeploymentTopologySpec{}, nil)
-	_, err := wireConfigGetter(shared, nil)
+	_, _, err := wireConfigGetter(shared, nil)
 	require.Error(t, err)
 	errcodetest.AssertCode(t, err, errcode.ErrCellInvalidConfig)
 }
@@ -68,7 +74,7 @@ func TestWireConfigGetter_NilTransport_FailFast(t *testing.T) {
 func TestWireConfigGetter_Unclassified_FailFast(t *testing.T) {
 	spec := bootstrap.DeploymentTopologySpec{Colocated: []string{"accesscore"}}
 	shared := configGetterTestDeps(t, spec, transport.NewInProcess(nil))
-	_, err := wireConfigGetter(shared, nil)
+	_, _, err := wireConfigGetter(shared, nil)
 	require.Error(t, err)
 	errcodetest.AssertCode(t, err, errcode.ErrCellInvalidConfig)
 }

@@ -45,6 +45,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 )
 
 // panicLogRedactViol is the PANIC-LOG-REDACT-01 diagnostic.
@@ -166,6 +168,119 @@ func TestPanicRegistered(t *testing.T) {
 	// full non-default tag union; pass it so the second scan pass covers them.
 	Report(t, rulePanicRegistered01,
 		CheckPanicRegistered(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+}
+
+// TestPanicRegisteredUsesProductionScope locks #2148's vacuity fix:
+// CheckPanicRegistered must scan via Production(...) — the workspace-aware scope
+// that expands to one ./<dir>/... per go.work member (see
+// typeseval.LoadProductionPackages) — never Typed(./...), which at GoCell's
+// module-less workspace root resolves to ZERO packages, leaving the entire
+// production tree silently unscanned. Its sibling TestPanicLogRedact already
+// uses Production(); this converges both panic gates onto one scope.
+//
+// AI-robust: Medium (type-aware AST scan; a regression to Typed(./...) re-vacates
+// the dogfood scan and fails here). Mirrors
+// TestClockChecksDoNotUseProdscanPatternsExtended. Production() subsumes the
+// external single-module cell via workspace.Modules' single-module fallback, so
+// no transport-specific dual-path is needed.
+//
+// Residual (Soft, accepted): matches the bare-Ident call form `Production(...)`
+// (same-package direct call). A migration to a qualified form
+// (`archtest.Production(...)`, a SelectorExpr) would slip past this scan — update
+// the matcher then. The non-vacuous coverage itself is held by the companion
+// TestPanicRegisteredScopeIncludesSatellites.
+func TestPanicRegisteredUsesProductionScope(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	path := filepath.Join(root, "tools", "archtest", "panic_invariants.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse panic_invariants.go: %v", err)
+	}
+	var found, sawProduction bool
+	EachInChildren[ast.FuncDecl](file, func(fn *ast.FuncDecl) {
+		if fn.Name == nil || fn.Body == nil || fn.Name.Name != "CheckPanicRegistered" {
+			return
+		}
+		found = true
+		EachInSubtree[ast.CallExpr](fn.Body, func(call *ast.CallExpr) {
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return
+			}
+			switch ident.Name {
+			case "Production":
+				sawProduction = true
+			case "Typed":
+				t.Errorf("CheckPanicRegistered must use Production(...) scope, not Typed(./...); " +
+					"Typed drops go.work satellites and is vacuous at the module-less workspace root (#2148)")
+			}
+		})
+	})
+	if !found {
+		t.Errorf("CheckPanicRegistered not found in panic_invariants.go (renamed?); " +
+			"update TestPanicRegisteredUsesProductionScope")
+	}
+	if !sawProduction {
+		t.Errorf("CheckPanicRegistered must call Production(...) so PANIC-REGISTERED-01 scans " +
+			"the whole workspace including satellites (#2148)")
+	}
+}
+
+// TestPanicRegisteredScopeIncludesSatellites is the self-contained anti-vacuity
+// companion: it proves the Production() scope that CheckPanicRegistered now uses
+// actually visits satellite-module production files, so PANIC-REGISTERED-01
+// coverage is non-vacuous after #2148. Mirrors
+// TestClockWorkspaceScopeIncludesSatellites.
+func TestPanicRegisteredScopeIncludesSatellites(t *testing.T) {
+	t.Parallel()
+	// examples/iotdevice/run.go proves the Production() scope LOADS an examples
+	// production file (the FILTER side — that shouldSkipForPanicRegistered does
+	// not drop it again — is held by TestPanicRegisteredDoesNotSkipExamples,
+	// #2149); it is also that test's disk-existence no-stale anchor (rename/delete
+	// fails here).
+	assertScopeVisits(t, "PANIC-REGISTERED-01 Production", Production(TypedOpts{Tests: false}),
+		"cmd/gocell/main.go", "cmd/corebundle/main.go", "examples/iotdevice/run.go")
+}
+
+// TestPanicRegisteredDoesNotSkipExamples is the FILTER-stage companion to
+// TestPanicRegisteredScopeIncludesSatellites: loading an examples file into the
+// scan is necessary but not sufficient — shouldSkipForPanicRegistered must also
+// not drop it again. Codex's PR #2252 review (cluster C1) caught exactly that
+// drift: #2149 put examples/ under production governance and CheckPanicRegistered
+// scans it via Production(), but the rule's own file filter still skipped the
+// whole examples/ tree, so PANIC-REGISTERED-01 over examples was false-green.
+//
+// This binds the filter's examples treatment to the single source
+// fileroles.IsProductionCode (which returns true for examples/): the positive
+// fixture must be BOTH unskipped here AND production per fileroles, so the two
+// classifiers cannot drift apart on examples/ again. The fixture's disk
+// existence is held by TestPanicRegisteredScopeIncludesSatellites (same path),
+// so no extra stat is needed here.
+//
+// AI-robust: Medium (runtime guard; re-adding the examples skip turns this RED).
+// A Hard form — deriving the skip set from fileroles so a separate examples arm
+// is unexpressible — needs a consumer-supplied SkipPaths seam for the importable
+// external-cell rule; that full single-sourcing is tracked in #1302.
+func TestPanicRegisteredDoesNotSkipExamples(t *testing.T) {
+	t.Parallel()
+	const examplesProd = "examples/iotdevice/run.go"
+	if shouldSkipForPanicRegistered(examplesProd) {
+		t.Errorf("shouldSkipForPanicRegistered(%q) = true; examples/ is production code "+
+			"and must be scanned by PANIC-REGISTERED-01 (#2149/#2252 C1)", examplesProd)
+	}
+	if !fileroles.IsProductionCode(examplesProd) {
+		t.Errorf("fileroles.IsProductionCode(%q) = false; the examples production "+
+			"classification drifted from the single source — re-sync the filter", examplesProd)
+	}
+	// Anti-vacuity: the skip set must still drop genuine non-production paths,
+	// so the examples-arm removal did not blunt the whole filter.
+	for _, rel := range []string{"examples/iotdevice/run_test.go", "vendor/x/y.go", "generated/z.go"} {
+		if !shouldSkipForPanicRegistered(rel) {
+			t.Errorf("shouldSkipForPanicRegistered(%q) = false; the skip set is broken", rel)
+		}
+	}
 }
 
 // TestScanPanicBuiltinShadows is the reverse self-check for the one declared

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
@@ -20,6 +21,47 @@ type stubResolver struct {
 
 func (s *stubResolver) Resolve(_ context.Context, _ string) (string, error) {
 	return s.endpoint, s.err
+}
+
+// derefTracer is a wrapper.Tracer whose pointer-receiver Start dereferences its
+// receiver. A typed-nil *derefTracer in a wrapper.Tracer interface is non-nil at
+// the interface level but panics the moment Start is invoked on the nil receiver
+// — the exact #2251 review F2 failure mode the constructor must normalize away.
+type derefTracer struct{ calls int }
+
+func (d *derefTracer) Start(ctx context.Context, _ string, _ ...wrapper.Attr) (context.Context, wrapper.Span) {
+	d.calls++ // nil-receiver dereference → panic when the typed-nil is not normalized
+	return ctx, nil
+}
+
+// TestNewRemoteHTTP_TypedNilTracerDegradesToNoop asserts a typed-nil tracer
+// passed to NewRemoteHTTP is normalized to wrapper.NoopTracer{} (via
+// validation.IsNilInterface), so DoContract does not panic at t.tracer.Start.
+// Pre-fix (bare `tracer == nil`) the typed-nil *derefTracer slips through and
+// DoContract panics on the nil-receiver Start (#2251 review F2).
+func TestNewRemoteHTTP_TypedNilTracerDegradesToNoop(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	var typedNil *derefTracer // typed-nil wrapper.Tracer wrapping a nil pointer
+	resolver := &stubResolver{endpoint: srv.URL}
+	tr := transport.NewRemoteHTTP(
+		clock.Real(), "configcore", resolver, srv.Client(), nil, typedNil,
+	)
+
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://ignored/internal/v1/x", nil)
+	resp, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req)
+	if err != nil {
+		t.Fatalf("DoContract: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode = %d, want 200", resp.StatusCode)
+	}
 }
 
 // TestRemoteHTTPTransport_HappyPath verifies that a successful round-trip

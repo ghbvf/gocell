@@ -24,9 +24,10 @@
 //     TestUserRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl.
 //
 //   - B2. generated mock implementations (mockery / gomock in _test.go) are
-//     excluded: test-file types are not scanned for implementations (Tests=false
-//     in the production load pass). If a generated mock appears in a production
-//     non-test file, the archtest will flag it — intentionally.
+//     excluded: the single Tests=true load collects impls through a non-_test.go
+//     declaration filter (productionImplCandidates / isTestDeclaredObj), so
+//     _test.go-declared types are dropped. If a generated mock appears in a
+//     production non-test file, the archtest will flag it — intentionally.
 //
 //   - B3. embedded interface forwarding (struct embedding ports.UserRepository):
 //     such a type structurally satisfies the interface but provides no real
@@ -61,7 +62,7 @@ func TestUserRepoConformanceEnrollment(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	Report(t, ruleUserRepoConformanceEnrollment01,
-		CheckUserRepoConformanceEnrollment01(t, ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
+		checkRepoConformanceEnrollment(t, userRepoConformanceSpec(), ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
 // TestUserRepoConformanceEnrollment_REDFixture verifies that the enrollment
@@ -96,7 +97,7 @@ func TestUserRepoConformanceEnrollment_REDFixture(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-			if p.Pkg.Path() == userRepoIfacePkg {
+			if p.Pkg.Path() == repoPortsPkg {
 				if obj := p.Pkg.Scope().Lookup(userRepoIfaceName); obj != nil {
 					if named, ok := obj.Type().(*types.Named); ok {
 						if iface, ok := named.Underlying().(*types.Interface); ok {
@@ -116,7 +117,7 @@ func TestUserRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	implPkgSet := make(map[string]bool)
 	for _, pkg := range implPkgs {
 		if pkg != nil {
-			collectUserRepoImpls(pkg, userRepoIface, implSet, implPkgSet)
+			collectImplsFromScope(pkg, userRepoIface, true, implSet, implPkgSet)
 		}
 	}
 	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty (need at least one impl)")
@@ -140,7 +141,8 @@ func TestUserRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	}
 
 	// Run the real flagging logic with the simulated enrolled set.
-	diags := flagUnenrolledImpls(implSet, enrolledPkgs)
+	diags := flagUnenrolledByPkg(implSet, enrolledPkgs,
+		func(implKey, _ string) string { return implKey + " not enrolled" })
 
 	assert.GreaterOrEqual(t, len(diags), 1,
 		"REDFixture: removing pkg %q from enrolledPkgs must produce at least 1 violation, got 0", targetPkg)

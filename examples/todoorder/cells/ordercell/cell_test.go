@@ -46,7 +46,7 @@ var _ persistence.TxRunner = demoTxRunner{}
 
 // newTestCell creates an OrderCell with NoopWriter + demoTxRunner (unified outbox path).
 func newTestCell() *OrderCell {
-	return NewOrderCell(
+	return NewOrderCell(clock.Real(),
 		WithRepository(mem.NewOrderRepository()),
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
@@ -122,7 +122,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewOrderCell(tt.opts...)
+			c := NewOrderCell(clock.Real(), tt.opts...)
 			err := c.Init(context.Background(), newTestRec())
 			if tt.wantErr {
 				require.Error(t, err)
@@ -138,7 +138,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 }
 
 func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) {
-	c := NewOrderCell()
+	c := NewOrderCell(clock.Real())
 	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
 	var ecErrDefault *errcode.Error
@@ -167,7 +167,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewOrderCell(tt.opts...)
+			c := NewOrderCell(clock.Real(), tt.opts...)
 			err := c.Init(context.Background(), newTestRec())
 			require.Error(t, err)
 			var ecErrReject *errcode.Error
@@ -178,7 +178,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 }
 
 func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
-	c := NewOrderCell(
+	c := NewOrderCell(clock.Real(),
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 	)
@@ -194,7 +194,7 @@ func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 // to inject a production cursor codec must not silently fall back to the
 // public demo key baked into the source tree.
 func TestOrderCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
-	c := NewOrderCell(
+	c := NewOrderCell(clock.Real(),
 		WithRepository(mem.NewOrderRepository()),
 		WithOutboxWriter(outbox.WrapWriterForCell(&orderRecordingWriter{})),
 		WithTxManager(persistence.WrapForCell(orderLocalTxRunner{})),
@@ -228,7 +228,7 @@ func (orderLocalTxRunner) RunInTx(ctx context.Context, fn func(context.Context) 
 }
 
 func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
-	c := NewOrderCell(
+	c := NewOrderCell(clock.Real(),
 		WithOutboxWriter(outbox.WrapWriterForCell(outbox.NoopWriter{})),
 		WithTxManager(persistence.WrapForCell(demoTxRunner{})),
 	)

@@ -17,8 +17,6 @@ package archtest
 //	CheckSagaStepCompensatePure — SAGA-STEP-COMPENSATE-PURE-01
 //	CheckSagaCoordinatorNoHeartbeatLoop — SAGA-COORDINATOR-NO-HEARTBEAT-LOOP-01
 //	CheckSagaExecutorRandInjected — SAGA-EXECUTOR-RAND-INJECTED-01
-//	CheckSagaJournalConformanceEnrollment — SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01
-//	CheckSagaGlobalReaderConformanceEnrollment — SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
 //	CheckSagaJournalHolderSeal — SAGA-JOURNAL-HOLDER-SEAL-01
 //	CheckSagaDriveBehindLeaderGate — SAGA-DRIVE-BEHIND-LEADER-GATE-01
 //	CheckSagaStepRunOutsideTx — SAGA-STEP-RUN-OUTSIDE-TX-01
@@ -26,8 +24,13 @@ package archtest
 //	CheckSagaMetricLabelValuesFrozen — SAGA-METRIC-LABEL-VALUES-FROZEN-01
 //	CheckSagaSlogInstanceFieldsCaller — SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
 //	CheckSagaTailerCheckpointAdvancerCaller — SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01
-//	CheckSagaOwnerCheckpointConformanceEnrollment — SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
 //	CheckSagaProjectionDepsInmemFunnel01 — SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01
+//
+// The three *-CONFORMANCE-ENROLLMENT-* saga rules (SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01,
+// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01, SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01)
+// moved to conformance_enrollment.go (#2249): a single Tests=true packages.Load shared
+// via the unexported checkSagaConformanceEnrollment, driven only by the Test* functions
+// in saga_invariants_test.go (GoCell-internal, never registered, no importable Check*).
 //
 // Registered in StandardCellRules (portable subset — rules that apply to any
 // Cell using the saga engine):
@@ -72,8 +75,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
-	"github.com/ghbvf/gocell/tools/typesutil"
 )
 
 // ─── Platform-path consts (all derived from PlatformModulePath) ─────────────
@@ -937,38 +938,6 @@ func CheckSagaExecutorRandInjected(t *testing.T, cfg ConfigForExternalCell) []Di
 
 // ─── SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01 helpers ─────────────────────────
 
-// collectSagaJournalImpls collects concrete types in pkg that implement iface,
-// populating implSet ("pkg/path.TypeName" → true) and implPkgSet (pkg path → true).
-func collectSagaJournalImpls(pkg *types.Package, iface *types.Interface, implSet, implPkgSet map[string]bool) { //nolint:gocognit,lll // archtest: value/pointer receivers + alias forms via typesutil.ImplementsInterface enumeration
-	if pkg == nil {
-		return
-	}
-	scope := pkg.Scope()
-	for _, name := range scope.Names() {
-		obj := scope.Lookup(name)
-		if obj == nil {
-			continue
-		}
-		if _, isTypeName := obj.(*types.TypeName); !isTypeName {
-			continue
-		}
-		t := obj.Type()
-		// typesutil.ImplementsInterface checks value-or-pointer receivers (the
-		// sanctioned funnel for go/types.Implements; TYPESUTIL-IMPLEMENTS-FUNNEL-01).
-		if typesutil.ImplementsInterface(t, iface) {
-			if named, ok := t.(*types.Named); ok {
-				if named.Underlying() != nil {
-					if _, isIface := named.Underlying().(*types.Interface); !isIface {
-						key := pkg.Path() + "." + name
-						implSet[key] = true
-						implPkgSet[pkg.Path()] = true
-					}
-				}
-			}
-		}
-	}
-}
-
 // factoryConstructedImpls returns the impl keys ("pkg/path.TypeName") constructed
 // inside the factory argument (call.Args[1]) of a conformance call. Resolves three
 // factory forms: an inline FuncLit, a named-func Ident (its FuncDecl in the package),
@@ -1136,190 +1105,6 @@ func findVarFuncLit(info *types.Info, files []*ast.File, obj types.Object) *ast.
 		}
 	}
 	return nil
-}
-
-// CheckSagaJournalConformanceEnrollment is the importable form of
-// SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01. It scans the running module for
-// concrete journal.Journal implementations that lack a conformance suite call.
-// Not registered in StandardCellRules (targets GoCell-internal journal impls).
-func CheckSagaJournalConformanceEnrollment(t *testing.T, cfg ConfigForExternalCell) []Diagnostic { //nolint:gocognit,funlen,lll // archtest: mirrors GlobalReader enrollment; journal.Journal target; parallel structure intentional
-	t.Helper()
-	_ = cfg
-
-	root := findModuleRoot(t)
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
-
-	var iface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == sagaJournalPkg {
-				if obj := p.Pkg.Scope().Lookup(sagaJournalIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if i, ok := named.Underlying().(*types.Interface); ok {
-							iface = i.Complete()
-						}
-					}
-				}
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	if iface == nil {
-		return []Diagnostic{{
-			Rel:     "kernel/saga/journal",
-			Line:    0,
-			Message: "SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01: failed to resolve journal.Journal interface; check import path " + sagaJournalPkg,
-		}}
-	}
-
-	implSet := make(map[string]bool)
-	implPkgSet := make(map[string]bool)
-	for _, pkg := range implPkgs {
-		if pkg != nil {
-			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
-		}
-	}
-
-	enrolledImpls := make(map[string]bool)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodscan.Patterns(root)),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				if !strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
-					sagaConformanceFuncName, implSet, enrolledImpls)
-			}
-			return nil
-		})
-
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if enrolledImpls[implKey] {
-			continue
-		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
-		diags = append(diags, Diagnostic{
-			Rel:  implKey,
-			Line: 0,
-			Message: fmt.Sprintf(
-				"archtest: kernel/saga/journal.Journal impl %q not enrolled "+
-					"(SAGA-JOURNAL-CONFORMANCE-ENROLLMENT-01). "+
-					"Add a _test.go in package %s (or its external _test) that "+
-					"both calls sagajournaltest.RunConformanceSuite(t, factory) "+
-					"and constructs the impl inside the factory.",
-				implKey, pkgPath,
-			),
-		})
-	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
-	return diags
-}
-
-// CheckSagaGlobalReaderConformanceEnrollment is the importable form of
-// SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01.
-// Not registered in StandardCellRules.
-func CheckSagaGlobalReaderConformanceEnrollment(t *testing.T, cfg ConfigForExternalCell) []Diagnostic { //nolint:gocognit,funlen,lll // archtest: mirrors Journal enrollment; journal.GlobalReader target; parallel structure intentional
-	t.Helper()
-	_ = cfg
-
-	root := findModuleRoot(t)
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./framework/kernel/saga/journal/..."}, prodPatterns...)
-
-	var iface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == sagaJournalPkg {
-				if obj := p.Pkg.Scope().Lookup(sagaGlobalReaderIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if i, ok := named.Underlying().(*types.Interface); ok {
-							iface = i.Complete()
-						}
-					}
-				}
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	if iface == nil {
-		return []Diagnostic{{
-			Rel:  "kernel/saga/journal",
-			Line: 0,
-			Message: "SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01: failed to resolve journal.GlobalReader interface; " +
-				"check import path " + sagaJournalPkg,
-		}}
-	}
-
-	implSet := make(map[string]bool)
-	implPkgSet := make(map[string]bool)
-	for _, pkg := range implPkgs {
-		if pkg != nil {
-			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
-		}
-	}
-
-	enrolledImpls := make(map[string]bool)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodscan.Patterns(root)),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				if !strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				creditEnrollmentsFromFactory(p.TypesInfo, p.Files, f,
-					sagaGlobalReaderConformanceFunc, implSet, enrolledImpls)
-			}
-			return nil
-		})
-
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if enrolledImpls[implKey] {
-			continue
-		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
-		diags = append(diags, Diagnostic{
-			Rel:  implKey,
-			Line: 0,
-			Message: fmt.Sprintf(
-				"archtest: kernel/saga/journal.GlobalReader impl %q not enrolled "+
-					"(SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01). "+
-					"Add a _test.go in package %s (or its external _test) that "+
-					"both calls sagajournaltest.RunGlobalReaderConformance(t, factory) "+
-					"and constructs the impl inside the factory.",
-				implKey, pkgPath,
-			),
-		})
-	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
-	return diags
 }
 
 // ─── SAGA-JOURNAL-HOLDER-SEAL-01 helpers ─────────────────────────────────────
@@ -3073,108 +2858,6 @@ func creditOwnerCheckpointEnrollments(
 		// Also handle CallExpr wrapping (e.g. NewMemOwnerCheckpointStore() call).
 		// The type-of approach above covers the result type directly.
 	})
-}
-
-// CheckSagaOwnerCheckpointConformanceEnrollment is the importable form of
-// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
-//
-// Every production named type implementing kernel/projection.OwnerCheckpointStore
-// must appear as an argument to projectiontest.RunOwnerCheckpointConformance in a
-// _test.go file of its package.
-//
-// AI-robust rating: Medium (types.Implements scan + test-callsite resolution;
-// Hard upgrade path = codegen golden that enumerates implementations, shared
-// with journal enrollment at gh #1003).
-//
-// Not registered in StandardCellRules.
-func CheckSagaOwnerCheckpointConformanceEnrollment(t *testing.T, cfg ConfigForExternalCell) []Diagnostic { //nolint:gocognit,funlen,lll // archtest: mirrors GlobalReader enrollment; OwnerCheckpointStore target; direct store arg (not factory closure)
-	t.Helper()
-	_ = cfg
-
-	root := findModuleRoot(t)
-	prodPatterns := prodscan.Patterns(root)
-	ifacePatterns := append([]string{"./framework/kernel/projection/..."}, prodPatterns...)
-
-	var iface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == sagaKernelProjectionPkg {
-				if obj := p.Pkg.Scope().Lookup(sagaOwnerCheckpointIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if i, ok := named.Underlying().(*types.Interface); ok {
-							iface = i.Complete()
-						}
-					}
-				}
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	if iface == nil {
-		return []Diagnostic{{
-			Rel:  "kernel/projection",
-			Line: 0,
-			Message: "SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01: failed to resolve projection.OwnerCheckpointStore interface; " +
-				"check import path " + sagaKernelProjectionPkg,
-		}}
-	}
-
-	implSet := make(map[string]bool)
-	implPkgSet := make(map[string]bool)
-	for _, pkg := range implPkgs {
-		if pkg != nil {
-			collectSagaJournalImpls(pkg, iface, implSet, implPkgSet)
-		}
-	}
-
-	enrolledImpls := make(map[string]bool)
-	_ = Run(t, Typed(TypedOpts{Tests: true, Tags: FlatNonDefaultTags()}, prodscan.Patterns(root)),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			for _, f := range p.Files {
-				if !strings.HasSuffix(p.Rel(f), "_test.go") {
-					continue
-				}
-				creditOwnerCheckpointEnrollments(p.TypesInfo, f,
-					sagaKernelProjectionTestPkg, sagaOwnerCheckpointConformanceFunc,
-					implSet, enrolledImpls)
-			}
-			return nil
-		})
-
-	var diags []Diagnostic
-	for implKey := range implSet {
-		if enrolledImpls[implKey] {
-			continue
-		}
-		dotIdx := strings.LastIndex(implKey, ".")
-		if dotIdx < 0 {
-			continue
-		}
-		pkgPath := implKey[:dotIdx]
-		diags = append(diags, Diagnostic{
-			Rel:  implKey,
-			Line: 0,
-			Message: fmt.Sprintf(
-				"archtest: kernel/projection.OwnerCheckpointStore impl %q not enrolled "+
-					"(SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01). "+
-					"Add a _test.go in package %s (or its external _test) that "+
-					"calls projectiontest.RunOwnerCheckpointConformance(t, store) "+
-					"with an instance of the impl.",
-				implKey, pkgPath,
-			),
-		})
-	}
-	sort.Slice(diags, func(i, j int) bool { return diags[i].Rel < diags[j].Rel })
-	return diags
 }
 
 // ─── SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01 (importable rule logic, #1391 / #2060) ─
