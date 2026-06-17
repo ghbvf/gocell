@@ -3,6 +3,7 @@ package celltls
 import (
 	"crypto/tls"
 	"os"
+	"strings"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -29,6 +30,12 @@ const (
 	msgBuildCAPool     = "celltls: build trust-root pool"
 	msgBuildClientID   = "celltls: build client identity"
 	msgBuildServerMTLS = "celltls: build server mTLS config"
+	// msgSharedMTLSEndpoint rejects ≥2 remote cells sharing one non-loopback
+	// endpoint under mTLS (#2263 F1): one process = one cell cert, so a shared
+	// mTLS endpoint cannot present a correct per-cell identity. Deploy each cell
+	// in its own process / endpoint (split mTLS = one cell per process).
+	msgSharedMTLSEndpoint = "celltls: transport mTLS requires one cell per process, but the deployment topology shares a" +
+		" non-loopback endpoint across multiple remote cells; give each cell its own endpoint (split mTLS = one cell per process)"
 )
 
 // Config carries the operator-provided transport mTLS material locations. The
@@ -97,6 +104,21 @@ func Resolve(topo bootstrap.DeploymentTopology, cfg Config) (Deps, error) {
 		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgPartialConfig,
 			errcode.WithInternal(
 				errcode.InternalAttr("configured_count", cfg.configuredCount()),
+			))
+	}
+
+	// #2263 review F1 — single-cell-per-process guard: mTLS binds ONE cell SPIFFE
+	// identity per process (the internal listener presents one cell cert), so a
+	// process serving multiple cells at the SAME non-loopback endpoint cannot
+	// present a correct per-cell cert (the cross-bind would fail for all but one).
+	// Fail-fast when TLS material is provisioned (this branch) AND the topology
+	// shares a non-loopback endpoint across ≥2 remote cells. Lifting this (a
+	// per-caller-cell identity resolver) is a follow-up; see ADR 202606171200-2263.
+	if ep, cells, shared := topo.SharedNonLoopbackRemoteEndpoint(); shared {
+		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgSharedMTLSEndpoint,
+			errcode.WithInternal(
+				errcode.InternalAttr("endpoint", ep),
+				errcode.InternalAttr("cells", strings.Join(cells, ",")),
 			))
 	}
 

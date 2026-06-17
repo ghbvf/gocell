@@ -631,6 +631,63 @@ func TestDeploymentTopologyHasNonLoopbackRemoteCells(t *testing.T) {
 	}
 }
 
+func TestDeploymentTopologySharedNonLoopbackRemoteEndpoint(t *testing.T) {
+	cases := []struct {
+		name      string
+		spec      DeploymentTopologySpec
+		wantFound bool
+		wantEP    string
+		wantCells []string
+	}{
+		{name: "no remote → none", spec: DeploymentTopologySpec{}, wantFound: false},
+		{
+			name: "unique non-loopback endpoints → none",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellA", Endpoint: "https://a.svc:8443"},
+				{CellID: "cellB", Endpoint: "https://b.svc:8443"},
+			}},
+			wantFound: false,
+		},
+		{
+			name: "two cells share a non-loopback endpoint → found",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "https://shared.svc:8443"},
+				{CellID: "cellC", Endpoint: "https://shared.svc:8443"},
+			}},
+			wantFound: true, wantEP: "https://shared.svc:8443", wantCells: []string{"cellB", "cellC"},
+		},
+		{
+			name: "shared LOOPBACK endpoint is exempt → none",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
+				{CellID: "cellB", Endpoint: "127.0.0.1:9090"},
+				{CellID: "cellC", Endpoint: "127.0.0.1:9090"},
+			}},
+			wantFound: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dt, err := newDeploymentTopology(tc.spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: %v", err)
+			}
+			ep, cells, found := dt.SharedNonLoopbackRemoteEndpoint()
+			if found != tc.wantFound {
+				t.Fatalf("found = %v, want %v", found, tc.wantFound)
+			}
+			if !found {
+				return
+			}
+			if ep != tc.wantEP {
+				t.Errorf("endpoint = %q, want %q", ep, tc.wantEP)
+			}
+			if strings.Join(cells, ",") != strings.Join(tc.wantCells, ",") {
+				t.Errorf("cells = %v, want %v", cells, tc.wantCells)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // validateSplitTopologyBroker — phase0 broker-mandatory gate
 // ---------------------------------------------------------------------------

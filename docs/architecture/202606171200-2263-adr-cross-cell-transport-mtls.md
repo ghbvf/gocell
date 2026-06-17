@@ -169,6 +169,14 @@ remote + TLS material 配置仍会启用 mTLS（不静默忽略 TLS config）。
 | **cert 轮换停机** | 不适用 | 静态 PEM：operator 手动轮换 + 重启；自动轮换属 follow-up（见下）| Soft（操作流程，技术闸不覆盖） |
 
 **本 PR 后残留（显式登记）**：
+- **split mTLS = 一进程一 cell（本 PR 强制 + 文档化的最小缓解；codex pr-review F1）**：mTLS 绑定
+  **一进程一 cell SPIFFE 身份**（internal listener 持一张 cell 证书），故一个进程不能在同一非 loopback
+  mTLS endpoint 承载多个 cell。本 PR 把该隐式假设**显式 fail-closed**：TLS 材料已配置 + topology 把
+  同一非 loopback endpoint 分给 ≥2 个 remote cell → `celltls.Resolve` 启动期报错
+  （`bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 派生信号；loopback/明文共址豁免）。
+  **完整解**（解除一进程一 cell 限制）= per-caller-cell TLS identity resolver / workload-vs-cell 双层
+  身份模型 + peer-authorize 允许集合 —— epic 级 follow-up（可对标 go-spiffe `spiffetls/tlsconfig`
+  的 per-workload SVID + Authorizer 模型）。评级：运行时 fail-closed guard = Medium。
 - **cert 自动轮换**：静态 PEM 需要手动轮换 + 重启；`runtime/certlifecycle` reconciler
   自动颁发/续期是独立 follow-up（涉及：reconciler DB + leader election + EST/ACME 对接，
   已有独立子系统，不塞入本 PR）。

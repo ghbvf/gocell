@@ -12,6 +12,7 @@ package bootstrap
 // read-only during serving.
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -207,6 +208,44 @@ func (t DeploymentTopology) HasNonLoopbackRemoteCells() bool {
 		}
 	}
 	return false
+}
+
+// SharedNonLoopbackRemoteEndpoint returns a non-loopback endpoint shared by ≥2
+// remote cells, those cell IDs (sorted), and found=true — or found=false when
+// every non-loopback remote endpoint is unique. Deterministic: the
+// lexicographically-smallest colliding endpoint is returned.
+//
+// This is the #2263 split-mTLS single-cell-per-process guard signal: mTLS binds
+// ONE cell SPIFFE identity per process (the internal listener presents one cell
+// cert), so a process serving multiple cells at the SAME mTLS endpoint cannot
+// present a correct per-cell certificate — the cross-bind would fail for all but
+// one. cellmodules/celltls.Resolve fails closed on this when TLS material is
+// provisioned. Loopback endpoints (local multi-process dev) are exempt: they are
+// plaintext-eligible and carry no per-cell mTLS identity. The full fix (a
+// per-caller-cell identity resolver lifting this one-cell-per-process limit) is a
+// follow-up; see ADR 202606171200-2263.
+func (t DeploymentTopology) SharedNonLoopbackRemoteEndpoint() (endpoint string, cells []string, found bool) {
+	byEndpoint := make(map[string][]string, len(t.remote))
+	for cellID, ep := range t.remote {
+		if netutil.IsLoopbackEndpoint(ep) {
+			continue
+		}
+		byEndpoint[ep] = append(byEndpoint[ep], cellID)
+	}
+	collisions := make([]string, 0, len(byEndpoint))
+	for ep, ids := range byEndpoint {
+		if len(ids) >= 2 {
+			collisions = append(collisions, ep)
+		}
+	}
+	if len(collisions) == 0 {
+		return "", nil, false
+	}
+	sort.Strings(collisions)
+	ep := collisions[0]
+	ids := append([]string(nil), byEndpoint[ep]...)
+	sort.Strings(ids)
+	return ep, ids, true
 }
 
 // IsColocated reports whether cellID is co-located in the same process.

@@ -158,6 +158,21 @@ func TestInternalListenerSecurity(t *testing.T) {
 	})
 }
 
+// TestResolve_SharedMTLSEndpoint_FailsClosed: material configured + two remote
+// cells sharing one non-loopback endpoint → fail-closed (#2263 F1: split mTLS is
+// one cell per process; a shared mTLS endpoint cannot present a per-cell cert).
+func TestResolve_SharedMTLSEndpoint_FailsClosed(t *testing.T) {
+	t.Parallel()
+	certFile, keyFile, caFile := writeCellMaterial(t)
+	cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: "example.org"}
+	shared := topo(t,
+		bootstrap.RemoteCellEndpoint{CellID: "configcore", Endpoint: "https://shared.svc:8443"},
+		bootstrap.RemoteCellEndpoint{CellID: "auditcore", Endpoint: "https://shared.svc:8443"},
+	)
+	_, err := celltls.Resolve(shared, cfg)
+	assert.Error(t, err, "mTLS + two cells at the same non-loopback endpoint must fail closed (one cell per process)")
+}
+
 func TestResolve_ErrorPaths(t *testing.T) {
 	t.Parallel()
 	certFile, keyFile, caFile := writeCellMaterial(t)

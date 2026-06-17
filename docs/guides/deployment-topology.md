@@ -262,6 +262,13 @@ mTLS 是传输层安全，以下纵深防御层与之正交，**仍然必须配�
 
 ### 已知局限（follow-up 登记）
 
+- **split mTLS = 一进程一 cell（强制）**：mTLS 下每个进程的 internal listener 只持**一张** cell
+  证书（一个 `spiffe://<td>/cell/<id>` 身份），cross-bind 按该 cell 身份校验调用方。因此**一个
+  进程不能在同一 mTLS endpoint 承载多个 cell**——否则除一个 cell 外其余的 cross-bind 必失配。
+  当 TLS 材料已配置且 deployment topology 把同一**非 loopback** endpoint 分配给 ≥2 个 remote
+  cell 时，`cellmodules/celltls.Resolve` **启动期 fail-closed**（loopback/demo 多 cell 同址明文
+  共址不受限）。每个 cell 用独立进程 / endpoint 部署。解除此限制（per-caller-cell 身份 resolver /
+  workload-vs-cell 双层身份模型）是 follow-up（见 ADR §推迟项）。
 - **cert 自动轮换**：本 PR 使用静态 PEM 文件，轮换需要手动替换文件 + 重启进程。自动颁发/续期
   via `runtime/certlifecycle` reconciler 是独立 follow-up（参考 ADR
   `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项）。
