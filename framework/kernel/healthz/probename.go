@@ -155,6 +155,34 @@ func EmitterFailOpenProbeName(cellID string) (ProbeName, error) {
 	return NewProbeName(emitterFailOpenProbeNamePrefix + cellID)
 }
 
+// remoteCellReadyProbeNameSuffix is the terminal segment of the cross-cell
+// remote-peer readiness probe name ("<cellID>_remote_ready"). It is a
+// dependency-availability probe (the remote peer's listener is TCP-reachable),
+// so it carries the "_ready" suffix per observability.md.
+const remoteCellReadyProbeNameSuffix = "_remote_ready"
+
+// RemoteCellReadyProbeName composes the typed probe name for a split-topology
+// remote-peer readiness probe scoped to targetCellID: "<cellID>_remote_ready"
+// (#2251 P2.7). It is registered by celltransport.Resolve's remote branch so a
+// peer that becomes unreachable degrades the consuming cell's /readyz (lets ops
+// shed traffic) without killing liveness.
+//
+// The cellID is validated against the full [NewProbeName] shape, so an invalid
+// cellID surfaces at transport-resolution time rather than per-probe invocation.
+// Budget: suffix "_remote_ready" (13) + cellID (≤32, pkg/scaffoldid cap) = ≤45 < 64.
+//
+// This is the SOLE sanctioned composed-name constructor for remote-peer
+// readiness probes — bare `cellID + "_remote_ready"` concat at callsites is
+// rejected by archtest PROBENAME-SEALED-FUNNEL-01 (A2 cast-ban + A4 NewProbeName
+// caller-allowlist), the same closure as [EmitterFailOpenProbeName].
+func RemoteCellReadyProbeName(targetCellID string) (ProbeName, error) {
+	if targetCellID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: remote-cell readiness probe targetCellID must not be empty")
+	}
+	return NewProbeName(targetCellID + remoteCellReadyProbeNameSuffix)
+}
+
 // projectionProbeNameInfix forms the fixed middle segment shared by all
 // projection probe names: "<cellID>_projection_<projectionID>_…".
 // Length = len("_projection_") = 12.

@@ -326,11 +326,45 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
   accesscore `celltransport.Resolve` 传入（非 nil），split topology remote 调用现发 `transport_mode=remote`
   指标（关闭 ADR D4 指标缺口）。**span tracer 半残留**：cross-cell span tracer 在 bootstrap phase5
   late-bind（`InProcessTransport.Bind`），module-Provide 期不可得 → remote span tracing 追踪在独立 follow-up
-  issue（结构性 late-bind blocker，非静默缺口）。
+  issue（结构性 late-bind blocker，非静默缺口）。**→ #2251 已闭合**（见 §#2251 Amendment）。
 - **AI-robust 护栏补全（P1.4 / P1.5）**：`SVCTOKEN-CALLER-CELL-REQUIRED-01` 增「auth 包外生产代码禁直调
   `GenerateServiceToken`（须走 `SignInternalRequest` funnel）」arm + red fixture——把 godoc 已宣称但未 enforce
   的禁令落为机器可判定（Medium）；`CELLTRANSPORT-SELECT-FUNNEL-01` 扫描根加 `corecells` + red fixture，封死
   core cell 直构 `transport.NewRemoteHTTP` 绕 topology gate 的未来路径。
+
+### #2251 Amendment — remote 可观测/Ops 收尾（span 半闭合 + readiness 闭环）
+
+承接 §#1966 Amendment 拆出的两条 follow-up，**关闭 D4 trace 半缺口**并补 remote peer 的 readiness 闭环。
+
+- **span tracer 单源（P1.3，D4 span 半闭合）**：放弃「remote 须复制 in-proc phase5 late-bind」的方向
+  ——remote transport 不依赖 phase5 才存在的 handler（只需 tracer），故构造期即可注入。tracer + metrics
+  收敛进 sealed `transport.CrossCellObs`（unexported 字段）；`SharedDeps` 以输入 `Tracer` + 派生
+  `TransportObs` **替换**松散 `TransportMetrics` 字段，Builder 同时 `bootstrap.WithTracer`
+  （router/in-proc/event-router）+ 注入捆绑（remote），故 remote 与 in-proc span **同源**。
+  `celltransport.Resolve` 收**一个**预建捆绑参——边界上无可省略/可 nil 的 tracer 参数，「接 metrics 忘
+  tracer」**类型级不可表达**（Hard sealed-construction）。范围 seam-only：`SharedDeps.Tracer` 可 nil 或
+  typed-nil（经 `validation.IsNilInterface` 归一降级 NoopTracer，#2251 review F2），生产暂未接真 otel（见 EPIC）。
+  - **评级分层（AI-robust「funnel 双向锁」，#2251 review F1）**：「remote 与 in-proc span 同源」依赖
+    「唯一 minter = `composition.Builder`」，须分上下游评级。**下游 = Hard**：`CrossCellObs` 字段 unexported，
+    包外不可 struct-literal 伪造，唯一 mint 路径是构造器。**上游「只 composition mint」= Medium**：由
+    caller-funnel `CROSSCELLOBS-MINTER-FUNNEL-01`（type-aware AST scan + RED fixture）守。**原 amendment 把
+    整句标 Hard 是 overclaim**——`NewCrossCellObs` 是 exported 构造器；bundle 类型在 `framework/runtime/transport`、
+    minter 在 `framework/runtime/composition`、consumer 在 `cellmodules/celltransport`，三包跨两模块、字段所有权
+    属 transport，sealed mint token 会成跨模块 import cycle，故 Go 可见性**不可**表达「只 composition mint」。
+    这是与 `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01` / `COMMAND-ASYNC-EMIT-CALLER-01` / RowScopeAll minter
+    同族的文档化永久 Go/module 天花板，不开 fake Hard-upgrade issue。
+- **remote peer readiness（P2.7）**：`celltransport.Resolve` 的 remote 分支经 `ModuleResult.Resources`
+  注册 `<cell>_remote_ready`（typed `healthz.RemoteCellReadyProbeName`）。probe 只对 resolved endpoint 做
+  **TCP dial**（`transport.EndpointDialTarget` 解析，与 `rewriteToAbsolute` 同源），**不**打远端 `/readyz`
+  ——cascade-safe（避免 A↔B 互探 readiness 死锁）。peer 不可达 → 本 cell `/readyz` 降级（运维摘流量），
+  只进 readiness aggregator、**不** kill liveness。**威胁矩阵补全**：D4 此前认为「健康检查已由 readyz/
+  ConsumerBase 覆盖」对 remote peer 不成立（peer down 时本 cell /readyz 仍 200）——本条把 remote 依赖纳入
+  本 cell readiness 闭环，纠正该盲区。
+- **范围切割（EPIC）**：本 PR 只做 TCP-dial 基线。更丰富的 peer health（HTTP `/readyz` 深度探测 + 远端
+  health-listener 地址发现、多副本 endpoint 替换 `StaticResolver`、liveness/readiness 编排、依赖环检测、
+  对标 k8s controller-runtime/readiness gate）归独立 EPIC「类 k8s cell 运行时管理」。
+- **golden 顺带修复**：`SHAREDDEPS-FIELDSET-FROZEN-01` golden 此前漏更 #1966 加的 `TransportMetrics`
+  字段（drift，base 已红）；本 PR 移除该字段 + 加 `Tracer`/`TransportObs`，golden 同步归绿。
 
 ### #1964 Amendment — per-cell 基础设施 seam 落地记录
 

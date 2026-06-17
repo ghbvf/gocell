@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/idempotency"
 	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/wrapper"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -171,14 +172,26 @@ type SharedDeps struct {
 	// internal-listener handler into it at phase5. Build always populates it.
 	InProcessTransport *transport.InProcessTransport
 
-	// TransportMetrics is the SHARED *transport.Metrics minted once by Build (from
-	// MetricsProvider) and reused by both the in-process transport and any remote
-	// transport a module resolves via celltransport.Resolve — so split-topology
-	// remote calls emit cell_transport_requests_total{transport_mode=remote}
-	// instead of dropping the metric (#1966 review P1.3, ADR D4). It is the SAME
-	// instance the in-process holder uses; reusing it (not re-registering) avoids
-	// a duplicate-counter registration error. Build always populates it.
-	TransportMetrics *transport.Metrics
+	// Tracer is the OPTIONAL cross-cell tracing backend (input). It is the SINGLE
+	// source for distributed tracing: when non-nil, Build threads it into BOTH the
+	// bootstrap tracer (router + in-process transport late-bind + event router, via
+	// bootstrap.WithTracer) AND the remote transport (via TransportObs below), so a
+	// split-topology remote call gets the SAME tracer as in-process calls — closing
+	// the ADR D4 span half (#2251 P1.3). Nil = no tracing configured (remote and
+	// in-process both degrade to wrapper.NoopTracer{}); production currently leaves
+	// it nil (seam-only) until a composition root wires a real otel tracer. Adding
+	// it here (rather than a per-call argument) makes "wired metrics but forgot the
+	// tracer" unrepresentable at the celltransport.Resolve boundary.
+	Tracer wrapper.Tracer
+
+	// TransportObs is the SHARED cross-cell observability bundle (transport metrics
+	// + Tracer) minted ONCE by Build and consumed by both the in-process transport
+	// and any remote transport a module resolves via celltransport.Resolve — so
+	// split-topology remote calls emit cell_transport_requests_total{transport_mode=
+	// remote} and produce spans instead of dropping them (#1966 review P1.3 / #2251,
+	// ADR D4). The metrics instance is reused (not re-registered) to avoid a
+	// duplicate-counter error. Build-populated (derived), not a caller input.
+	TransportObs transport.CrossCellObs
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener.
 	HealthHTTPAddr string
