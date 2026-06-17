@@ -2,13 +2,13 @@
 # verify-bucket: validate
 # verify-local-compose: assert local docker deploy artefacts stay in sync.
 #
-# Guards the docker-compose.local.yml / hack/scripts/gen-deploy-secrets.sh /
+# Guards the deploy/docker-compose.local.yml / hack/scripts/gen-deploy-secrets.sh /
 # docs/ops/local-docker-deploy.md trio + the JWT env-set behavior of
 # tests/e2e/start-corebundle.sh that lets real-mode deployments inject a
 # fixed keypair instead of every container generating ephemeral keys.
 #
 # What this checks (executable; fail-closed):
-#   1. docker-compose.local.yml is a structurally valid compose file
+#   1. deploy/docker-compose.local.yml is a structurally valid compose file
 #      (`docker compose config -q` parses + interpolates).
 #   2. tests/e2e/start-corebundle.sh JWT env-set guard — BEHAVIOR test via
 #      fake openssl on PATH:
@@ -17,7 +17,7 @@
 #      Replaces an earlier string-grep gate (Soft, violates AI-robust ≥Medium
 #      door) with a runtime invariant check on the actual script.
 #   3. .gitignore covers .env.local so generated secrets never land in git.
-#   4. .env.local.example + docs/ops/local-docker-deploy.md exist (so the
+#   4. deploy/.env.local.example + docs/ops/local-docker-deploy.md exist (so the
 #      compose file has companion docs / placeholders).
 #   5. Makefile exposes local-up / local-down targets.
 #
@@ -59,8 +59,8 @@ else
     OPS_PASS=placeholder \
     GOCELL_JWT_PRIVATE_KEY=placeholder \
     GOCELL_JWT_PUBLIC_KEY=placeholder \
-    docker compose -f docker-compose.local.yml config -q \
-    || fail "docker-compose.local.yml failed structural parse"
+    docker compose -f deploy/docker-compose.local.yml --project-directory . config -q \
+    || fail "deploy/docker-compose.local.yml failed structural parse"
 fi
 
 # 2. JWT env-set guard — BEHAVIOR test (not string grep).
@@ -144,7 +144,7 @@ if ! grep -qE '^\.env\.local$|^\*\.env\.local$' .gitignore; then
 fi
 
 # 4. Companion files exist.
-for required in .env.local.example docs/ops/local-docker-deploy.md docker-compose.local.yml hack/scripts/gen-deploy-secrets.sh tests/e2e/start-corebundle.sh; do
+for required in deploy/.env.local.example docs/ops/local-docker-deploy.md deploy/docker-compose.local.yml hack/scripts/gen-deploy-secrets.sh tests/e2e/start-corebundle.sh; do
   [[ -f "${required}" ]] || fail "missing required file: ${required}"
 done
 

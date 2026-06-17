@@ -327,7 +327,7 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 在 "Per-Cell Session and Cursor Keys" 和 "configcore cell database" 章节后追加
 `foocore` 小节，列出 `GOCELL_FOOCORE_DATABASE_URL` 等变量。
 
-### Step 6. 更新 `.env.example`
+### Step 6. 更新 `deploy/.env.example`
 
 添加 `foocore` 相关的带注释示例行：
 

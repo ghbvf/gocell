@@ -10,7 +10,7 @@ All integration test files use the `//go:build integration` build tag so they ar
 
 Start the local Docker daemon. Integration tests use testcontainers and
 self-provision PostgreSQL, Redis, RabbitMQ, Vault, and similar dependencies per
-test. Do not start the repository root `docker-compose.yml` for the
+test. Do not start `deploy/docker-compose.yml` for the
 testcontainer-backed integration suite.
 
 Use strict mode when a run must fail if Docker is unavailable:
