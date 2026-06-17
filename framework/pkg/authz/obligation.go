@@ -129,10 +129,12 @@ func (fm FieldMask) clone() FieldMask {
 //
 //   - RowScope: the row-visibility predicate the PEP must apply to list/get
 //     queries. A zero RowScope is valid here — it means "this policy does not
-//     itself constrain row scope" (the policy obligation is absent). The
-//     *effective* row scope for a request is resolved by the PR-7 evaluator,
-//     which combines all policy obligations with the principal→RowScope
-//     derivation (PR-5). Only a non-zero RowScope carries an explicit
+//     itself constrain row scope" (the policy obligation is absent). The current
+//     PR-7 evaluator combines RowScope obligations only among matching permit
+//     rules, choosing the narrowest policy-imposed scope. It does NOT yet merge
+//     those policy obligations with the principal→RowScope derivation (PR-5);
+//     data PEPs that need an effective request scope must perform that merge at
+//     the enforcement boundary. Only a non-zero RowScope carries an explicit
 //     obligation; it must be a valid tenant.RowScope value.
 //
 //   - FieldMask: the set of columns to mask in the response. An empty FieldMask
@@ -142,10 +144,10 @@ func (fm FieldMask) clone() FieldMask {
 // GoCell only models mandatory obligations in this type.
 type Obligations struct {
 	// RowScope is the row-visibility obligation. A zero value is valid and
-	// means "this policy does not impose a row-scope constraint"; the PR-7
-	// evaluator resolves the effective scope from all applicable obligations
-	// combined with the principal→RowScope derivation (PR-5). A non-zero
-	// value must pass tenant.RowScope.Validate().
+	// means "this policy does not impose a row-scope constraint"; the current
+	// evaluator merges only matching policy-permit obligations and leaves any
+	// principal-derived RowScope merge to the data PEP. A non-zero value must
+	// pass tenant.RowScope.Validate().
 	RowScope tenant.RowScope
 	// FieldMask specifies which response columns to mask. An empty FieldMask
 	// is valid (no masking required).
