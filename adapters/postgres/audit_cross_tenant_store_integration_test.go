@@ -529,24 +529,28 @@ func seedCrossTenantEntries(t *testing.T, ownerPool *Pool, entries []*ledger.Ent
 			ts = clock.Real().Now()
 		}
 
-		// Generate a deterministic row ID (event_id is a UNIQUE key per chain). The
-		// id column is uuid, so derive a stable valid UUID from eventID+suffix.
+		// Generate a deterministic, GLOBALLY-UNIQUE row id. The id column is a uuid
+		// PRIMARY KEY, and production PG assigns a random uuid.New() per row, so the
+		// fixture id must include the tenant (not just the eventID): EventID is unique
+		// only per (namespace, tenant), so two tenants may legitimately share one (the
+		// CrossTenant_GetByID_DuplicateEventID conformance case), and an eventID-only
+		// derivation would collide on audit_entries_pkey.
 		// Unlike insertAuditRowSQL (which hardcodes empty subject_id/trace_id), this
 		// persists the entry's SubjectID + TraceID so the cross-tenant SubjectID/
 		// TraceID filter conformance sub-tests exercise real predicate matching.
 		_, err := ownerPool.DB().Exec(ctx, insertCrossTenantRowSQL,
-			auditRowUUID(e.EventID+"-pg"), // $1 id (uuid) — unique per chain entry
-			ns,                            // $2 namespace
-			seqNo,                         // $3 seq_no
-			e.EventID,                     // $4 event_id (conformance unique key)
-			e.EventType,                   // $5 event_type
-			e.ActorID,                     // $6 actor_id
-			e.SubjectID,                   // $7 subject_id
-			tid,                           // $8 tenant_id
-			e.TraceID,                     // $9 trace_id
-			ts,                            // $10 occurred_at + timestamp
-			prevHash,                      // $11 prev_hash
-			auditHash64,                   // $12 hash
+			auditRowUUID(e.EventID+"-"+tid+"-pg"), // $1 id (uuid) — globally unique per (eventID, tenant)
+			ns,          // $2 namespace
+			seqNo,       // $3 seq_no
+			e.EventID,   // $4 event_id (conformance unique key)
+			e.EventType, // $5 event_type
+			e.ActorID,   // $6 actor_id
+			e.SubjectID, // $7 subject_id
+			tid,         // $8 tenant_id
+			e.TraceID,   // $9 trace_id
+			ts,          // $10 occurred_at + timestamp
+			prevHash,    // $11 prev_hash
+			auditHash64, // $12 hash
 		)
 		require.NoError(t, err, "seedCrossTenantEntries: insert %s (ns=%s tenant=%s seq=%d)",
 			e.EventID, ns, tid, seqNo)
