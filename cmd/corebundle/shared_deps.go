@@ -14,8 +14,8 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
-// SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
-// `cp .env.example .env && go run ./cmd/corebundle` works without first
+// SampleVerbosePlaceholder is the literal placeholder shipped in deploy/.env.example so
+// `cp deploy/.env.example .env && go run ./cmd/corebundle` works without first
 // minting a secret. validateControlPlane rejects this exact value in
 // adapter mode "real" — production deployments must mint their own
 // high-entropy token. Exposed (capitalised) so example/test code and the

@@ -221,7 +221,7 @@ func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
 // cover golangci/golangci-lint-action (removed in #1565/#2125), and both a
 // root github-actions block and a root gomod block must be present.
 //
-// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01.
+// INVARIANT: DEPENDABOT-NO-GHOST-GOLANGCI-01 — ghost golangci group ban + root blocks present.
 func TestDependabotNoGhostGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "dependabot.yml")))

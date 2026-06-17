@@ -110,7 +110,7 @@
 //
 // On-demand inventory listing (no persisted view):
 //
-//	bash scripts/audit/list-archtests.sh
+//	bash hack/scripts/audit/list-archtests.sh
 //
 // prints every anchor + file + line + theme to stdout. Persisted
 // `docs/audit/archtest-inventory.md` and its drift gate were removed in

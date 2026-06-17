@@ -25,7 +25,7 @@
 #      version pinning + docker-image fallback (deemed multi-thousand-
 #      contributor reproducibility scaffolding, unjustified at our scale)
 #      and broad `find . -name "*.sh"` discovery (this repo keeps all shell
-#      under scripts/ hack/ tests/).
+#      under hack/ tests/).
 
 set -euo pipefail
 
@@ -53,10 +53,10 @@ while IFS= read -r script; do
     *) echo "verify-shellcheck: git check-ignore failed for ${script} (exit ${ec})" >&2
        exit "${ec}" ;;                     # 128 = not a repo / bad pathspec
   esac
-done < <(find scripts hack tests .github/scripts -type f -name '*.sh' 2>/dev/null | sort)
+done < <(find hack tests .github/scripts -type f -name '*.sh' 2>/dev/null | sort)
 
 if [[ ${#scripts_to_check[@]} -eq 0 ]]; then
-  echo "verify-shellcheck: no scripts found under scripts/ hack/ tests/" >&2
+  echo "verify-shellcheck: no scripts found under hack/ tests/" >&2
   exit 1
 fi
 

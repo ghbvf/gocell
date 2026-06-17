@@ -2,8 +2,8 @@
 
 // INVARIANT: COMPOSE-DEV-LOOPBACK-BIND-01
 //
-// The repo-root docker-compose.yml is the zero-config local-dev quick-start
-// stack, and it ships FIXED, committed dev credentials (POSTGRES_PASSWORD:
+// deploy/docker-compose.yml is the local-dev quick-start stack (run via
+// `make up`, #1781), and it ships FIXED, committed dev credentials (POSTGRES_PASSWORD:
 // gocell_dev, RABBITMQ_DEFAULT_PASS: gocell_dev, MINIO_ROOT_PASSWORD:
 // gocell_dev_secret). Because those credentials are known to anyone with the
 // repo, every published host port MUST bind to 127.0.0.1 (loopback) rather than
@@ -18,7 +18,7 @@
 // test). Hard is unreachable: docker-compose YAML has no type-system way to pin a
 // host IP onto a port string, and Go has no compile-time equivalent.
 //
-// Scope: ONLY the repo-root docker-compose.yml. docker-compose.local.yml uses
+// Scope: ONLY deploy/docker-compose.yml. deploy/docker-compose.local.yml uses
 // ${VAR:?} (caller-supplied, non-committed) credentials plus a shared netns, and
 // tests/e2e/docker-compose.e2e.yaml uses network_mode: host with no published
 // ports — both have a different risk model and are intentionally out of scope of
@@ -27,7 +27,7 @@
 // Blind spots (disclosed):
 //   - Only short-syntax ports ("[IP:]HOST:CONTAINER[/proto]") are parsed;
 //     long-syntax (- target:/published:/host_ip:) and IPv6 host IPs are not. The
-//     root file uses IPv4 short syntax; a future switch must extend hostIsLoopback.
+//     file uses IPv4 short syntax; a future switch must extend hostIsLoopback.
 //   - Asserts only the literal 127.0.0.1 host-IP prefix, not runtime reachability.
 package archtest
 
@@ -95,24 +95,24 @@ func hostIsLoopback(portSpec string) bool {
 	return parts[0] == loopbackHostIP
 }
 
-// TestComposeDevLoopbackBind enforces COMPOSE-DEV-LOOPBACK-BIND-01 against the
-// repo-root docker-compose.yml.
+// TestComposeDevLoopbackBind enforces COMPOSE-DEV-LOOPBACK-BIND-01 against
+// deploy/docker-compose.yml.
 //
-// Anti-vacuity: asserts at least 4 published ports were inspected. The root file
+// Anti-vacuity: asserts at least 4 published ports were inspected. The file
 // publishes 6 (postgres, redis, rabbitmq×2, minio×2); a count below 4 means the
 // parse or file path broke and the guard would otherwise be vacuously green.
 func TestComposeDevLoopbackBind(t *testing.T) {
 	root := findModuleRoot(t)
-	path := filepath.Clean(filepath.Join(root, "docker-compose.yml"))
+	path := filepath.Clean(filepath.Join(root, "deploy", "docker-compose.yml"))
 	body, err := os.ReadFile(path)
-	require.NoError(t, err, "%s: repo-root docker-compose.yml must exist", composeLoopbackRuleID)
+	require.NoError(t, err, "%s: deploy/docker-compose.yml must exist", composeLoopbackRuleID)
 
 	violations, checked := composeNonLoopbackPorts(body)
 	for _, v := range violations {
-		t.Errorf("%s: docker-compose.yml: %s", composeLoopbackRuleID, v)
+		t.Errorf("%s: deploy/docker-compose.yml: %s", composeLoopbackRuleID, v)
 	}
 	require.GreaterOrEqualf(t, checked, 4,
-		"%s: inspected only %d published ports in docker-compose.yml — expected ≥4; "+
+		"%s: inspected only %d published ports in deploy/docker-compose.yml — expected ≥4; "+
 			"parse or path may be broken", composeLoopbackRuleID, checked)
 }
 

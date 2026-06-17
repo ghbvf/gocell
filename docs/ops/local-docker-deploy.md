@@ -41,10 +41,10 @@ cd gocell
 ### Step 2: Generate secrets
 
 ```bash
-bash scripts/gen-deploy-secrets.sh
+bash hack/scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 14 values in `.env.local` (see §Secrets table for the
+The script generates 15 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.
@@ -65,7 +65,7 @@ again to obtain fresh credentials. For persistent keypair across restarts, see
 make local-up
 ```
 
-This runs `docker compose -f docker-compose.local.yml --env-file .env.local up
+This runs `docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local up
 -d --wait`. Compose starts PostgreSQL and Redis, waits until both pass their
 health checks, runs the database migration job to completion, then starts
 `corebundle`. The `--wait` flag blocks until `corebundle` itself reports healthy
@@ -194,7 +194,7 @@ Production deployments replace this arrangement with a managed TLS Redis URL
 The health listener binds to `127.0.0.1:9091` (`GOCELL_HTTP_HEALTH_LOCAL_ONLY=1`), which is reachable **only from inside the `corebundle` container's netns**—that's what the Docker `healthcheck` directive uses. From the host machine, `curl http://localhost:9091/readyz` will fail (connection refused). To probe readiness from the host, either:
 
 - Inspect `docker compose ps`—the `corebundle` container reports `(healthy)` when readyz is green;
-- Or `docker compose -f docker-compose.local.yml --env-file .env.local exec corebundle curl -fsS http://127.0.0.1:9091/readyz`.
+- Or `docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local exec corebundle curl -fsS http://127.0.0.1:9091/readyz`.
 
 Primary port `:8080` is the only listener published to the host; business `/api/v1/*` traffic enters there.
 
@@ -203,7 +203,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 
 ### What the script generates
 
-`scripts/gen-deploy-secrets.sh` writes 14 values to `.env.local`:
+`hack/scripts/gen-deploy-secrets.sh` writes 15 values to `.env.local`:
 
 | Variable | How generated |
 |----------|---------------|
@@ -213,6 +213,7 @@ Primary port `:8080` is the only listener published to the host; business `/api/
 | `CONFIGCORE_MASTER_KEY` | `openssl rand -hex 32` (64 hex chars) |
 | `CONFIGCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `AUDITCORE_HMAC_KEY` | `openssl rand -base64 32` |
+| `AUDIT_BOOTSTRAP_HMAC_KEY` | `openssl rand -base64 32` (bootstrap audit chain HMAC key B, ADR 202605270230 / #1121) |
 | `AUDITCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `ACCESSCORE_CURSOR_KEY` | `openssl rand -base64 32` |
 | `ACCESSCORE_IP_HASH_SALT` | `openssl rand -base64 32` |
@@ -234,7 +235,7 @@ for the complete opt-in recipe.
 `.env.local` is listed in `.gitignore`. The script sets `chmod 600` on the
 generated file. Never commit this file to version control.
 
-`.env.local.example` (committed) is a template showing the expected variable
+`deploy/.env.local.example` (committed) is a template showing the expected variable
 names and value shapes. It contains no real secrets.
 
 ### Secret rotation
@@ -243,7 +244,7 @@ To rotate all secrets at once:
 
 ```bash
 rm .env.local
-bash scripts/gen-deploy-secrets.sh
+bash hack/scripts/gen-deploy-secrets.sh
 make local-down
 make local-up
 ```
@@ -289,8 +290,8 @@ is left unconfigured, causing super-admin cross-tenant audit read to return HTTP
 ### New env var: `GOCELL_APP_PASSWORD`
 
 `GOCELL_APP_PASSWORD` sets the password for the restricted role. It must be set in
-`.env.local`. The secret-generation script `scripts/gen-deploy-secrets.sh` writes
-it automatically alongside `PG_PASSWORD`. Use `.env.local.example` as a reference.
+`.env.local`. The secret-generation script `hack/scripts/gen-deploy-secrets.sh` writes
+it automatically alongside `PG_PASSWORD`. Use `deploy/.env.local.example` as a reference.
 
 ### First-time setup (new role, new data dir)
 
@@ -323,7 +324,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
 1. Generate core secrets if you have not already:
 
    ```bash
-   bash scripts/gen-deploy-secrets.sh
+   bash hack/scripts/gen-deploy-secrets.sh
    ```
 
 2. Append the two optional variables to `.env.local` (the password must be hex/URL-safe):
@@ -353,7 +354,7 @@ The super-admin cross-tenant audit read capability (`gocell_audit_admin` pool) i
 4. Verify the admin pool probe is green:
 
    ```bash
-   docker compose -f docker-compose.local.yml --env-file .env.local exec corebundle \
+   docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local exec corebundle \
      sh -c 'curl -fsS -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" "http://127.0.0.1:9091/readyz?verbose"' | grep audit_admin
    ```
 
@@ -386,14 +387,14 @@ make: *** [local-up] Error 1
 `make local-up` runs `docker compose ... up -d --wait` and waits up to 40 retries x 3 s = 120 s for `corebundle` to report healthy. Exit 1 means the corebundle container either started and exited, or never reached `/readyz` green. Inspect logs:
 
 ```bash
-docker compose -f docker-compose.local.yml --env-file .env.local logs corebundle
+docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local logs corebundle
 ```
 
 Common root causes:
 
-- Missing env var — corebundle prints `ERR_VALIDATION_FAILED` with the offending env name. Re-run `bash scripts/gen-deploy-secrets.sh` after deleting `.env.local`.
+- Missing env var — corebundle prints `ERR_VALIDATION_FAILED` with the offending env name. Re-run `bash hack/scripts/gen-deploy-secrets.sh` after deleting `.env.local`.
 - Wrong key format — `ERR_AUTH_KEY_INVALID` for JWT, or PEM parse errors when injecting multiline keys via `env_file` (see §Production Differences).
-- PG migration incomplete — check `docker compose -f docker-compose.local.yml --env-file .env.local logs migrate`; should exit 0 with no error output.
+- PG migration incomplete — check `docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local logs migrate`; should exit 0 with no error output.
 - Bound port conflict on `:8080` — `lsof -i :8080` to find the offending process.
 
 ### `corebundle` restart loop with `ERR_ADAPTER_ENDPOINT_NOT_TLS`
@@ -406,7 +407,7 @@ ERR_ADAPTER_ENDPOINT_NOT_TLS: Redis address is not a TLS endpoint
 
 Cause: `corebundle` is not sharing Redis's network namespace, so it resolves
 `GOCELL_REDIS_ADDR=127.0.0.1:6379` against the Docker bridge network instead of
-the loopback. This happens when `docker-compose.local.yml` is modified and the
+the loopback. This happens when `deploy/docker-compose.local.yml` is modified and the
 `network_mode: "service:redis"` line is removed or altered.
 
 Fix: restore `network_mode: "service:redis"` on the `corebundle` service.
@@ -420,7 +421,7 @@ Cause: the `migrate` service started before PostgreSQL finished its health check
 This should not happen in normal operation because the migration service declares
 `depends_on: postgres: condition: service_healthy`. If it does happen, it is
 usually a sign that the health check interval or retry count in
-`docker-compose.local.yml` was changed.
+`deploy/docker-compose.local.yml` was changed.
 
 Fix: run `make local-down && make local-up`. Compose will wait for PostgreSQL to
 be healthy before starting the migration service.
@@ -452,7 +453,7 @@ lsof -i :8080
 ```
 
 Stop whatever process is using port 8080, or change the published port mapping
-in `docker-compose.local.yml` (note: since the port is declared on the `redis`
+in `deploy/docker-compose.local.yml` (note: since the port is declared on the `redis`
 service, both the `redis` entry and any curl commands must use the new port).
 
 
@@ -464,12 +465,12 @@ To stop the stack and remove all volumes (including the PostgreSQL data director
 make local-down
 ```
 
-This runs `docker compose -f docker-compose.local.yml --env-file .env.local down -v`.
+This runs `docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local down -v`.
 
 To stop the stack while keeping PostgreSQL data intact (for a faster restart):
 
 ```bash
-docker compose -f docker-compose.local.yml --env-file .env.local down
+docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local down
 ```
 
 Omitting `-v` preserves the `pgdata` named volume so the next `make local-up`
