@@ -1162,26 +1162,9 @@ func TestErrcodeScanScopeIncludesSatellites(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 	root := findModuleRoot(t)
-	required := map[string]bool{
-		"cmd/gocell/main.go":     false,
-		"cmd/corebundle/main.go": false,
-	}
-	_ = Run(t, Typed(TypedOpts{Tests: false}, prodscan.PatternsWithSatellites(root)),
-		func(p *Pass) []Diagnostic {
-			for _, f := range p.Files {
-				rel := filepath.ToSlash(p.Rel(f))
-				if _, ok := required[rel]; ok {
-					required[rel] = true
-				}
-			}
-			return nil
-		})
-	for rel, seen := range required {
-		if !seen {
-			t.Errorf("errcode scan scope (prodscan.PatternsWithSatellites) did not visit %s; "+
-				"satellite coverage would be vacuous", rel)
-		}
-	}
+	assertScopeVisits(t, "errcode (prodscan.PatternsWithSatellites)",
+		Typed(TypedOpts{Tests: false}, prodscan.PatternsWithSatellites(root)),
+		"cmd/gocell/main.go", "cmd/corebundle/main.go")
 }
 
 // ─── import anchors ───────────────────────────────────────────────────────────

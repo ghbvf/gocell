@@ -171,27 +171,8 @@ func TestClockPositionalInjection(t *testing.T) {
 func TestClockWorkspaceScopeIncludesSatellites(t *testing.T) {
 	t.Parallel()
 
-	required := map[string]bool{
-		"cmd/gocell/main.go":      false,
-		"cmd/gocell/app/check.go": false,
-		"cmd/corebundle/main.go":  false,
-	}
-
-	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			rel := filepath.ToSlash(p.Rel(f))
-			if _, ok := required[rel]; ok {
-				required[rel] = true
-			}
-		}
-		return nil
-	})
-
-	for rel, seen := range required {
-		if !seen {
-			t.Errorf("clock workspace production scope did not visit %s; satellite module coverage would be vacuous", rel)
-		}
-	}
+	assertScopeVisits(t, "clock workspace production", Production(TypedOpts{Tests: false}),
+		"cmd/gocell/main.go", "cmd/gocell/app/check.go", "cmd/corebundle/main.go")
 }
 
 func TestClockChecksDoNotUseProdscanPatternsExtended(t *testing.T) {

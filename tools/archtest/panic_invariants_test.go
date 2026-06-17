@@ -235,31 +235,13 @@ func TestPanicRegisteredUsesProductionScope(t *testing.T) {
 // TestClockWorkspaceScopeIncludesSatellites.
 func TestPanicRegisteredScopeIncludesSatellites(t *testing.T) {
 	t.Parallel()
-	required := map[string]bool{
-		"cmd/gocell/main.go":     false,
-		"cmd/corebundle/main.go": false,
-		// examples/ is production code held to PANIC-REGISTERED-01 (#2149); prove
-		// the Production() scope LOADS an examples production file (the FILTER side
-		// — that shouldSkipForPanicRegistered does not drop it again — is held by
-		// TestPanicRegisteredDoesNotSkipExamples). Also the disk-existence no-stale
-		// anchor for that test's examples fixture: rename/delete fails here.
-		"examples/iotdevice/run.go": false,
-	}
-	_ = Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		for _, f := range p.Files {
-			rel := filepath.ToSlash(p.Rel(f))
-			if _, ok := required[rel]; ok {
-				required[rel] = true
-			}
-		}
-		return nil
-	})
-	for rel, seen := range required {
-		if !seen {
-			t.Errorf("PANIC-REGISTERED-01 Production scope did not visit %s; "+
-				"satellite coverage would be vacuous", rel)
-		}
-	}
+	// examples/iotdevice/run.go proves the Production() scope LOADS an examples
+	// production file (the FILTER side — that shouldSkipForPanicRegistered does
+	// not drop it again — is held by TestPanicRegisteredDoesNotSkipExamples,
+	// #2149); it is also that test's disk-existence no-stale anchor (rename/delete
+	// fails here).
+	assertScopeVisits(t, "PANIC-REGISTERED-01 Production", Production(TypedOpts{Tests: false}),
+		"cmd/gocell/main.go", "cmd/corebundle/main.go", "examples/iotdevice/run.go")
 }
 
 // TestPanicRegisteredDoesNotSkipExamples is the FILTER-stage companion to
