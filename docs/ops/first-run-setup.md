@@ -99,7 +99,7 @@ services:
 After starting, trigger the setup:
 
 ```bash
-docker compose up -d
+make up
 curl -s -X POST http://localhost:8080/api/v1/access/setup/admin \
   -u "ops:OpsPass123!" \
   -H 'Content-Type: application/json' \

@@ -44,7 +44,7 @@ cd gocell
 bash hack/scripts/gen-deploy-secrets.sh
 ```
 
-The script generates 14 values in `.env.local` (see §Secrets table for the
+The script generates 15 values in `.env.local` (see §Secrets table for the
 full list). The file is set to `chmod 600` automatically. The script exits
 with code 1 if `.env.local` already exists, so it is safe to run without
 checking first.

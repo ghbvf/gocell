@@ -21,6 +21,12 @@
 # For a fail-fast "bring-your-own-password" variant that uses ${VAR:?} and
 # refuses to start with a missing secret, see docker-compose.local.yml.
 
+# Explicit project name (mirrors docker-compose.local.yml's `name: gocell-local`) so
+# `make up` (--project-directory .) and hack/scripts/healthcheck-verify.sh (COMPOSE_FILE=)
+# resolve to the SAME project regardless of CWD/invocation — without it the two derive
+# different names (cwd-basename vs `deploy`) and act on separate stacks (#1781).
+name: gocell
+
 services:
   postgres:
     image: postgres:15-alpine
