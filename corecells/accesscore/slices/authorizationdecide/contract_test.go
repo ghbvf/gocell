@@ -213,6 +213,38 @@ func TestHttpAuthDecideV1_StoreUnavailable(t *testing.T) {
 	c.ValidateErrorResponse(t, http.StatusServiceUnavailable, rec.Body.Bytes())
 }
 
+// TestHttpAuthDecideV1_Forbidden covers the two contract-declared 403 fail-closed
+// paths, both produced by the RequirePermissionForSelf gate (not the handler):
+//   - no Authorizer wired → "policy engine not wired" deny;
+//   - missing tenant scope → the gate's access:decide Authorize fails closed.
+func TestHttpAuthDecideV1_Forbidden(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.auth.decide.v1")
+
+	t.Run("no authorizer wired", func(t *testing.T) {
+		h, _ := newDecideMux(t, mem.NewPolicyRepository())
+		// principal + tenant, but NO Authorizer in context → gate fails closed (403).
+		ctx := ctxkeys.WithTenantID(auth.TestContext(decideTestSubject, []string{"user"}), testTenantIDStr)
+		rec := postDecide(t, h, ctx, `{"action":"audit:read"}`)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("no authorizer: expected 403, got %d", rec.Code)
+		}
+		c.ValidateErrorResponse(t, http.StatusForbidden, rec.Body.Bytes())
+	})
+
+	t.Run("missing tenant scope", func(t *testing.T) {
+		h, svc := newDecideMux(t, mem.NewPolicyRepository())
+		// principal + Authorizer, but NO tenant → the gate's access:decide Authorize
+		// fails closed (tenant.FromContext error → KindPermissionDenied → 403).
+		ctx := auth.WithAuthorizer(auth.TestContext(decideTestSubject, []string{"user"}), svc)
+		rec := postDecide(t, h, ctx, `{"action":"audit:read"}`)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("missing tenant: expected 403, got %d", rec.Code)
+		}
+		c.ValidateErrorResponse(t, http.StatusForbidden, rec.Body.Bytes())
+	})
+}
+
 // TestHttpAuthDecideV1_ResponseSchema locks the response shape: a wrong-shaped
 // body must be rejected by the contract response schema.
 func TestHttpAuthDecideV1_ResponseSchema(t *testing.T) {

@@ -372,3 +372,71 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 		})
 	}
 }
+
+// TestBuiltinBaseline_AccessDecide covers the access:decide self-introspection
+// baseline pair (#1863): the self rule (subject.sub == resource.id) admits any
+// authenticated caller querying their own decisions, and the admin rule admits
+// admin/super-admin for a non-self resource — the {owner, admin} closed set frozen
+// by BASELINE-OWNER-RULE-TENANT-FREEZE-01. A non-admin querying a non-self resource
+// is denied, and an empty resource id is fail-closed (resource.id not-found).
+func TestBuiltinBaseline_AccessDecide(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	const (
+		selfID  = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+		otherID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+	)
+	userPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: selfID, TenantID: testTenantIDStr,
+		Roles: []string{"user"},
+	}
+	adminPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: selfID, TenantID: testTenantIDStr,
+		Roles: []string{auth.RoleAdmin},
+	}
+	decide := authz.PermAccessDecide().String()
+
+	tests := []struct {
+		name       string
+		principal  *auth.Principal
+		resourceID string
+		wantAllow  bool
+	}{
+		{
+			name:      "user + access:decide + resource==self → Allow (self rule)",
+			principal: userPrincipal, resourceID: selfID, wantAllow: true,
+		},
+		{
+			name:      "user + access:decide + resource==other → Deny (non-owner, non-admin)",
+			principal: userPrincipal, resourceID: otherID, wantAllow: false,
+		},
+		{
+			name:      "admin + access:decide + resource==other → Allow (admin rule)",
+			principal: adminPrincipal, resourceID: otherID, wantAllow: true,
+		},
+		{
+			name:      "user + access:decide + empty resource → Deny (resource.id not-found, fail-closed)",
+			principal: userPrincipal, resourceID: "", wantAllow: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
+			dec, _ := svc.evaluate(nil, resolver, decide)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow(),
+				"resourceID=%q roles=%v", tt.resourceID, tt.principal.Roles)
+		})
+	}
+
+	// Action-scope guard: the access:decide rules must NOT grant a different action.
+	t.Run("access:decide self rule does not grant user:read", func(t *testing.T) {
+		resolver := attributeResolver{principal: userPrincipal, resourceID: selfID}
+		dec, _ := svc.evaluate(nil, resolver, authz.PermUserRead().String())
+		assert.True(t, dec.IsAllow(),
+			"sanity: self IS allowed user:read on own id (baseline-user-read-self)")
+		resolver = attributeResolver{principal: userPrincipal, resourceID: selfID}
+		dec, _ = svc.evaluate(nil, resolver, authz.PermConfigRead().String())
+		assert.False(t, dec.IsAllow(),
+			"access:decide self rule must not leak into an unrelated action (config:read)")
+	})
+}

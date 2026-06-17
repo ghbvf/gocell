@@ -149,10 +149,16 @@ var builtinBaseline = []abac.Rule{
 	// allow-all): access:decide is registered as an owner-scoped action in
 	// baseline_freeze_test.go, so BASELINE-OWNER-RULE-TENANT-FREEZE-01 holds its
 	// allow surface to the closed {owner, admin} set — same shape as user:read /
-	// role:read. The admin rule is dormant for the current self-only endpoint (the
-	// gate always forwards resource==caller) but is required by that closed-set
-	// invariant and is what lets admin/super-admin decide about OTHER subjects once
-	// the endpoint accepts a non-self subject (ABAC §4.x).
+	// role:read. The admin rule is dormant for the CURRENT endpoint: the
+	// RequirePermissionForSelf gate always evaluates access:decide with resource ==
+	// the caller's OWN subject, so the self rule alone admits every authenticated
+	// caller through the gate (the admin rule adds nothing while resource==caller).
+	// (Distinct resource: the handler's downstream Authorize for the *queried* action
+	// uses the free-form req.Resource — but that evaluates THAT action's own rules,
+	// not access:decide's.) The admin rule is required by the {1 owner, 1 admin}
+	// closed-set invariant and is what will let admin/super-admin decide access:decide
+	// about OTHER subjects once a future endpoint forwards a non-self subject as the
+	// access:decide resource (ABAC §4.x).
 	{
 		ID:         "baseline-access-decide-self",
 		Name:       "Baseline: allow a user to query their own authorization decisions (subject.sub == resource.id)",

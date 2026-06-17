@@ -209,11 +209,12 @@ func RequirePermissionForSelf(p authz.Permission) Policy {
 	}
 }
 
-// enforcePermission is the shared body of RequirePermission and
-// RequirePermissionForResource. resource is the value forwarded to
-// Authorizer.Authorize (r.URL.Path for RequirePermission; canonicalized path
-// param for RequirePermissionForResource). Logging uses r.URL.Path throughout
-// for observability regardless of the resource argument.
+// enforcePermission is the shared body of RequirePermission,
+// RequirePermissionForResource, and RequirePermissionForSelf. resource is the
+// value forwarded to Authorizer.Authorize: r.URL.Path for RequirePermission; the
+// canonicalized path param for RequirePermissionForResource; the caller's own
+// canonicalized subject for RequirePermissionForSelf. Logging uses r.URL.Path
+// throughout for observability regardless of the resource argument.
 func enforcePermission(r *http.Request, p authz.Permission, resource string) error {
 	// Zero Permission is a programmer error; fail-closed before any I/O.
 	if p.IsZero() {
@@ -234,7 +235,7 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 	if !ok {
 		// Fail-closed: an unwired PDP is a misconfiguration; deny all requests.
 		loggerFrom(r.Context()).Error(
-			"authz: RequirePermission called with no Authorizer in context — denying (fail-closed)",
+			"authz: permission gate called with no Authorizer in context — denying (fail-closed)",
 			slog.String("path", r.URL.Path),
 			slog.String("subject", principal.Subject),
 			slog.String("permission", p.String()),

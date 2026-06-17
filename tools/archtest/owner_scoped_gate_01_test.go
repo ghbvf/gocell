@@ -305,6 +305,14 @@ func TestOwnerScopedGate_ReverseFixture(t *testing.T) {
 	// RequirePermissionForResource triple → in production it would be a MISSING entry.
 	assert.NotContains(t, collected, "redfixture|userID|PermRoleRead",
 		"reverse fixture: a regression to plain auth.RequirePermission must NOT be collected as an owner gate (so production reports it MISSING)")
+	// #1863: a well-formed RequirePermissionForSelf gate is collected as a "self" triple
+	// (proves the self-branch extraction is exercised, not vacuous).
+	assert.Contains(t, collected, "redfixture|self|PermSystemRead",
+		"reverse fixture: a well-formed RequirePermissionForSelf gate must be collected as a self triple")
+	// A self-gate regressed to plain RequirePermission is NOT collected as a self triple
+	// → in production it would be a MISSING entry, identical to the RequirePermissionForResource regression.
+	assert.NotContains(t, collected, "redfixture|self|PermConfigRead",
+		"reverse fixture: a self-gate regressed to plain auth.RequirePermission must NOT be collected as a self triple")
 	for k := range collected {
 		assert.False(t, strings.Contains(k, "PermRoleRead"),
 			"reverse fixture: the plain RequirePermission(PermRoleRead) gate must not produce any owner-gate triple, got %q", k)

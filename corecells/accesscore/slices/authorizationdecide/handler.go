@@ -22,6 +22,14 @@ import (
 // PDP's ownership rules.
 type DecideAdapter struct{ S *Service }
 
+// Canonical const messages for the adapter's typed error responses
+// (MESSAGE-CONST-LITERAL-01 discipline; mirrors the msg* consts in
+// runtime/auth/permission.go so the wording is greppable and refactor-safe).
+const (
+	msgMissingPrincipal = "missing principal"
+	msgUnknownAction    = "unknown action"
+)
+
 // Decide implements decidegen.Service.
 //
 // A policy DENY for the queried action is NOT an HTTP error: it is a successful
@@ -37,7 +45,7 @@ func (a DecideAdapter) Decide(ctx context.Context, req *decidegen.Request) (deci
 		// principal, so this is unreachable on the wired route — but the subject is
 		// load-bearing (it is the decision subject), so fail closed if absent.
 		return decidegen.Decide401ErrorResponse{Body: *errcode.New(
-			errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing principal",
+			errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgMissingPrincipal,
 		)}, nil
 	}
 	// Validate the action resolves to a registered permission. PermissionByName
@@ -46,7 +54,7 @@ func (a DecideAdapter) Decide(ctx context.Context, req *decidegen.Request) (deci
 	// would silently never match any rule (a dead always-deny).
 	if _, ok := authz.PermissionByName(req.Action); !ok {
 		return decidegen.Decide400ErrorResponse{Body: *errcode.New(
-			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "unknown action",
+			errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, msgUnknownAction,
 		)}, nil
 	}
 
