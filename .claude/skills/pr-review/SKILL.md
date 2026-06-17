@@ -157,13 +157,15 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 **优先当前会话窗口**：同 session 内刚跑过 `/pr-review` 或 `/fix`、findings 已在上下文 → 直接用，不重复拉取。窗口没有 → `gh pr view <N> --json comments,reviews`，按 createdAt 倒序锁定**最近一次 review findings**（codex review/comment 或 `pm:pr-review` 的 `<details>` 无损详表，每条带 `file:line` + 证据 + 建议）+ 其后 `pm:fix`（fix 声称修了什么）。两者都无 → 报错退出（无可验证项）。
 
+**额外解析 OSS 集合**：从其后 `pm:fix` 的 `🚦 OUT_OF_SCOPE` 指针 + 本 PR `pm:oos` 评论（每条 OSS 的 `file:line` + 已建 issue #N / `deferred:<原因>`）认出上一轮被**声明为 OUT_OF_SCOPE** 的 finding。据此把上一轮 findings 拆成两组：**IN_SCOPE**（B3 验代码）与**被声明 OSS**（B3 评估分类是否合理，不验代码）。
+
 ### B2 定位 worktree
 
 同 阶段 2.5（复用既有 worktree 或自动建 review-only worktree，读当前 head 代码）。
 
 ### B3 逐条验证（Read 当前代码，只信代码）
 
-对每条上一轮 finding，在 `$WORKTREE` Read 其 `file:line` 现状判定：
+**IN_SCOPE finding**：在 `$WORKTREE` Read 其 `file:line` 现状判定：
 
 | 状态 | 判据 |
 |------|------|
@@ -174,17 +176,24 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 
 **每条必须 Read 实证，不凭 pm:fix 的"已修"自述**（review 只信代码，对齐 reviewer.md §Reasoning Blindness）。
 
+**被声明 OUT_OF_SCOPE 的 finding（两步，不盲信 OSS 标签）**：
+
+1. **评估分类是否合理**：Read finding 站点 + 本 PR diff（`gh pr diff <N>`），判断它是否确为「与本 PR 改动无关的不同包 / 模块」。
+   - **不合理**（实为 in-scope、本该随本 PR 一起修）→ 判 `❌ 误判OSS（应在本 PR 修）`，**计入 needs-fix**（不能用 OSS 标签把本该修的问题甩出去）。
+   - **合理** → 进第 2 步。
+2. **核 pm:oos 留痕**：已建 issue #N / 显式 `deferred:<原因>` → 标 `🔲 OUT_OF_SCOPE(合理)`，**不计入 needs-fix**；合理但无留痕 → 仍标 🔲 + 附 action「应建 backlog issue 未建」，**不阻断 verdict**（backlog 跟踪缺口，非代码缺陷）。
+
 ### B4 输出（窗口=主输出）
 
-1. **验证表**（主输出，逐条）：`F{n} [原 P·Cx·维度] repo-relative-path:line → ✅/❌/⚠️/🔧 + 一句证据`
-2. **汇总**：已修复 N / 未修复 M / 回归 K / 部分 J
-3. **结论 + 流转建议**：
-   - 全 ✅ → 切 `pr-status/ready` + `pr-review/approved`
-   - 有 ❌/⚠️/🔧 → 切 `pr-review/changes-requested` + `pr-status/needs-fix`（5-state；清 `pr-review/approved` + `pr-status/needs-check-fix`），未修/回归项带 `file:line` 回 `/fix`
+1. **验证表**（主输出，逐条）：`F{n} [原 P·Cx·维度] repo-relative-path:line → ✅/❌/⚠️/🔧/🔲 + 一句证据`
+2. **汇总**：已修复 N / 未修复 M / 回归 K / 部分 J / 范围外合理 R（🔲）/ 误判OSS S
+3. **结论 + 流转建议**（判定规则收敛）：`verdict=changes-requested ⟺ ∃（IN_SCOPE 为 ❌/⚠️/🔧）或（被声明 OSS 经评估不合理）`；合理 OSS（🔲）一律不触发。
+   - 无触发项 → 切 `pr-status/ready` + `pr-review/approved`
+   - 有触发项 → 切 `pr-review/changes-requested` + `pr-status/needs-fix`（5-state；清 `pr-review/approved` + `pr-status/needs-check-fix`），未修/回归/误判OSS 项带 `file:line` 回 `/fix`
 
 ### B5 贴 pm:pr-review（--check 留痕）+ 切 label
 
-窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧 状态替代簇归属，summary 用 已修复N/未修复M/回归K）——窗口=主输出、评论=留痕，两者都做（见 `PROJECT.md` §5）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：verdict 取 `ready`（全 ✅）/ `changes-requested`（有 ❌/⚠️/🔧）；`bash hack/automation/pr-meta.sh emit-block --kind=pr-review --pr=<N> --phase=check --verdict=<上> --findings='<计数 json>'`（round carry / refs 全派生）追加到 body 末尾。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）：全 ✅ → `pr-status/ready` + `pr-review/approved`；有遗留 → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state；清 `pr-review/approved` + `pr-status/needs-check-fix`）。
+窗口打印 B4 后，贴 `pm:pr-review` 评论（--check 变体：每条 finding 带 ✅/❌/⚠️/🔧/🔲 状态替代簇归属，summary 用 已修复N/未修复M/回归K/范围外合理R/误判OSS S）——窗口=主输出、评论=留痕，两者都做（见 `PROJECT.md` §5）。**追加机器块**（贴评论前，接口见 `pr-comment.md` §机器块）：verdict 取 `ready`（无触发项，🔲 合理 OSS 不算）/ `changes-requested`（有 IN_SCOPE ❌/⚠️/🔧 或 误判OSS）；`bash hack/automation/pr-meta.sh emit-block --kind=pr-review --pr=<N> --phase=check --verdict=<上> --findings='<计数 json，区分 in_scope / oss_reasonable / oss_misclassified>'`（round carry / refs 全派生）追加到 body 末尾。命令 + 回显见 `issues` B4；再按 B4 结论切 label（命令见 `issues` B3）：无触发项 → `pr-status/ready` + `pr-review/approved`；有触发项 → `pr-review/changes-requested` + `pr-status/needs-fix`（5-state；清 `pr-review/approved` + `pr-status/needs-check-fix`）。
 
 ---
 
@@ -202,4 +211,4 @@ echo "✅ 已贴评论：$URL"                                           # 回�
 3. 无 worktree 自动创建 `worktrees/review-pr<N>`；既有 worktree 复用，不重建
 4. 主 agent 输出含 Read/Grep 证据 + 根因簇视图先于 Finding 详表；维度名内部一致
 5. 阶段 6 贴 `<!-- pm:pr-review -->` 评论（含 footer + 每条 finding 的 file:line）+ 回显 comment URL/id
-6. `--check` 模式：读上一轮 findings → 逐条 Read 验证 ✅/❌/⚠️/🔧（含抓回归）→ 窗口主输出验证表 + 贴 pm:pr-review（--check）→ 按结论切 label（全 ✅ → ready+approved / 有遗留 → changes-requested+needs-fix，清 approved+needs-check-fix）
+6. `--check` 模式：读上一轮 findings（拆 IN_SCOPE / 被声明 OSS）→ IN_SCOPE 逐条 Read 验证 ✅/❌/⚠️/🔧（含抓回归），被声明 OSS 评估分类合理性（合理 + 留痕 → 🔲 不计入；误判 OSS → 计入 needs-fix）→ 窗口主输出验证表 + 贴 pm:pr-review（--check）→ 按 `changes-requested ⟺ IN_SCOPE 未修 或 误判OSS`（合理 🔲 不触发）切 label（无触发 → ready+approved / 有触发 → changes-requested+needs-fix，清 approved+needs-check-fix）
