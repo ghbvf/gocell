@@ -23,11 +23,15 @@ var _ reconcile.LeaderElector = (*RedisReconcileElector)(nil)
 const reconcileEpochKeyTTL = 30 * 24 * time.Hour
 
 func reconcileEpochKeyTTLSeconds() (int64, error) {
-	if reconcileEpochKeyTTL < time.Second {
+	return reconcileEpochKeyTTLSecondsFor(reconcileEpochKeyTTL)
+}
+
+func reconcileEpochKeyTTLSecondsFor(ttl time.Duration) (int64, error) {
+	if ttl < time.Second {
 		return 0, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"redis reconcile elector: epoch key TTL must be at least 1s")
 	}
-	return int64(reconcileEpochKeyTTL / time.Second), nil
+	return int64(ttl / time.Second), nil
 }
 
 // reconcileAcquireScript atomically acquires the leader lease and returns

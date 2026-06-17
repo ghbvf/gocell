@@ -291,6 +291,24 @@ func TestParseAcquireResult(t *testing.T) {
 	})
 }
 
+func TestReconcileEpochKeyTTLSecondsFor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects_subsecond_ttl", func(t *testing.T) {
+		_, err := reconcileEpochKeyTTLSecondsFor(500 * time.Millisecond)
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		require.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+	})
+
+	t.Run("truncates_to_whole_seconds", func(t *testing.T) {
+		got, err := reconcileEpochKeyTTLSecondsFor(1500 * time.Millisecond)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), got)
+	})
+}
+
 // TestReconcileElector_AcquireScriptContent golden-locks the acquire Lua so an
 // accidental edit (which the mock would not catch) fails at unit-test time.
 func TestReconcileElector_AcquireScriptContent(t *testing.T) {

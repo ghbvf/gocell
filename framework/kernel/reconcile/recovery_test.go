@@ -157,6 +157,37 @@ func TestRecovery_PanicValueRedactsSensitiveFields(t *testing.T) {
 	assert.NotContains(t, buf.String(), "hunter2")
 }
 
+func TestStructuredPanicValue_RedactsNestedArraysAndStrings(t *testing.T) {
+	t.Parallel()
+
+	got, ok := structuredPanicValue(map[string]any{
+		"code": "bad-state",
+		"items": []any{
+			map[string]any{"token": "secret-token"},
+			"password=hunter2",
+		},
+	}).(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "bad-state", got["code"])
+
+	items, ok := got["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 2)
+
+	first, ok := items[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, redaction.Mask, first["token"])
+	assert.Equal(t, "password="+redaction.Mask, items[1])
+}
+
+func TestStructuredPanicValue_Fallbacks(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, structuredPanicValue(nil))
+	assert.Equal(t, "token="+redaction.Mask, structuredPanicValue("token=secret-token"))
+	assert.Contains(t, structuredPanicValue(make(chan int)), "0x")
+}
+
 // TestClassify verifies the classify helper's full table:
 //   - nil → resultSuccess
 //   - PermanentError(x) → resultPermanent
