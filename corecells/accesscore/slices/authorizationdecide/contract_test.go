@@ -324,17 +324,20 @@ func TestDecideAdapter_Decide_Direct(t *testing.T) {
 	})
 }
 
-// TestHttpAuthDecideV1_ResponseSchema locks the response shape: a wrong-shaped
-// body must be rejected by the contract response schema. The additionalProperties:
-// false guards (F4, #1863 review) machine-lock the "only return allowed" boundary —
-// a leaked Decision.Reason() under data, or any extra top-level field, is rejected.
+// TestHttpAuthDecideV1_ResponseSchema locks the response shape: a body missing the
+// required allowed verdict must be rejected by the contract response schema.
+//
+// F4 (#1863 review) note — the "only return allowed, never leak Decision.Reason()"
+// boundary is NOT enforced via additionalProperties:false here: response schemas are
+// `lenient` by ADR-202605031600 (V1-RESPONSE-EVOLVE) so the wire stays forward-
+// compatible, and verify-schema-policy.sh forbids additionalProperties:false on them.
+// The boundary is instead machine-locked one layer stronger, at the codegen type:
+// the generated ResponseData carries a single Allowed bool field (no reason), so the
+// handler structurally cannot serialize a reason — see TestDecideAdapter_Decide_Direct
+// and the Decide200JSONResponse construction in handler.go.
 func TestHttpAuthDecideV1_ResponseSchema(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.decide.v1")
 	c.MustRejectResponse(t, []byte(`{"data":{"wrong":"shape"}}`))
 	c.MustRejectResponse(t, []byte(`{"data":{}}`))
-	// additionalProperties:false on data — a smuggled deny reason must be rejected.
-	c.MustRejectResponse(t, []byte(`{"data":{"allowed":true,"reason":"insufficient permissions"}}`))
-	// additionalProperties:false on root — no extra top-level field allowed.
-	c.MustRejectResponse(t, []byte(`{"data":{"allowed":true},"reason":"x"}`))
 }

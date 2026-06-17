@@ -12,12 +12,10 @@
       },
       "required": [
         "allowed"
-      ],
-      "additionalProperties": false
+      ]
     }
   },
   "required": [
     "data"
-  ],
-  "additionalProperties": false
+  ]
 }
