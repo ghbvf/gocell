@@ -49,6 +49,7 @@ else
     CONFIGCORE_MASTER_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
     CONFIGCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     AUDITCORE_HMAC_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxxxx \
+    AUDIT_BOOTSTRAP_HMAC_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxx \
     AUDITCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     ACCESSCORE_CURSOR_KEY=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
     ACCESSCORE_IP_HASH_SALT=placeholder-32-bytes-padding-xxxxxxxxxxxxxxxx \
