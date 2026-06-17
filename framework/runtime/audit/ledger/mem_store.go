@@ -152,16 +152,18 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 
 	// Build the stored entry (copy to prevent caller mutations from leaking).
 	stored := copyEntry(e)
-	// Assign a stable store-level ID from EventID. This DIVERGES from the PG
-	// LedgerStore, which assigns a fresh random uuid.New() primary key on INSERT:
-	// MemStore reuses the EventID so the keyset tie-break (id ASC) is DETERMINISTIC
-	// across test runs — a random UUID would make same-timestamp tie ordering flaky.
-	// Consequence: the mem id is unique only within (namespace, tenant) — it inherits
-	// EventID's uniqueness scope — whereas the PG id is globally unique. Both are the
-	// opaque row handle the wire `id` field projects and GetByID resolves; the
-	// serving GetByID is tenant-scoped so the narrower mem uniqueness suffices, and
-	// in a real (PG) deployment the EventID is itself a canonical UUID.
-	stored.ID = e.EventID
+	// Assign a GLOBALLY-UNIQUE, deterministic store id derived from the entry's
+	// (namespace, tenant, eventID) — the unique key of the audit chain
+	// (uq_audit_ns_tenant_event_id). Global uniqueness is load-bearing for the
+	// cross-tenant read: MemCrossTenantStore.GetByIDCrossTenant spans every tenant
+	// AND both namespace chains, so a bare-EventID id (EventID is unique only per
+	// (namespace, tenant)) would let two tenants sharing an EventID collide and
+	// return the wrong row (#2288 review F1). Deterministic (not a random uuid.New
+	// like the PG LedgerStore) so the keyset tie-break (id ASC) stays stable across
+	// test runs. Both backends thus assign a globally-unique opaque handle — random
+	// uuid on PG, deterministic hash here — that the wire `id` projects and GetByID
+	// resolves; the contract treats id as an opaque SafeID string either way.
+	stored.ID = deterministicEntryID(string(m.protocol.Namespace()), e.TenantID, e.EventID)
 	stored.SeqNo = int64(len(chain.entries)) + 1
 	stored.PrevHash = prevHash
 	stored.Hash = m.protocol.ComputeHash(prevHash, stored)
@@ -176,6 +178,17 @@ func (m *MemStore) Append(_ context.Context, e *Entry) error {
 	e.Hash = stored.Hash
 
 	return nil
+}
+
+// deterministicEntryID derives a globally-unique, deterministic in-memory store id
+// from an entry's unique key (namespace, tenant, eventID). It reuses the store's
+// already-imported sha256/hex (no new dependency); the NUL separators make the
+// concatenation unambiguous (so "a","bc" and "ab","c" cannot collide). 16 bytes
+// (128-bit) of digest is ample collision resistance for a demo/test store. See the
+// Append call site for why global uniqueness (not the bare EventID) is required.
+func deterministicEntryID(namespace, tenantID, eventID string) string {
+	sum := sha256.Sum256([]byte(namespace + "\x00" + tenantID + "\x00" + eventID))
+	return hex.EncodeToString(sum[:16])
 }
 
 // Tail returns the current tail snapshot of the ctx-scoped tenant chain (the

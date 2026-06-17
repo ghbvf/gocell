@@ -18,8 +18,8 @@ import (
 
 // Service implements audit query business logic against a ledger.QueryStore.
 //
-// The narrow QueryStore interface (just Query, no Append/Tail/Verify/...) lets
-// composition roots inject a read-side aggregator like ledger.MultiStore that
+// The narrow QueryStore interface (the read methods Query + GetByID, no
+// Append/Tail/Verify/...) lets composition roots inject a read-side aggregator like ledger.MultiStore that
 // fans out reads across multiple chains (issue #1121 / ADR 202605270230 —
 // auditcore relay chain + bootstrap chain). Any concrete ledger.Store also
 // satisfies QueryStore by structural typing, so single-chain deployments need

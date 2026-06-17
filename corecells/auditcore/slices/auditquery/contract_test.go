@@ -314,8 +314,9 @@ func TestHttpAuditGetV1Serve(t *testing.T) {
 	h := newContractQueryHandler(e)
 
 	rec := httptest.NewRecorder()
-	// The mem store assigns id = EventID on Append; substitute the {id} path param.
-	path := strings.Replace(c.HTTP.Path, "{id}", e.EventID, 1)
+	// Append wrote back the store-assigned opaque id (backend-specific: a
+	// deterministic hash on mem, a uuid on PG); substitute it into the {id} path.
+	path := strings.Replace(c.HTTP.Path, "{id}", e.ID, 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
 	// admin role passes the flat audit:read gate; tenant matches the entry's tenant.
 	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))

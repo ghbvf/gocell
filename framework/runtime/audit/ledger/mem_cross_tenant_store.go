@@ -145,8 +145,10 @@ func collectFromMemStore(store *MemStore, filters AuditFilters) []*Entry {
 // ErrAuditLedgerNotFound when none exists. The single-entry counterpart of
 // QueryCrossTenant: NO tenant predicate (the read spans every tenant by
 // construction) and NO owner predicate (the RowScopeAll obligation makes every
-// actor_id visible). In a real (PG) deployment the id is a globally-unique uuid,
-// so the cross-tenant lookup is unambiguous; mem fixtures use distinct ids.
+// actor_id visible). The opaque id is globally unique on every backend (mem assigns
+// a deterministic namespace+tenant+eventID hash, PG a uuid primary key), so the
+// first match IS the only match — the cross-tenant lookup is unambiguous even when
+// two tenants share an EventID (#2288 review F1).
 //
 // ctv carries the sealed RowScopeAll obligation. This method re-validates it
 // fail-closed (ctv.Validate) before reading — the data-layer PEP (F2): the typed

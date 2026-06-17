@@ -257,8 +257,9 @@ func TestMultiStore_Query_TiedTimestamps_TieBreakedByID(t *testing.T) {
 	a := buildMemStore(t, mustNamespace(t, "auditcore"), clockmock.New(ts))
 	b := buildMemStore(t, mustNamespace(t, "bootstrap"), clockmock.New(ts))
 
-	// MemStore assigns ID = EventID. Pick IDs that lexicographically sort
-	// "evt-a" < "evt-z" so the tie-break is observable.
+	// MemStore now assigns a globally-unique deterministic id (a hash of namespace +
+	// tenant + eventID, #2288 review F1), no longer the bare EventID — so the
+	// tie-break order is still observable but no longer predictable from the EventIDs.
 	appendAt(t, a, "evt-a", "event.x.v1", "actor", ts)
 	appendAt(t, b, "evt-z", "event.y.v1", "actor", ts)
 
@@ -270,9 +271,13 @@ func TestMultiStore_Query_TiedTimestamps_TieBreakedByID(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	// QuerySort = (timestamp DESC, id ASC). Equal timestamps → id ASC: evt-a < evt-z.
-	assert.Equal(t, "evt-a", got[0].EventID, "tie-break must be id ASC across stores")
-	assert.Equal(t, "evt-z", got[1].EventID)
+	// QuerySort = (timestamp DESC, id ASC). With tied timestamps the result must be
+	// ordered by the store-assigned id ASC. The ids are opaque (a deterministic hash
+	// on mem, a uuid on PG), so assert the order IS id-ascending and both events are
+	// present — backend-agnostic, not a hardcoded EventID order.
+	assert.Less(t, got[0].ID, got[1].ID, "tie-break must be id ASC across stores")
+	assert.ElementsMatch(t, []string{"evt-a", "evt-z"},
+		[]string{got[0].EventID, got[1].EventID}, "both stores' events present")
 }
 
 // TestMultiStore_Query_AppliesCursor exercises the cross-store cursor

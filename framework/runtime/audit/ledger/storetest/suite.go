@@ -874,12 +874,13 @@ func runAppendMultiKeyPayloadRoundTrip(t *testing.T, factory Factory) {
 // ascending insertion order, which differs from PG's ORDER BY timestamp DESC.
 // This case asserts both backends produce the same timestamp-DESC ordering.
 //
-// Note on id-ASC tie-break: PG ORDER BY uses `id` (a uuid.NewString() per row)
-// for tie-break — that's a PG implementation detail for query stability, NOT
-// part of the cross-backend contract. MemStore's Entry.ID (assigned from
-// EventID) and PG's Entry.ID (random UUID) cannot agree on tie-break ordering
-// by construction, so this case uses 4 distinct timestamps to eliminate ties
-// and validate only the timestamp-DESC contract that both backends must honor.
+// Note on id-ASC tie-break: PG ORDER BY uses `id` (a random uuid per row) for
+// tie-break — that's a PG implementation detail for query stability, NOT part of
+// the cross-backend contract. MemStore's Entry.ID (a deterministic hash of
+// namespace+tenant+eventID) and PG's Entry.ID (random uuid) are both globally
+// unique but cannot agree on tie-break ORDERING by construction, so this case uses
+// 4 distinct timestamps to eliminate ties and validate only the timestamp-DESC
+// contract that both backends must honor.
 func runQueryOrderingTimestampDescIDAsc(t *testing.T, factory Factory) {
 	store, _, fc, cleanup := factory(t)
 	defer cleanup()
@@ -1728,7 +1729,7 @@ const getByIDMalformedID = "not-a-uuid"
 
 // visGetByIDCase mirrors visGetCase but for GetByID (keyed on the opaque id rather
 // than seq_no). The id is captured from the seeded entry's Append write-back, so
-// one case table works across mem (id=EventID) and PG (id=uuid) backends.
+// one case table works across mem (id=deterministic hash) and PG (id=uuid) backends.
 type visGetByIDCase struct {
 	name    string
 	scope   tenant.RowScope
@@ -1922,6 +1923,59 @@ func RunCrossTenantQueryConformance(t *testing.T, factory CrossTenantFactory) {
 	t.Run("CrossTenant_GetByID_NotFound", func(t *testing.T) {
 		runCTGetByIDNotFound(t, factory)
 	})
+	t.Run("CrossTenant_GetByID_DuplicateEventID_GloballyUniqueId", func(t *testing.T) {
+		runCTGetByIDDuplicateEventID(t, factory)
+	})
+}
+
+// runCTGetByIDDuplicateEventID pins F1 (#2288 review): the public id projected by a
+// cross-tenant read MUST be globally unique, so GetByIDCrossTenant never returns the
+// WRONG tenant's row when two tenants reuse the same EventID. EventID is unique only
+// per (namespace, tenant) (uq_audit_ns_tenant_event_id), so tenant A and tenant B may
+// legitimately share one — a backend that set the public id to the bare EventID (the
+// old MemStore behavior) would return whichever row map iteration hit first. Seeds the
+// same EventID under two tenants; asserts QueryCrossTenant returns two rows with
+// DISTINCT ids, and GetByIDCrossTenant resolves the RIGHT tenant's row for each id.
+func runCTGetByIDDuplicateEventID(t *testing.T, factory CrossTenantFactory) {
+	t.Helper()
+	const dupEventID = "ct-dup-evt"
+	base := epochAnchor
+	seed := []*ledger.Entry{
+		{
+			EventID: dupEventID, EventType: "ct.dup", ActorID: "actor-a",
+			TenantID: crossTenantConformanceTenantA, Timestamp: base.Add(time.Millisecond), Payload: []byte(`{}`),
+		},
+		{
+			EventID: dupEventID, EventType: "ct.dup", ActorID: "actor-b",
+			TenantID: crossTenantConformanceTenantB, Timestamp: base.Add(ctTs2), Payload: []byte(`{}`),
+		},
+	}
+	store, cleanup := factory(t, seed)
+	defer cleanup()
+
+	ctv := tenant.NewCrossTenantVisibility()
+	rows, err := store.QueryCrossTenant(context.Background(), ctv, ledger.AuditFilters{},
+		query.ListParams{Limit: 50, Sort: ledger.QuerySort()})
+	if err != nil {
+		t.Fatalf("QueryCrossTenant: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("QueryCrossTenant: got %d rows, want 2 (both tenants' same-EventID entries)", len(rows))
+	}
+	if rows[0].ID == rows[1].ID {
+		t.Fatalf("cross-tenant ids must be globally unique even when EventID is shared; both = %q", rows[0].ID)
+	}
+	for _, want := range rows {
+		got, gerr := store.GetByIDCrossTenant(context.Background(), ctv, want.ID)
+		if gerr != nil {
+			t.Fatalf("GetByIDCrossTenant(%q): %v", want.ID, gerr)
+		}
+		if got.TenantID != want.TenantID || got.ActorID != want.ActorID {
+			t.Errorf("GetByIDCrossTenant(%q): got tenant=%q actor=%q, want tenant=%q actor=%q "+
+				"(wrong-tenant row — public id not globally unique)",
+				want.ID, got.TenantID, got.ActorID, want.TenantID, want.ActorID)
+		}
+	}
 }
 
 // runCTGetByIDFound: GetByIDCrossTenant resolves a seeded entry by its store id

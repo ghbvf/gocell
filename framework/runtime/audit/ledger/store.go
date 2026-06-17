@@ -284,10 +284,12 @@ type Store interface {
 	// super-admin cross-tenant single-entry read is served by the admin-pool-backed
 	// CrossTenantQueryStore.GetByIDCrossTenant (#1810), not via this path.
 	//
-	// id is an OPAQUE store handle, NOT necessarily a canonical UUID at this
-	// boundary: the PG LedgerStore assigns a random uuid primary key on Append, but
-	// the in-memory demo MemStore assigns the EventID (deterministic so keyset
-	// tie-breaking by id ASC is stable across test runs). Backends therefore
+	// id is an OPAQUE, GLOBALLY-UNIQUE store handle, NOT necessarily a canonical UUID
+	// at this boundary: the PG LedgerStore assigns a random uuid primary key on
+	// Append, while the in-memory demo MemStore assigns a deterministic hash of
+	// (namespace, tenant, eventID) — globally unique (so a cross-tenant read never
+	// confuses two entries that merely share an EventID) yet deterministic (so the
+	// keyset tie-break by id ASC stays stable across test runs). Backends therefore
 	// validate id shape as they see fit (PG parse-guards it as a uuid so a malformed
 	// id collapses to not-found rather than a 22P02 cast error); the contract treats
 	// it as a backend-agnostic SafeID string, validated at the wire boundary.

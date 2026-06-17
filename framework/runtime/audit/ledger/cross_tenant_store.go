@@ -37,14 +37,6 @@ import (
 // it is absent (the admin read pool is not provisioned), a super-admin's
 // RowScopeAll request stays fail-closed at HTTP 501 (RowScopeAllUnsupportedError),
 // exactly as before #1810 — graceful, fail-closed, never fail-open.
-// ErrMsgCrossTenantObligation is the single-source const-literal fail-close
-// message (MESSAGE-CONST-LITERAL-01) every CrossTenantQueryStore backend uses when
-// the data-layer PEP rejects a zero/invalid CrossTenantVisibility (F2). Exported so
-// the mem backend (this package), the PG AuditCrossTenantStore (adapters/postgres),
-// and the auditquery Service (corecells) all reference one literal — a single edit
-// site, no cross-backend drift.
-const ErrMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
-
 type CrossTenantQueryStore interface {
 	// QueryCrossTenant lists audit entries across ALL tenants (and both the relay
 	// and bootstrap namespace chains) matching AuditFilters, using the same keyset
@@ -67,8 +59,9 @@ type CrossTenantQueryStore interface {
 	//
 	// Unlike Store.GetByID there is NO tenant.TenantID parameter (the read spans
 	// every tenant by construction) and NO owner predicate (the RowScopeAll
-	// obligation makes every actor_id visible). The id is globally unique on the PG
-	// admin pool (uuid primary key), so the cross-tenant lookup is unambiguous.
+	// obligation makes every actor_id visible). The id is globally unique on every
+	// backend (PG admin pool: uuid primary key; mem: a deterministic
+	// namespace+tenant+eventID hash), so the cross-tenant lookup is unambiguous.
 	//
 	// ctv carries the sealed RowScopeAll obligation; like QueryCrossTenant this
 	// method re-validates it fail-closed (ctv.Validate) before reading — the
@@ -77,3 +70,13 @@ type CrossTenantQueryStore interface {
 	// zero/invalid obligation can never produce a cross-tenant read.
 	GetByIDCrossTenant(ctx context.Context, ctv tenant.CrossTenantVisibility, id string) (*Entry, error)
 }
+
+// ErrMsgCrossTenantObligation is the single-source const-literal fail-close message
+// (MESSAGE-CONST-LITERAL-01) the CrossTenantQueryStore BACKENDS use when the
+// data-layer PEP rejects a zero/invalid CrossTenantVisibility (F2). Exported so the
+// mem backend (this package) and the PG AuditCrossTenantStore (adapters/postgres)
+// reference one literal — a single edit site, no cross-backend drift. The auditquery
+// Service has its OWN service-layer PEP message (errMsgInvalidCrossTenantObligation)
+// — defense in depth, deliberately distinct so a log line names which layer rejected;
+// it does NOT reuse this constant.
+const ErrMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
