@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
@@ -169,5 +170,98 @@ func TestServer_WatchCommands_OverGRPC(t *testing.T) {
 	} else if c := status.Code(err); c != codes.Canceled {
 		// Canceled is expected; a connection-close race may surface Unavailable.
 		t.Logf("Recv-after-cancel code = %v (Canceled expected)", c)
+	}
+}
+
+// watchTestPollInterval is the polling tick for testwait-style loops in watch
+// tail tests (avoids a fixed sleep, keeps tests fast).
+const watchTestPollInterval = 5 * time.Millisecond
+
+// TestServer_WatchCommands_LatentDelivery is the core real-time push test
+// (#1795): the handler subscribes BEFORE the snapshot (so no commands are
+// missed), streams the empty snapshot, then receives a command enqueued AFTER
+// the watch was opened via the notifier.
+func TestServer_WatchCommands_LatentDelivery(t *testing.T) {
+	t.Parallel()
+	notifier := devicecmd.NewNotifier()
+	srv := newTestServerWithNotifier(t, notifier)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newWatchStream(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, stream)
+	}()
+
+	// Enqueue a command AFTER the watch is started. The notifier delivers it to
+	// the open stream. We poll sentCh until the entry arrives or timeout.
+	if _, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
+		DeviceId:    seededDeviceID,
+		CommandType: "firmware-update",
+		Payload:     []byte("{}"),
+	}); err != nil {
+		cancel()
+		t.Fatalf("latent enqueue: %v", err)
+	}
+
+	// Poll for the latent delivery.
+	deadline := time.Now().Add(watchTestTimeout)
+	var received *commandv1.WatchCommandsResponse
+	for time.Now().Before(deadline) {
+		select {
+		case e := <-stream.sentCh:
+			received = e
+		default:
+			time.Sleep(watchTestPollInterval)
+		}
+		if received != nil {
+			break
+		}
+	}
+	if received == nil {
+		cancel()
+		t.Fatalf("WatchCommands did not deliver the latent command within %s", watchTestTimeout)
+	}
+	if received.GetCommandType() != "firmware-update" {
+		t.Errorf("latent delivery command_type = %q, want firmware-update", received.GetCommandType())
+	}
+	if received.GetCommandId() == "" {
+		t.Errorf("latent delivery must carry the command id")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WatchCommands must return context.Canceled after cancel, got %v", err)
+		}
+	case <-time.After(watchTestTimeout):
+		t.Fatalf("WatchCommands did not return after context cancel")
+	}
+}
+
+// TestServer_WatchCommands_TimeoutNoCommand asserts that a watch with a
+// deadline-bound context and NO new command returns cleanly when the deadline
+// elapses (the handler returns ctx.Err(), not a hang).
+func TestServer_WatchCommands_TimeoutNoCommand(t *testing.T) {
+	t.Parallel()
+	notifier := devicecmd.NewNotifier()
+	srv := newTestServerWithNotifier(t, notifier)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	stream := newWatchStream(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, stream)
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("WatchCommands must return DeadlineExceeded when context times out with no new commands, got %v", err)
+		}
+	case <-time.After(watchTestTimeout):
+		t.Fatalf("WatchCommands did not return after context deadline elapsed")
 	}
 }

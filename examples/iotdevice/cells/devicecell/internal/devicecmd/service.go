@@ -89,6 +89,17 @@ type Service struct {
 	// the composition root. It is fire-and-forget — it must not fail the ack.
 	onResolved func(context.Context, command.Entry, command.AckReason)
 
+	// onEnqueue is an optional hook fired after a command is successfully
+	// persisted by Enqueue. It is the notification seam for the in-process
+	// watcher hub (Notifier.Notify): devices watching their command queue over
+	// gRPC WatchCommands receive newly-enqueued commands in real time without
+	// polling. Nil means no hook (demo mode with no active watchers). Set via
+	// WithOnEnqueue by the composition root on ALL enqueue-capable Service
+	// instances (pubSvc / intSvc / grpcSvc) so that a command enqueued over any
+	// path reaches watching devices. Fire-and-forget — it must not fail the
+	// enqueue; see Notifier for the drop-on-full / non-blocking contract.
+	onEnqueue func(context.Context, command.Entry)
+
 	// emitter is the writer-backed CellEmitter EnqueueAsync uses to emit a
 	// cmdenqueue async command (the #1610 cross-cell idempotency consumer). Nil
 	// disables the async path (EnqueueAsync fail-fasts). Set via WithCommandEmitter
@@ -115,6 +126,19 @@ func WithOnCommandResolved(hook func(context.Context, command.Entry, command.Ack
 	return func(s *Service) {
 		if hook != nil {
 			s.onResolved = hook
+		}
+	}
+}
+
+// WithOnEnqueue registers a hook fired after a command is successfully persisted
+// by Enqueue. The primary consumer is the Notifier that fans out to WatchCommands
+// gRPC streams so watching devices receive commands in real time (#1795). A nil
+// hook is ignored. Accumulative: a nil argument leaves the prior value in place.
+// The hook is fire-and-forget — it must not fail the enqueue.
+func WithOnEnqueue(hook func(context.Context, command.Entry)) Option {
+	return func(s *Service) {
+		if hook != nil {
+			s.onEnqueue = hook
 		}
 	}
 }
@@ -281,6 +305,14 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		slog.String("device_id", deviceID),
 		slog.String("command_type", commandType),
 	)
+
+	// Notify active watchers after successful persistence (#1795). Fire-and-forget:
+	// a nil hook is the common case (no active watchers); the Notifier is
+	// non-blocking so a slow watching device never stalls ingestion.
+	if s.onEnqueue != nil {
+		s.onEnqueue(ctx, entry)
+	}
+
 	return entry, nil
 }
 

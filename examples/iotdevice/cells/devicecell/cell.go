@@ -463,6 +463,13 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.certCompletionSvc = certCompletionSvc
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecertcompletion.SliceMetadata()))
 
+	// cmdNotifier is the single shared in-process watcher hub (#1795). It is
+	// constructed once here and injected into ALL enqueue-capable Service instances
+	// (pubSvc / intSvc / grpcSvc) via WithOnEnqueue so that a command enqueued over
+	// ANY path (HTTP, gRPC, internal) reaches watching devices. The gRPC
+	// WatchCommands handler subscribes through the same notifier.
+	cmdNotifier := devicecmd.NewNotifier()
+
 	// Public slice service: sliceName "devicecommand" for observability labels.
 	// It serves the device ack (回执) endpoint, so it carries the cert-completion
 	// resolution hook: a terminal rotate-cert ack emits a rotation-resolved event.
@@ -477,6 +484,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		// dispatch by DeriveCommandKey across cells/pods.
 		devicecmd.WithCommandEmitter(c.bootstrapEmitter),
 		devicecmd.WithCommandTxManager(c.bootstrapTxManager),
+		// #1795: notify active WatchCommands streams of newly-enqueued commands.
+		devicecmd.WithOnEnqueue(cmdNotifier.Notify),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
@@ -486,6 +495,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		runMode,
 		devicecmd.WithSliceName("devicecommandinternal"),
+		// #1795: commands enqueued via the internal path also reach watchers.
+		devicecmd.WithOnEnqueue(cmdNotifier.Notify),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command-internal: %w", err)
@@ -501,6 +512,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		c.clk, cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		runMode,
 		devicecmd.WithSliceName("devicecommandrpc"),
+		// #1795: commands enqueued via gRPC also reach watchers.
+		devicecmd.WithOnEnqueue(cmdNotifier.Notify),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command-grpc: %w", err)
@@ -508,7 +521,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	// Authorization (device:command) is enforced by the runtime gRPC auth
 	// interceptor (#2008), wired from the same dc.Authorizer() via grpcDeps in the
 	// composition root — the handler no longer holds the Authorizer.
-	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc)
+	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc, cmdNotifier)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
 	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same
