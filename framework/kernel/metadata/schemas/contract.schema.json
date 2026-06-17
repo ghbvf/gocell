@@ -367,6 +367,11 @@
                       }
                     }
                   },
+                  "permission": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "ABAC action this route's PDP gate requires (e.g. config:read), #2205 — the HTTP sibling of endpoints.grpc.methods[].permission. cellgen derives a cell-level contractID→permission resolver from it and the generated handler resolves through authz.MethodPolicyResolver (runtime/auth.RequirePermissionByName), replacing slice hand-wiring of auth.RequirePermission(authz.PermX()). Must be a member of the closed authz registry (governance validates membership via authz.IsKnownPermissionString). Mutually exclusive with auth.public/bootstrap/clientsOnly/serviceOwned (those modes have no RequirePermission gate); may accompany a standard route or a passwordResetExempt route. Optional during the #2205 migration (sparse overlay); PR-13 makes it mandatory for standard routes."
+                  },
                   "auth": {
                     "type": "object",
                     "description": "Route-level authentication overrides for contractgen. Omit for standard authenticated routes. Mutex enforced by value-true (if/then const:true) so explicit `false` is equivalent to omission and never triggers conflict — see metadata.AuthComboLegal for the single oracle.",
@@ -478,6 +483,22 @@
                       "required": ["auth"]
                     },
                     "then": { "required": ["ownership"] }
+                  },
+                  {
+                    "description": "endpoints.http.permission is mutually exclusive with auth.public/bootstrap/clientsOnly/serviceOwned — those modes replace or delegate the route gate, so a contract-derived RequirePermission action is contradictory (#2205). It may accompany a standard route (no auth flag) or a passwordResetExempt route (which still carries a Policy).",
+                    "if": { "required": ["permission"] },
+                    "then": {
+                      "properties": {
+                        "auth": {
+                          "properties": {
+                            "public": {"not": {"const": true}},
+                            "bootstrap": {"not": {"const": true}},
+                            "clientsOnly": {"not": {"const": true}},
+                            "serviceOwned": {"not": {"const": true}}
+                          }
+                        }
+                      }
+                    }
                   }
                 ]
               }
