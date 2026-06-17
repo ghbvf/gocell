@@ -7,9 +7,11 @@ package interceptor
 //  1. extractResourceFieldValue: happy path (proto.Message with string UUID field)
 //  2. extractResourceFieldValue: not a proto.Message → ("", false)
 //  3. extractResourceFieldValue: field not found → ("", false)
-//  4. extractResourceFieldValue: empty string value → ("", false)
-//  5. extractResourceFieldValue: non-canonical UUID value → ("", false)
-//  6. extractResourceFieldValue: uppercase UUID rejected
+//  4. extractResourceFieldValue: empty string value → ("", true) forwarded (HTTP parity; PDP rejects for
+//     owner, admin still passes)
+//  5. extractResourceFieldValue: non-canonical UUID value → (value, true) forwarded raw (HTTP parity;
+//     non-UUID ids pass through for PDP comparison)
+//  6. extractResourceFieldValue: uppercase UUID normalized to lowercase
 //  7. extractResourceForUnary: no resource resolver → (fullMethod, nil)
 //  8. extractResourceForUnary: resolver returns ok=false → (fullMethod, nil)
 //  9. extractResourceForUnary: resolver ok, extraction succeeds → (uuid, nil)
@@ -434,8 +436,23 @@ func (ownershipAuthorizer) Authorize(_ context.Context, subject, resource, _ str
 // the per-message check. Only full deferral to the first RecvMsg (resource =
 // extracted device UUID) lets the device through. With the open-time coarse gate
 // present (the bug), this test fails: the device is denied before RecvMsg.
+//
+// Additionally asserts: PDP is called exactly ONCE and with resource == testDeviceUUID
+// (the deferred gate forwards the extracted id, not fullMethod).
 func TestStreamAuth_OwnerScoped_DefersGateToFirstRecvMsg(t *testing.T) {
 	t.Parallel()
+
+	var capturedResource string
+	pdpCallCount := 0
+	authzCapture := captureResourceAuthorizer{
+		decision: mustAllow(),
+		capture:  &capturedResource,
+	}
+	// Wrap captureResourceAuthorizer with a counting layer.
+	authzCountCapture := countingCaptureAuthorizer{
+		inner: authzCapture,
+		count: &pdpCallCount,
+	}
 
 	var handlerReached bool
 	handler := func(_ any, ss grpc.ServerStream) error {
@@ -453,11 +470,26 @@ func TestStreamAuth_OwnerScoped_DefersGateToFirstRecvMsg(t *testing.T) {
 		stubVerifier{claims: kauth.Claims{Subject: testDeviceUUID}},
 		WithPermissionResolver(permResolverFor(streamMethod)),
 		WithResourceResolver(func(string) (string, bool) { return "service", true }),
-		WithPDPAuthorizer(ownershipAuthorizer{}),
+		WithPDPAuthorizer(authzCountCapture),
 	)(nil, ss, streamInfo(), handler)
 
 	require.NoError(t, err, "owner-scoped stream must NOT be denied by an open-time coarse gate")
 	assert.True(t, handlerReached, "handler must be reached after the deferred per-message gate allows")
+	assert.Equal(t, 1, pdpCallCount, "PDP must be called exactly once (deferred to first RecvMsg)")
+	assert.Equal(t, testDeviceUUID, capturedResource,
+		"PDP resource must be the extracted device UUID, not fullMethod")
+}
+
+// countingCaptureAuthorizer counts calls and delegates to an inner
+// captureResourceAuthorizer.
+type countingCaptureAuthorizer struct {
+	inner captureResourceAuthorizer
+	count *int
+}
+
+func (a countingCaptureAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
+	*a.count++
+	return a.inner.Authorize(ctx, subject, resource, action)
 }
 
 // TestStreamAuth_OwnerScoped_CrossDeviceDenied verifies a device watching ANOTHER

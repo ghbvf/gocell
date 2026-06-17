@@ -22,14 +22,16 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
 
 // watchSnapshotLimit bounds the initial active-command snapshot WatchCommands
 // streams before it tails for drain/disconnect. The snapshot is silently capped
-// at this many entries — a production watch should paginate (check page.HasMore
-// and stream subsequent pages) rather than truncate.
+// at this many entries; WatchCommands is server-streaming and the client cannot
+// send a page token mid-stream. Reconnect triggers a fresh snapshot, which is
+// the resync path for missed entries.
 const watchSnapshotLimit = 100
 
 // Server implements commandv1.DeviceCommandServiceServer.
@@ -38,6 +40,10 @@ type Server struct {
 	clk      clock.Clock
 	cmdSvc   *devicecmd.Service
 	notifier *devicecmd.Notifier
+	// subscribeHook, if non-nil, is called in WatchCommands immediately after
+	// Subscribe returns. Test-only seam for synchronizing Subscribe-before-enqueue
+	// ordering in latent-delivery tests; always nil in production.
+	subscribeHook func(deviceID string)
 }
 
 // NewServer constructs the gRPC command server. clock is a mandatory positional
@@ -56,8 +62,13 @@ type Server struct {
 // the HTTP RequirePermission route gate.
 func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, notifier *devicecmd.Notifier) *Server {
 	clock.MustHaveClock(clk, "devicecommandrpc.NewServer")
+	if cmdSvc == nil {
+		panic(panicregister.Approved("devicecommandrpc-server-cmdsvc-required",
+			errcode.Assertion("devicecommandrpc.NewServer: cmdSvc must not be nil")))
+	}
 	if notifier == nil {
-		panic("devicecommandrpc.NewServer: notifier must not be nil")
+		panic(panicregister.Approved("devicecommandrpc-server-notifier-required",
+			errcode.Assertion("devicecommandrpc.NewServer: notifier must not be nil")))
 	}
 	return &Server{clk: clk, cmdSvc: cmdSvc, notifier: notifier}
 }
@@ -148,6 +159,9 @@ func (s *Server) WatchCommands(
 	// Subscribe BEFORE the snapshot to avoid the snapshot↔tail gap (#1795).
 	ch, cancel := s.notifier.Subscribe(req.GetDeviceId())
 	defer cancel()
+	if s.subscribeHook != nil {
+		s.subscribeHook(req.GetDeviceId())
+	}
 
 	page, err := s.cmdSvc.ScanActive(ctx,
 		command.ScanFilter{DeviceID: req.GetDeviceId()},
@@ -183,6 +197,9 @@ func tailWatchStream(
 			return ctx.Err()
 		case e, ok := <-ch:
 			if !ok {
+				// Safety net: the Notifier never closes the channel (see notifier.go
+				// "channel is never closed by the Notifier" doc) — this branch is
+				// unreachable in practice but guards against future refactoring.
 				return ctx.Err()
 			}
 			if err := stream.Send(toWatchResponse(e)); err != nil {

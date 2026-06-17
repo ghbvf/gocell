@@ -955,6 +955,27 @@ func TestEnrichGrpcServices_OwnerScopedCrossCheck(t *testing.T) {
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
+					return
+				}
+				// PASS case (owner-scoped + resource): assert MethodResources contains
+				// the WatchCommands→device_id mapping (#2207 cross-check).
+				if tc.name == "owner-scoped permission with resource → PASS" {
+					if len(spec.GrpcServices) == 0 {
+						t.Fatal("PASS case must produce at least one GrpcService")
+					}
+					gs := spec.GrpcServices[0]
+					watchFull := "/device.command.v1.DeviceCommandService/WatchCommands"
+					var found bool
+					for _, mr := range gs.MethodResources {
+						if mr.FullMethod == watchFull && mr.Field == "device_id" {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("PASS case: MethodResources must contain %q→device_id, got %+v",
+							watchFull, gs.MethodResources)
+					}
 				}
 			} else {
 				if err == nil {

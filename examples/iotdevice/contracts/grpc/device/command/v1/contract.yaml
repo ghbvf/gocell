@@ -26,4 +26,10 @@ endpoints:
         permission: device:command
       - name: WatchCommands
         permission: device:consume
+        # resource: device_id names the proto request-message field the interceptor
+        # extracts per-message and forwards as the PDP resource. device_id is the
+        # proto field name (snake_case) — the gRPC equivalent of the HTTP deviceId
+        # path param. To determine whether a permission is owner-scoped (and thus
+        # requires a resource selector), see authz.Permission.IsOwnerScoped() in
+        # framework/pkg/authz/permission.go.
         resource: device_id

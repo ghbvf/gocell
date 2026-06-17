@@ -2,6 +2,7 @@ package devicecmd
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/framework/kernel/command"
@@ -89,10 +90,10 @@ func (n *Notifier) Subscribe(deviceID string) (<-chan command.Entry, func()) {
 }
 
 // Notify sends e to every active subscriber for e.DeviceID. If a subscriber's
-// buffer is full the delivery is dropped (best-effort — see notifierBufferSize
-// comment). Notify never blocks on a slow subscriber so that Enqueue is never
-// stalled by a watching device.
-func (n *Notifier) Notify(_ context.Context, e command.Entry) {
+// buffer is full the delivery is dropped and a Warn log is emitted (best-effort
+// — see notifierBufferSize comment). Notify never blocks on a slow subscriber
+// so that Enqueue is never stalled by a watching device.
+func (n *Notifier) Notify(ctx context.Context, e command.Entry) {
 	n.mu.Lock()
 	list := n.subs[e.DeviceID]
 	if len(list) == 0 {
@@ -109,7 +110,11 @@ func (n *Notifier) Notify(_ context.Context, e command.Entry) {
 		select {
 		case s.ch <- e:
 		default:
-			// Buffer full — drop silently (best-effort, documented above).
+			// Buffer full — drop and log a warning (best-effort, documented above).
+			// device_id and subscriber_key are non-PII routing keys.
+			slog.WarnContext(ctx, "devicecmd: watcher buffer full, dropping command notification (best-effort)",
+				slog.String("device_id", e.DeviceID),
+				slog.Uint64("subscriber_key", s.key))
 		}
 	}
 }

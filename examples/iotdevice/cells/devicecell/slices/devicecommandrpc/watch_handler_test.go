@@ -173,18 +173,23 @@ func TestServer_WatchCommands_OverGRPC(t *testing.T) {
 	}
 }
 
-// watchTestPollInterval is the polling tick for testwait-style loops in watch
-// tail tests (avoids a fixed sleep, keeps tests fast).
-const watchTestPollInterval = 5 * time.Millisecond
-
 // TestServer_WatchCommands_LatentDelivery is the core real-time push test
 // (#1795): the handler subscribes BEFORE the snapshot (so no commands are
 // missed), streams the empty snapshot, then receives a command enqueued AFTER
 // the watch was opened via the notifier.
+//
+// Subscribe↔enqueue ordering is deterministic: a subscribeHook seam on Server
+// signals a channel once Subscribe has returned, so the test goroutine waits
+// for that signal before enqueuing — eliminating the scheduling race.
 func TestServer_WatchCommands_LatentDelivery(t *testing.T) {
 	t.Parallel()
 	notifier := devicecmd.NewNotifier()
 	srv := newTestServerWithNotifier(t, notifier)
+
+	// subscribed is closed by the hook once Subscribe has returned, providing a
+	// deterministic sync point before the enqueue.
+	subscribed := make(chan struct{})
+	srv.subscribeHook = func(_ string) { close(subscribed) }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := newWatchStream(ctx)
@@ -193,8 +198,16 @@ func TestServer_WatchCommands_LatentDelivery(t *testing.T) {
 		done <- srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, stream)
 	}()
 
-	// Enqueue a command AFTER the watch is started. The notifier delivers it to
-	// the open stream. We poll sentCh until the entry arrives or timeout.
+	// Wait until Subscribe has returned before enqueuing — no scheduling race.
+	select {
+	case <-subscribed:
+	case <-time.After(watchTestTimeout):
+		cancel()
+		t.Fatalf("WatchCommands did not subscribe within %s", watchTestTimeout)
+	}
+
+	// Enqueue a command AFTER Subscribe is confirmed. The notifier delivers it
+	// to the open stream.
 	if _, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
 		DeviceId:    seededDeviceID,
 		CommandType: "firmware-update",
@@ -204,21 +217,11 @@ func TestServer_WatchCommands_LatentDelivery(t *testing.T) {
 		t.Fatalf("latent enqueue: %v", err)
 	}
 
-	// Poll for the latent delivery.
-	deadline := time.Now().Add(watchTestTimeout)
+	// Wait for the latent delivery on sentCh.
 	var received *commandv1.WatchCommandsResponse
-	for time.Now().Before(deadline) {
-		select {
-		case e := <-stream.sentCh:
-			received = e
-		default:
-			time.Sleep(watchTestPollInterval)
-		}
-		if received != nil {
-			break
-		}
-	}
-	if received == nil {
+	select {
+	case received = <-stream.sentCh:
+	case <-time.After(watchTestTimeout):
 		cancel()
 		t.Fatalf("WatchCommands did not deliver the latent command within %s", watchTestTimeout)
 	}

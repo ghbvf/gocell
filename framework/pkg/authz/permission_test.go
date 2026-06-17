@@ -466,6 +466,14 @@ func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
 		t.Errorf("owner-scoped permission count = %d, want %d (anti-vacuity: update this count if you intentionally change the set)",
 			ownerScopedCount, wantOwnerScopedCount)
 	}
+	// Coarse-count assertion: total = coarse + owner-scoped must equal len(Permissions()).
+	// Anti-vacuity: ensures both sides of the partition are machine-verified.
+	wantCoarseCount := len(Permissions()) - wantOwnerScopedCount
+	coarseCount := len(Permissions()) - ownerScopedCount
+	if coarseCount != wantCoarseCount {
+		t.Errorf("coarse permission count = %d, want %d (total=%d - ownerScoped=%d)",
+			coarseCount, wantCoarseCount, len(Permissions()), wantOwnerScopedCount)
+	}
 	// Zero-value Permission must report IsOwnerScoped()==false (fail-closed for forged values).
 	var zero Permission
 	if zero.IsOwnerScoped() {

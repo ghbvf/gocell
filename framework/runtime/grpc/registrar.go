@@ -335,8 +335,9 @@ func (r *ServiceRegistrar) recordMethodOverlays(spec cell.GRPCServiceSpec, scope
 	// this spec registered (a stale key would reference a non-existent RPC). The
 	// field name value is not validated here against the proto descriptor — the
 	// interceptor fails closed on a missing or wrong-type field at extraction time
-	// (F3 fail-closed, A4). The cellgen cross-check (owner-scoped permission without
-	// resource → build error) and governance FMT-41 guard the authoring side.
+	// (F3 fail-closed in the interceptor — see resource.go). The cellgen cross-check
+	// (owner-scoped permission without resource → build error) and governance FMT-41
+	// guard the authoring side.
 	for method, field := range spec.MethodResources {
 		if _, ok := scoped.localMethods[method]; !ok {
 			panic(panicregister.Approved("grpc-registrar-unknown-method-key",

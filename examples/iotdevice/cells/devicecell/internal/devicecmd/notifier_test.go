@@ -2,6 +2,7 @@ package devicecmd
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,11 @@ import (
 // notifierTestTimeout is the maximum time a blocking Notify or receive is
 // allowed to take in notifier tests.
 const notifierTestTimeout = 2 * time.Second
+
+// notifierNonBlockingTimeout is a short bound used to assert that Notify is
+// non-blocking (the Enqueue-never-blocks invariant). A slow, stalling Notify
+// must be caught well within this window.
+const notifierNonBlockingTimeout = 200 * time.Millisecond
 
 // makeEntry builds a minimal command.Entry for the given deviceID.
 func makeEntry(deviceID string) command.Entry {
@@ -83,7 +89,7 @@ func TestNotifier_FullBuffer_DropsWithoutBlocking(t *testing.T) {
 	select {
 	case <-done:
 		// All Notify calls returned without blocking.
-	case <-time.After(notifierTestTimeout):
+	case <-time.After(notifierNonBlockingTimeout):
 		t.Fatal("Notify blocked when subscriber buffer was full (Enqueue-never-blocks violated)")
 	}
 
@@ -145,6 +151,41 @@ func TestNotifier_Cancel_IsIdempotent(t *testing.T) {
 	_, cancel := n.Subscribe("device-1")
 	cancel()
 	cancel() // must not panic
+}
+
+// TestNotifier_ConcurrentSubscribeNotifyCancel verifies that concurrent
+// Subscribe, Notify, and cancel calls do not race or deadlock. Multiple
+// goroutines subscribe, receive notifications, and cancel simultaneously;
+// correctness is verified under -race.
+func TestNotifier_ConcurrentSubscribeNotifyCancel(t *testing.T) {
+	t.Parallel()
+	const goroutines = 8
+	n := NewNotifier()
+	var wg sync.WaitGroup
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ch, cancel := n.Subscribe("device-1")
+			// Notify once on this goroutine's entry to drive concurrent fan-out.
+			n.Notify(context.Background(), makeEntry("device-1"))
+			// Drain whatever landed (may be 0 or more).
+			select {
+			case <-ch:
+			default:
+			}
+			cancel()
+		}()
+	}
+	// Coordinate: wait for all goroutines to complete, no sleep.
+	wg.Wait()
+	// After all goroutines canceled, the notifier must be empty (no leaked subs).
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.subs) != 0 {
+		t.Errorf("after all cancels, subs map must be empty, got %v", n.subs)
+	}
 }
 
 // TestNotifier_MultipleSubscribersForSameDevice asserts fan-out: two

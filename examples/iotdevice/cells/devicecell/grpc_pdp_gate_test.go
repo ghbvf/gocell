@@ -191,8 +191,15 @@ func TestDeviceCommandGRPC_PDPGate_Stream_EndToEnd(t *testing.T) {
 	client, _ := startGatedDeviceCommandServer(t)
 	req := &commandv1.WatchCommandsRequest{DeviceId: watchedDeviceID}
 
+	// No authorization metadata → gate rejects with Unauthenticated (mirror of
+	// the unary no-token branch; for streaming the verdict surfaces on Recv).
+	stream, err := client.WatchCommands(context.Background(), req)
+	require.NoError(t, err, "stream open RPC itself returns; the gate verdict surfaces on Recv")
+	_, err = stream.Recv()
+	assert.Equal(t, codes.Unauthenticated, status.Code(err), "missing token must be Unauthenticated for WatchCommands")
+
 	// Viewer → neither admin/operator nor the device itself → PermissionDenied.
-	stream, err := client.WatchCommands(bearer(context.Background(), tokenViewer), req)
+	stream, err = client.WatchCommands(bearer(context.Background(), tokenViewer), req)
 	require.NoError(t, err, "stream open RPC itself returns; the gate verdict surfaces on Recv")
 	_, err = stream.Recv()
 	assert.Equal(t, codes.PermissionDenied, status.Code(err), "viewer must be PermissionDenied for WatchCommands")
