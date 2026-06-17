@@ -154,8 +154,12 @@ type Bootstrap struct {
 	routerReadyTimeout     time.Duration
 	routerReadyTimeoutSet  bool
 	subscriptionValidators []cell.SubscriptionValidator
-	relay                  *runtimeoutbox.Relay                   // optional: wired by WithRelay; nil = no relay depth metric
-	configEventCollector   metricsmiddleware.ConfigEventCollector // optional: settlement observer injected via WrapConfigEventSubscriber
+	// relaysByInstance holds the fanned-out relays keyed by deduplicated infra
+	// instance (#2152 PR-1). Empty = no relay; each entry gets its own
+	// relayAdapter in managedResources. Colocated registers one under
+	// DefaultInstanceKey (behavior unchanged); split registers one per instance.
+	relaysByInstance     map[InfraInstanceKey]*runtimeoutbox.Relay
+	configEventCollector metricsmiddleware.ConfigEventCollector // optional: settlement observer injected via WrapConfigEventSubscriber
 
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle

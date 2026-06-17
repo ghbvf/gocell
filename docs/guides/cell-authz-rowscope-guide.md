@@ -1,0 +1,115 @@
+# Cell Authorization and RowScope Guide
+
+This guide is the consumer-facing checklist for wiring a business endpoint into
+GoCell's permission-based authorization path. ADRs explain why the model exists;
+this page explains what to change.
+
+## Endpoint Checklist
+
+For each non-public business endpoint:
+
+1. Declare a sealed permission accessor in `framework/pkg/authz/permission.go`.
+   Permissions use resource/action strings such as `config:write`; callers use
+   accessor functions such as `authz.PermConfigWrite()`, never exported vars or
+   raw strings.
+2. Attach the generated handler to the PDP route gate:
+   `auth.RequirePermission(authz.PermXxx())`.
+3. For owner/self endpoints, use
+   `auth.RequirePermissionForResource("pathParam", authz.PermXxx())`. It
+   canonicalizes the path parameter and forwards it as `resource.id` for PDP
+   ownership rules. Do not replace it with plain `RequirePermission`.
+4. Register the baseline grant in the PDP that owns this assembly's
+   authorization rules. Platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep the matching baseline in their own
+   `Authorizer()`/PDP. A missing baseline means the endpoint is default-deny
+   unless tenant policy grants it.
+5. Wire the composition root so the primary listener gets an Authorizer:
+   `bootstrap.WithPrimaryAuthorizer(authorizer)` or
+   `bootstrap.PrimaryAuthorizerOption(cells)`. Without this, the route gate
+   fails closed.
+6. Add contract/slice coverage for 403 and for the exact permission action passed
+   to the Authorizer. Add e2e coverage when the endpoint depends on baseline
+   registration or composition-root wiring.
+
+## Route Gate vs Data Boundary
+
+`auth.RequirePermission` is a coarse allow/deny gate. It does not enforce
+obligations such as RowScope or FieldMask. If a permit carries a non-zero
+obligation that the route gate cannot discharge, the route gate denies rather
+than silently dropping it.
+
+Data visibility must be enforced where data is read:
+
+- Read/list data PEPs derive `tenant.RowVisibility` from the principal and apply
+  it to the repository query. For audit reads, a tenant policy may widen the
+  route gate, but it cannot widen the principal-derived RowScope.
+- Owner/self route grants only allow the caller through the gate. The data layer
+  still needs its own tenant/RowVisibility checks.
+- Write endpoints generally have no RowScope dimension. Their isolation boundary
+  is the typed tenant axis, ctx tenant propagation, and PostgreSQL FORCE RLS.
+
+## PDP Ownership
+
+`RequirePermission` calls the primary listener's injected Authorizer. The
+composition root decides which PDP owns baseline rules:
+
+| Assembly shape | Baseline owner | Wiring |
+|----------------|----------------|--------|
+| Platform corecells bundle | `corecells/accesscore/slices/authorizationdecide/baseline.go` | `bootstrap.PrimaryAuthorizerOption(cells)` discovers the accesscore Authorizer. |
+| Example or self-contained cell | The cell's local `Authorizer()`/PDP, beside the cell-specific policy code. | `bootstrap.PrimaryAuthorizerOption(cells)` discovers exactly one provider, or the root passes it via `bootstrap.WithPrimaryAuthorizer`. |
+| External assembly with its own PDP | The external PDP package that owns policy evaluation. | The composition root injects that PDP with `bootstrap.WithPrimaryAuthorizer`. |
+
+Do not copy platform accesscore baseline rules into examples just to satisfy the
+checklist. Keep each grant beside the PDP that will evaluate it, and keep only
+one primary Authorizer per assembly so startup can fail fast on ambiguous wiring.
+
+## RowScope Values
+
+`tenant.RowScope` has four non-zero values:
+
+| Scope | Meaning | Enforcement location |
+|-------|---------|----------------------|
+| `self` | Caller sees rows whose owner/actor matches the subject. | Data PEP predicate |
+| `device` | Device-scoped variant of self-style visibility. | Data PEP predicate |
+| `tenant` | Caller sees rows in the current tenant. | Typed tenant + RLS + data predicate |
+| `all` | Cross-tenant visibility for explicit admin paths. | Dedicated audited path; serving pools fail closed where unsupported |
+
+Zero RowScope is invalid as principal visibility. Inside `authz.Obligations`,
+zero RowScope means only "this policy did not impose a row-scope obligation."
+The current evaluator merges RowScope only among matching policy permits; data
+PEPs must not assume policy obligations have already been merged with the
+principal-derived RowScope.
+
+## Common Failure Modes
+
+| Failure | Symptom | Fix |
+|---------|---------|-----|
+| Permission minted but no baseline rule | Admin receives 403 from default-deny. | Add the matching baseline rule or document tenant-policy-only access. |
+| Baseline registered in the wrong PDP owner | Tests pass in one assembly but another route still denies. | Put the grant beside the PDP injected by that assembly's composition root. |
+| Handler uses `auth.AnyRole` | Authorization bypasses the PDP funnel and role-literal governance fails. | Use `auth.RequirePermission` or `auth.RequirePermissionForResource`. |
+| Owner endpoint uses plain `RequirePermission` | PDP sees the URL path instead of canonical `resource.id`; ownership rule does not match. | Use `RequirePermissionForResource` with the path-param name. |
+| Composition root omits the Authorizer | Every permission-gated request fails closed. | Install `WithPrimaryAuthorizer` / `PrimaryAuthorizerOption`. |
+| Route gate assumed to enforce RowScope | A future data PEP may apply a policy-only wider scope. | Merge/enforce principal-derived RowVisibility at the data boundary. |
+
+## Examples
+
+Positive examples:
+
+- `corecells/configcore/slices/configwrite/handler.go` wires
+  `auth.RequirePermission(authz.PermConfigWrite())`.
+- `corecells/accesscore/slices/identitymanage/handler.go` uses
+  `auth.RequirePermissionForResource("id", authz.PermUserRead())` for owner
+  reads.
+- `cmd/corebundle/run.go` wires the primary Authorizer for the bundled
+  accesscore/configcore/auditcore assembly.
+- `examples/todoorder/cells/ordercell/authorizer.go` keeps todoorder's
+  self-contained baseline in the example-owned PDP.
+- `examples/iotdevice/cells/devicecell/authorizer.go` does the same for
+  iotdevice device permissions.
+
+Primary rationale:
+
+- Cedar and XACML both keep deny/default-deny and obligation handling explicit.
+- Spring Security role hierarchy is explicit configuration; GoCell likewise uses
+  explicit baseline rules rather than implicit role inheritance.

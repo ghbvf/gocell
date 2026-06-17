@@ -148,8 +148,9 @@ import (
     "context"
 
     createg "github.com/ghbvf/gocell/generated/contracts/http/myapp/widgets/create/v1"
-    "github.com/ghbvf/gocell/framework/pkg/errcode"
     kcell "github.com/ghbvf/gocell/framework/kernel/cell"
+    "github.com/ghbvf/gocell/framework/pkg/authz"
+    "github.com/ghbvf/gocell/framework/pkg/errcode"
     "github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
@@ -175,13 +176,41 @@ func (a CreateAdapter) Create(ctx context.Context, req *createg.Request) (create
 type Handler struct{ h *createg.Handler }
 
 func NewHandler(svc *Service) *Handler {
-    return &Handler{h: createg.NewHandler(CreateAdapter{svc}, auth.AnyRole(auth.RoleAdmin))}
+    return &Handler{h: createg.NewHandler(CreateAdapter{svc}, auth.RequirePermission(authz.PermWidgetCreate()))}
 }
 
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
     return h.h.RegisterRoutes(mux)
 }
 ```
+
+`authz.PermWidgetCreate()` stands for the sealed permission accessor you add for
+the endpoint. Business endpoints should use `auth.RequirePermission` or
+`auth.RequirePermissionForResource`; `auth.AnyRole` is not the normal endpoint
+authorization path.
+
+### Endpoint authorization checklist
+
+For any non-public business endpoint:
+
+1. Mint a sealed permission accessor in `framework/pkg/authz/permission.go`.
+2. Attach it to the generated handler with `auth.RequirePermission(perm)`.
+3. Use `auth.RequirePermissionForResource(pathParam, perm)` when the endpoint
+   grants owner/self access through PDP ownership rules.
+4. Add the matching baseline rule to the PDP that owns this assembly's policy:
+   platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep the grant in their own
+   `Authorizer()`/PDP. Document tenant-policy-only endpoints explicitly.
+5. Ensure the composition root wires the PDP into the primary listener through
+   `bootstrap.WithPrimaryAuthorizer` or `bootstrap.PrimaryAuthorizerOption`.
+6. For list/get data, enforce `tenant.RowVisibility` in the data PEP; the route
+   gate only decides coarse allow/deny.
+7. Cover 403 contract behavior plus an e2e or slice test that proves the route
+   uses the expected permission action.
+
+See `docs/guides/cell-authz-rowscope-guide.md` for the full workflow and
+RowScope/RLS boundary rules.
 
 ## Step 4: Wire into the Cell
 
