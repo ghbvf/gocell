@@ -4,6 +4,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // staticMethodPolicyResolver is an immutable, map-backed authz.MethodPolicyResolver.
@@ -77,6 +78,19 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 // HTTP-PERMISSION-GATE-WIRING-FUNNEL-01; the contract→permission binding it reads is
 // golden-locked at codegen (Hard).
 func RequirePermissionForContract(contractID string, resolver authz.MethodPolicyResolver) Policy {
+	// Exported-helper self-defense: the generated handler is the only sanctioned
+	// caller (HTTP-PERMISSION-GATE-WIRING-FUNNEL-01), but this func is exported, so it
+	// guards its own resolver contract here rather than relying on the caller. A nil
+	// (or typed-nil) resolver is a wiring bug — fail fast via panicregister, the
+	// package convention (NewStaticMethodPolicyResolver does the same), so it never
+	// becomes a bare Go nil-deref panic. validation.IsNilInterface catches typed-nil a
+	// bare == nil would miss.
+	if validation.IsNilInterface(resolver) {
+		panic(panicregister.Approved("http-permission-nil-resolver",
+			errcode.Assertion("RequirePermissionForContract: resolver must not be nil for contract %q (the cell "+
+				"authz.MethodPolicyResolver must be injected by cellgen-wired NewHandler; a nil/typed-nil resolver "+
+				"is a wiring bug)", contractID)))
+	}
 	perm, ok := resolver.PermissionForMethod(contractID)
 	if !ok {
 		panic(panicregister.Approved("http-permission-unmapped",

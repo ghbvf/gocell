@@ -107,3 +107,25 @@ func TestRequirePermissionForContract_NoAuthorizer_FailClosed(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "unwired PDP must fail-closed (403)")
 }
+
+// nilGuardResolver is a pointer-receiver MethodPolicyResolver used only to construct
+// a typed-nil interface value for the nil-guard test.
+type nilGuardResolver struct{}
+
+func (*nilGuardResolver) PermissionForMethod(string) (authz.Permission, bool) {
+	return authz.Permission{}, false
+}
+
+// TestRequirePermissionForContract_NilResolver_Panics: the exported helper fails fast
+// (panicregister, not a bare Go nil-deref) on both a nil interface and a typed-nil
+// resolver — validation.IsNilInterface catches the typed-nil a bare == nil would miss.
+func TestRequirePermissionForContract_NilResolver_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		_ = RequirePermissionForContract("http.config.get.v1", nil)
+	}, "nil interface resolver must fail-fast at construction")
+
+	var typedNil *nilGuardResolver // typed-nil: non-nil interface, nil concrete pointer
+	assert.Panics(t, func() {
+		_ = RequirePermissionForContract("http.config.get.v1", typedNil)
+	}, "typed-nil resolver must fail-fast (IsNilInterface), not slip to a bare nil-deref")
+}

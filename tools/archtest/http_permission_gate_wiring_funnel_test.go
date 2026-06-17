@@ -12,50 +12,57 @@
 //
 // in the cell's generated cell_gen.go, and the generated HTTP handlers
 // (handler_gen.go) build their gate via auth.RequirePermissionForContract(contractSpec.ID,
-// resolver) against it. The resolver is the data source; the gate downstream is inert
-// without one.
+// resolver) against it.
 //
-// This archtest locks the resolver SOURCE: auth.NewStaticMethodPolicyResolver may be
-// referenced in production ONLY from a generated cell_gen.go. A hand-written call
-// (in a slice, cell, composition root, …) would build a resolver from a hand-authored
-// contractID→action map, bypassing the endpoints.http.permission overlay — a latent
-// authorization-source drift that the contract-fanout closure and FMT-42 could not see.
+// Locking the resolver SOURCE alone does NOT suffice. authz.MethodPolicyResolver is an
+// EXPORTED interface, so hand-written production code can implement its own resolver
+// (never touching NewStaticMethodPolicyResolver) and pass it to the EXPORTED
+// auth.RequirePermissionForContract — fabricating a contract-derived gate from a
+// hand-authored permission, bypassing the endpoints.http.permission overlay entirely.
+// So this funnel locks BOTH ends, mirroring GRPC-PERMISSION-GATE-WIRING-FUNNEL-01's two
+// dimensions:
 //
-// Why locking the resolver source suffices (RequirePermissionForContract is downstream):
-// the cell resolver var is unexported and package-scoped to the cell, so no other
-// package can obtain it; the only HTTP resolver values in production come from this
-// constructor. RequirePermissionForContract takes a resolver, so a hand-wired gate still
-// needs a resolver — which only the locked constructor produces. Its own wiring inside
-// handler_gen.go is additionally byte-locked by the contractgen golden
-// (synth_http_auth_modes_permission). (handler_gen.go lives under <module>/generated/,
-// which Production scope excludes, so it is not — and need not be — scanned here.)
+//	D1 (resolver source): auth.NewStaticMethodPolicyResolver may be referenced in
+//	    production ONLY from a generated cell_gen.go (basename allowlist). Its callers
+//	    live in cell_gen.go, which sits under corecells/examples (NOT generated/), so
+//	    Production scope sees them — a hand-written constructor call is flagged here.
+//	D2 (gate caller): auth.RequirePermissionForContract may be called ONLY from a
+//	    generated handler_gen.go. Its sanctioned callers live under <module>/generated/,
+//	    which Production scope EXCLUDES — so ANY caller the Production scan observes is
+//	    by definition hand-written (a bypass) and flagged. The generated callers are
+//	    counted by a separate Typed scan over ./generated/... purely as the anti-vacuity
+//	    anchor (the funnel guards nothing if no handler ever calls the gate). Same shape
+//	    as COMMAND-ASYNC-EMIT-CALLER-01's generated-caller handling.
+//
+// Together D1+D2 mean neither a forged resolver nor a hand-wired gate can produce a
+// contract-derived route gate outside codegen. handler_gen.go's gate wiring is also
+// byte-locked by the contractgen golden (synth_http_auth_modes_permission), and the
+// helper itself fails fast on a nil/typed-nil resolver (validation.IsNilInterface).
 //
 // # AI-robust rating (per .claude/rules/gocell/ai-robust.md)
 //
-// Medium — a go/types caller-allowlist typed scan, same tier and mechanism as
-// GRPC-PERMISSION-GATE-WIRING-FUNNEL-01. The allowlist is by codegen-output filename
-// (cell_gen.go), robust to where a cell lives (basename match, not a fixed path), so a
-// cell move does not silently open a bypass. Hard-downstream is not reachable:
-// NewStaticMethodPolicyResolver is an exported func; the single-source guarantee is the
-// cellgen template (golden-locked) plus this allowlist, not type sealing.
+// Medium — go/types caller-allowlist typed scans, same tier and mechanism as
+// GRPC-PERMISSION-GATE-WIRING-FUNNEL-01. Hard-downstream is not reachable: both symbols
+// are exported, so the single-source guarantee is the codegen templates (golden-locked)
+// plus these allowlists, not type sealing. The Hard path (a sealed generated-only
+// carrier so hand-written code cannot even name a contract-derived gate) is the #2205
+// review's documented 重构 option, deferred with the rest of the PR-13 hardening.
 //
 // # Blind spots (per AI-robust §"强制盲区自检")
 //
-//   - Filename-based allowlist: a hand-written non-generated file literally named
-//     cell_gen.go would be exempt. Such a file colliding with the codegen output name
-//     is itself a review-visible anomaly (and would be overwritten by `gocell generate
-//     cell`), so this is an accepted Medium ceiling.
-//   - The scan is production + generated-excluded (Production); tests freely call the
-//     constructor to exercise the resolver.
-//   - A caller obtaining the func through a variable/parameter typed as a func value
-//     (not a direct reference) escapes the ident scan — the same alias blind spot the
-//     gRPC funnel documents.
+//   - Filename-based allowlist (D1): a hand-written non-generated file literally named
+//     cell_gen.go would be exempt — but it would be overwritten by `gocell generate
+//     cell` and is review-visible, an accepted Medium ceiling.
+//   - Both scans are production + generated-excluded (Production); tests freely use the
+//     symbols. D2's generated callers are reached only by the anti-vacuity Typed scan.
+//   - A caller obtaining either symbol through a variable/parameter typed as a func/
+//     interface value (not a direct reference) escapes the ident scan — the same alias
+//     blind spot the gRPC funnel documents.
 //
-// Anti-vacuity: the sanctioned cell_gen.go reference must be live (the configcore
-// #2205 migration produces it; a stale-or-missing ref fails the anti-vacuity check),
-// and the NegativeControl runs the identical scan treating NO file as sanctioned and
-// asserts the live cell_gen.go reference IS flagged — proving the matcher is not
-// vacuously green.
+// Anti-vacuity: D1's sanctioned cell_gen.go reference must be live + the NegativeControl
+// flags it under an empty allowlist; D2's generated handler_gen.go gate callers must be
+// live (a missing anchor = funnel vacuous). Both fail closed if the #2205 migration
+// artifacts disappear.
 package archtest
 
 import (
@@ -78,6 +85,26 @@ const httpResolverCtorName = "NewStaticMethodPolicyResolver"
 // httpResolverCodegenFile is the codegen-output filename that is its SOLE sanctioned
 // caller (the per-cell generated file that renders cellHTTPResolver).
 const httpResolverCodegenFile = "cell_gen.go"
+
+// httpGateFuncName is the contract-derived HTTP route gate this funnel's D2 dimension
+// locks; httpGatePkgGlob is the generated subtree its sanctioned callers live under.
+const (
+	httpGateFuncName = "RequirePermissionForContract"
+	httpGatePkgGlob  = "./generated/contracts/http/..."
+)
+
+// isHTTPGateCaller reports whether call is a call to auth.RequirePermissionForContract.
+func isHTTPGateCaller(info *types.Info, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	fn, ok := info.Uses[sel.Sel].(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != runtimeAuthPkgPath {
+		return false
+	}
+	return fn.Name() == httpGateFuncName
+}
 
 // isHTTPResolverCtor reports whether id resolves (via go/types Uses) to
 // auth.NewStaticMethodPolicyResolver.
@@ -133,23 +160,99 @@ func scanHTTPResolverCtorRefs(t *testing.T, enforce bool) ([]Diagnostic, map[str
 	return diags, observedAtCodegen
 }
 
-// TestArchtest_HTTPPermissionGateWiringFunnel01 asserts that every production
-// reference to auth.NewStaticMethodPolicyResolver sits in a generated cell_gen.go, and
-// that at least one such reference is live (anti-vacuity).
+// scanHTTPGateCallersProduction scans production code (generated/ excluded by Production)
+// for calls to auth.RequirePermissionForContract. The SOLE sanctioned callers are
+// generated handler_gen.go, which live under <module>/generated/ and are therefore NOT
+// in Production scope — so ANY caller this scan observes is hand-written (a bypass that
+// forges a contract-derived gate without going through endpoints.http.permission) and is
+// flagged. Mirrors the Production half of COMMAND-ASYNC-EMIT-CALLER-01.
+func scanHTTPGateCallersProduction(t *testing.T) []Diagnostic {
+	return Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		// runtime/auth OWNS the gate; its own def/internal use is not a bypass.
+		if p.Pkg.Path() == runtimeAuthPkgPath {
+			return nil
+		}
+		var d []Diagnostic
+		for _, file := range p.Files {
+			rel := p.Rel(file)
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				if !isHTTPGateCaller(p.TypesInfo, call) {
+					return
+				}
+				d = append(d, Diagnostic{
+					Rel:  rel,
+					Line: p.Fset.Position(call.Pos()).Line,
+					Message: fmt.Sprintf(
+						"HTTP-PERMISSION-GATE-WIRING-FUNNEL-01: %s calls auth.%s directly. The contract-derived "+
+							"HTTP route gate may be wired ONLY by a generated handler_gen.go (from "+
+							"endpoints.http.permission). A hand-written call fabricates a gate from a hand-authored "+
+							"permission/resolver, bypassing the contract overlay — declare endpoints.http.permission "+
+							"and regenerate instead.",
+						rel, httpGateFuncName),
+				})
+			})
+		}
+		return d
+	})
+}
+
+// generatedHTTPGateCallerCount counts calls to auth.RequirePermissionForContract under
+// ./generated/contracts/http/... — the anti-vacuity anchor for D2. The Production scan
+// above excludes generated/, so without this anchor the gate-caller funnel could guard
+// nothing (no sanctioned caller ever observed). A zero count means codegen stopped
+// emitting the gate (template regression) or the scanner drifted.
+func generatedHTTPGateCallerCount(t *testing.T) int {
+	count := 0
+	_ = Run(t, Typed(TypedOpts{}, []string{httpGatePkgGlob}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		for _, file := range p.Files {
+			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
+				if isHTTPGateCaller(p.TypesInfo, call) {
+					count++
+				}
+			})
+		}
+		return nil
+	})
+	return count
+}
+
+// TestArchtest_HTTPPermissionGateWiringFunnel01 locks BOTH dimensions: D1 — every
+// production reference to auth.NewStaticMethodPolicyResolver sits in a generated
+// cell_gen.go (+ live anti-vacuity); D2 — auth.RequirePermissionForContract is never
+// called from hand-written production code (its sanctioned generated callers are live).
 func TestArchtest_HTTPPermissionGateWiringFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
+	// D1: resolver source.
 	diags, observed := scanHTTPResolverCtorRefs(t, true)
 	if len(observed) == 0 {
 		diags = append(diags, Diagnostic{
-			Message: "HTTP-PERMISSION-GATE-WIRING-FUNNEL-01: no live auth.NewStaticMethodPolicyResolver " +
+			Message: "HTTP-PERMISSION-GATE-WIRING-FUNNEL-01 (D1): no live auth.NewStaticMethodPolicyResolver " +
 				"reference observed in any generated cell_gen.go — the funnel is vacuous. The configcore #2205 " +
 				"migration should produce one; if the cellgen template moved, update httpResolverCodegenFile.",
 		})
 	}
+
+	// D2: gate caller. Flag any hand-written caller; anchor on live generated callers.
+	diags = append(diags, scanHTTPGateCallersProduction(t)...)
+	if generatedHTTPGateCallerCount(t) == 0 {
+		diags = append(diags, Diagnostic{
+			Message: "HTTP-PERMISSION-GATE-WIRING-FUNNEL-01 (D2): no live auth.RequirePermissionForContract call " +
+				"observed under " + httpGatePkgGlob + " — the gate-caller funnel is vacuous. A generated " +
+				"handler_gen.go should call it (configcore #2205 migration); if the contractgen template moved, " +
+				"update httpGatePkgGlob / httpGateFuncName.",
+		})
+	}
+
 	Report(t, "HTTP-PERMISSION-GATE-WIRING-FUNNEL-01", diags)
 }
 
