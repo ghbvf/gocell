@@ -200,6 +200,62 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 > Migration note: older deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
+## Split 拓扑 mTLS 传输层安全（#2263，ZT-1）
+
+非 loopback `topology.remote` 跨 cell 调用现强制 mTLS（`celltls.Resolve` 在启动期 fail-fast）。
+以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在 topology 含非 loopback
+remote cell 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
+
+每个 cell 进程需要：一张携带 `spiffe://<trustDomain>/cell/<cellID>` URI SAN + 双 EKU
+（ServerAuth + ClientAuth）的 leaf cert、配套私钥，以及签发所有 cell cert 的 trust-root CA bundle。
+完整证书要求、SPIFFE-ID 格式和操作步骤见 `docs/guides/deployment-topology.md` §Split mTLS 配置 checklist。
+
+| 变量 | 用途 | 默认值 | 必填 | 说明 |
+|------|------|--------|------|------|
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM **文件路径**（URI SAN `spiffe://<trustDomain>/cell/<cellID>`，双 EKU）| — | topology 含非 loopback remote cell 时必填（all-or-nothing） | 框架在启动时读取文件内容到内存，不在请求路径重读。cert 必须同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——兼作 server cert 和 client cert。TLS 1.3 强制，cert 签名算法须兼容（ECDSA P-256+ 或 RSA 2048+）。|
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | `GOCELL_TRANSPORT_TLS_CERT_FILE` 配套的私钥 PEM **文件路径** | — | 同上（all-or-nothing） | 私钥必须与 cert 中的公钥匹配；不匹配导致 `tls.LoadX509KeyPair` 报错，启动 fail-fast。|
+| `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM **文件路径**（签发所有 cell leaf cert 的单根 CA） | — | 同上（all-or-nothing） | 同时作为客户端 `RootCAs`（验证 server 证书链）和服务端 `ClientCAs`（验证 client 证书链）。支持多 CA 的 bundle PEM（多个 `-----BEGIN CERTIFICATE-----` 块），但所有 leaf cert 须在同一信任根下。|
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain，不含 `spiffe://` 前缀（如 `gocell.internal`）| — | 同上（all-or-nothing） | 用于构造和验证 SPIFFE-ID：客户端 `VerifyConnection` 要求 server cert 的 URI SAN 以 `spiffe://<trustDomain>/cell/` 开头；服务端 cross-bind middleware 同样以本 env 作为 trust domain 过滤。非空 + 不含 `spiffe://` 前缀 + 不含 `/` 尾缀；违反格式启动 fail-fast。|
+
+**Fail-closed 行为要点**：
+- topology 含非 loopback remote cell + 任一变量缺失 → **启动 fail-fast**。
+- 四变量全设但无 remote cell → 仍 honor（loopback remote 亦升 mTLS）。
+- cert chain 验证失败 / SPIFFE cell ID 不匹配目标 cell → TLS 握手拒绝（client 侧 `VerifyConnection` 报错）。
+- client cert SPIFFE cell ID 与 service-token callerCell 不一致 → **401**（server 侧 cross-bind middleware）。
+
+> **Warning — loopback remote 亦强制 mTLS（反直觉行为）：**
+> 即使 remote peer 端点是 loopback 地址（`localhost` / `127.x.x.x` / `::1`），只要四个 TLS
+> 环境变量已设置，`celltls.Resolve` 就会 honor 该 TLS 材料并强制 mTLS。这意味着：
+>
+> **demo / dev 环境不应设置这四个变量，除非已准备好有效的证书。**
+>
+> 错误后果：在本地 Docker Compose 多进程 dev 中同时配置了 loopback remote peer 和 TLS 变量
+> 但未提供有效 cert/key/CA → TLS 握手失败，peer 不可达，`<peer>_remote_ready` probe 报
+> `unhealthy`，进程 `/readyz` 503。解决方法：dev 不设置这四个变量（plaintext loopback），
+> 或提供真实的自签 CA + leaf cert（参见 `docs/guides/deployment-topology.md` §Split mTLS
+> 配置 checklist）。
+
+**轮换注意**：本 PR 使用静态文件，轮换需替换文件 + 重启进程（hot-reload 是 follow-up）。
+证书自动颁发/续期追踪在 `runtime/certlifecycle` reconciler 独立 roadmap；SPIFFE Workload API
+集成（ZT-4）是另一独立 roadmap。完整说明见 ADR
+`docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项。
+
+**TLS 握手失败的可观测性（metrics vs trace）：**
+TLS 握手失败（cert chain 验证错误、SPIFFE-ID 不匹配、证书过期）与普通 TCP 不可达，在 metric
+层面都记为 `cell_transport_requests_total{outcome="dial_error"}`——`outcome` label 是有界低基数
+闭值集，不细分 TLS 内部原因。
+
+需要区分"cert 信任链错误"与"host 不可达"时，应查**链路追踪 span**：每次 dial 失败后
+transport 均调用 `span.RecordError(err)`，携带完整的 Go TLS 错误字符串（`error.type` 属性）。
+这是有意为之——保持 metric label 低基数（避免证书 CN/SAN 等高 cardinality 信息进 label），
+同时在 trace 侧保留完整诊断上下文。
+
+操作员排查流程：
+1. 看 `/readyz?verbose` 确认 `<peer>_remote_ready` probe 状态。
+2. 用 Grafana/Prometheus 查 `cell_transport_requests_total{outcome="dial_error"}` 确认失败量级。
+3. 用 Jaeger/Zipkin 按 trace 的 `error.type` 属性过滤，定位是 TLS 握手错误还是连接拒绝。
+4. 对照四个 `GOCELL_TRANSPORT_TLS_*` / `GOCELL_SPIFFE_TRUST_DOMAIN` 变量及 cert 内容排查根因。
+
 ## HTTP Listeners (three-listener topology)
 
 > **Breaking change:** `/healthz`, `/readyz`, and `/metrics` have moved from the primary port to the health listener. Update your k8s probes and Prometheus scrape configuration accordingly. See [listener-topology](listener-topology.md) for details.
@@ -281,7 +337,7 @@ The old global PostgreSQL env names for the **serving pool** (`cmd/corebundle`) 
 > the conventional DSN variable for the **`tools/pg-migrate` migration-admin tool**
 > (owner/superuser role, distinct from the restricted `gocell_app` serving role).
 > `tools/pg-migrate` and the associated `pg-migrate` service in
-> `docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml` continue to
+> `deploy/docker-compose.local.yml` and `tests/e2e/docker-compose.e2e.yaml` continue to
 > use `GOCELL_PG_DSN`. The migration-admin tool and the `cmd/corebundle` serving
 > pool may point at the **same database** but with **different roles** (superuser vs
 > restricted `gocell_app`).

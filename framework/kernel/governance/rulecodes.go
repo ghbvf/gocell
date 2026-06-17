@@ -84,6 +84,17 @@ const (
 	// reconciliation tracked separately).
 	codeTOPO13 RuleCode = "TOPO-13"
 
+	// TOPO-14: split-topology mTLS endpoint gate (#2263). In a split assembly,
+	// every NON-loopback remote cell endpoint must use the https scheme: transport
+	// mTLS is mandatory across a real network boundary (no private-network plaintext
+	// fallback). A loopback endpoint (127.0.0.0/8, ::1, localhost) stays plaintext-
+	// eligible for local multi-process dev. This is the build-time half of the
+	// #2263 fail-closed double gate; the runtime half (cellmodules/celltls.Resolve
+	// + celltransport.Resolve) fails closed when TLS material is absent. Hard-leaning
+	// (build-time, machine-decidable on the assembly endpoint scheme); the runtime
+	// gate covers env-PEM presence the static scheme check cannot see.
+	codeTOPO14 RuleCode = "TOPO-14"
+
 	// VERIFY — verify closure (rules_verify.go; VERIFY-06 strict-only).
 	codeVERIFY01 RuleCode = "VERIFY-01"
 	codeVERIFY02 RuleCode = "VERIFY-02"

@@ -55,3 +55,36 @@ func TestIsValidNetworkAddress(t *testing.T) {
 		})
 	}
 }
+
+func TestIsLoopbackEndpoint(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		// loopback (bare host:port)
+		{name: "ipv4 loopback:port", input: "127.0.0.1:9090", want: true},
+		{name: "ipv4 loopback range:port", input: "127.5.6.7:9090", want: true},
+		{name: "localhost:port", input: "localhost:8080", want: true},
+		{name: "ipv6 loopback:port", input: "[::1]:9000", want: true},
+		// loopback (URL form)
+		{name: "https localhost", input: "https://localhost:8443", want: true},
+		{name: "http ipv4 loopback no port", input: "http://127.0.0.1", want: true},
+		{name: "https ipv6 loopback", input: "https://[::1]:8443", want: true},
+		// non-loopback
+		{name: "service dns:port", input: "configcore:9090", want: false},
+		{name: "service dns URL", input: "https://configcore.svc.cluster.local:8443", want: false},
+		{name: "routable ip:port", input: "10.0.0.5:9090", want: false},
+		{name: "public ip URL", input: "https://203.0.113.7:8443", want: false},
+		// degenerate
+		{name: "empty", input: "", want: false},
+		{name: "garbage", input: "not-a-valid-addr", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := netutil.IsLoopbackEndpoint(tc.input); got != tc.want {
+				t.Errorf("IsLoopbackEndpoint(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}

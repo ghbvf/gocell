@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -71,11 +73,18 @@ const crossTenantBaseSQL = `SELECT id, seq_no, event_id, event_type, actor_id,
 FROM audit_entries
 WHERE true`
 
-// errMsgCrossTenantObligation is the const-literal fail-close message
-// (MESSAGE-CONST-LITERAL-01) when the data-layer PEP rejects a zero/invalid
-// CrossTenantVisibility (F2). KindInternal: a bad obligation reaching the store
-// is a server-side invariant break, not client input — mirrors the service PEP.
-const errMsgCrossTenantObligation = "audit ledger: cross-tenant read requires a valid RowScopeAll obligation"
+// crossTenantByIDSQL fetches a single entry by its opaque uuid id across ALL
+// tenants and BOTH namespace chains (no namespace / tenant predicate — the admin
+// pool's permissive RLS SELECT policy USING(true) returns every row). The
+// `$1::uuid` cast matches the house pattern (session_store.go subject_id = $2::uuid)
+// for comparing a uuid column to a string parameter; the caller parse-guards id first so
+// the cast never raises 22P02. id is the globally-unique PRIMARY KEY, so at most
+// one row matches.
+const crossTenantByIDSQL = `SELECT id, seq_no, event_id, event_type, actor_id,
+       subject_id, tenant_id, session_id, correlation_id, trace_id, occurred_at,
+       timestamp, payload, prev_hash, hash
+FROM audit_entries
+WHERE id = $1::uuid`
 
 // QueryCrossTenant lists audit entries across ALL tenants and BOTH namespace
 // chains matching AuditFilters, using keyset cursor pagination. params.Sort must
@@ -100,7 +109,7 @@ func (s *AuditCrossTenantStore) QueryCrossTenant(
 ) ([]*ledger.Entry, error) {
 	if err := ctv.Validate(); err != nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
-			errMsgCrossTenantObligation)
+			ledger.ErrMsgCrossTenantObligation)
 	}
 	if err := ledger.ValidateQueryFilters(filters); err != nil {
 		return nil, err
@@ -147,6 +156,46 @@ func (s *AuditCrossTenantStore) QueryCrossTenant(
 		result = []*ledger.Entry{}
 	}
 	return result, nil
+}
+
+// GetByIDCrossTenant fetches a single audit entry by its opaque uuid id across
+// ALL tenants and BOTH namespace chains. Returns ErrAuditLedgerNotFound when no
+// entry with that id exists. NO tenant predicate and NO owner predicate: the
+// cross-tenant read is the intended capability (admin pool permissive RLS) and the
+// RowScopeAll obligation makes every actor_id visible. The id is parse-guarded as
+// a uuid so a malformed id collapses to not-found rather than raising a 22P02 cast
+// error.
+//
+// ctv carries the sealed RowScopeAll obligation; this method re-validates it
+// fail-closed (ctv.Validate) before reading — the data-layer PEP (F2), mirroring
+// QueryCrossTenant. NO SET LOCAL, NO RunInTx, NO Protocol — pure read-only path.
+func (s *AuditCrossTenantStore) GetByIDCrossTenant(
+	ctx context.Context,
+	ctv tenant.CrossTenantVisibility,
+	id string,
+) (*ledger.Entry, error) {
+	if err := ctv.Validate(); err != nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			ledger.ErrMsgCrossTenantObligation)
+	}
+	if _, perr := uuid.Parse(id); perr != nil {
+		return nil, auditEntryNotFoundByID()
+	}
+	var e ledger.Entry
+	err := s.db.QueryRow(ctx, crossTenantByIDSQL, id).Scan(
+		&e.ID, &e.SeqNo,
+		&e.EventID, &e.EventType, &e.ActorID,
+		&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.TraceID, &e.OccurredAt,
+		&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, auditEntryNotFoundByID()
+	}
+	if err != nil {
+		return nil, ctxcancel.WrapOrInfra(err, "cross_tenant_get_by_id", "cross-tenant",
+			ErrAdapterPGQuery, "audit ledger: cross-tenant get by id failed")
+	}
+	return &e, nil
 }
 
 // scanAuditCrossTenantRows scans all rows from a pgx.Rows result into

@@ -5,11 +5,14 @@ lifecycle: asset
 contractUsages:
   - contract: http.audit.list.v1
     role: serve
+  - contract: http.audit.get.v1
+    role: serve
 verify:
   unit:
     - unit.auditquery.service
   contract:
     - contract.http.audit.list.v1.serve
+    - contract.http.audit.get.v1.serve
   waivers: []
 
 allowedFiles:

@@ -27,9 +27,12 @@ assemblies and requires no configuration change.
 - **Exhaustive partition**: every cell declared in the assembly's `cells[]`
   must appear in exactly one of `colocated[]` or `remote[]`.
 - **Mutual exclusion**: a cell cannot appear in both lists simultaneously.
-- **Endpoint format** (syntactic only): remote cell endpoints must be a bare
-  `host:port` or an `http`/`https` URL with a non-empty host. Other schemes
-  (e.g. `grpc://`) are rejected. Production TLS enforcement is US6 #1964.
+- **Endpoint format**: remote cell endpoints must be a bare `host:port` or an
+  `http`/`https` URL with a non-empty host. Other schemes (e.g. `grpc://`) are
+  rejected. **Non-loopback remote endpoints must use `https` scheme** (enforced
+  by `gocell validate` rule TOPO-14, #2263). Loopback endpoints
+  (`localhost`/`127.x.x.x`/`::1`) may use bare `host:port` or `http` for local
+  multi-process dev.
 - **Remote placement**: declaring `topology.remote` is now production-reachable.
   US4 #1963 wired in-process transport selection; US5 #1966 added the
   `RemoteHTTPTransport` and removed the TOPO-12 fail-close gate. A real event
@@ -50,10 +53,13 @@ A split topology requires a real event broker (TOPO-13 enforces this). See the
 
 Remote cell endpoints must be a **bare `host:port`** or an
 **`http`/`https` URL with a non-empty host**. Other schemes (e.g. `grpc://`) are
-rejected. This is a **syntactic** check only — production TLS/mTLS enforcement
-for remote endpoints is handled separately by US6 #1964 (see ADR
-`202606131142-1423` security-gap matrix). Loopback (`localhost`) is syntactically
-accepted (useful for dev/compose multi-process topologies).
+rejected. **Non-loopback endpoints must use `https`** (enforced by `gocell
+validate` rule TOPO-14, #2263): bare `host:port` is accepted only for loopback
+addresses (`localhost`, `127.x.x.x`, `::1`). Loopback addresses are plaintext-eligible
+for local multi-process dev (e.g. Docker Compose with multiple GoCell processes).
+
+Production split deployments MUST use `https` endpoints and configure mTLS
+material via the four env vars described in §Split mTLS 配置 checklist below.
 
 ## Static enforcement by `gocell validate`
 
@@ -64,6 +70,7 @@ Four governance rules enforce deployment topology:
 | **TOPO-10** | Structural validity: mutual exclusion, exhaustive partition, valid endpoints |
 | **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell reachable (colocated or remote) within that assembly |
 | **TOPO-13** | Active broker gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
+| **TOPO-14** | mTLS scheme gate (#2263): a non-loopback remote cell endpoint must use `https` scheme — bare `host:port` or `http://` is rejected for non-loopback addresses |
 
 Run `gocell validate` to check all three. TOPO-12 (the former topology.remote
 fail-close gate) was removed by US5 #1966 — `topology.remote` is now
@@ -148,27 +155,146 @@ When cells are split across processes, the following infrastructure is required:
   详见 [`docs/ops/listener-topology.md` §"Deployment Recommendations"](../ops/listener-topology.md)。
   验证步骤：从 caller cell 进程（或同等网络位置）向 `<被调用cell地址>:9090/internal/v1/...`
   发起探测请求，确认可达（401 是预期鉴权响应，connection refused 或 timeout 表示绑定错误）。
-- **TLS/mTLS enforcement** (deferred → 独立 backlog issue): production transport
-  security for remote endpoints. Bare `host:port` endpoints currently default to
-  plaintext HTTP; bearer/principal headers are integrity-protected by MAC but not
-  confidential. mTLS / SPIFFE-SVID peer authentication is **orthogonal** to the
-  token-layer per-cell identity that #2153 landed and is tracked as **#2263** —
-  until then, run `topology.remote` only on a trusted/private network. **「trusted
-  network」的具体操作约束**（见 ADR `202606131142-1423` §#1966 review amendment §操作约束）：
-  ① **split cell 进程使用 provisioned 子密钥而非共享 master**（即上方 §Per-cell service-token
-  密钥分发 bullet）：master 不进 cell 进程，被攻陷 cell 无法伪造第三 cell 的 caller 身份；
-  ② **internal listener 绑定到可达地址 + NetworkPolicy/VPC 限制 ingress 至授权 caller**：
-  `/internal/v1/*` 入站仅允许已声明 caller cell 所在 pod/网段，网络层是 caller-cell allowlist
-  之外的纵深防御第一道门（见上方 §Internal listener 绑定与可达性）；
-  ③ **服务端 RequireCallerCell allowlist**：每个 `/internal/v1/*` contract 必须在 contract.yaml
-  声明 `callers` 闭集，框架在令牌验证后校验 `callerCell` claim 是否在 allowlist 内（令牌层，
-  与网络层正交，独立 fail-closed）。这三条合起来构成 mTLS 落地前的「trusted network」最低操作
-  基线；缺任一条均使隔离降级。See ADR `202606131142-1423` §#2153 Amendment §残留.
+- **mTLS（#2263，已落地，split 拓扑强制）**：非 loopback split 跨 cell 调用现强制 mTLS —— 见
+  §Split mTLS 配置 checklist。「部署在可信私有网络」不再是 mTLS 的替代品；该 soft 约束已被 #2263 的
+  fail-closed 技术边界取代。以下约束**仍然成立**（纵深防御，不是 mTLS 的替代品）：
+  ① **split cell 进程使用 provisioned 子密钥而非共享 master**（#2153，见上方 §Per-cell service-token
+  密钥分发 bullet）；
+  ② **internal listener 绑定到可达地址 + NetworkPolicy/VPC 限制 ingress 至授权 caller**（见上方
+  §Internal listener 绑定与可达性）；
+  ③ **服务端 RequireCallerCell allowlist**：每个 `/internal/v1/*` contract 在 contract.yaml 声明
+  `callers` 闭集，框架令牌验证后校验 `callerCell` claim（令牌层，与网络层正交，独立 fail-closed）。
+  完整威胁矩阵见 ADR `202606171200-2263-adr-cross-cell-transport-mtls.md` §威胁矩阵。
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
 split topology in production. `topology.remote` is production-reachable as of
-US5 #1966; token-layer per-cell identity isolation landed in #2153 (run remote
-on a trusted network until the separate mTLS backlog item lands).
+US5 #1966; token-layer per-cell identity isolation landed in #2153; transport-layer
+mTLS peer authentication landed in #2263 (non-loopback split now requires mTLS,
+fail-closed — see §Split mTLS 配置 checklist below).
+
+## Split mTLS 配置 checklist
+
+适用于 `topology.remote` 含**非 loopback** remote cell 的所有生产部署（#2263，ZT-1）。
+
+### 前置条件：证书要求
+
+每个 cell 进程需要一张 **leaf cert**，满足：
+
+1. **SPIFFE URI SAN**（`spiffe://<trustDomain>/cell/<cellID>`）：
+   - `trustDomain` = `GOCELL_SPIFFE_TRUST_DOMAIN` 环境变量的值（如 `gocell.internal`）。
+   - `cellID` = assembly.yaml 中声明的 cell id（如 `accesscore`、`auditcore`）。
+2. **双 EKU**：同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——同一证书兼作
+   server cert（接受对端验证）和 client cert（向对端出示）。
+3. **单根 CA 签发**：所有 cell 的 leaf cert 由同一 trust-root CA 签发（CA cert 作为
+   `GOCELL_TRANSPORT_TLS_CA_FILE` 的内容，分发给每个 cell 进程）。
+4. **TLS 1.3 兼容**：框架强制 `tls.VersionTLS13`，确保 leaf cert / CA cert 的签名算法
+   和密钥长度满足 TLS 1.3 要求（RSA 2048+ 或 ECDSA P-256+）。
+
+生成自签 CA + leaf cert 的工具示例（本地测试）：
+
+```bash
+# 生成 CA
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 \
+  -keyout ca.key -out ca.crt -subj "/CN=gocell-test-ca" -nodes
+
+# 生成 accesscore leaf cert（带 SPIFFE URI SAN + 双 EKU）
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout accesscore.key \
+  -out accesscore.csr -subj "/CN=spiffe://gocell.internal/cell/accesscore" -nodes
+
+openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 365 -out accesscore.crt \
+  -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/accesscore\nextendedKeyUsage=serverAuth,clientAuth")
+```
+
+生产环境请使用正式 PKI / cert-manager / SPIRE 签发。
+
+### 四个必填环境变量（all-or-nothing）
+
+| 变量 | 含义 | 示例 |
+|------|------|------|
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM 文件路径 | `/etc/gocell/tls/accesscore.crt` |
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | 配套私钥 PEM 文件路径 | `/etc/gocell/tls/accesscore.key` |
+| `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM 文件路径 | `/etc/gocell/tls/ca.crt` |
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain（不含 `spiffe://` 前缀） | `gocell.internal` |
+
+**All-or-nothing 语义**：四个变量必须同时设置或同时不设。只设部分视同全部未设——
+`celltls.Resolve` 在此情况下启动 fail-fast（含非 loopback remote cell 时）。
+
+> **Warning — loopback remote cell 配置了 TLS 变量仍会强制 mTLS（反直觉行为）：**
+> `celltls.Resolve` 在四个 TLS 变量全部设置时 **无论 remote endpoint 是否为 loopback**，都会
+> 强制使用 mTLS 材料。这意味着即便 remote peer 是 `localhost:9090`，只要这四个变量已设，
+> 就必须提供有效的 cert/key/CA，否则 TLS 握手失败。
+>
+> **demo / dev 环境如需 loopback 明文通信，请勿设置这四个变量。**
+> 只在真正需要 mTLS 的生产或测试场景才配置它们，并确保提供合法的 cert/key/CA（可使用下方
+> openssl 自签示例）。
+
+**Fail-closed 行为**：
+- topology 含非 loopback remote cell + TLS material 缺失 → **启动 fail-fast**（不降级明文）。
+- 各 peer 逐个检查：非 loopback peer + 无 client identity → **启动 fail-fast**。
+- cert chain 验证失败 / SPIFFE cell ID 不匹配 → **TLS 握手拒绝**（连接终止，不静默通过）。
+- cert SPIFFE cell ID 与 service-token callerCell claim 不一致 → **401**（cross-bind middleware）。
+
+### assembly.yaml 要求
+
+非 loopback remote endpoint 必须使用 `https` scheme：
+
+```yaml
+topology:
+  remote:
+    - cellID: auditcore
+      endpoint: "https://auditcore.internal:9090"  # 正确：https
+      # endpoint: "auditcore.internal:9090"         # 错误：非 loopback 裸 host:port 被 TOPO-14 拒绝
+      # endpoint: "http://auditcore.internal:9090"  # 错误：非 loopback http 被 TOPO-14 拒绝
+      # endpoint: "localhost:9090"                  # 可接受：loopback，本地 dev 用
+```
+
+运行 `gocell validate` 验证：TOPO-14 在构建/CI 阶段静态检查。
+
+### 纵深防御（在 mTLS 之上仍然成立）
+
+mTLS 是传输层安全，以下纵深防御层与之正交，**仍然必须配置**：
+
+1. **Per-cell provisioned keyring**（#2153）：split cell 进程不持 master secret，只持自身子密钥。
+   见上方 §Per-cell service-token 密钥分发。
+2. **Internal listener 可达性 + NetworkPolicy**：见上方 §Internal listener 绑定与可达性。
+3. **RequireCallerCell allowlist**：每个 `/internal/v1/*` contract 必须声明 `callers` 闭集。
+
+### 已知局限（follow-up 登记）
+
+- **split mTLS = 一进程一 cell（强制）**：mTLS 下每个进程的 internal listener 只持**一张** cell
+  证书（一个 `spiffe://<td>/cell/<id>` 身份），cross-bind 按该 cell 身份校验调用方。因此**一个
+  进程不能在同一 mTLS endpoint 承载多个 cell**——否则除一个 cell 外其余的 cross-bind 必失配。
+  当 TLS 材料已配置且 deployment topology 把同一**非 loopback** endpoint 分配给 ≥2 个 remote
+  cell 时，`cellmodules/celltls.Resolve` **启动期 fail-closed**（loopback/demo 多 cell 同址明文
+  共址不受限）。每个 cell 用独立进程 / endpoint 部署。解除此限制（per-caller-cell 身份 resolver /
+  workload-vs-cell 双层身份模型）是 follow-up（见 ADR §推迟项）。
+- **cert 自动轮换**：本 PR 使用静态 PEM 文件，轮换需要手动替换文件 + 重启进程。自动颁发/续期
+  via `runtime/certlifecycle` reconciler 是独立 follow-up（参考 ADR
+  `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项）。
+- **SPIFFE Workload API / SPIRE agent**（ZT-4）：独立 roadmap，需要 `adapters/spiffe` +
+  SPIRE agent sidecar。本 PR 的静态 PEM 与 SPIRE 签发的 cert 在 wire 上完全兼容（相同
+  SPIFFE URI SAN 格式），ZT-4 落地时只需替换证书供给方式。
+- **hot-reload**：cert 文件变更后需重启（文件 watcher 是 follow-up）。
+- **静态 PEM 的证书轮换操作流程（无 rolling path）：** 当前 mTLS 使用静态 PEM 文件，进程启动
+  时一次性读入内存，运行期不重新加载。cert 轮换没有零停机 rolling 路径，操作员必须按以下顺序
+  执行以最小化服务中断：
+
+  1. **信任包扩展（trust-bundle overlap）：** 在将 leaf cert 切换到新 CA 签发之前，先把新 CA
+     cert **追加**到现有 CA bundle 文件（`GOCELL_TRANSPORT_TLS_CA_FILE`），使 CA bundle 同时
+     包含旧 CA 和新 CA。把更新后的 CA bundle 分发到所有 cell 进程并重启，完成后每个 cell 同时
+     信任旧 CA 和新 CA 签发的 leaf cert。
+  2. **Leaf cert 滚动（coordinator）：** 依次为每个 cell 进程生成新 CA 签发的 leaf cert，
+     替换 `GOCELL_TRANSPORT_TLS_CERT_FILE` / `GOCELL_TRANSPORT_TLS_KEY_FILE`，重启该进程。
+     因其他 cell 仍信任新旧两个 CA，期间 TLS 握手不会中断。
+  3. **全进程重启窗口：** 完成所有 leaf cert 替换后，视情况收缩 CA bundle（移除旧 CA 并再次
+     重启）。期间 `<peer>_remote_ready` probe 会在每次重启时短暂降级（`unhealthy`）并在进程
+     重新上线后恢复；kubelet 会据此短暂摘除 pod 流量，这是预期行为。
+  4. **监控 `<peer>_remote_ready` probe：** 整个轮换窗口期间持续观察各 peer 的
+     `_remote_ready` probe，确认每次重启后都恢复 `healthy` 再继续下一步。
+
+  热重载（文件 watcher 驱动的无重启轮换）是 follow-up（hot-reload roadmap）。
+
 
 **Diagnosing broker status via `/readyz?verbose`**: the framework-level
 `Topology.AdapterInfo()` method returns `"in-memory"` by default. In a postgres
@@ -182,4 +308,7 @@ meaningful in a postgres deployment.
 ## ADR reference
 
 For design decisions, threat model, and phase plan, see:
-`docs/architecture/202606131142-1423-adr-cell-deployment-topology.md`
+
+- `docs/architecture/202606131142-1423-adr-cell-deployment-topology.md` — 部署拓扑 seam 决策、安全模型、历次 amendment。
+- `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` — split mTLS 对等认证（ZT-1）、SPIFFE-ID 约定、fail-closed 双闸、AI-robust 档位表。
+- `docs/architecture/202605290130-049-adr-mtls-server-builder-and-identity-hook.md` — server 侧 mTLS builder 与 PeerIdentity ctx hook。

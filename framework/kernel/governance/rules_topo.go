@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/netutil"
 )
 
 const fieldContractUsagesContractFmt = "contractUsages[%d].contract"
@@ -823,4 +825,61 @@ func isCrossProcessEventPair(pubLoc, subLoc metadata.CellLocation) bool {
 		return pubEP != subEP // same remote endpoint = same process
 	}
 	return true // one local + one remote → cross-process
+}
+
+// validateTOPO14 enforces the split-topology mTLS endpoint gate (#2263): in every
+// assembly, each NON-loopback remote cell endpoint must use the https scheme.
+// Transport mTLS is mandatory across a real network boundary — there is no
+// private-network plaintext fallback. A loopback endpoint (127.0.0.0/8, ::1,
+// localhost) stays plaintext-eligible for local multi-process dev.
+//
+// This is the BUILD-TIME half of the #2263 fail-closed double gate. The RUNTIME
+// half (cellmodules/celltls.Resolve + celltransport.Resolve) fails closed when a
+// non-loopback remote peer is declared but no TLS material is provisioned — the
+// env-PEM presence this static scheme check cannot see.
+func (v *Validator) validateTOPO14() []ValidationResult {
+	var results []ValidationResult
+
+	keys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	for _, asmID := range keys {
+		asm := v.project.Assemblies[asmID]
+		if asm == nil {
+			continue
+		}
+		results = append(results, v.checkTOPO14Assembly(asm)...)
+	}
+	return results
+}
+
+// checkTOPO14Assembly flags every non-loopback remote endpoint in asm that is not
+// https.
+func (v *Validator) checkTOPO14Assembly(asm *metadata.AssemblyMeta) []ValidationResult {
+	var results []ValidationResult
+	for _, entry := range asm.Topology.Remote {
+		ep := entry.Endpoint
+		// Loopback peers (local multi-process dev) stay plaintext-eligible.
+		if netutil.IsLoopbackEndpoint(ep) {
+			continue
+		}
+		if strings.HasPrefix(ep, "https://") {
+			continue
+		}
+		results = append(results, v.newError(
+			codeTOPO14, IssueForbidden,
+			assemblyFile(asm), "topology",
+			fmt.Sprintf(
+				"assembly %q remote cell %q endpoint %q is non-loopback but not https;"+
+					" split-topology cross-cell transport requires mTLS (https) across a network boundary (#2263)",
+				asm.ID, entry.CellID, ep),
+			"use an https:// endpoint and provision transport mTLS material"+
+				" (GOCELL_TRANSPORT_TLS_CERT_FILE/KEY_FILE/CA_FILE + GOCELL_SPIFFE_TRUST_DOMAIN),"+
+				" or bind the peer to loopback for local multi-process dev",
+		))
+	}
+	return results
 }

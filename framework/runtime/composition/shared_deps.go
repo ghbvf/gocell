@@ -1,6 +1,7 @@
 package composition
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/capability"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
@@ -194,6 +196,24 @@ type SharedDeps struct {
 	// ADR D4). The metrics instance is reused (not re-registered) to avoid a
 	// duplicate-counter error. Build-populated (derived), not a caller input.
 	TransportObs transport.CrossCellObs
+
+	// RemoteClientTLS is the cell's client-side mTLS identity for dialing remote
+	// peer cells over https (#2263). The composition root resolves it once via
+	// cellmodules/celltls.Resolve and hands it to celltransport.Resolve, which
+	// mints a per-target-cell *tls.Config (peer authenticated by SPIFFE cell ID).
+	// The zero value means "no client mTLS" (demo / loopback / all-colocated):
+	// celltransport.Resolve then fails closed only for a non-loopback https peer.
+	// Caller input (composition root); zero is the valid no-mTLS state.
+	RemoteClientTLS tlsutil.ClientIdentity
+
+	// InternalListenerServerTLS is the cell's server-side mTLS config for the
+	// internal listener (#2263), resolved alongside RemoteClientTLS by
+	// cellmodules/celltls.Resolve. When non-nil the composition root wires it via
+	// celltls.InternalListenerSecurity (prepends kauth.AuthMTLS{} +
+	// bootstrap.WithListenerTLS). Nil = no server mTLS (service-token-only, demo /
+	// loopback). Caller input; nil is the valid no-mTLS state. A *tls.Config (not
+	// a celltls type) keeps this package free of a cellmodules import (layer rule).
+	InternalListenerServerTLS *tls.Config
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener.
 	HealthHTTPAddr string

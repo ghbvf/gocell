@@ -400,7 +400,7 @@ adapters/     — External system adapters (postgres / redis / rabbitmq / websoc
 pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
 cmd/          — CLI (gocell validate [--strict] / scaffold / generate / check / verify)
 examples/     — Example projects; may include example-local cells/contracts/journeys
-templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
+docs/templates/ — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
 generated/    — Tool-generated artifacts (indexes, derived views)
 ```
 
@@ -617,12 +617,12 @@ clone … && go install ./cmd/gocell`). See
 
 GoCell includes templates for common engineering documents:
 
-- `templates/adr.md` — Architecture Decision Record
-- `templates/cell-design.md` — Cell design document
-- `templates/contract-review.md` — Contract review checklist
-- `templates/runbook.md` — Operations runbook
-- `templates/postmortem.md` — Incident postmortem
-- `templates/grafana-dashboard.json` — Grafana monitoring dashboard
+- `docs/templates/adr.md` — Architecture Decision Record
+- `docs/templates/cell-design.md` — Cell design document
+- `docs/templates/contract-review.md` — Contract review checklist
+- `docs/templates/runbook.md` — Operations runbook
+- `docs/templates/postmortem.md` — Incident postmortem
+- `docs/templates/grafana-dashboard.json` — Grafana monitoring dashboard
 
 ## License
 

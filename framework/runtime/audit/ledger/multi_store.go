@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -101,6 +102,37 @@ func (m *MultiStore) Query(
 		merged = []*Entry{}
 	}
 	return merged, nil
+}
+
+// GetByID fans out to each backing store and returns the first entry found, or
+// ErrAuditLedgerNotFound when no store has it. An entry lives in exactly one
+// backing store (one namespace chain), so the first non-not-found result is the
+// answer: a backing store's ErrAuditLedgerNotFound means "not in this chain — try
+// the next", while any other error propagates (a real fault, or a validation
+// rejection every backend would raise). The tenant + owner axes are enforced by
+// each backing store; RowScopeAll is fail-closed here before fan-out (mirrors
+// Query), so a cross-tenant single-entry read never reaches the serving chains.
+func (m *MultiStore) GetByID(
+	ctx context.Context, t tenant.TenantID, vis tenant.RowVisibility, id string,
+) (*Entry, error) {
+	if err := ValidateQueryTenant(t); err != nil {
+		return nil, err
+	}
+	if vis.Scope() == tenant.RowScopeAll {
+		return nil, RowScopeAllUnsupportedError()
+	}
+	for _, s := range m.stores {
+		e, err := s.GetByID(ctx, t, vis, id)
+		if err == nil {
+			return e, nil
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrAuditLedgerNotFound {
+			continue // not in this chain — try the next backing store
+		}
+		return nil, fmt.Errorf("multi-store get-by-id: %w", err)
+	}
+	return nil, auditEntryNotFoundByID()
 }
 
 // compareBySort returns a negative integer when a sorts before b under cols,

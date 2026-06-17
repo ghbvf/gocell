@@ -218,22 +218,25 @@ clean:
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle
 # ---------------------------------------------------------------------------
+# Compose files live under deploy/; --project-directory . pins relative-path
+# resolution (build context, bind mounts) and the derived project name to the
+# repo root, so moving the files into deploy/ is transparent (#1781).
 
 up:
-	docker compose up -d --wait
+	docker compose -f deploy/docker-compose.yml --project-directory . up -d --wait
 
 down:
-	docker compose down
+	docker compose -f deploy/docker-compose.yml --project-directory . down
 
 # Local docker deploy: full stack (PG+Redis+migrate+corebundle).
-# Prereq: scripts/gen-deploy-secrets.sh to produce .env.local first.
+# Prereq: hack/scripts/gen-deploy-secrets.sh to produce .env.local first.
 local-up:
-	@test -f .env.local || (echo "missing .env.local; run scripts/gen-deploy-secrets.sh first" >&2; exit 1)
-	docker compose -f docker-compose.local.yml --env-file .env.local up -d --wait
+	@test -f .env.local || (echo "missing .env.local; run hack/scripts/gen-deploy-secrets.sh first" >&2; exit 1)
+	docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local up -d --wait
 
 local-down:
-	@test -f .env.local || (echo "missing .env.local; run scripts/gen-deploy-secrets.sh first" >&2; exit 1)
-	docker compose -f docker-compose.local.yml --env-file .env.local down -v
+	@test -f .env.local || (echo "missing .env.local; run hack/scripts/gen-deploy-secrets.sh first" >&2; exit 1)
+	docker compose -f deploy/docker-compose.local.yml --project-directory . --env-file .env.local down -v
 
 # ---------------------------------------------------------------------------
 # Integration tests  (T08)
@@ -286,8 +289,8 @@ test-examples-smoke:
 
 # ---------------------------------------------------------------------------
 # Healthcheck verification  (T09)
-# Delegates to scripts/healthcheck-verify.sh
+# Delegates to hack/scripts/healthcheck-verify.sh
 # ---------------------------------------------------------------------------
 
 healthcheck-verify:
-	bash scripts/healthcheck-verify.sh
+	bash hack/scripts/healthcheck-verify.sh

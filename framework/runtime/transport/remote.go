@@ -209,7 +209,11 @@ func rewriteToAbsolute(req *http.Request, endpoint string) error {
 //
 // Accepted forms (ok=true):
 //   - "http(s)://host[:port]" → (u.Scheme, u.Host).
-//   - bare "host:port" → ("http", endpoint); TLS enforcement is US6 #1964.
+//   - bare "host:port" → ("http", endpoint); plaintext is only reachable for a
+//     loopback/demo peer — a non-loopback split peer is required to be https and
+//     gated to mTLS at construction time by cellmodules/celltransport.Resolve
+//     (#2263 fail-closed gate), so this default never carries cross-network
+//     traffic unencrypted.
 //
 // Any path (beyond an optional root "/"), query, or fragment, or an empty
 // endpoint, is rejected (ok=false) rather than silently truncated (#1966 review

@@ -13,6 +13,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
+	"github.com/ghbvf/gocell/cellmodules/celltls"
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -186,10 +187,15 @@ func defaultRuntimeOptions(
 			[]auth.ListenerAuth{primaryAuth},
 		))
 	}
-	internalChain, err := buildInternalAuthChain(shared)
+	internalBase, err := buildInternalAuthChain(shared)
 	if err != nil {
 		return nil, fmt.Errorf("internal listener auth: %w", err)
 	}
+	// #2263: layer transport-level mTLS over the service-token chain when split
+	// TLS material is provisioned (celltls.Resolve set InternalListenerServerTLS).
+	// celltls.InternalListenerSecurity is the single chain-shape source shared with
+	// examples/ssobff. Nil server TLS → chain unchanged (demo / loopback).
+	internalChain, internalTLSOpts := celltls.InternalListenerSecurity(shared.InternalListenerServerTLS, internalBase)
 	// #673: the HealthListener is mandatory (unlike PrimaryListener, which a
 	// worker-only binary may omit). resolveListenerAddrs always defaults
 	// HealthHTTPAddr to 127.0.0.1:9091, so it is never empty on the env path;
@@ -198,7 +204,7 @@ func defaultRuntimeOptions(
 	// constructed SharedDeps with an empty addr now fails fast at bootstrap
 	// phase0 (validateListenerConfig: no address) instead of being skipped.
 	opts = append(opts,
-		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain),
+		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain, internalTLSOpts...),
 		bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}),
 		devtoolsOption(shared),
 	)

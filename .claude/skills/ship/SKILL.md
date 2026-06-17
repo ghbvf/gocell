@@ -65,10 +65,10 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 ```bash
 git fetch origin
-git worktree add worktrees/<Type>/<issue#-short-name> -b <Type>/<issue#-short-name> origin/develop
+git worktree add worktrees/<type>/<issue#-short-name> -b <type>/<issue#-short-name> origin/develop
 ```
 
-命名依 `git-worktree` skill：**编号 = 关联 issue#**（无 issue 不编号），path 与分支首段含 **Type**（Feature/Fix/Refactor/Docs/Experiment）。下文 `worktrees/<wt>` 简写指该 worktree 目录。
+命名依 `git-worktree` skill：**编号 = 关联 issue#**（无 issue 不编号），path 与分支首段含 **type**（feature/fix/refactor/docs/experiment，一律小写）。下文 `worktrees/<wt>` 简写指该 worktree 目录。
 
 ---
 

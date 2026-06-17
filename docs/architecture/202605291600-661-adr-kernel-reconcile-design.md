@@ -3,24 +3,18 @@
 | 字段 | 值 |
 |------|---|
 | ADR ID | 661 |
-| 状态 | **Accepted（设计冻结）。PR-A1–A7 已合入 develop；A8–A10 在 §6.1 trigger gate 内（kernel 基建 A1–A8 不门 trigger，详见 §6.2 Amendment 2026-06-02）** |
+| 状态 | **Accepted（设计冻结；A1-A10 已 landed/闭环）。`kernel/reconcile` 基建、`kernel/command` 迁移、`examples/iotdevice` 消费均已在 develop；原 trigger gate 已由 §6.2 与 ADR-1895 收窄为后续业务 cell 接入质量门** |
 | 日期 | 2026-05-29 |
 | Issue | [#661](https://github.com/ghbvf/gocell/issues/661)（父）/ [#1162](https://github.com/ghbvf/gocell/issues/1162)（PR-A1） |
 | Spec | `docs/plans/specs/202605262359-661-kernel-reconcile-{spec,plan,tasks}.md` |
 | 一致性级别 | **L4 DeviceLatent**（issue 第一性原理重评结论） |
 
-> 本 ADR 是 `kernel/reconcile` 的设计权威源。本 PR（PR-A1）是 **docs-only**——`kernel/reconcile`
-> 的实现代码**不在本 PR、也尚未合入 develop**，而活在同 stack 的原型分支 `661-loop-skeleton`
-> （PR-A2 3 件套最小核 + PR-A3 Loop 调度骨架）。该原型经 `go test -race ./kernel/reconcile/`
-> 通过、coverage 90.8%，为 `§2 ≥80% reuse`、`§3 接口形态`、`§7 panic 隔离` 等论断提供**原型实现
-> 背书**——但这是「**分支原型验证**」而非「trunk 已验证」：A2/A3 作为各自独立 PR（经各自 review）
-> 实际合入 develop 前，develop 上没有任何 `kernel/reconcile` 代码，本文论断在 trunk 维度仍是
-> 「设计 + 待兑现」。引用具体数值（coverage / LoC）时须带此 provenance，勿表述为 trunk 现状。
-> A1–A3 是 **stacked PR，按 A1（base develop）← A2 ← A3 依次合入**（plan.md「每 PR merge
-> 后 trunk 可发布」）；本文用「由 PR-Ax 交付」标注每条论断的承载 PR——读者在 develop 上看到的
-> 实现取决于已合入到哪一 PR，A2/A3 交付的形态/数值（接口、Loop、metrics、archtest 等）只在其
-> 承载 PR 实际合入 develop 后才成为 trunk 事实。设计与实现分歧时以本 ADR 为准，并在同 PR 内
-> 修正实现或修订本 ADR。
+> 本 ADR 是 `kernel/reconcile` 的设计权威源。截至 2026-06-17，`kernel/reconcile`
+> 的 trunk 事实已包括：3 件套最小核、`Loop`/`Trigger`/backoff、`LeaderElector`+
+> epoch fencing、Builder DSL、system producer identity、redis/postgres 两个 adapter、
+> `reconciletest` conformance、`kernel/command.Sweeper` 迁移，以及
+> `examples/iotdevice` 的端到端消费方。早期 coverage / LoC 数值仍按其承载 PR 的验证口径引用；
+> 设计与实现分歧时以本 ADR 的最新 amendment 为准，并在同 PR 内修正实现或修订本 ADR。
 
 ---
 
@@ -47,38 +41,37 @@
 `PermanentError`/`IsPermanent` ≈ 30 LoC（`reconciler.go` 45 + `result.go` 类型部分）；
 controller-runtime `pkg/reconcile`+`pkg/builder` 公开面 ≥800 LoC，简化 ≥4x。
 
-**交付划分**：本 stack 分三 PR——PR-A1（本 ADR，docs-only，= 当前 PR）/ PR-A2（接口 + 3 frozen
-archtest）/ PR-A3（Loop 调度骨架 + 4 metrics + clock carve-out）。A2/A3 已在原型分支
-`661-loop-skeleton` 经 `go test -race` + 90.8% coverage 验证，但**尚未作为 PR 合入 develop**；
-合入顺序 A1←A2←A3。下文「由 PR-Ax 交付」标注每条论断的承载 PR——某论断背书的代码只有在其
-承载 PR 实际合入后才存在于 develop。PR-A4–A10（Trigger / Backoff / LeaderElector / Builder /
-迁移 / 文档）受 §6 trigger gate 封存。
+**交付状态**：A1-A10 已 landed/闭环。A1 固定本 ADR 与对标快照；A2–A8 交付
+`kernel/reconcile` 接口、Loop、Trigger、backoff、LeaderElector + fencing、Builder、
+`kernel/command` 迁移；A9 的 examples/iotdevice 切换被 A8 吸收并以 #1170 spec-reconcile
+关闭；A10 的治理文档 / 对标索引 / ADR amendment 已落入当前文档集。下文「由 PR-Ax 交付」
+保留为 provenance 标记，不再表示 trunk 上缺代码或等待 trigger。
 
 ---
 
 ## §1 问题陈述
 
-### 1.1 kernel/command Sweeper 域绑定
+### 1.1 kernel/command Sweeper 域绑定（历史问题）
 
-现状 L4 控制环唯一实例是 `kernel/command.Sweeper` + `runtime/command.SweeperLifecycle`：
+本 ADR 立项时，L4 控制环唯一实例是 `kernel/command.Sweeper` + `runtime/command.SweeperLifecycle`：
 
 - `kernel/command.Sweeper.SweepTick(ctx, now)` 是**命令实体专属**的批量扫描器——内部
   `scanner.ScanActive` → `SweepOnce`（计算过期）→ `queue.Ack(AckTimeout)`，签名与命令
   domain 强耦合（`ActiveScanner` / `Queue` / `ExpiryTransition`）。
-- `runtime/command.SweeperLifecycle`（446 LoC）是通用的**调度骨架**：control-plane ticker /
+- 原 `runtime/command.SweeperLifecycle`（446 LoC）是通用的**调度骨架**：control-plane ticker /
   startup probe / owner-ctx 派生 / graceful stop / 错误计数——这部分与命令域无关。
 
-骨架可复用，但被命令域签名（`SweepTick`/`SweepTicker`/`SweepErrorCounter`）绑死，无法被
-其他 L4 消费方直接复用。
+骨架可复用，但当时被命令域签名（`SweepTick`/`SweepTicker`/`SweepErrorCounter`）绑死，无法被
+其他 L4 消费方直接复用；A8 已将该调度骨架迁入 `kernel/reconcile.Loop` 并删除旧 runtime 路径。
 
 ### 1.2 四个真消费方需要泛化
 
-issue #661 第一性原理重评列出 ≥4 个 roadmap-committed 的 L4 desired-state 消费方
-（详见 §6 trigger 表）：`pkicell.rotation`（证书续期）、`mdmcell.command`（命令超时重发）、
-`devicelifecycle.cronsweep`（设备墓碑状态机）、`zerotrust.trustscore`（信任分周期重评）。
-四者都需要「周期观察非终态实体 → 逐个驱动至期望态 → 按结果重排」的相同控制环，仅
-Reconcile 逻辑不同。把 Sweeper 骨架泛化为 `kernel/reconcile.Loop` + `Reconciler` 接口，
-四者只写 Reconcile 本体。
+issue #661 第一性原理重评列出多个 roadmap-committed 的 L4 desired-state 消费面
+（详见 §6 trigger 表）：`runtime/certlifecycle`（框架证书生命周期，ADR-1895 D2/D5）、
+`mdmcell.command`（命令超时重发）、`devicelifecycle.cronsweep`（设备墓碑状态机）、
+`zerotrust.trustscore`（信任分周期重评）。四者都需要「周期观察非终态实体 → 逐个驱动至期望态 →
+按结果重排」的相同控制环，仅 Reconcile 逻辑不同。把 Sweeper 骨架泛化为
+`kernel/reconcile.Loop` + `Reconciler` 接口，消费方只写 Reconcile 本体。
 
 ### 1.3 权限模型澄清（防与 ADR-041 §3.3 矛盾）
 
@@ -429,7 +422,8 @@ not guarantee that only one client is acting as a leader (a.k.a. fencing)."* STW
 
 因此单实例正确性**不能**靠 lease 本身，必须靠 **monotonic fencing token + 写路径 CAS**（§4.3）
 + **消费方幂等**（§4.4）兜底。本节 §4.1–§4.2 是 lease 机制（best-effort 收窄窗口），§4.3–§4.4
-是正确性闭环（结构性兜底）。**以下 §4 全节是 PR-A6 设计**（未落地，受 §6 trigger gate 封存）。
+是正确性闭环（结构性兜底）。**以下 §4 全节由 PR-A6 设计并落地**；后续 amendments 记录
+as-built 修正与 review 收敛。
 
 ### 4.1 两 adapter
 
@@ -517,23 +511,23 @@ controller-runtime 也明确二者正交）。
 
 ## §6 trigger 满足条件 + 激活流程
 
-### 6.1 Trigger Gate（真实业务消费方 cell + examples 端到端切换实施前必须满足）
+### 6.1 Trigger Gate（已收窄为后续业务 cell 接入质量门）
 
-> **gate 范围说明（§6.2 Amendment 2026-06-02 收窄）**：本 gate 仅针对**真实业务消费方 cell**
-> （T1–T4：pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep /
-> zerotrust.trustscore）的建设 + `examples` 端到端切换，**不门 kernel 基建 A1–A8**。
-> kernel 基建（接口 / Trigger / backoff / LeaderElector + adapter / Builder /
-> kernel/command 迁移）已经 maintainer 逐 PR 显式 un-park，不再受本 gate 约束——详见 §6.2。
+> **当前 gate 范围（§6.2 + ADR-1895 同步）**：`kernel/reconcile` 基建、`kernel/command`
+> 迁移、`examples/iotdevice` 验证消费方，以及 `runtime/certlifecycle` 框架证书生命周期能力
+> **均不再受本 gate 阻塞**。本 gate 仅保留为后续真实业务 cell / 产品接入的质量门，防止把
+> framework runtime 能力误计为 winmdm / ZT 业务 cell 成熟度。
 
-| # | 触发条件 | 预计 |
-|---|---------|------|
-| T1 | `pkicell.rotation`（证书续期 L4 环） | winmdm Stage 1, 2027 Q1 |
+| # | 触发条件 | 当前口径 |
+|---|---------|----------|
+| T1' | `runtime/certlifecycle`（框架证书生命周期 reconciler，ADR-1895 D2/D5） | v1.0 P0；证明证书生命周期 runtime 消费面成立，但不计入业务 cell 数 |
 | T2 | `mdmcell.command`（命令超时重发） | winmdm Stage 2, 2027 Q2-Q3 |
 | T3 | `devicelifecycle.cronsweep`（设备墓碑状态机） | winmdm Stage 4, 2027 Q4 |
 | T4 | `zerotrust.trustscore`（信任分周期重评） | zt Phase 5, 2029 Q1 |
 
-**满足判定**：T1/T2/T3 至少 **2 个生产 cell** 落地（不含 `examples/iotdevice`），或 T1/T2/T3
-任一 + T4。
+**满足判定（后续业务 cell 质量门）**：T2/T3 至少 **2 个生产 cell** 落地（不含
+`examples/iotdevice` 与 framework runtime 能力），或 T2/T3 任一 + T4。T1' 只解除证书生命周期
+对已退役 winmdm 续期 slice 的等待，不替代业务 cell 计数。
 
 ### 6.2 A1–A3 ahead-of-trigger 例外（本 PR）
 
@@ -555,15 +549,22 @@ trigger gate 的原始约束（spec.md §Trigger Gate）是「trigger 满足前�
 > §6.2 item 1–3 的 un-park 理由（无外部调用方 + 可运行实现是 ADR 论断的验证手段 + 不引入业务
 > cell / `mdm/` 目录）对 A4–A8 同等成立。`runtime/command.SweeperLifecycle` 旧路径在 A8 才删，
 > A6 不动它（无双轨破裂）。**§6.1 trigger gate 语义同步收窄**：T1–T4 现仅门**真实业务消费方 cell**
-> （pkicell.rotation / mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore）的建设
+> （mdmcell.command / devicelifecycle.cronsweep / zerotrust.trustscore 等）的建设
 > + `examples` 端到端切换，**不门 kernel 基建**。这与 §6.2 item 3「不引入业务 cell」是同一条线的
 > 延伸，非新政策。§6.1 表头已同步更新为与本 amendment 一致，冲突已在源头解决。
 
-### 6.3 激活流程（A4–A10）
+> **§6.2 Amendment 2026-06-17（ADR-1895 同步，#1956）**：ADR-1895 D2/D5 已将设备证书生命周期
+> 下移为框架能力 `runtime/certlifecycle`（复用 `kernel/reconcile.Loop`），winmdm 后续只保留
+> WSTEP/SCEP/caworkflow 协议前端并消费框架底座。因此原 T1 被 T1' 替换：T1' 证明证书生命周期
+> runtime 消费面成立，但**不是**业务 cell 计数项；后续业务 cell 质量门仍只统计真实 winmdm / ZT
+> cell 的生产落地。
 
-trigger 满足时：开新 implementation plan（`docs/plans/<ts>-661-kernel-reconcile-active.md`）引用
-本 ADR + spec，按 A4→A10 顺序执行（B4 内 A4∥A5 可并行）；A10 merge 后关闭 #661。激活前核验
-controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修订本 §2。
+### 6.3 历史激活流程（A4–A10）
+
+A4–A10 已按本 ADR + spec 的 PR 序列 landed/闭环：A4/A5 并行段已落地，A6/A7/A8 交付 leader /
+Builder / command 迁移，A9 被 A8 吸收并以 #1170 spec-reconcile 关闭，A10 文档治理落入当前
+文档集。后续若新增业务 cell 消费方，不再重启本激活流程；只需引用本 ADR、ADR-1895 与
+`kernel/reconcile/doc.go` 的当前 invariants。
 
 ---
 
@@ -601,9 +602,10 @@ controller-runtime 对标快照（§2 的 5 个 ref）仍有效，否则先修�
 >   为「lease 收窄 + epoch fencing 结构兜底」。
 > - **新增 T-FENCE 行**：覆盖「旧 leader 迟到写」这一原矩阵漏掉的威胁；评级 **设计**（A6 落地
 >   FencedWriter funnel 后定级）。
-> - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 未落地），本次只是把
+> - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 当时待交付），本次只是把
 >   *保证来源* 从 lease（错）改为 epoch fencing + 幂等（对），并把 A6 验收门槛写死，使 A6 实现者
->   无法回退到「信 lease」的旧错。fencing 设计是 docs（不建代码），不违反 §6 trigger gate。
+>   无法回退到「信 lease」的旧错。后续 2026-06-02 / 2026-06-17 amendments 已把 A6 as-built 结论收敛为
+>   `FencedWriter` 唯一写面 + epoch CAS；本段保留为 PR-A6 前的历史重评记录，不再表示当前实现仍停留在文档限定状态。
 
 > **§Amendment 2026-06-01 (PR-A5 #1166) — F5/F6 落地威胁矩阵逐行重评**：
 > PR-A5 落地 F5（dirty/processing dedup）+ F6（shared waitingLoop delaying queue）+
@@ -768,8 +770,8 @@ A8 删除 `runtime/command.SweeperLifecycle` + `SweepTicker` 命名，`kernel/co
 - A8 同步迁移 `clock_invariants_test.go`：runtime/command 的 controlPlaneClock carve-out 随
   `lifecycle.go` 删除而退场（reconcile 的 carve-out 已在本 PR/A3 加入 `controlPlaneClockHosts`）。
 
-> 当前 PR（A1–A3）**不**删除 SweeperLifecycle——它仍是 runtime/command 的活跃路径；§8 是 A8
-> 的设计声明，A8 受 §6 trigger gate 封存。
+> A1–A3 当时**不**删除 SweeperLifecycle——它仍是 runtime/command 的活跃路径；§8 是 A8
+> 的设计声明。当前 trunk 已由 A8 删除旧路径并迁入 `kernel/reconcile.Loop`。
 
 ref: kubernetes-sigs/controller-runtime pkg/reconcile/reconcile.go
 ref: kubernetes-sigs/controller-runtime pkg/internal/controller/controller.go

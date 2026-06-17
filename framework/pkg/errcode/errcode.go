@@ -965,6 +965,31 @@ const (
 	// Constructed with KindConflict → HTTP 409 (control-plane signal; normally
 	// never surfaces at an HTTP boundary).
 	ErrReconcileLeaseHeld Code = "ERR_RECONCILE_LEASE_HELD"
+
+	// Runtime contract-registration state-machine codes (303-US2, #2233).
+	// kernel/registry.ContractRegistrar drives runtime-submitted contracts
+	// through a sealed RegistrationState machine; these dedicated codes let
+	// operator dashboards / downstream handlers (US6/US7/US13) route registration
+	// failure modes without string-matching messages — mirroring the saga journal
+	// sentinels which moved off generic ErrValidationFailed/ErrConflict for the
+	// same reason (#959).
+	//
+	// ErrRegistrationInvalidTransition signals an attempted state transition that
+	// the legalTransitions table forbids (e.g. activating a contract that was
+	// never approved — the approval-bypass invariant). Constructed with
+	// KindInvalid → HTTP 400 (mirrors saga.Transition).
+	ErrRegistrationInvalidTransition Code = "ERR_REGISTRATION_INVALID_TRANSITION"
+	// ErrRegistrationNotFound signals that the addressed registration id is not
+	// known to the registrar (Advance/Events on an unknown id). Distinct from
+	// ErrContractNotFound, which the read-only ContractRegistry uses for parsed
+	// compile-time contract metadata; conflating them would mis-route operator
+	// dashboards. Constructed with KindNotFound → HTTP 404.
+	ErrRegistrationNotFound Code = "ERR_REGISTRATION_NOT_FOUND"
+	// ErrRegistrationDuplicate signals that Submit was called for a registration
+	// id that already exists. Constructed with KindConflict → HTTP 409 (mirrors
+	// ErrSagaDuplicateInstance). The (kind,domain,version,owner) uniqueness
+	// quadruple is a separate concern owned by US15/FR-009.
+	ErrRegistrationDuplicate Code = "ERR_REGISTRATION_DUPLICATE"
 )
 
 // PublicError is the structured projection shared by HTTP responses, CLI text
