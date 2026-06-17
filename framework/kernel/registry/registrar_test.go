@@ -97,6 +97,67 @@ func TestSubmit_EmptyFields(t *testing.T) {
 	assert.Equal(t, 0, r.Count())
 }
 
+// TestSubmit_WhitespaceOnlyFields verifies whitespace-only required fields are
+// rejected (not just byte-empty) — a blank Submitter must not become a phantom
+// identity in the audit trail.
+func TestSubmit_WhitespaceOnlyFields(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	cases := []registry.SubmitInput{
+		{ID: "  ", Kind: "http", Submitter: "cell-a"},
+		{ID: "x", Kind: "\t", Submitter: "cell-a"},
+		{ID: "x", Kind: "http", Submitter: "   "},
+	}
+	for _, in := range cases {
+		_, err := r.Submit(in)
+		errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+	}
+	assert.Equal(t, 0, r.Count(), "whitespace-only required fields must not create a registration")
+}
+
+// TestSubmit_TrimsStoredIdentity verifies required identity fields are stored
+// canonicalized (trimmed), so padded values don't drift attribution / dedup.
+func TestSubmit_TrimsStoredIdentity(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	reg, err := r.Submit(registry.SubmitInput{ID: " reg-1 ", Kind: " http ", Submitter: " cell-a "})
+	require.NoError(t, err)
+	assert.Equal(t, "reg-1", reg.ID)
+	assert.Equal(t, "http", reg.Kind)
+	assert.Equal(t, "cell-a", reg.Submitter)
+	_, ok := r.Get("reg-1") // stored under the trimmed id
+	assert.True(t, ok)
+}
+
+// TestAdvance_WhitespaceOnlyActor verifies a whitespace-only actor is rejected
+// and leaves state/events untouched (audit attribution must name a real actor).
+func TestAdvance_WhitespaceOnlyActor(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	mustSubmit(t, r, "reg-1")
+	_, err := advance(r, "reg-1", registry.StateProbing(), "  \t ", "")
+	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
+	reg, ok := r.Get("reg-1")
+	require.True(t, ok)
+	assert.Equal(t, registry.StateSubmitted(), reg.State, "whitespace-only actor must not advance state")
+	events, _ := r.Events("reg-1")
+	assert.Len(t, events, 1, "no event appended on rejected whitespace advance")
+}
+
+// TestAdvance_TrimsStoredActor verifies a padded approver is stored trimmed.
+func TestAdvance_TrimsStoredActor(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistrar(t)
+	mustSubmit(t, r, "reg-1")
+	for _, to := range []registry.RegistrationState{registry.StateProbing(), registry.StateConformant(), registry.StatePendingApproval()} {
+		_, err := advance(r, "reg-1", to, "system", "")
+		require.NoError(t, err)
+	}
+	reg, err := advance(r, "reg-1", registry.StateApproved(), "  admin-9  ", "")
+	require.NoError(t, err)
+	assert.Equal(t, "admin-9", reg.Approver)
+}
+
 func TestAdvance_FullLifecycle(t *testing.T) {
 	t.Parallel()
 	r, _ := newRegistrar(t)

@@ -52,6 +52,7 @@ func NewContractRegistrar(clk clock.Clock) *ContractRegistrar {
 // if the id already exists. dedup is by registration id only; the
 // (kind,domain,version,owner) uniqueness quadruple is owned by US15/FR-009.
 func (r *ContractRegistrar) Submit(in SubmitInput) (ContractRegistration, error) {
+	in = in.normalized()
 	if err := in.validate(); err != nil {
 		return ContractRegistration{}, err
 	}
@@ -91,6 +92,7 @@ func (r *ContractRegistrar) Submit(in SubmitInput) (ContractRegistration, error)
 // ErrValidationFailed for an empty in.ID or in.Actor (attribution is required).
 // When in.To is approved, in.Actor is recorded as the registration's Approver.
 func (r *ContractRegistrar) Advance(in AdvanceInput) (ContractRegistration, error) {
+	in = in.normalized()
 	if err := in.validate(); err != nil {
 		return ContractRegistration{}, err
 	}
