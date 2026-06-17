@@ -67,6 +67,7 @@ func TestAccesscorePermissions_String(t *testing.T) {
 		{"PermUserRead", PermUserRead(), "user:read"},
 		{"PermUserWrite", PermUserWrite(), "user:write"},
 		{"PermRoleRead", PermRoleRead(), "role:read"},
+		{"PermAccessDecide", PermAccessDecide(), "access:decide"},
 		{"PermSessionVerify", PermSessionVerify(), "session:verify"},
 	}
 	for _, tc := range cases {
@@ -178,6 +179,7 @@ func TestAccesscorePermissions_StableIdentity(t *testing.T) {
 		{"PermUserRead", PermUserRead(), permUserRead},
 		{"PermUserWrite", PermUserWrite(), permUserWrite},
 		{"PermRoleRead", PermRoleRead(), permRoleRead},
+		{"PermAccessDecide", PermAccessDecide(), permAccessDecide},
 		{"PermSessionVerify", PermSessionVerify(), permSessionVerify},
 	}
 	for _, tc := range cases {
@@ -205,18 +207,19 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// Pin the closed set. A new Perm* var that forgets to enroll in allPermissions
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
 	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
-	// (PR-10b) + 6 accesscore (PR-10c + session:verify #1154) + 4 iotdevice + 4 todoorder
-	// (PR-10d #1894).
-	if len(perms) != 21 {
-		t.Fatalf("Permissions() len = %d, want 21 "+
-			"(2 platform + 5 configcore + 6 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
+	// (PR-10b) + 7 accesscore (PR-10c + session:verify #1154 + access:decide #1863) +
+	// 4 iotdevice + 4 todoorder (PR-10d #1894).
+	if len(perms) != 22 {
+		t.Fatalf("Permissions() len = %d, want 22 "+
+			"(2 platform + 5 configcore + 7 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
 		"config:read": true, "config:write": true, "config:publish": true,
 		"flag:read": true, "flag:write": true,
 		"policy:read": true, "policy:write": true,
-		"user:read": true, "user:write": true, "role:read": true, "session:verify": true,
+		"user:read": true, "user:write": true, "role:read": true,
+		"access:decide": true, "session:verify": true,
 		"device:command": true, "device:consume": true, "device:read": true, "device:list": true,
 		"order:create": true, "order:list": true, "order:read": true, "order:update": true,
 	}
@@ -433,13 +436,14 @@ func TestIsKnownPermissionString(t *testing.T) {
 // declares endpoints.grpc.methods[].resource. If a permission's scope is misclassified
 // here, the cross-check silently admits or rejects gRPC method overlays incorrectly.
 //
-// Anti-vacuity: the owner-scoped count is exactly 7 (not zero; not the full 21).
+// Anti-vacuity: the owner-scoped count is exactly 8 (not zero; not the full set).
 // Changing any scope in permission.go must update this test.
 func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
 	t.Parallel()
 
-	// The 7 owner-scoped permissions. These are the ones used with
-	// RequirePermissionForResource on HTTP (subject.sub == resource.id ownership rule).
+	// The owner-scoped permissions. These are the ones used with
+	// RequirePermissionForResource / RequirePermissionForSelf on HTTP, or
+	// resource: <field> on gRPC (subject.sub == resource.id ownership rule).
 	wantOwnerScoped := map[string]bool{
 		"device:consume": true,
 		"device:read":    true,
@@ -448,8 +452,9 @@ func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
 		"role:read":      true,
 		"order:read":     true,
 		"order:update":   true,
+		"access:decide":  true,
 	}
-	const wantOwnerScopedCount = 7
+	const wantOwnerScopedCount = 8
 
 	ownerScopedCount := 0
 	for _, p := range Permissions() {

@@ -170,11 +170,51 @@ func RequirePermissionForResource(pathParam string, p authz.Permission) Policy {
 	}
 }
 
-// enforcePermission is the shared body of RequirePermission and
-// RequirePermissionForResource. resource is the value forwarded to
-// Authorizer.Authorize (r.URL.Path for RequirePermission; canonicalized path
-// param for RequirePermissionForResource). Logging uses r.URL.Path throughout
-// for observability regardless of the resource argument.
+// RequirePermissionForSelf returns a Policy that forwards the caller's OWN
+// subject (from the authenticated Principal) to the PDP as the `resource`
+// argument of Authorizer.Authorize, so the identity-ownership baseline rule
+// (subject.sub == resource.id) evaluates the caller against themselves.
+//
+// It is the gate for self-introspection endpoints that carry NO resource path
+// parameter — the authenticated subject IS the resource. The canonical use is
+// POST /api/v1/access/decide (#1863, BR-004): any authenticated user may ask the
+// PDP "may I do <action>?" about themselves, gated by the access:decide baseline
+// SELF rule (subject.sub == resource.id) — a conditioned grant, NOT an
+// unconditional allow-all (BASELINE-OWNER-RULE-TENANT-FREEZE-01 holds the
+// access:decide allow surface to the closed {owner, admin} set).
+//
+// Like RequirePermissionForResource it is NOT a self-exemption: every request
+// flows through the PDP, which decides. It shares enforcePermission, so it is
+// fail-closed identically — absent Principal / absent Authorizer / zero
+// Permission / non-zero obligation on Allow → deny. When no Principal is in
+// context the forwarded resource is "" and enforcePermission's own principal
+// guard returns 401 (single fail-closed source; no duplicated check here).
+//
+// The subject is canonicalized via httputil.ParseCanonicalUUID before forwarding
+// so it matches the canonical subject the PDP derives from the JWT (idempotent
+// when the subject is already the canonical lowercase UUID).
+//
+// AI-robust Grade: Hard — downstream of the sealed authorizerKey funnel (same as
+// RequirePermission / RequirePermissionForResource).
+func RequirePermissionForSelf(p authz.Permission) Policy {
+	return func(r *http.Request) error {
+		resource := ""
+		if principal, ok := FromContext(r.Context()); ok {
+			resource = principal.Subject
+			if canonical, ok := httputil.ParseCanonicalUUID(resource); ok {
+				resource = canonical
+			}
+		}
+		return enforcePermission(r, p, resource)
+	}
+}
+
+// enforcePermission is the shared body of RequirePermission,
+// RequirePermissionForResource, and RequirePermissionForSelf. resource is the
+// value forwarded to Authorizer.Authorize: r.URL.Path for RequirePermission; the
+// canonicalized path param for RequirePermissionForResource; the caller's own
+// canonicalized subject for RequirePermissionForSelf. Logging uses r.URL.Path
+// throughout for observability regardless of the resource argument.
 func enforcePermission(r *http.Request, p authz.Permission, resource string) error {
 	// Zero Permission is a programmer error; fail-closed before any I/O.
 	if p.IsZero() {
@@ -195,7 +235,7 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 	if !ok {
 		// Fail-closed: an unwired PDP is a misconfiguration; deny all requests.
 		loggerFrom(r.Context()).Error(
-			"authz: RequirePermission called with no Authorizer in context — denying (fail-closed)",
+			"authz: permission gate called with no Authorizer in context — denying (fail-closed)",
 			slog.String("path", r.URL.Path),
 			slog.String("subject", principal.Subject),
 			slog.String("permission", p.String()),

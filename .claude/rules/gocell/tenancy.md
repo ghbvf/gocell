@@ -85,9 +85,11 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
 - PDP fail-closed：缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny。内置 baseline
   是 action-scoped + role-conditioned 的 allow 规则（复刻既有 role 门禁）；baseline ≠ 降级
   allow-all。租户 policy 叠加在 baseline 上，可加 allow 也可加 deny（forbid-wins 保证 deny
-  优先）——故租户 allow 可放宽**路由门禁**，但**不能扩大数据访问**：数据可见性由 principal
-  派生的 `RowScope`（身份决定，policy 改不动）独立治理，租户给非 admin 授 `audit:read` 只让其
-  过门禁，数据层仍按 RowScope=self 只返回本人行。路由门禁是 RowScope 之上的纵深防御，不是唯一控制点。
+  优先）——故租户 allow 可放宽**路由门禁**，但**不能扩大数据访问**。读端点的数据可见性由
+  principal 派生的 `RowScope`（身份决定，policy 改不动）独立治理，租户给非 admin 授
+  `audit:read` 只让其过门禁，数据层仍按 RowScope=self 只返回本人行。写端点没有 RowScope
+  维度，隔离后盾是 typed tenant 参数 / ctx tenant 与 PostgreSQL FORCE RLS 的 tenant 边界。
+  路由门禁是数据边界之上的纵深防御，不是唯一控制点。
 - 路由门禁是 coarse allow/deny，不**执行** obligation（RowScope/FieldMask 由数据层 PEP 执行），
   但对 Allow 携带的非零 obligation **fail-closed**（拒绝而非静默丢弃）——baseline obligation
   为零，正常路径不受影响。

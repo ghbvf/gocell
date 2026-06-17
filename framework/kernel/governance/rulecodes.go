@@ -241,4 +241,21 @@ const (
 	// COMMAND — command contract format (rules_command.go).
 	codeCOMMANDCONTRACTSCHEMAREF01        RuleCode = "COMMAND-CONTRACT-SCHEMA-REF-01"
 	codeCOMMANDCONTRACTCONSISTENCYLEVEL01 RuleCode = "COMMAND-CONTRACT-CONSISTENCY-LEVEL-01"
+
+	// REG — runtime contract registration gate (gate.go, 303-US3 #2234).
+	// REG-01 is the runtime fanout-completeness compensation emitted by
+	// (*Validator).runtimeFanoutCompleteness. It is GATE-ONLY: deliberately NOT
+	// registered in allRules (its emitter is not a validate*/checkDEP*/checkCH*
+	// rule), so `gocell validate` / `gocell check` never run it and in-tree static
+	// governance does not regress (FR-004). It exists here so the gate's
+	// newError call passes GOVERNANCE-RULE-CODE-CONST-SINGLE-SOURCE-01; the
+	// allRules↔golden freeze (TestAllRulesMatchGolden) is unaffected because that
+	// test pins registered rule codes, and an unregistered const is permitted.
+	codeREG01 RuleCode = "REG-01"
+	// REG-02 is the gate-only deprecated-registration ADVISORY (a warning, not a
+	// blocking error): submitting a contract whose lifecycle is "deprecated" is
+	// allowed but surfaced as a non-blocking warning, mirroring the canonical K8s
+	// AdmissionResponse warning for a deprecated API version (research.md §2.2).
+	// Same gate-only / not-in-allRules posture as REG-01.
+	codeREG02 RuleCode = "REG-02"
 )

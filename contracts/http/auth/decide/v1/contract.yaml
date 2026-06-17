@@ -1,0 +1,32 @@
+id: http.auth.decide.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/decide
+    successStatus: 200
+    responses:
+      400:
+        description: "Bad request — request body decode/schema failure, or action is blank or not a registered permission (ERR_AUTH_RBAC_INVALID_INPUT)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token. The decision subject is the authenticated principal (JWT), never a request-body field."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — the PDP cannot evaluate the request (e.g. missing tenant scope), or the access:decide self gate fails closed (no Authorizer wired). Any authenticated user may query their OWN decisions via the access:decide baseline self rule (subject.sub == resource.id, #1863) — a conditioned grant, not an unconditional allow. A policy deny for the queried action is NOT a 403: it is a successful 200 with data.allowed=false."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit (emitted by the generated body-decode path)."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      503:
+        description: "Service Unavailable — the ABAC policy store is unreachable; the PDP fails closed (ERR_SERVICE_UNAVAILABLE) rather than emit an allow or deny."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -16,9 +16,15 @@ var sliceMeta = &metadata.SliceMeta{
 	BelongsToCell:    "accesscore",
 	ConsistencyLevel: "L0",
 	Lifecycle:        "asset",
+	ContractUsages: []metadata.ContractUsage{
+		{Contract: "http.auth.decide.v1", Role: "serve"},
+	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
 			"unit.authorizationdecide.service",
+		},
+		Contract: []string{
+			"contract.http.auth.decide.v1.serve",
 		},
 	},
 	AllowedFiles: []string{
