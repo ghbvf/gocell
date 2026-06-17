@@ -92,9 +92,9 @@ func TestAssemblySpec_TopologyRoundTrip(t *testing.T) {
 				Cells: metadata.CellRefs("alpha", "beta"),
 				Owner: metadata.OwnerMeta{Team: "platform", Role: "bundle-owner"},
 				Topology: metadata.TopologyMeta{
-					Colocated: []string{"alpha"},
-					Remote: []metadata.TopologyRemoteEntry{
-						{CellID: "beta", Endpoint: "beta.svc:8080"},
+					Groups: []metadata.TopologyGroup{
+						{Role: "core", Cells: []string{"alpha"}, Endpoint: "alpha.svc:8080"},
+						{Role: "edge", Cells: []string{"beta"}, Endpoint: "beta.svc:8080"},
 					},
 				},
 			},
@@ -117,10 +117,12 @@ func TestAssemblySpec_TopologyRoundTrip(t *testing.T) {
 		}
 	}
 	require.NotNil(t, asmSpec.Topology)
-	assert.Equal(t, []string{"alpha"}, asmSpec.Topology.Colocated)
-	require.Len(t, asmSpec.Topology.Remote, 1)
-	assert.Equal(t, "beta", asmSpec.Topology.Remote[0].CellID)
-	assert.Equal(t, "beta.svc:8080", asmSpec.Topology.Remote[0].Endpoint)
+	require.Len(t, asmSpec.Topology.Groups, 2)
+	assert.Equal(t, "core", asmSpec.Topology.Groups[0].Role)
+	assert.Equal(t, []string{"alpha"}, asmSpec.Topology.Groups[0].Cells)
+	assert.Equal(t, "edge", asmSpec.Topology.Groups[1].Role)
+	assert.Equal(t, []string{"beta"}, asmSpec.Topology.Groups[1].Cells)
+	assert.Equal(t, "beta.svc:8080", asmSpec.Topology.Groups[1].Endpoint)
 
 	// Wire shape: a topology-bearing assembly emits the field with its values.
 	jsonBytes, err := json.Marshal(asmSpec)

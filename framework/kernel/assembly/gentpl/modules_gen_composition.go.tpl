@@ -79,31 +79,25 @@ func generatedPostgresCells() []string {
 {{- end}}
 }
 
-// generatedDeploymentTopology returns the assembly's codegen-derived deployment
-// placement spec (single-sourced from assembly.yaml topology, derived by
-// `gocell generate assembly`). Empty topology => all cells co-located (zero-
-// migration default). Composition root injects it via
-// bootstrap.WithDeploymentTopology; phase0 seals and validates it. ALWAYS
-// emitted so the composition root can call it unconditionally.
-func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec {
-{{- if or .DeploymentTopology.Colocated .DeploymentTopology.Remote}}
-	return bootstrap.DeploymentTopologySpec{
-{{- if .DeploymentTopology.Colocated}}
-		Colocated: []string{
-{{- range .DeploymentTopology.Colocated}}
-			{{printf "%q" .}},
-{{- end}}
-		},
-{{- end}}
-{{- if .DeploymentTopology.Remote}}
-		Remote: []bootstrap.RemoteCellEndpoint{
-{{- range .DeploymentTopology.Remote}}
-			{CellID: {{printf "%q" .CellID}}, Endpoint: {{printf "%q" .Endpoint}}},
-{{- end}}
+// generatedTopologyGroups returns the assembly's COMPLETE deployment-partition
+// graph (single-sourced from assembly.yaml topology.groups, derived by
+// `gocell generate assembly`). Empty topology => nil => all cells co-located
+// (zero-migration default). The composition root picks a deployment role and
+// derives its per-process bootstrap.DeploymentTopologySpec via
+// bootstrap.SpecForRole; phase0 seals and validates that. ALWAYS emitted so the
+// composition root can call it unconditionally.
+func generatedTopologyGroups() []bootstrap.TopologyGroup {
+{{- if .TopologyGroups.Groups}}
+	return []bootstrap.TopologyGroup{
+{{- range .TopologyGroups.Groups}}
+		{
+			Role:     {{printf "%q" .Role}},
+			Cells:    []string{{"{"}}{{range $i, $c := .Cells}}{{if $i}}, {{end}}{{printf "%q" $c}}{{end}}{{"}"}},
+			Endpoint: {{printf "%q" .Endpoint}},
 		},
 {{- end}}
 	}
 {{- else}}
-	return bootstrap.DeploymentTopologySpec{}
+	return nil
 {{- end}}
 }

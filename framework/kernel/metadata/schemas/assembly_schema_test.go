@@ -151,11 +151,11 @@ func TestAssemblySchema_Topology(t *testing.T) {
 	}
 
 	accepted := map[string]string{
-		"no topology block":  bp,
-		"empty topology":     topo(``),
-		"colocated only":     topo(`"colocated":["accesscore","auditcore"]`),
-		"remote only":        topo(`"remote":[{"cellID":"accesscore","endpoint":"a:1"},{"cellID":"auditcore","endpoint":"b:2"}]`),
-		"mixed coloc+remote": topo(`"colocated":["accesscore"],"remote":[{"cellID":"auditcore","endpoint":"svc:9000"}]`),
+		"no topology block": bp,
+		"empty topology":    topo(``),
+		"single group":      topo(`"groups":[{"role":"mono","cells":["accesscore","auditcore"],"endpoint":"mono:9000"}]`),
+		"two groups": topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1"},` +
+			`{"role":"edge","cells":["auditcore"],"endpoint":"b:2"}]`),
 	}
 	for name, doc := range accepted {
 		t.Run("accept/"+name, func(t *testing.T) {
@@ -164,13 +164,15 @@ func TestAssemblySchema_Topology(t *testing.T) {
 	}
 
 	rejected := map[string]string{
-		"topology extra property": topo(`"colocated":["accesscore"],"unknown":true`),
-		"bad cellID in colocated": topo(`"colocated":["BadCell"]`),
-		"bad cellID in remote":    topo(`"remote":[{"cellID":"Bad-Cell","endpoint":"svc:9000"}]`),
-		"remote missing endpoint": topo(`"remote":[{"cellID":"accesscore"}]`),
-		"remote missing cellID":   topo(`"remote":[{"endpoint":"svc:9000"}]`),
-		"remote extra property":   topo(`"remote":[{"cellID":"accesscore","endpoint":"x:1","extra":"x"}]`),
-		"empty endpoint string":   topo(`"remote":[{"cellID":"accesscore","endpoint":""}]`),
+		"topology extra property": topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1"}],"unknown":true`),
+		"bad cellID in group":     topo(`"groups":[{"role":"core","cells":["BadCell"],"endpoint":"a:1"}]`),
+		"group missing role":      topo(`"groups":[{"cells":["accesscore"],"endpoint":"a:1"}]`),
+		"group missing cells":     topo(`"groups":[{"role":"core","endpoint":"a:1"}]`),
+		"group missing endpoint":  topo(`"groups":[{"role":"core","cells":["accesscore"]}]`),
+		"group empty cells":       topo(`"groups":[{"role":"core","cells":[],"endpoint":"a:1"}]`),
+		"group extra property":    topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1","extra":"x"}]`),
+		"empty endpoint string":   topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":""}]`),
+		"empty role string":       topo(`"groups":[{"role":"","cells":["accesscore"],"endpoint":"a:1"}]`),
 	}
 	for name, doc := range rejected {
 		t.Run("reject/"+name, func(t *testing.T) {

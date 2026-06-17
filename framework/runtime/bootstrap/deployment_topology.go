@@ -25,9 +25,45 @@ type RemoteCellEndpoint struct {
 	Endpoint string
 }
 
+// TopologyGroup is the codegen-produced runtime mirror of metadata.TopologyGroup:
+// one deployment role (a named set of cells deployed together, reachable at
+// Endpoint). The full group graph is single-sourced from assembly.yaml topology
+// and emitted by `gocell generate` as generatedTopologyGroups(). A process picks
+// one role at startup and SpecForRole derives its per-process
+// DeploymentTopologySpec. Distinct (layer-mirrored) from metadata.TopologyGroup
+// because the kernel cannot import runtime/bootstrap — the same layer-split
+// rationale as the RemoteCellEndpoint mirror below.
+type TopologyGroup struct {
+	Role     string
+	Cells    []string
+	Endpoint string
+}
+
+const errMsgDeployTopoRoleUnsupported = "deployment topology: role selection not yet wired (GOCELL_CELL_ROLE lands in #1423 PR-2)"
+
+// SpecForRole derives the per-process DeploymentTopologySpec from the full
+// topology group graph for the deployment role this process runs as.
+//
+// PR-1 (#1423) implements only the no-role path: an empty role selects the
+// all-colocated monolith — every cell mounted in one process (the single-binary
+// deployment that #1423 preserves), expressed as the zero DeploymentTopologySpec.
+// A non-empty role is fail-closed (errcode) here: role-based subset derivation
+// (colocated = the role's cells, remote = every other group's cells × endpoint)
+// plus the multi-group-without-role startup gate land in PR-2 via GOCELL_CELL_ROLE.
+func SpecForRole(groups []TopologyGroup, role string) (DeploymentTopologySpec, error) {
+	if role == "" {
+		return DeploymentTopologySpec{}, nil // all-colocated monolith
+	}
+	return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		errMsgDeployTopoRoleUnsupported,
+		errcode.WithInternal(errcode.InternalAttr("role", role), errcode.InternalAttr("groupCount", len(groups))),
+		errcode.WithDetails(errcode.PublicString("role", role)))
+}
+
 // DeploymentTopologySpec is the PLAIN, codegen-produced input describing the
 // assembly's deployment placement (single-sourced from assembly.yaml topology,
-// emitted by `gocell generate` as generatedDeploymentTopology()). It carries no
+// derived at the composition root via SpecForRole(generatedTopologyGroups(), role)).
+// It carries no
 // validation — phase0 seals+validates it into a DeploymentTopology. Empty spec
 // => all cells co-located (zero-migration default).
 type DeploymentTopologySpec struct {

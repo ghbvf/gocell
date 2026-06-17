@@ -19,121 +19,12 @@ func assemblyWith(cells []string, topo metadata.TopologyMeta) *metadata.Assembly
 	}
 }
 
-// TestCellLocation_Methods verifies the CellLocation helper methods.
-func TestCellLocation_Methods(t *testing.T) {
-	t.Run("Missing", func(t *testing.T) {
-		loc := metadata.CellLocation{Kind: metadata.CellLocationMissing}
-		assert.True(t, loc.IsMissing())
-		assert.False(t, loc.IsLocal())
-		assert.False(t, loc.IsRemote())
-		ep, ok := loc.RemoteEndpoint()
-		assert.False(t, ok)
-		assert.Empty(t, ep)
-	})
-	t.Run("Local", func(t *testing.T) {
-		loc := metadata.CellLocation{Kind: metadata.CellLocationLocal}
-		assert.False(t, loc.IsMissing())
-		assert.True(t, loc.IsLocal())
-		assert.False(t, loc.IsRemote())
-		ep, ok := loc.RemoteEndpoint()
-		assert.False(t, ok)
-		assert.Empty(t, ep)
-	})
-	t.Run("Remote", func(t *testing.T) {
-		loc := metadata.CellLocation{Kind: metadata.CellLocationRemote, Endpoint: "host:8080"}
-		assert.False(t, loc.IsMissing())
-		assert.False(t, loc.IsLocal())
-		assert.True(t, loc.IsRemote())
-		ep, ok := loc.RemoteEndpoint()
-		assert.True(t, ok)
-		assert.Equal(t, "host:8080", ep)
-	})
+// group is a tiny constructor to keep the table-driven cases readable.
+func group(role string, endpoint string, cells ...string) metadata.TopologyGroup {
+	return metadata.TopologyGroup{Role: role, Cells: cells, Endpoint: endpoint}
 }
 
-// TestClassifyCell covers the three placement states and both topology modes.
-func TestClassifyCell(t *testing.T) {
-	cells := []string{"alpha", "beta", "gamma"}
-
-	tests := []struct {
-		name     string
-		asm      *metadata.AssemblyMeta
-		cellID   string
-		wantKind metadata.CellLocationKind
-		wantEP   string
-	}{
-		// ---- empty topology (all-colocated default) ----
-		{
-			name:     "empty topology / known cell => Local",
-			asm:      assemblyWith(cells, metadata.TopologyMeta{}),
-			cellID:   "alpha",
-			wantKind: metadata.CellLocationLocal,
-		},
-		{
-			name:     "empty topology / unknown cell => Missing",
-			asm:      assemblyWith(cells, metadata.TopologyMeta{}),
-			cellID:   "delta",
-			wantKind: metadata.CellLocationMissing,
-		},
-
-		// ---- non-empty topology ----
-		{
-			name: "non-empty topology / colocated cell => Local",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "svc.internal:9000"},
-				},
-			}),
-			cellID:   "beta",
-			wantKind: metadata.CellLocationLocal,
-		},
-		{
-			name: "non-empty topology / remote cell => Remote with endpoint",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "svc.internal:9000"},
-				},
-			}),
-			cellID:   "gamma",
-			wantKind: metadata.CellLocationRemote,
-			wantEP:   "svc.internal:9000",
-		},
-		{
-			name: "non-empty topology / unclassified cell => Missing",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "svc:9000"},
-				},
-			}),
-			cellID:   "gamma", // in asm.Cells but not in topology
-			wantKind: metadata.CellLocationMissing,
-		},
-		{
-			name: "non-empty topology / totally unknown cell => Missing",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta", "gamma"},
-			}),
-			cellID:   "delta",
-			wantKind: metadata.CellLocationMissing,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := metadata.ClassifyCell(tc.asm, tc.cellID)
-			assert.Equal(t, tc.wantKind, got.Kind, "Kind mismatch")
-			if tc.wantKind == metadata.CellLocationRemote {
-				ep, ok := got.RemoteEndpoint()
-				require.True(t, ok)
-				assert.Equal(t, tc.wantEP, ep)
-			}
-		})
-	}
-}
-
-// TestValidateTopologyStructure covers all validation rules.
+// TestValidateTopologyStructure covers all groups-partition validation rules.
 func TestValidateTopologyStructure(t *testing.T) {
 	cells := []string{"alpha", "beta", "gamma"}
 
@@ -150,186 +41,139 @@ func TestValidateTopologyStructure(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "exhaustive topology with valid endpoints => nil",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "host:8080"},
-					{CellID: "gamma", Endpoint: "https://remote.svc/"},
-				},
-			}),
+			name: "single group covering all cells => nil",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("monolith", "host:8080", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: false,
 		},
 		{
-			name: "exhaustive topology with https URL endpoint => nil",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "https://svc.internal:9000"},
-					{CellID: "gamma", Endpoint: "host:8080"},
-				},
-			}),
+			name: "two-group exhaustive partition with host:port endpoints => nil",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha"),
+				group("edge", "edge.svc:9001", "beta", "gamma"),
+			}}),
 			wantErr: false,
 		},
 		{
-			// #1966 review P2.9: an endpoint carrying a path/query/fragment would
-			// be silently truncated by the remote transport (only scheme+host are
-			// kept), so it is rejected at config-validation time (fail-closed).
-			name: "endpoint with path => error",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "https://svc.internal:9000/api"},
-					{CellID: "gamma", Endpoint: "host:8080"},
-				},
-			}),
-			wantErr: true,
-		},
-		{
-			name: "remote entry with grpc:// scheme (non-http/https) => error",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "grpc://h:1"},
-				},
-			}),
-			wantErr: true,
-			errSub:  "invalid endpoint",
-		},
-		{
-			name: "all colocated exhaustive => nil",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta", "gamma"},
-			}),
-			wantErr: false,
-		},
-		{
-			name: "all remote exhaustive => nil",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "alpha", Endpoint: "a:1"},
-					{CellID: "beta", Endpoint: "b:2"},
-					{CellID: "gamma", Endpoint: "c:3"},
-				},
-			}),
+			name: "two-group partition with https endpoints => nil",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "https://core.svc:9443", "alpha", "beta"),
+				group("edge", "https://edge.svc:9443", "gamma"),
+			}}),
 			wantErr: false,
 		},
 
-		// ---- mutual exclusion ----
+		// ---- role validation ----
 		{
-			name: "mutual exclusion: cell in both colocated and remote",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "alpha", Endpoint: "host:9000"},
-					{CellID: "gamma", Endpoint: "host:9001"},
-				},
-			}),
+			name: "empty role",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("", "host:8080", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: true,
-			errSub:  "mutual exclusion",
+			errSub:  "role must be non-empty",
+		},
+		{
+			name: "duplicate role",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha"),
+				group("core", "edge.svc:9001", "beta", "gamma"),
+			}}),
+			wantErr: true,
+			errSub:  "duplicate group role",
 		},
 
-		// ---- duplicate cellID within colocated ----
+		// ---- group cells validation ----
 		{
-			name: "duplicate cellID in colocated",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "host:9000"},
-				},
-			}),
+			name: "group with no cells",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000"),
+				group("edge", "edge.svc:9001", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: true,
-			errSub:  "duplicate colocated",
+			errSub:  "at least one cell",
+		},
+		{
+			name: "cell in more than one group (mutual exclusion)",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha", "beta"),
+				group("edge", "edge.svc:9001", "alpha", "gamma"), // alpha twice
+			}}),
+			wantErr: true,
+			errSub:  "more than one group",
+		},
+		{
+			name: "cell repeated within a single group",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha", "alpha", "beta"),
+				group("edge", "edge.svc:9001", "gamma"),
+			}}),
+			wantErr: true,
+			errSub:  "more than one group",
+		},
+		{
+			name: "group references cellID not in asm.Cells",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha", "beta"),
+				group("edge", "edge.svc:9001", "gamma", "delta"), // delta unknown
+			}}),
+			wantErr: true,
+			errSub:  "not declared in assembly cells",
 		},
 
-		// ---- duplicate cellID within remote ----
+		// ---- exhaustiveness ----
 		{
-			name: "duplicate cellID in remote",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "host:9000"},
-					{CellID: "beta", Endpoint: "host:9001"},
-					{CellID: "gamma", Endpoint: "host:9002"},
-				},
-			}),
-			wantErr: true,
-			errSub:  "duplicate remote",
-		},
-
-		// ---- unknown cellID not in asm.Cells ----
-		{
-			name: "colocated references cellID not in asm.Cells",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta", "delta"}, // "delta" not in cells
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "host:9000"},
-				},
-			}),
-			wantErr: true,
-			errSub:  "unknown colocated",
-		},
-		{
-			name: "remote references cellID not in asm.Cells",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta", "gamma"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "delta", Endpoint: "host:9000"}, // "delta" not in cells
-				},
-			}),
-			wantErr: true,
-			errSub:  "unknown remote",
-		},
-
-		// ---- non-exhaustive: cell in asm.Cells but not classified ----
-		{
-			name: "non-exhaustive: gamma not classified",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "beta", Endpoint: "host:9000"},
-				},
+			name: "non-exhaustive: gamma not assigned to any group",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "core.svc:9000", "alpha"),
+				group("edge", "edge.svc:9001", "beta"),
 				// gamma missing
-			}),
+			}}),
 			wantErr: true,
 			errSub:  "non-exhaustive topology",
 		},
 
-		// ---- empty endpoint ----
+		// ---- endpoint validation ----
 		{
-			name: "remote entry with empty endpoint",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: ""},
-				},
-			}),
+			name: "empty endpoint",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: true,
 			errSub:  "empty endpoint",
 		},
-
-		// ---- whitespace-only endpoint ----
 		{
-			name: "remote entry with whitespace endpoint",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "   "},
-				},
-			}),
+			name: "whitespace-only endpoint",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "   ", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: true,
 			errSub:  "empty endpoint",
 		},
-
-		// ---- malformed endpoint (not host:port, not valid URL with host) ----
 		{
-			name: "remote entry with malformed endpoint",
-			asm: assemblyWith(cells, metadata.TopologyMeta{
-				Colocated: []string{"alpha", "beta"},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: "gamma", Endpoint: "not-a-valid-addr"},
-				},
-			}),
+			name: "malformed endpoint",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "not-a-valid-addr", "alpha", "beta", "gamma"),
+			}}),
+			wantErr: true,
+			errSub:  "invalid endpoint",
+		},
+		{
+			name: "grpc:// scheme endpoint (non-http/https)",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "grpc://h:1", "alpha", "beta", "gamma"),
+			}}),
+			wantErr: true,
+			errSub:  "invalid endpoint",
+		},
+		{
+			// #1966 review P2.9: an endpoint carrying a path/query/fragment would be
+			// silently truncated by the remote transport (only scheme+host kept), so
+			// it is rejected at config-validation time (fail-closed).
+			name: "endpoint with path",
+			asm: assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				group("core", "https://core.svc:9000/api", "alpha", "beta", "gamma"),
+			}}),
 			wantErr: true,
 			errSub:  "invalid endpoint",
 		},
@@ -351,35 +195,72 @@ func TestValidateTopologyStructure(t *testing.T) {
 	}
 }
 
-// TestClassifyCell_RemoteWithEmptyEndpoint documents that ClassifyCell does no
-// endpoint validation (F9): a remote entry with empty endpoint returns
-// CellLocationRemote with an empty endpoint string, and RemoteEndpoint()
-// returns ("", true). ValidateTopologyStructure owns endpoint validation.
-func TestClassifyCell_RemoteWithEmptyEndpoint(t *testing.T) {
-	cells := []string{"alpha", "beta"}
-	asm := assemblyWith(cells, metadata.TopologyMeta{
-		Colocated: []string{"alpha"},
-		Remote: []metadata.TopologyRemoteEntry{
-			{CellID: "beta", Endpoint: ""},
-		},
+// TestCellGroup covers cell→group lookup across the three states.
+func TestCellGroup(t *testing.T) {
+	cells := []string{"alpha", "beta", "gamma"}
+
+	t.Run("empty topology => not found", func(t *testing.T) {
+		asm := assemblyWith(cells, metadata.TopologyMeta{})
+		_, ok := metadata.CellGroup(asm, "alpha")
+		assert.False(t, ok, "no groups declared => cell is in no explicit group")
 	})
-	loc := metadata.ClassifyCell(asm, "beta")
-	assert.Equal(t, metadata.CellLocationRemote, loc.Kind,
-		"ClassifyCell must return CellLocationRemote even when endpoint is empty")
-	assert.True(t, loc.IsRemote())
-	ep, ok := loc.RemoteEndpoint()
-	assert.True(t, ok, "RemoteEndpoint must return (_, true) for CellLocationRemote")
-	assert.Equal(t, "", ep, "empty endpoint is preserved as-is; validation is ValidateTopologyStructure's concern")
+
+	asm := assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+		group("core", "core.svc:9000", "alpha", "beta"),
+		group("edge", "edge.svc:9001", "gamma"),
+	}})
+
+	t.Run("cell in core group", func(t *testing.T) {
+		g, ok := metadata.CellGroup(asm, "beta")
+		require.True(t, ok)
+		assert.Equal(t, "core", g.Role)
+		assert.Equal(t, "core.svc:9000", g.Endpoint)
+	})
+	t.Run("cell in edge group", func(t *testing.T) {
+		g, ok := metadata.CellGroup(asm, "gamma")
+		require.True(t, ok)
+		assert.Equal(t, "edge", g.Role)
+	})
+	t.Run("unknown cell => not found", func(t *testing.T) {
+		_, ok := metadata.CellGroup(asm, "delta")
+		assert.False(t, ok)
+	})
+}
+
+// TestSameGroup covers the co-location predicate used by governance TOPO-13.
+func TestSameGroup(t *testing.T) {
+	cells := []string{"alpha", "beta", "gamma"}
+
+	t.Run("empty topology => all co-located", func(t *testing.T) {
+		asm := assemblyWith(cells, metadata.TopologyMeta{})
+		assert.True(t, metadata.SameGroup(asm, "alpha", "gamma"),
+			"no groups => single-process default => co-located")
+	})
+
+	asm := assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+		group("core", "core.svc:9000", "alpha", "beta"),
+		group("edge", "edge.svc:9001", "gamma"),
+	}})
+
+	t.Run("same group => true", func(t *testing.T) {
+		assert.True(t, metadata.SameGroup(asm, "alpha", "beta"))
+	})
+	t.Run("different group => false", func(t *testing.T) {
+		assert.False(t, metadata.SameGroup(asm, "alpha", "gamma"))
+	})
+	t.Run("unknown cell => false (fail-closed)", func(t *testing.T) {
+		assert.False(t, metadata.SameGroup(asm, "alpha", "delta"))
+	})
 }
 
 // TestTopologyMeta_ZeroValue confirms the zero value means "empty" / all-colocated.
 func TestTopologyMeta_ZeroValue(t *testing.T) {
 	var topo metadata.TopologyMeta
-	assert.Nil(t, topo.Colocated)
-	assert.Nil(t, topo.Remote)
+	assert.Nil(t, topo.Groups)
 
-	asm := assemblyWith([]string{"alpha"}, topo)
-	loc := metadata.ClassifyCell(asm, "alpha")
-	assert.Equal(t, metadata.CellLocationLocal, loc.Kind,
-		"zero-value topology should treat known cells as Local")
+	asm := assemblyWith([]string{"alpha", "beta"}, topo)
+	assert.True(t, metadata.SameGroup(asm, "alpha", "beta"),
+		"zero-value topology treats all cells as co-located")
+	_, ok := metadata.CellGroup(asm, "alpha")
+	assert.False(t, ok, "zero-value topology assigns no explicit group")
 }

@@ -126,7 +126,14 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// dialing remote peers + server config for the internal listener). Fails
 	// closed when the deployment topology has a non-loopback remote cell but no
 	// TLS material is provisioned (see cellmodules/celltls).
-	deployTopoSpec := generatedDeploymentTopology()
+	// generatedTopologyGroups() is the assembly's complete deployment-partition
+	// graph. PR-1 (#1423) runs the all-colocated monolith: no role is selected
+	// (GOCELL_CELL_ROLE role selection lands in PR-2), so SpecForRole(_, "")
+	// returns the zero spec — every cell mounted in this one process.
+	deployTopoSpec, err := bootstrap.SpecForRole(generatedTopologyGroups(), "")
+	if err != nil {
+		return nil, nil, err
+	}
 	celltlsDeps, err := resolveTransportTLSMaterial(deployTopoSpec)
 	if err != nil {
 		return nil, nil, err

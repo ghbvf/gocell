@@ -502,8 +502,11 @@ seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring�
 **PR 分解（mini-epic 收口，逐个独立 review，TDD RED→GREEN 在各 feature PR 内；能力 = US9 #2278，验收 = US7 #1967）**：
 - **PR-0（本 PR）**：本 amendment + `specs/069 tasks.md` US7 细化 + sibling issues。**docs-only、全绿**（不携 RED stub——
   独立可合并 PR 不挂失败测试；TDD RED→GREEN 落各 feature PR 内）。
-- **PR-1**：`topology.groups` schema（取代 colocated/remote authoring）+ 重写 `ValidateTopologyStructure` + codegen
-  golden（Hard golden + Medium validate）。
+- **PR-1（✅ 已落地 #2278）**：`topology.groups` schema（取代 colocated/remote authoring，原地删 `TopologyMeta.{Colocated,Remote}`
+  / `TopologyRemoteEntry` / `ClassifyCell` / `CellLocation`）+ 重写 `ValidateTopologyStructure`（穷尽+互斥分区 + 新 `CellGroup`/
+  `SameGroup` 助手）+ governance TOPO-10/11/13/14 改消费 groups + catalog 导出 wire DTO 改 groups + codegen
+  `generatedTopologyGroups()` + 字节 golden（Hard golden + Medium validate）。运行期最小桥 `bootstrap.SpecForRole(groups, "")`
+  = 全 colocated monolith（role 选择留 PR-2）。
 - **PR-2**：role 选择器 + `NewForRole` 子集挂载 + `MOUNTED-EQUALS-COLOCATED` 守卫（Medium）。
 - **PR-3**：缺失依赖启动期闸 + `gocell validate` 静态 arm + archtest red/green（Medium）。
 - **PR-4（= #1967 验收）**：`corebundle` assembly.yaml `topology.groups`（accesstier/configtier）+ `tests/e2e/` split

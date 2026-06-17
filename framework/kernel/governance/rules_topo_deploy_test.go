@@ -124,9 +124,9 @@ func TestTOPO10_ValidExhaustiveTopology(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: cellB, Endpoint: "remote.svc:9090"},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
+					{Role: "edge", Cells: []string{cellB}, Endpoint: "remote.svc:9090"},
 				},
 			}),
 		},
@@ -136,7 +136,7 @@ func TestTOPO10_ValidExhaustiveTopology(t *testing.T) {
 	assert.Empty(t, got, "valid exhaustive topology should produce 0 TOPO-10 findings")
 }
 
-// TestTOPO10_MutualExclusionViolation: cell in both colocated and remote → TOPO-10 fires.
+// TestTOPO10_MutualExclusionViolation: cell assigned to two groups → TOPO-10 fires.
 func TestTOPO10_MutualExclusionViolation(t *testing.T) {
 	cellA := metadatatest.CellIDCellA
 	pm := &metadata.ProjectMeta{
@@ -146,8 +146,10 @@ func TestTOPO10_MutualExclusionViolation(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
-				Remote:    []metadata.TopologyRemoteEntry{{CellID: cellA, Endpoint: "host:9090"}},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
+					{Role: "edge", Cells: []string{cellA}, Endpoint: "edge.svc:9090"},
+				},
 			}),
 		},
 	}
@@ -172,9 +174,11 @@ func TestTOPO10_NonExhaustiveTopology(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			// topology only lists cellA, missing cellB → non-exhaustive
+			// group only lists cellA, missing cellB → non-exhaustive
 			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
+				},
 			}),
 		},
 	}
@@ -200,10 +204,10 @@ func TestTOPO10_MalformedEndpoint(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{cellA, cellB}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
-				Remote: []metadata.TopologyRemoteEntry{
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
 					// malformed endpoint — not a valid host:port or URL
-					{CellID: cellB, Endpoint: "not-a-valid-endpoint-!!!"},
+					{Role: "edge", Cells: []string{cellB}, Endpoint: "not-a-valid-endpoint-!!!"},
 				},
 			}),
 		},
@@ -274,9 +278,9 @@ func TestTOPO11_ProviderMissing_EmptyTopology(t *testing.T) {
 	assert.NotEmpty(t, got[0].Fix)
 }
 
-// TestTOPO11_ProviderMissing_SplitTopology: assembly topology has consumer in
-// colocated and a bystander in remote, but provider is not in the assembly →
-// ClassifyCell returns Missing → TOPO-11 fires.
+// TestTOPO11_ProviderMissing_SplitTopology: assembly topology partitions consumer
+// and a bystander into two groups, but provider is not a member of the assembly →
+// TOPO-11 fires (provider ∉ assembly cells).
 func TestTOPO11_ProviderMissing_SplitTopology(t *testing.T) {
 	consumer := metadatatest.CellIDConsumerCell
 	provider := metadatatest.CellIDProviderCell
@@ -296,8 +300,8 @@ func TestTOPO11_ProviderMissing_SplitTopology(t *testing.T) {
 	contracts := map[string]*metadata.ContractMeta{
 		"event.data.v1": topoTestContract("event.data.v1", "event", provider),
 	}
-	// Assembly topology covers {consumer, bystander} exhaustively;
-	// provider is not in the assembly → ClassifyCell returns Missing.
+	// Assembly topology partitions {consumer, bystander} into two groups;
+	// provider is not a member of the assembly → TOPO-11 fires.
 	pm := &metadata.ProjectMeta{
 		Cells:     cells,
 		Slices:    slices,
@@ -305,9 +309,9 @@ func TestTOPO11_ProviderMissing_SplitTopology(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{consumer, bystander}, metadata.TopologyMeta{
-				Colocated: []string{consumer},
-				Remote: []metadata.TopologyRemoteEntry{
-					{CellID: bystander, Endpoint: "host:9090"},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{consumer}, Endpoint: "core.svc:9090"},
+					{Role: "edge", Cells: []string{bystander}, Endpoint: "host:9090"},
 				},
 			}),
 		},
@@ -333,19 +337,22 @@ func TestTOPO11_ProviderColocated(t *testing.T) {
 	assert.Empty(t, got, "co-located provider should produce 0 TOPO-11 findings")
 }
 
-// TestTOPO11_ProviderRemote: provider cell is declared in remote topology → no TOPO-11 error.
+// TestTOPO11_ProviderRemote: provider cell is in a remote group of the assembly
+// → reachable → no TOPO-11 error.
 func TestTOPO11_ProviderRemote(t *testing.T) {
 	consumer := metadatatest.CellIDConsumerCell
 	provider := metadatatest.CellIDProviderCell
 
 	pm := buildTOPO11Project(consumer, provider, []string{consumer, provider},
 		metadata.TopologyMeta{
-			Colocated: []string{consumer},
-			Remote:    []metadata.TopologyRemoteEntry{{CellID: provider, Endpoint: "remote.svc:9090"}},
+			Groups: []metadata.TopologyGroup{
+				{Role: "core", Cells: []string{consumer}, Endpoint: "core.svc:9090"},
+				{Role: "edge", Cells: []string{provider}, Endpoint: "remote.svc:9090"},
+			},
 		})
 	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateTOPO11(), codeTOPO11)
-	assert.Empty(t, got, "remote provider should produce 0 TOPO-11 findings")
+	assert.Empty(t, got, "remote-group provider should produce 0 TOPO-11 findings")
 }
 
 // TestTOPO11_FrameworkOwnedProvider: framework-owned contract (ownerCell == _framework)
@@ -472,7 +479,7 @@ func TestTOPO11_ProviderRole_NotConsumer(t *testing.T) {
 func TestTOPO10_AntiVacuity(t *testing.T) {
 	cellA := metadatatest.CellIDCellA
 
-	// Red: mutual-exclusion violation → TOPO-10 must fire.
+	// Red: cell assigned to two groups → TOPO-10 must fire.
 	pmRed := &metadata.ProjectMeta{
 		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
@@ -480,16 +487,18 @@ func TestTOPO10_AntiVacuity(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
-				Remote:    []metadata.TopologyRemoteEntry{{CellID: cellA, Endpoint: "host:9090"}},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
+					{Role: "edge", Cells: []string{cellA}, Endpoint: "edge.svc:9090"},
+				},
 			}),
 		},
 	}
 	valRed := NewValidator(pmRed, ".", clock.Real())
 	redGot := findByCode(valRed.validateTOPO10(), codeTOPO10)
-	require.NotEmpty(t, redGot, "anti-vacuity: red fixture (mutual exclusion) must produce ≥1 TOPO-10 finding")
+	require.NotEmpty(t, redGot, "anti-vacuity: red fixture (cell in two groups) must produce ≥1 TOPO-10 finding")
 
-	// Green: valid exhaustive topology → TOPO-10 must NOT fire.
+	// Green: valid single-group topology → TOPO-10 must NOT fire.
 	pmGreen := &metadata.ProjectMeta{
 		Cells:     map[string]*metadata.CellMeta{metadatatest.CellIDCellA: topoTestCell(cellA)},
 		Slices:    map[string]*metadata.SliceMeta{},
@@ -497,7 +506,9 @@ func TestTOPO10_AntiVacuity(t *testing.T) {
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"testasm": topoTestAssembly([]string{cellA}, metadata.TopologyMeta{
-				Colocated: []string{cellA},
+				Groups: []metadata.TopologyGroup{
+					{Role: "core", Cells: []string{cellA}, Endpoint: "core.svc:9090"},
+				},
 			}),
 		},
 	}
