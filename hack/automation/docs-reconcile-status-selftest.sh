@@ -35,6 +35,7 @@ EOF
 # Plan
 IMPLEMENTED-HISTORICAL
 ADR-1895 aligns runtime/certlifecycle.
+Current business consumers: mdmcell/devicelifecycle/zerotrust.
 Postgres leader uses row-TTL UPSERT CAS.
 EOF
 
@@ -43,6 +44,7 @@ EOF
 IMPLEMENTED-HISTORICAL
 ADR-1895 aligns runtime/certlifecycle.
 Postgres leader uses row-TTL UPSERT CAS.
+Historical Closure Matrix（A1-A10 已闭环）
 EOF
 
   cat >"${root}/docs/plans/product-roadmap/202604301030-winmdm-prd-on-gocell.md" <<'EOF'
@@ -65,6 +67,20 @@ EOF
       ;;
     advisory)
       printf '\nPostgres leader uses advisory lock.\n' >>"${root}/docs/plans/specs/202605262359-661-kernel-reconcile-plan.md"
+      ;;
+    stale-consumer)
+      printf '\n真消费方 ≥ 4（pkicell/mdmcell/devicelifecycle/zerotrust）\n' >>"${root}/docs/plans/specs/202605262359-661-kernel-reconcile-plan.md"
+      ;;
+    stale-tracking)
+      cat >>"${root}/docs/plans/specs/202605262359-661-kernel-reconcile-tasks.md" <<'EOF'
+
+## Tracking Matrix（trigger 满足时填）
+| A3 | `661-loop-skeleton` | `worktrees/661-03-loop` | — | — | — | — |
+- [ ] **T99** stale open task
+EOF
+      ;;
+    docs-only-fencing)
+      printf '\nfencing 设计是 docs（不建代码）\n' >>"${root}/docs/architecture/202605291600-661-adr-kernel-reconcile-design.md"
       ;;
     old-prd)
       printf '\nWSTEP 协议支持（pkicell）\n' >>"${root}/docs/plans/product-roadmap/202604301030-winmdm-prd-on-gocell.md"
@@ -110,6 +126,9 @@ run_case "good-fixture" good pass
 run_case "missing-runtime-fails" missing-runtime fail
 run_case "parked-status-fails" parked fail
 run_case "advisory-lock-fails" advisory fail
+run_case "stale-consumer-fails" stale-consumer fail
+run_case "stale-tracking-fails" stale-tracking fail
+run_case "docs-only-fencing-fails" docs-only-fencing fail
 run_case "old-prd-fails" old-prd fail
 
 printf 'docs-reconcile-status selftest: %d passed, %d failed\n' "${pass}" "${fail}"

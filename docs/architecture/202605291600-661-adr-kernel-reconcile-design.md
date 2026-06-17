@@ -604,7 +604,8 @@ Builder / command 迁移，A9 被 A8 吸收并以 #1170 spec-reconcile 关闭，
 >   FencedWriter funnel 后定级）。
 > - 没有格子从 ✅ 退化为 ❌ 而无补偿：跨副本正确性原本就标「设计」（A6 当时待交付），本次只是把
 >   *保证来源* 从 lease（错）改为 epoch fencing + 幂等（对），并把 A6 验收门槛写死，使 A6 实现者
->   无法回退到「信 lease」的旧错。fencing 设计是 docs（不建代码），不违反 §6 trigger gate。
+>   无法回退到「信 lease」的旧错。后续 2026-06-02 / 2026-06-17 amendments 已把 A6 as-built 结论收敛为
+>   `FencedWriter` 唯一写面 + epoch CAS；本段保留为 PR-A6 前的历史重评记录，不再表示当前实现仍停留在文档限定状态。
 
 > **§Amendment 2026-06-01 (PR-A5 #1166) — F5/F6 落地威胁矩阵逐行重评**：
 > PR-A5 落地 F5（dirty/processing dedup）+ F6（shared waitingLoop delaying queue）+

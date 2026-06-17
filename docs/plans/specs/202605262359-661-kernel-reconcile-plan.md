@@ -250,7 +250,7 @@ B1 (PR-A1) ────────────────────┐
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| 新建 kernel/ 子包（kernel/reconcile） | 真消费方 ≥ 4（pkicell/mdmcell/devicelifecycle/zerotrust），现有 kernel/command 强耦合命令实体无法复用 | 在 kernel/command 内泛化：会让 command 包暴露与命令无关的接口，破坏单一职责；且 kernel/command 已 PR-A8 迁出 |
+| 新建 kernel/ 子包（kernel/reconcile） | `runtime/certlifecycle` 证明框架证书底座需要通用 L4 loop；后续业务消费方按 ADR-1895 口径跟踪 mdmcell/devicelifecycle/zerotrust，不再把历史 pkicell 触发项计入当前业务 cell 数 | 在 kernel/command 内泛化：会让 command 包暴露与命令无关的接口，破坏单一职责；且 kernel/command 已 PR-A8 迁出 |
 | Builder DSL（PR-A7） | funnel 上游 Hard：消费方构造 Loop 必经 Builder，使「裸 NewLoop 直构」编译期不可表达（Loop 构造函数私有化 + Builder 是唯一公开入口） | 直接 NewLoop(opts) public 构造：funnel 上游 Soft，无法防止消费方绕过 metric/leader/backoff wiring |
 | 新建 archtest invariants × 5+ | 接口字段 frozen + carve-out + funnel 三类 enforcement 均需 archtest 兜底；ai-robust 评级 Medium-Hard | 不写 archtest：消费方可随意改 Request/Result 字段集，本 spec 的接口最小性 SC-001 立即失守 |
 | LeaderElector 接口在 kernel 层声明 / 实现在 adapter | 接口归属遵循 kernel-driven adapter-implements 模式（对齐 outbox.Emitter / persistence.CellTxManager） | 接口下沉到 adapter：kernel/reconcile 无法在 Loop 内调用 lease 抽象，需要消费方在每个 cell 重复 wiring |
