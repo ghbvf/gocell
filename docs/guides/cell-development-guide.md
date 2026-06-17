@@ -353,6 +353,29 @@ funnel. ABAC `permission`/`resource`/`action` and `internalOnly` are **not** par
 overlay yet — only `public` is live (the rest are deferred to #2008). See ADR
 `docs/architecture/202605260000-adr-grpc-transport-adapter.md` §"Amendment #1675".
 
+### 6c. Business Endpoint Authorization
+
+Business endpoints are permission-gated through the ABAC PDP, not role literals
+in handlers. The minimum checklist is:
+
+1. Add a sealed permission accessor in `framework/pkg/authz/permission.go`.
+2. Wire the generated handler with `auth.RequirePermission(perm)`.
+3. Use `auth.RequirePermissionForResource(pathParam, perm)` for owner/self
+   resources so the PDP receives the canonical resource id.
+4. Add the corresponding baseline allow rule in the PDP that owns this
+   assembly's rules: platform corecells use
+   `corecells/accesscore/slices/authorizationdecide/baseline.go`; example,
+   external, or self-contained cells keep it in their own `Authorizer()`/PDP.
+   Document tenant-policy-only endpoints explicitly.
+5. Wire the PDP from the composition root with `bootstrap.WithPrimaryAuthorizer`
+   or `bootstrap.PrimaryAuthorizerOption`.
+6. Enforce `tenant.RowVisibility` in list/get data PEPs; write endpoints rely on
+   typed tenant inputs plus tenant RLS rather than RowScope.
+7. Add 403 contract coverage and an e2e/slice assertion for the expected
+   permission action.
+
+The full how-to lives in `docs/guides/cell-authz-rowscope-guide.md`.
+
 ### 7. Register Event Subscriptions (Optional)
 
 The sole authoritative source for subscriptions is **`slice.yaml` `contractUsages[role=subscribe]`** — cellgen generates the `reg.Subscribe(...)` call into `cell_gen.go` from this declaration. Manually starting goroutines or calling `Subscriber.Subscribe` directly is forbidden; goroutine lifecycle, error convergence, and Setup/Ready phases are all managed by EventRouter.
