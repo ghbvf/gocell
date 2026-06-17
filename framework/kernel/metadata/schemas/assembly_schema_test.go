@@ -172,13 +172,13 @@ func TestAssemblySchema_Topology(t *testing.T) {
 		"old colocated authoring field": topo(`"colocated":["accesscore","auditcore"]`),
 		"old remote authoring field":    topo(`"remote":[{"cellID":"auditcore","endpoint":"host:9090"}]`),
 		"bad cellID in group":           topo(`"groups":[{"role":"core","cells":["BadCell"],"endpoint":"a:1"}]`),
-		"group missing role":      topo(`"groups":[{"cells":["accesscore"],"endpoint":"a:1"}]`),
-		"group missing cells":     topo(`"groups":[{"role":"core","endpoint":"a:1"}]`),
-		"group missing endpoint":  topo(`"groups":[{"role":"core","cells":["accesscore"]}]`),
-		"group empty cells":       topo(`"groups":[{"role":"core","cells":[],"endpoint":"a:1"}]`),
-		"group extra property":    topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1","extra":"x"}]`),
-		"empty endpoint string":   topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":""}]`),
-		"empty role string":       topo(`"groups":[{"role":"","cells":["accesscore"],"endpoint":"a:1"}]`),
+		"group missing role":            topo(`"groups":[{"cells":["accesscore"],"endpoint":"a:1"}]`),
+		"group missing cells":           topo(`"groups":[{"role":"core","endpoint":"a:1"}]`),
+		"group missing endpoint":        topo(`"groups":[{"role":"core","cells":["accesscore"]}]`),
+		"group empty cells":             topo(`"groups":[{"role":"core","cells":[],"endpoint":"a:1"}]`),
+		"group extra property":          topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1","extra":"x"}]`),
+		"empty endpoint string":         topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":""}]`),
+		"empty role string":             topo(`"groups":[{"role":"","cells":["accesscore"],"endpoint":"a:1"}]`),
 	}
 	for name, doc := range rejected {
 		t.Run("reject/"+name, func(t *testing.T) {
