@@ -24,9 +24,10 @@
 //     TestUserRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl.
 //
 //   - B2. generated mock implementations (mockery / gomock in _test.go) are
-//     excluded: test-file types are not scanned for implementations (Tests=false
-//     in the production load pass). If a generated mock appears in a production
-//     non-test file, the archtest will flag it — intentionally.
+//     excluded: the single Tests=true load collects impls through a non-_test.go
+//     declaration filter (productionImplCandidates / isTestDeclaredObj), so
+//     _test.go-declared types are dropped. If a generated mock appears in a
+//     production non-test file, the archtest will flag it — intentionally.
 //
 //   - B3. embedded interface forwarding (struct embedding ports.UserRepository):
 //     such a type structurally satisfies the interface but provides no real

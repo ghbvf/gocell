@@ -793,9 +793,10 @@ func TestSagaExecutorRandInjected_Detector_RedDotImportRandFixture(t *testing.T)
 //     TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl.
 //
 //   - B2. generated mock implementations (mockery / gomock in _test.go) are
-//     excluded: test-file types are not scanned for implementations (Tests=false
-//     in the production load pass). If a generated mock appears in a production
-//     non-test file, the archtest will flag it — intentionally.
+//     excluded: the single Tests=true load collects impls through a non-_test.go
+//     declaration filter (productionImplCandidates / isTestDeclaredObj), so
+//     _test.go-declared types are dropped. If a generated mock appears in a
+//     production non-test file, the archtest will flag it — intentionally.
 //
 //   - B3. embedded interface forwarding (struct embedding journal.Journal):
 //     such a type structurally satisfies the interface but provides no real
@@ -981,9 +982,10 @@ func TestSagaJournalConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t *test
 //   - B1. reflect-based implicit implementations: no production saga code uses
 //     this pattern; confirmed by
 //     TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl.
-//   - B2. generated mock implementations in _test.go are excluded (Tests=false in
-//     the production load pass); a mock in a production non-test file would be
-//     flagged — intentionally.
+//   - B2. generated mock implementations in _test.go are excluded: the single
+//     Tests=true load drops _test.go-declared types via the non-_test.go
+//     declaration filter (productionImplCandidates / isTestDeclaredObj); a mock in
+//     a production non-test file would be flagged — intentionally.
 //   - B3. embedded interface forwarding (struct embedding journal.GlobalReader)
 //     structurally satisfies the interface; such helpers live in _test.go (out of
 //     the impl scan). A production struct embedding it is treated as an impl and
@@ -1313,9 +1315,10 @@ func TestSagaTailerCheckpointAdvancerCaller_GREENFixture(t *testing.T) {
 //   - B1. reflect-based implicit implementations: no production code uses this
 //     pattern; confirmed by TestSagaOwnerCheckpointConformanceEnrollment_
 //     ReverseBlindSpot_NoReflectImpl.
-//   - B2. generated mock implementations in _test.go are excluded (Tests=false in
-//     the implementation scan); a mock in a production non-test file would be
-//     flagged — intentionally.
+//   - B2. generated mock implementations in _test.go are excluded: the single
+//     Tests=true load drops _test.go-declared types via the non-_test.go
+//     declaration filter (productionImplCandidates / isTestDeclaredObj); a mock in
+//     a production non-test file would be flagged — intentionally.
 //   - B3. pointer-receiver-only impl whose constructor returns *T: info.Types for
 //     the direct store arg unwraps *T → T, so keys match. Confirmed by
 //     MemOwnerCheckpointStore (constructed directly as &MemOwnerCheckpointStore{}).
