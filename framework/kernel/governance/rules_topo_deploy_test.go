@@ -158,6 +158,10 @@ func TestTOPO10_MutualExclusionViolation(t *testing.T) {
 	require.Len(t, got, 1, "mutual exclusion violation should produce 1 TOPO-10 finding")
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
+	// The anchor must point at the precise duplicate cell within groups, not a
+	// coarse "topology" — the second group's cell entry that re-declares cellA.
+	assert.Equal(t, "topology.groups[1].cells[0]", got[0].Field,
+		"duplicate-cell finding must anchor at the re-declaring group's cell index")
 	assert.NotEmpty(t, got[0].Fix)
 }
 
@@ -187,6 +191,10 @@ func TestTOPO10_NonExhaustiveTopology(t *testing.T) {
 	require.Len(t, got, 1, "non-exhaustive topology should produce 1 TOPO-10 finding")
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
+	// Exhaustiveness is a whole-section invariant (no single group owns the gap),
+	// so the anchor is the "topology" section, not a per-group index.
+	assert.Equal(t, "topology", got[0].Field,
+		"non-exhaustive finding must anchor at the topology section")
 	assert.NotEmpty(t, got[0].Fix)
 }
 
@@ -217,6 +225,10 @@ func TestTOPO10_MalformedEndpoint(t *testing.T) {
 	require.Len(t, got, 1, "malformed endpoint should produce 1 TOPO-10 finding")
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
+	// The anchor must point at the offending group's endpoint field, not a coarse
+	// "topology" — the second group carries the malformed endpoint.
+	assert.Equal(t, "topology.groups[1].endpoint", got[0].Field,
+		"malformed-endpoint finding must anchor at the offending group's endpoint")
 	assert.NotEmpty(t, got[0].Fix)
 }
 

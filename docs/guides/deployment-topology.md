@@ -176,14 +176,15 @@ When cells are split across processes, the following infrastructure is required:
   完整威胁矩阵见 ADR `202606171200-2263-adr-cross-cell-transport-mtls.md` §威胁矩阵。
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
-split topology in production. `topology.remote` is production-reachable as of
-US5 #1966; token-layer per-cell identity isolation landed in #2153; transport-layer
-mTLS peer authentication landed in #2263 (non-loopback split now requires mTLS,
-fail-closed — see §Split mTLS 配置 checklist below).
+split topology in production. A split `topology.groups` topology is
+production-reachable as of US5 #1966; token-layer per-cell identity isolation
+landed in #2153; transport-layer mTLS peer authentication landed in #2263
+(non-loopback split now requires mTLS, fail-closed — see §Split mTLS 配置
+checklist below).
 
 ## Split mTLS 配置 checklist
 
-适用于 `topology.remote` 含**非 loopback** remote cell 的所有生产部署（#2263，ZT-1）。
+适用于 `topology.groups` 含**非 loopback** group endpoint 的所有 split 生产部署（#2263，ZT-1）。
 
 ### 前置条件：证书要求
 

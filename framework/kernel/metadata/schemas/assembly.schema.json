@@ -88,7 +88,7 @@
     },
     "topology": {
       "type": "object",
-      "description": "OPTIONAL deployment topology for this assembly: the COMPLETE deployment-partition graph. Omit entirely for single-process (all-colocated default — zero-migration path). Declare when cells split across multiple processes; list one group per deployment role and assign every cell to exactly one group (exhaustive, mutually-exclusive partition). A process selects one role at startup (GOCELL_CELL_ROLE) and hosts that group's cells in-process; every other group is a remote peer. `gocell validate` enforces TOPO-10 (structural), TOPO-11 (provider reachability), TOPO-13 (cross-process broker), TOPO-14 (mTLS endpoint). Validated at governance time by ValidateTopologyStructure.",
+      "description": "OPTIONAL deployment topology for this assembly: the COMPLETE deployment-partition graph. Omit entirely for single-process (all-colocated default — zero-migration path). Declare when cells split across multiple processes; list one group per deployment role and assign every cell to exactly one group (exhaustive, mutually-exclusive partition). Each group is reachable at its endpoint as a remote peer from any other role's perspective. PR-1 (#2278) supports groups authoring, `gocell generate`, and catalog export; per-role process selection at startup (GOCELL_CELL_ROLE → hosting one group's cells in-process) lands in PR-2 — a non-empty GOCELL_CELL_ROLE currently fail-closes. `gocell validate` enforces TOPO-10 (structural), TOPO-11 (provider reachability), TOPO-13 (cross-process broker), TOPO-14 (mTLS endpoint). Validated at governance time by ValidateTopologyStructure.",
       "additionalProperties": false,
       "properties": {
         "groups": {
@@ -102,7 +102,7 @@
             "properties": {
               "role": {
                 "type": "string",
-                "description": "Unique deployment role name selected at startup via GOCELL_CELL_ROLE.",
+                "description": "Unique deployment role name. Per-role process selection at startup via GOCELL_CELL_ROLE lands in PR-2 (#2278); a non-empty role currently fail-closes.",
                 "minLength": 1
               },
               "cells": {

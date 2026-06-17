@@ -165,7 +165,13 @@ func TestAssemblySchema_Topology(t *testing.T) {
 
 	rejected := map[string]string{
 		"topology extra property": topo(`"groups":[{"role":"core","cells":["accesscore"],"endpoint":"a:1"}],"unknown":true`),
-		"bad cellID in group":     topo(`"groups":[{"role":"core","cells":["BadCell"],"endpoint":"a:1"}]`),
+		// The removed pre-#2278 authoring forms (topology.colocated / topology.remote)
+		// must stay rejected: topology now accepts only `groups` (additionalProperties:false).
+		// These red cases lock the migration — re-adding either field to the schema turns
+		// these green (test fails), surfacing the regression.
+		"old colocated authoring field": topo(`"colocated":["accesscore","auditcore"]`),
+		"old remote authoring field":    topo(`"remote":[{"cellID":"auditcore","endpoint":"host:9090"}]`),
+		"bad cellID in group":           topo(`"groups":[{"role":"core","cells":["BadCell"],"endpoint":"a:1"}]`),
 		"group missing role":      topo(`"groups":[{"cells":["accesscore"],"endpoint":"a:1"}]`),
 		"group missing cells":     topo(`"groups":[{"role":"core","endpoint":"a:1"}]`),
 		"group missing endpoint":  topo(`"groups":[{"role":"core","cells":["accesscore"]}]`),
