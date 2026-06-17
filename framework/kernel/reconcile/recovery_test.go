@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,6 +130,31 @@ func TestRecovery_PanicLogsStructuredPanicValue(t *testing.T) {
 	require.True(t, ok, "panic log must include a structured panic_value object")
 	assert.Equal(t, "bad-state", panicValue["code"])
 	assert.Equal(t, float64(42), panicValue["id"])
+}
+
+func TestRecovery_PanicValueRedactsSensitiveFields(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := testLogger(&buf)
+
+	type panicPayload struct {
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+
+	rec := panicReconciler{payload: panicPayload{Code: "bad-state", Password: "hunter2"}}
+	req := Request{EntityID: "sensitive-panic-entity"}
+
+	_, err := recoverReconcile(context.Background(), rec, req, logger, "my_reconciler")
+	require.Error(t, err)
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry), "panic log must be valid JSON")
+	panicValue, ok := entry["panic_value"].(map[string]any)
+	require.True(t, ok, "panic log must include a structured panic_value object")
+	assert.Equal(t, "bad-state", panicValue["code"])
+	assert.Equal(t, redaction.Mask, panicValue["password"])
+	assert.NotContains(t, buf.String(), "hunter2")
 }
 
 // TestClassify verifies the classify helper's full table:

@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -56,8 +57,8 @@ func classify(err error) resultLabel {
 func recoverReconcile(ctx context.Context, rec Reconciler, req Request, logger *slog.Logger, reconcilerID string) (res Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			safe := redaction.RedactString(fmt.Sprintf("%v", r))
-			err = fmt.Errorf("reconcile: recovered panic in Reconcile(entity=%q): %s", req.EntityID, safe)
+			panicValue := structuredPanicValue(r)
+			err = fmt.Errorf("reconcile: recovered panic in Reconcile(entity=%q): %v", req.EntityID, panicValue)
 			res = Result{}
 			// Log at Error: a reconciler panic is a correctness bug, not ordinary
 			// transient noise. The entity will be requeued (transient semantics), but
@@ -65,9 +66,50 @@ func recoverReconcile(ctx context.Context, rec Reconciler, req Request, logger *
 			logger.ErrorContext(ctx, "reconcile: reconciler panicked (BUG); entity requeued as transient",
 				slog.String("reconciler", reconcilerID),
 				slog.String("entity", req.EntityID),
-				redaction.RedactSlogAttr(slog.Any("panic_value", r)),
+				slog.Any("panic_value", panicValue),
 				slog.Any("error", err))
 		}
 	}()
 	return rec.Reconcile(ctx, req)
+}
+
+func structuredPanicValue(v any) any {
+	switch v.(type) {
+	case nil, error, fmt.Stringer, string:
+		return redaction.RedactAny(v)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return redaction.RedactAny(v)
+	}
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return redaction.RedactAny(v)
+	}
+	return redactDecodedPanicValue(decoded)
+}
+
+func redactDecodedPanicValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if redaction.IsSensitiveKey(k) {
+				out[k] = redaction.Mask
+				continue
+			}
+			out[k] = redactDecodedPanicValue(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = redactDecodedPanicValue(val)
+		}
+		return out
+	case string:
+		return redaction.RedactString(x)
+	default:
+		return x
+	}
 }

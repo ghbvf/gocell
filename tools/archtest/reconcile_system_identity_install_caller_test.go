@@ -86,10 +86,11 @@ func TestReconcileSystemIdentityInstallCaller01_RedFixture(t *testing.T) {
 		found += len(scanReconcileSystemIdentityInstallCaller01(p, observed))
 		return nil
 	})
-	assert.Equal(t, 2, found,
+	assert.Equal(t, 3, found,
 		"RECONCILE-SYSTEM-IDENTITY-INSTALL-CALLER-01 RED fixture must report exactly "+
-			"two violations: one non-Loop.process installer reference and one same-package "+
-			"principal setter reference outside installSystemProducerIdentity")
+			"three violations: one non-Loop.process installer reference, one selector-form "+
+			"principal setter reference, and one dot-import bare principal setter reference "+
+			"outside installSystemProducerIdentity")
 }
 
 func scanReconcileSystemIdentityInstallCaller01(
@@ -161,13 +162,13 @@ func scanReconcileSystemIdentitySetterRefs(
 	var diags []Diagnostic
 	for _, file := range p.Files {
 		rel := p.Rel(file)
-		EachInSubtree[ast.SelectorExpr](file, func(sel *ast.SelectorExpr) {
-			setter, matched := principalSetterName(p.TypesInfo, sel)
+		EachInSubtree[ast.Ident](file, func(id *ast.Ident) {
+			setter, matched := principalSetterIdentName(p.TypesInfo, id)
 			if !matched {
 				return
 			}
-			line := p.Fset.Position(sel.Pos()).Line
-			caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, sel)
+			line := p.Fset.Position(id.Pos()).Line
+			caller, ok := ResolveEnclosingFunc(p.TypesInfo, file, id)
 			if !ok {
 				diags = append(diags, Diagnostic{
 					Rel:  rel,
@@ -203,6 +204,17 @@ func scanReconcileSystemIdentitySetterRefs(
 		})
 	}
 	return diags
+}
+
+func principalSetterIdentName(info *types.Info, id *ast.Ident) (string, bool) {
+	fn, ok := info.Uses[id].(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != ctxkeysPkgPath {
+		return "", false
+	}
+	if _, isSetter := principalSetterAllowlist[fn.Name()]; !isSetter {
+		return "", false
+	}
+	return fn.Name(), true
 }
 
 func staleReconcileSystemIdentityDiags(observed *reconcileSystemIdentityObserved) []Diagnostic {
