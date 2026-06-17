@@ -6,7 +6,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 )
 
 // fwRoute builds a well-formed FrameworkServedRoute for the given contract id
@@ -20,6 +22,18 @@ func fwRoute(contractID string) FrameworkServedRoute {
 			Register: func(cell.RouteMux) error { return nil },
 		},
 	}
+}
+
+// fwBootstrap builds a Bootstrap whose must-serve EXPECTATION rides on the
+// assembly (assembly.Config.FrameworkContracts) — mirroring production, where
+// the expected set comes from buildAssembly(generatedFrameworkServedContracts())
+// not from the WithFrameworkHTTPServing option. The assembly's eager hook
+// dispatcher is drained via t.Cleanup so the unit test leaks no goroutine.
+func fwBootstrap(t *testing.T, expected []string, routes []FrameworkServedRoute) *Bootstrap {
+	t.Helper()
+	asm := assembly.New(clock.Real(), assembly.Config{ID: "fwtest", FrameworkContracts: expected})
+	t.Cleanup(asm.Shutdown)
+	return &Bootstrap{assemblyCore: asm, frameworkServingRoutes: routes}
 }
 
 func TestValidateFrameworkServing(t *testing.T) {
@@ -76,7 +90,7 @@ func TestValidateFrameworkServing(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b := &Bootstrap{frameworkServedContractIDs: tc.expected, frameworkServingRoutes: tc.routes}
+			b := fwBootstrap(t, tc.expected, tc.routes)
 			err := b.validateFrameworkServing()
 			if tc.wantErr {
 				require.Error(t, err)
@@ -93,10 +107,7 @@ func TestValidateFrameworkServing_NonEmptyCellID(t *testing.T) {
 	t.Parallel()
 	r := fwRoute("http.devicestate.v1")
 	r.Group.CellID = "syscore"
-	b := &Bootstrap{
-		frameworkServedContractIDs: []string{"http.devicestate.v1"},
-		frameworkServingRoutes:     []FrameworkServedRoute{r},
-	}
+	b := fwBootstrap(t, []string{"http.devicestate.v1"}, []FrameworkServedRoute{r})
 	require.Error(t, b.validateFrameworkServing())
 }
 
@@ -105,10 +116,7 @@ func TestValidateFrameworkServing_NonEmptyCellID(t *testing.T) {
 func TestValidateFrameworkServing_NilRegister(t *testing.T) {
 	t.Parallel()
 	r := FrameworkServedRoute{ContractID: "http.devicestate.v1", Group: cell.RouteGroup{Listener: cell.PrimaryListener}}
-	b := &Bootstrap{
-		frameworkServedContractIDs: []string{"http.devicestate.v1"},
-		frameworkServingRoutes:     []FrameworkServedRoute{r},
-	}
+	b := fwBootstrap(t, []string{"http.devicestate.v1"}, []FrameworkServedRoute{r})
 	require.Error(t, b.validateFrameworkServing())
 }
 

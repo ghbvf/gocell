@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
+	"github.com/ghbvf/gocell/cellmodules/deviceserving"
 	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
@@ -108,7 +109,7 @@ func buildBootstrapFromShared(
 	// testing: no real-mode validation, inline listener construction.
 	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
 		asm, err := buildAssembly(locals, "corebundle-test",
-			durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
+			durabilityModeForTopology(shared.Topology), shared.Clock, generatedFrameworkServedContracts(), cells...)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +135,14 @@ func buildBootstrapFromShared(
 				bootstrap.WithListenerNet(primaryLn),
 			),
 			corebundleTestGRPCListenerOption(t, cells, asm.CellIDs()),
+			// Framework-owned HTTP serving mirrors production runCorebundle: the
+			// assembly above carries generatedFrameworkServedContracts() as its
+			// must-serve set, so this option MUST wire the matching routes or phase0
+			// validateFrameworkServing fail-fasts. Keeping the test harness in lockstep
+			// with production wiring is the #2348 review F2 fix (omit → caught here).
+			bootstrap.WithFrameworkHTTPServing(
+				[]bootstrap.FrameworkServedRoute{deviceserving.NewService(shared.Clock).Route()},
+			),
 		)
 		opts = append(opts, extra...)
 		return opts, nil

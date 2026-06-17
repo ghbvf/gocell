@@ -24,46 +24,58 @@ type FrameworkServedRoute struct {
 	Group      cell.RouteGroup
 }
 
-// WithFrameworkHTTPServing wires framework-owned HTTP serving (ownerCell:
-// _framework). expected is the codegen-derived set of active framework-owned
-// http contract ids this assembly MUST serve (generatedFrameworkServedContracts(),
-// single-sourced from assembly.yaml frameworkContracts); routes are the actual
-// RouteGroups the composition root constructs (e.g. cellmodules/deviceserving).
+// WithFrameworkHTTPServing wires the framework-owned HTTP RouteGroups (ownerCell:
+// _framework) the composition root constructs (e.g. cellmodules/deviceserving).
 //
-// phase0 fail-fasts (validateFrameworkServing, Init-independent, before serve)
-// when the two sets disagree: an expected id with no wired RouteGroup is the
-// DEAD-CONTRACT analog for framework serving (the contract is declared active +
-// served but nothing mounts it — a silent dead route), and a wired route for a
-// contract the assembly did not declare is stale wiring. This mirrors the gRPC
-// permission-gate wiring fail-fast (#2204) and SPIRE catalog.Load /
-// controller-runtime Builder.Build construction-time wiring checks: the static
-// assembly makes the served set fully known before serve, so the absence of a
-// backend is a startup error, not a request-time 404.
+// The must-serve EXPECTATION is NOT passed here — it rides on the assembly
+// (assembly.Config.FrameworkContracts, codegen-derived from
+// generatedFrameworkServedContracts() and threaded through buildAssembly), so it
+// cannot be omitted: the assembly is a mandatory bootstrap input, whereas this
+// option is not. bootstrap (validateFrameworkServing, phase0) reconciles the
+// assembly's declared framework contracts against these routes. Omitting this
+// option entirely while the assembly declares framework contracts is therefore a
+// startup error (expected non-empty, provided empty), not a silent dead 404 —
+// this closes the omit-option hole (#2348 review F1).
 //
-// Not calling this option leaves no framework HTTP routes mounted with NO error
-// (an assembly with an empty frameworkContracts serves none). This is a wiring
-// option (idempotent opt-in).
-func WithFrameworkHTTPServing(expected []string, routes []FrameworkServedRoute) Option {
+// phase0 fail-fast (Init-independent, before serve): an expected id (assembly
+// frameworkContracts) with no wired RouteGroup is the DEAD-CONTRACT analog for
+// framework serving; a wired route for a contract the assembly did not declare
+// is stale wiring. Mirrors gRPC #2204 / SPIRE catalog.Load / controller-runtime
+// Builder.Build construction-time wiring checks.
+func WithFrameworkHTTPServing(routes []FrameworkServedRoute) Option {
 	return func(b *Bootstrap) {
-		b.frameworkServedContractIDs = append([]string(nil), expected...)
 		b.frameworkServingRoutes = append([]FrameworkServedRoute(nil), routes...)
 	}
 }
 
-// validateFrameworkServing reconciles the codegen-derived must-serve expectation
-// set against the wired framework RouteGroups. Called from phase0ValidateOptions
-// (before any component starts), so an unwired-but-declared framework contract
-// fails the process at startup rather than serving dead 404s.
+// frameworkServedExpected is the must-serve expectation set, derived from the
+// assembly (assembly.Config.FrameworkContracts via WithAssembly). It rides on the
+// mandatory assembly so it cannot be omitted — the basis for the omit-option
+// fail-fast. nil when no assembly is wired (auto-built path) or the assembly
+// declares no framework contracts.
+func (b *Bootstrap) frameworkServedExpected() []string {
+	if b.assemblyCore == nil {
+		return nil
+	}
+	return b.assemblyCore.FrameworkContracts()
+}
+
+// validateFrameworkServing reconciles the assembly's codegen-derived must-serve
+// expectation set (frameworkServedExpected) against the wired framework
+// RouteGroups. Called from phase0ValidateOptions (before any component starts),
+// so an unwired-but-declared framework contract fails the process at startup
+// rather than serving dead 404s.
 func (b *Bootstrap) validateFrameworkServing() error {
-	if len(b.frameworkServedContractIDs) == 0 && len(b.frameworkServingRoutes) == 0 {
+	expectedIDs := b.frameworkServedExpected()
+	if len(expectedIDs) == 0 && len(b.frameworkServingRoutes) == 0 {
 		return nil
 	}
 	provided, err := b.frameworkServingProvidedSet()
 	if err != nil {
 		return err
 	}
-	expected := make(map[string]bool, len(b.frameworkServedContractIDs))
-	for _, id := range b.frameworkServedContractIDs {
+	expected := make(map[string]bool, len(expectedIDs))
+	for _, id := range expectedIDs {
 		expected[id] = true
 	}
 	var missing, extra []string

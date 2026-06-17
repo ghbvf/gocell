@@ -19,13 +19,15 @@ func buildAssembly(
 	assemblyID string,
 	mode outbox.DurabilityMode,
 	clk clock.Clock,
+	frameworkContracts []string,
 	cells ...cell.Cell,
 ) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(clk, assembly.Config{
-		ID:              assemblyID,
-		DurabilityMode:  mode,
-		HookObserver:    locals.hookObserver,
-		MetricsProvider: locals.metricProvider,
+		ID:                 assemblyID,
+		DurabilityMode:     mode,
+		HookObserver:       locals.hookObserver,
+		MetricsProvider:    locals.metricProvider,
+		FrameworkContracts: frameworkContracts,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
 	})
 	for _, c := range cells {

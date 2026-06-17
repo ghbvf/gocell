@@ -66,6 +66,17 @@ type Config struct {
 	ID             string
 	DurabilityMode outbox.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
 
+	// FrameworkContracts is the assembly's must-serve set for framework-owned
+	// contracts (ownerCell: _framework), codegen-derived from assembly.yaml
+	// `frameworkContracts` (generatedFrameworkServedContracts()). It rides on the
+	// assembly — the mandatory bootstrap input — rather than on the optional
+	// WithFrameworkHTTPServing call, so bootstrap's startup reconcile
+	// (validateFrameworkServing) can fail-fast when an assembly declares a
+	// framework contract but the composition root forgot to wire its RouteGroup:
+	// expected (this field) is non-empty while the provided routes are empty.
+	// Empty for assemblies serving no framework contract (#2348 review F1).
+	FrameworkContracts []string
+
 	// HookTimeout bounds every BeforeStart/AfterStart/BeforeStop/AfterStop
 	// hook invocation. Zero uses DefaultHookTimeout. Set to a negative value
 	// to disable per-hook timeouts entirely (hook inherits parent ctx only).
@@ -192,6 +203,12 @@ func newDispatcherConfig(cfg Config, dropped metrics.CounterVec) dispatcherConfi
 		Dropped:     dropped,
 	}
 }
+
+// FrameworkContracts returns the assembly's codegen-derived must-serve set for
+// framework-owned contracts (Config.FrameworkContracts). bootstrap reads it as
+// the startup-reconcile expectation so an unwired-but-declared framework
+// contract fails fast (see Config.FrameworkContracts).
+func (a *CoreAssembly) FrameworkContracts() []string { return a.cfg.FrameworkContracts }
 
 func (a *CoreAssembly) ensureDispatcherLocked() {
 	if a.dispatcher != nil {
