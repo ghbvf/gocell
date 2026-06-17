@@ -63,15 +63,51 @@ func TestFMT42_UnknownPermission(t *testing.T) {
 	}
 }
 
-// TestFMT42_PermissionWithNoGateMode: permission + a no-gate auth mode → mutex error.
+// TestFMT42_PermissionWithNoGateMode: permission + any no-gate auth mode → mutex error.
+// Table-driven: each of the 4 no-gate modes (Public / Bootstrap / ClientsOnly /
+// ServiceOwned) is mutually exclusive with a permission overlay.
 func TestFMT42_PermissionWithNoGateMode(t *testing.T) {
-	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
-		h.Permission = "config:read"
-		h.Auth = metadata.HTTPAuthMeta{Public: true}
-	})
-	results := NewValidator(project, "", clock.Real()).validateFMT42()
-	if len(fmt42Errors(results)) == 0 {
-		t.Fatal("FMT-42: expected mutex error for permission + auth.public, got none")
+	cases := []struct {
+		name   string
+		mutate func(h *metadata.HTTPTransportMeta)
+	}{
+		{
+			name: "Public",
+			mutate: func(h *metadata.HTTPTransportMeta) {
+				h.Permission = "config:read"
+				h.Auth = metadata.HTTPAuthMeta{Public: true}
+			},
+		},
+		{
+			name: "Bootstrap",
+			mutate: func(h *metadata.HTTPTransportMeta) {
+				h.Permission = "config:read"
+				h.Auth = metadata.HTTPAuthMeta{Bootstrap: true}
+			},
+		},
+		{
+			name: "ClientsOnly",
+			mutate: func(h *metadata.HTTPTransportMeta) {
+				h.Permission = "config:read"
+				h.Auth = metadata.HTTPAuthMeta{ClientsOnly: true}
+			},
+		},
+		{
+			name: "ServiceOwned",
+			mutate: func(h *metadata.HTTPTransportMeta) {
+				h.Permission = "config:read"
+				h.Auth = metadata.HTTPAuthMeta{ServiceOwned: true}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			project := fmt42Project(tc.mutate)
+			results := NewValidator(project, "", clock.Real()).validateFMT42()
+			if len(fmt42Errors(results)) == 0 {
+				t.Fatalf("FMT-42: expected mutex error for permission + auth.%s, got none", tc.name)
+			}
+		})
 	}
 }
 

@@ -56,8 +56,8 @@ var testReadTenant = configcoretest.TestTenant
 const configBasePath = "/api/v1/config"
 
 // asAdmin attaches an admin Principal, a valid TenantID, and an allow Authorizer
-// to req so it satisfies the auth.RequirePermission(authz.PermConfigRead()) PDP
-// gate AND the configread handler's tenant.FromContext call.
+// to req so it satisfies the contract-derived PDP gate (#2205, auth.RequirePermissionForContract)
+// AND the configread handler's tenant.FromContext call.
 func asAdmin(req *http.Request) *http.Request {
 	ctx := withAllowAuthorizer(
 		configcoretest.CtxWithTenant(auth.TestContext("admin-user", []string{auth.RoleAdmin})),

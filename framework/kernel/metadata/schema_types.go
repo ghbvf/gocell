@@ -45,7 +45,7 @@ type HTTPTransportMeta struct {
 	// contract-derived origin of the route's auth.RequirePermission gate: cellgen
 	// derives a cell-level contractID→permission map from this overlay and the
 	// generated handler resolves it through authz.MethodPolicyResolver
-	// (runtime/auth.RequirePermissionByName), replacing the slice hand-wiring of
+	// (runtime/auth.RequirePermissionForContract), replacing the slice hand-wiring of
 	// auth.RequirePermission(authz.PermX()). It is a first-class sibling of Auth, NOT
 	// folded into HTTPAuthMeta's 5-bool mutex matrix: Permission is a string, and
 	// keeping it out preserves the 2^5 auth-combo space (same rationale as

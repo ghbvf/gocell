@@ -55,7 +55,7 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 	return staticMethodPolicyResolver{byKey: byKey}
 }
 
-// RequirePermissionByName returns the contract-derived HTTP route gate: it resolves
+// RequirePermissionForContract returns the contract-derived HTTP route gate: it resolves
 // contractID through the cell-level authz.MethodPolicyResolver ONCE at construction
 // (Mount/Init time) and delegates to RequirePermission(perm) — the SOLE PDP route
 // entry, so this adds no second PDP path (PR-10a D5 holds). It only changes WHERE the
@@ -76,11 +76,11 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 // AI-robust Grade: Medium — the gate is callable code, locked to generated callers by
 // HTTP-PERMISSION-GATE-WIRING-FUNNEL-01; the contract→permission binding it reads is
 // golden-locked at codegen (Hard).
-func RequirePermissionByName(contractID string, resolver authz.MethodPolicyResolver) Policy {
+func RequirePermissionForContract(contractID string, resolver authz.MethodPolicyResolver) Policy {
 	perm, ok := resolver.PermissionForMethod(contractID)
 	if !ok {
 		panic(panicregister.Approved("http-permission-unmapped",
-			errcode.Assertion("RequirePermissionByName: contract %q has no permission mapping in the cell "+
+			errcode.Assertion("RequirePermissionForContract: contract %q has no permission mapping in the cell "+
 				"MethodPolicyResolver (codegen drift — the contract must declare endpoints.http.permission and "+
 				"cellgen must enroll it; regenerate via gocell generate cell)", contractID)))
 	}

@@ -327,7 +327,7 @@ type httpEndpointSpec struct {
 	// (#2205) — non-empty only for contract-derived gated routes. When set, the
 	// generated NewHandler takes a resolver authz.MethodPolicyResolver argument
 	// (instead of policy auth.Policy) and constructs the gate via
-	// auth.RequirePermissionByName(contractSpec.ID, resolver); when empty, the legacy
+	// auth.RequirePermissionForContract(contractSpec.ID, resolver); when empty, the legacy
 	// hand-wired policy-arg path is generated unchanged. Mutually exclusive with the
 	// no-gate auth modes (AuthPublic/AuthBootstrap/AuthClientsOnly/AuthServiceOwned);
 	// may accompany a standard route or AuthPasswordResetExempt.

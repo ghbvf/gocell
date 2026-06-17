@@ -11,7 +11,7 @@
 //	var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{ <contractID>: <action>, … })
 //
 // in the cell's generated cell_gen.go, and the generated HTTP handlers
-// (handler_gen.go) build their gate via auth.RequirePermissionByName(contractSpec.ID,
+// (handler_gen.go) build their gate via auth.RequirePermissionForContract(contractSpec.ID,
 // resolver) against it. The resolver is the data source; the gate downstream is inert
 // without one.
 //
@@ -21,10 +21,10 @@
 // contractID→action map, bypassing the endpoints.http.permission overlay — a latent
 // authorization-source drift that the contract-fanout closure and FMT-42 could not see.
 //
-// Why locking the resolver source suffices (RequirePermissionByName is downstream):
+// Why locking the resolver source suffices (RequirePermissionForContract is downstream):
 // the cell resolver var is unexported and package-scoped to the cell, so no other
 // package can obtain it; the only HTTP resolver values in production come from this
-// constructor. RequirePermissionByName takes a resolver, so a hand-wired gate still
+// constructor. RequirePermissionForContract takes a resolver, so a hand-wired gate still
 // needs a resolver — which only the locked constructor produces. Its own wiring inside
 // handler_gen.go is additionally byte-locked by the contractgen golden
 // (synth_http_auth_modes_permission). (handler_gen.go lives under <module>/generated/,

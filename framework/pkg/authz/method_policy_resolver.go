@@ -38,7 +38,7 @@ package authz
 //   - HTTP: runtime/auth.NewStaticMethodPolicyResolver builds a cell-level resolver
 //     from a contractID→action map that cellgen derives from each served HTTP
 //     contract's endpoints.http.permission overlay; the generated handler's gate
-//     (runtime/auth.RequirePermissionByName) resolves through it.
+//     (runtime/auth.RequirePermissionForContract) resolves through it.
 //
 // # AI-robust grade
 //

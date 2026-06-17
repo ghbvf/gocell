@@ -32,6 +32,11 @@ func TestNewStaticMethodPolicyResolver_HitMiss(t *testing.T) {
 
 	_, ok = r.PermissionForMethod("http.not.mapped.v1")
 	assert.False(t, ok, "unmapped key must fail closed (ok=false), never an implicit allow")
+
+	// empty map: construction must not panic, and every lookup fails closed.
+	empty := NewStaticMethodPolicyResolver(map[string]string{})
+	_, ok = empty.PermissionForMethod("anything")
+	assert.False(t, ok, "empty resolver must fail closed for any key")
 }
 
 // TestNewStaticMethodPolicyResolver_UnknownAction_Panics: an action string outside
@@ -43,10 +48,10 @@ func TestNewStaticMethodPolicyResolver_UnknownAction_Panics(t *testing.T) {
 	}, "unknown action string must fail-fast at construction")
 }
 
-// TestRequirePermissionByName_Allow: the contract-derived HTTP gate resolves the
+// TestRequirePermissionForContract_Allow: the contract-derived HTTP gate resolves the
 // permission through the resolver and then behaves exactly like RequirePermission
 // — a PDP allow returns nil.
-func TestRequirePermissionByName_Allow(t *testing.T) {
+func TestRequirePermissionForContract_Allow(t *testing.T) {
 	r := NewStaticMethodPolicyResolver(map[string]string{"http.config.get.v1": "config:read"})
 	p := &Principal{Kind: PrincipalUser, Subject: "11111111-1111-1111-1111-111111111111", Roles: []string{"admin"}}
 	allow := &mockAuthorizer{allowed: true}
@@ -54,13 +59,13 @@ func TestRequirePermissionByName_Allow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/x", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), allow))
 
-	err := RequirePermissionByName("http.config.get.v1", r)(req)
+	err := RequirePermissionForContract("http.config.get.v1", r)(req)
 	assert.NoError(t, err, "PDP allow must return nil")
 }
 
-// TestRequirePermissionByName_Deny: a PDP deny returns KindPermissionDenied (403),
+// TestRequirePermissionForContract_Deny: a PDP deny returns KindPermissionDenied (403),
 // same as RequirePermission (the gate is the same single PDP path).
-func TestRequirePermissionByName_Deny(t *testing.T) {
+func TestRequirePermissionForContract_Deny(t *testing.T) {
 	r := NewStaticMethodPolicyResolver(map[string]string{"http.config.get.v1": "config:read"})
 	p := &Principal{Kind: PrincipalUser, Subject: "11111111-1111-1111-1111-111111111111", Roles: []string{"user"}}
 	deny := &mockAuthorizer{allowed: false}
@@ -68,35 +73,35 @@ func TestRequirePermissionByName_Deny(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/x", nil)
 	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
 
-	err := RequirePermissionByName("http.config.get.v1", r)(req)
+	err := RequirePermissionForContract("http.config.get.v1", r)(req)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind, "PDP deny must return 403")
 }
 
-// TestRequirePermissionByName_ResolverMiss_Panics: a contract id the cell resolver
+// TestRequirePermissionForContract_ResolverMiss_Panics: a contract id the cell resolver
 // does not know is codegen drift (the handler is only generated with this gate when
 // the contract carries a permission overlay, and cellgen enrolls every such contract
 // in the resolver). Resolution is one-shot at construction (Mount/Init time), so the
 // miss fails fast there, not at first request.
-func TestRequirePermissionByName_ResolverMiss_Panics(t *testing.T) {
+func TestRequirePermissionForContract_ResolverMiss_Panics(t *testing.T) {
 	r := NewStaticMethodPolicyResolver(map[string]string{"http.config.get.v1": "config:read"})
 	assert.Panics(t, func() {
-		_ = RequirePermissionByName("http.unmapped.v1", r)
+		_ = RequirePermissionForContract("http.unmapped.v1", r)
 	}, "resolver miss at construction must fail-fast (codegen drift)")
 }
 
-// TestRequirePermissionByName_NoAuthorizer_FailClosed: resolving the permission
+// TestRequirePermissionForContract_NoAuthorizer_FailClosed: resolving the permission
 // does not relax the fail-closed contract — an unwired PDP still denies (403).
-func TestRequirePermissionByName_NoAuthorizer_FailClosed(t *testing.T) {
+func TestRequirePermissionForContract_NoAuthorizer_FailClosed(t *testing.T) {
 	r := NewStaticMethodPolicyResolver(map[string]string{"http.config.get.v1": "config:read"})
 	p := &Principal{Kind: PrincipalUser, Subject: "11111111-1111-1111-1111-111111111111", Roles: []string{"admin"}}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/x", nil)
 	req = req.WithContext(WithPrincipal(req.Context(), p)) // no Authorizer wired
 
-	err := RequirePermissionByName("http.config.get.v1", r)(req)
+	err := RequirePermissionForContract("http.config.get.v1", r)(req)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))

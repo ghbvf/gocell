@@ -36,7 +36,7 @@ type Handler struct {
 // config:read. NewHandler takes the cell-level
 // authz.MethodPolicyResolver (built by cellgen from the cell's served-contract
 // permission overlays) and constructs the route gate via
-// auth.RequirePermissionByName(contractSpec.ID, resolver) — the HTTP sibling of
+// auth.RequirePermissionForContract(contractSpec.ID, resolver) — the HTTP sibling of
 // the gRPC interceptor's resolver lookup, replacing a hand-wired
 // auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
 // construction (composition root must inject the cell resolver).
@@ -47,7 +47,7 @@ func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
 		// so PANIC-REGISTERED-01 stays clean.
 		panic(panicregister.Approved("http-config-list-v1-resolver-nil", errcode.Assertion("generated handler http.config.list.v1: resolver must not be nil (endpoints.http.permission contracts require the cell authz.MethodPolicyResolver; composition root must inject the cellgen-built resolver)")))
 	}
-	h := &Handler{svc: svc, policy: auth.RequirePermissionByName(contractSpec.ID, resolver)}
+	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec.ID, resolver)}
 	return h
 }
 
