@@ -487,10 +487,24 @@ kubernetes `cmd/kube-controller-manager` ControllerDescriptor；spring-projects/
   入口的直挂——upstream backstop）。`MOUNTED-EQUALS-COLOCATED` **AI-robust 评级 Medium**（运行期 bijection 守卫；
   cellID 运行期字符串，Hard 不可达——同 M12a / broker-mandatory闸 诚实天花板）+ red/green fixture + anti-vacuity。
 
-**缺失依赖启动期闸（SC-002 sync 维补全）**：消费 contract 的 provider cell ∉ colocated ∪ remote map → fail-fast
-（区分「本地依赖缺失」vs「拓扑漏声明」）+ `gocell validate` 静态 arm。**注**：该静态检查原属 US2 T011（计划但未落地）
-+ US3 T030（event 维，已由 #1965 broker 闸覆盖）；本 amendment 把 sync 维补全并加运行期闸。对标 Spring Modulith
-`ApplicationModules.verify()` 的 allowed-dependencies。sync 维（本闸）+ event 维（#1965）合起来 = 无静默死路由。
+**缺失依赖 fail-fast（SC-002 sync 维）—— 已由既有双层兑现，PR-3 不建平行闸（2026-06-18 PR-3 收口）**：
+消费 contract 的 provider cell ∉ colocated ∪ remote → fail-fast，sync 维由**两层**覆盖：
+① **静态** `gocell validate` arm = `validateTOPO11`（**PR-1 #2337 已落地**，遍历 contractUsages 消费方，provider
+∉ `assembly.cells` → 报错；配 TOPO-10 穷尽分区 ⟹ provider ∉ colocated∪remote）——该检查原属 US2 T011（本 amendment
+原记「计划但未落地」，实由 PR-1 over-deliver 兑现）；② **运行期** fail-fast = `celltransport.Resolve` 的 **eager**
+（module-wiring / 启动期）fail-closed（US5 #1966）：sync client wiring 拨真实 server cell，provider 既非 colocated 也非
+remote → `KindInternal` fail-fast、错误冒泡 → 进程起不来（FR-004「bootstrap MUST fail-fast」满足），该 seam 由
+`CELLTRANSPORT-SELECT-FUNNEL-01` 锁为 sync 跨 cell 调用唯一出口。event 维由 US3 #1965 broker 闸覆盖。
+对标 Spring Modulith `ApplicationModules.verify()` 的 allowed-dependencies；sync 维（双层）+ event 维（#1965）= 无静默死路由。
+
+**PR-3 不新增 phase0 平行闸（三层自审结论）**：本 amendment 原写「补全 sync 维并**加运行期闸**」，前提是「静态 arm 空缺
++ 无运行期兜底」。PR-1 over-deliver TOPO-11 + US5 已有 eager fail-closed seam 使该前提消失。新增一个 bootstrap phase0 闸
+经实测判为**冗余平行结构**：它须以运行期 `ConsumedContracts().OwnerCell()` 重派生可达性，弱于 TOPO-11 的权威
+`ProviderEndpoint()`、引入 owner≠server 盲区（两条 truth）；`MOUNTED-EQUALS-COLOCATED` 先保证 colocated==mounted 后其
+「本地依赖缺失」分支为死代码；funnel 已禁绕过 seam 的裸 http 兄弟调用 → 闸在 sanctioned 路径零触发。按「抽象前提消失第一
+选择是删除」，PR-3 收敛为本收口注（载体重评）+ `celltransport.Resolve` 两类失败诊断命名（`topology under-declared` /
+`local dependency missing`，单源于该 seam）。**本收口是 config-correctness 控制的载体重评，不触及上文 §威胁矩阵的安全
+模型**（MAC 完整性 / per-cell 身份 #2153 / mTLS #2263 不变）。
 
 **威胁矩阵重评（AI-robust 章程：amendment 必须同步重评）**：本 amendment 使 split **真实端到端可发生**（此前
 seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring」缺口经 **#2153（per-cell HKDF 子密钥 + master 缺席）
@@ -508,12 +522,16 @@ seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring�
   `generatedTopologyGroups()` + 字节 golden（Hard golden + Medium validate）。运行期最小桥 `bootstrap.SpecForRole(groups, "")`
   = 全 colocated monolith（role 选择留 PR-2）。
 - **PR-2**：role 选择器 + `NewForRole` 子集挂载 + `MOUNTED-EQUALS-COLOCATED` 守卫（Medium）。
-- **PR-3**：缺失依赖启动期闸 + `gocell validate` 静态 arm + archtest red/green（Medium）。
+- **PR-3（✅ 收口 #2278）**：缺失依赖 sync 维**已由 PR-1 TOPO-11（静态）+ US5 #1966 `celltransport.Resolve` eager
+  fail-closed seam（运行期，`CELLTRANSPORT-SELECT-FUNNEL-01` 锁）双层兑现**；三层自审判新增 phase0 闸为冗余平行结构 →
+  **不建闸**。PR-3 = ADR/tasks 重评收口 + `celltransport.Resolve` 两类失败诊断命名（in-place，无新机制）。
 - **PR-4（= #1967 验收）**：`corebundle` assembly.yaml `topology.groups`（accesstier/configtier）+ `tests/e2e/` split
   compose（同 image 2 进程 + broker + PG）+ 双拓扑参数化 journey 一致性断言 + CI 接入（对标 weavertest Local/Multi）。
 
 AI-robust 新机制评级：groups codegen golden = **Hard**；groups 校验 / role fail-fast / `MOUNTED-EQUALS-COLOCATED`
-/ 缺失依赖闸 = **Medium**（拓扑/role/cellID 均运行期数据，Hard 不可达，诚实天花板，无 Soft）。
+= **Medium**（拓扑/role/cellID 均运行期数据，Hard 不可达，诚实天花板，无 Soft）。**缺失依赖 sync 维不新增机制**——
+覆盖 = `validateTOPO11`（Medium governance rule）+ sealed `DeploymentTopology`（Hard）+ `CELLTRANSPORT-SELECT-FUNNEL-01`
+（Medium caller funnel，下游 `Resolve` fail-closed Hard）。
 
 **范围切割（显式 backlog，不静默）**：外部 cell（ssobff 等）双拓扑覆盖（epic 验收第二条）→ 新 backlog issue；
 per-cell relay 扇出 → 已 #2152；mTLS → 已 #2263（见下 §#2263 Amendment，已 CLOSED，非 defer）。
