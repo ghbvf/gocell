@@ -160,6 +160,23 @@ func TestRegistry_List_OrderedCursorPaginated(t *testing.T) {
 	assert.Equal(t, "d", page2[1].ID)
 }
 
+func TestRegistry_AllMethods_InvalidTenant(t *testing.T) {
+	r, _ := newRegistry(t)
+	zero := tenant.TenantID("")
+	ctx := context.Background()
+
+	_, cErr := r.Create(ctx, zero, registry.SubmitInput{ID: "x", Kind: "http", Submitter: "a"})
+	assertCode(t, cErr, errcode.ErrValidationFailed)
+	_, tErr := r.Transition(ctx, zero, registry.AdvanceInput{ID: "x", To: registry.StateProbing(), Actor: "s"})
+	assertCode(t, tErr, errcode.ErrValidationFailed)
+	_, _, gErr := r.Get(ctx, zero, "x")
+	assertCode(t, gErr, errcode.ErrValidationFailed)
+	_, lErr := r.List(ctx, zero, "", 10)
+	assertCode(t, lErr, errcode.ErrValidationFailed)
+	_, hErr := r.History(ctx, zero, "x")
+	assertCode(t, hErr, errcode.ErrValidationFailed)
+}
+
 func TestRegistry_CrossTenantIsolation(t *testing.T) {
 	r, _ := newRegistry(t)
 	mustCreate(t, r, testTenant, "http.foo.v1", "event", "carol") // non-http kind + distinct submitter

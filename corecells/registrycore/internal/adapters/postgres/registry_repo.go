@@ -79,10 +79,12 @@ func (r *Registry) Create(ctx context.Context, t tenant.TenantID, in registry.Su
 	submitted := registry.StateSubmitted()
 	// ON CONFLICT DO NOTHING + RowsAffected detects the per-tenant duplicate
 	// without aborting the transaction (so the caller's tx stays usable).
+	// approver is omitted — the column's DB DEFAULT '' applies (a submission has no
+	// approver until the pending-approval → approved transition records one).
 	n, err := db.Exec(ctx,
 		`INSERT INTO contract_registrations
-		   (tenant_id, id, kind, payload_schema, submitter, approver, state, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, '', $6, $7, $7)
+		   (tenant_id, id, kind, payload_schema, submitter, state, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
 		 ON CONFLICT (tenant_id, id) DO NOTHING`,
 		t.String(), in.ID, in.Kind, in.PayloadSchema, in.Submitter, submitted.String(), now)
 	if err != nil {
@@ -163,18 +165,19 @@ func (r *Registry) loadForUpdate(ctx context.Context, db DBTX, t tenant.TenantID
 }
 
 // appendEvent inserts one append-only migration event, assigning the next 1-based
-// per-registration seq. Shared by Create (from = zero sentinel) and Transition.
+// per-registration seq via a scalar subquery so the seq read and the insert are a
+// SINGLE atomic statement (no read-then-write window). Shared by Create (from =
+// zero sentinel) and Transition.
+//
+// Concurrency: same-registration writes are already serialized upstream — Create
+// by the projection PK (ON CONFLICT lets only one Create win) and Transition by
+// the FOR UPDATE row lock in loadForUpdate — so two appendEvent calls never race
+// the same (tenant_id, registration_id). The single-statement seq is defense in
+// depth on top of that, not the primary guard.
 func (r *Registry) appendEvent(
 	ctx context.Context, db DBTX, t tenant.TenantID, regID string,
 	from, to registry.RegistrationState, actor, reason string, now time.Time,
 ) error {
-	var seq int
-	if err := db.QueryRow(ctx,
-		`SELECT COALESCE(MAX(seq), 0) + 1 FROM contract_registration_events
-		 WHERE tenant_id = $1 AND registration_id = $2`,
-		t.String(), regID).Scan(&seq); err != nil {
-		return queryErr("append-event-seq", err)
-	}
 	fromStr := "" // zero sentinel persists as '' (ParseState("") → zero)
 	if !from.IsZero() {
 		fromStr = from.String()
@@ -182,8 +185,12 @@ func (r *Registry) appendEvent(
 	if _, err := db.Exec(ctx,
 		`INSERT INTO contract_registration_events
 		   (tenant_id, registration_id, seq, from_state, to_state, actor, reason, occurred_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		t.String(), regID, seq, fromStr, to.String(), actor, reason, now); err != nil {
+		 VALUES (
+		   $1, $2,
+		   (SELECT COALESCE(MAX(seq), 0) + 1 FROM contract_registration_events
+		     WHERE tenant_id = $1 AND registration_id = $2),
+		   $3, $4, $5, $6, $7)`,
+		t.String(), regID, fromStr, to.String(), actor, reason, now); err != nil {
 		return queryErr("append-event", err)
 	}
 	return nil
@@ -254,10 +261,15 @@ func (r *Registry) History(ctx context.Context, t tenant.TenantID, id string) ([
 		if err := rows.Scan(&seq, &fromStr, &toStr, &actor, &reason, &occurredAt); err != nil {
 			return nil, queryErr("history-scan", err)
 		}
-		from, okFrom := registry.ParseState(fromStr) // '' → zero sentinel
+		from, okFrom := registry.ParseState(fromStr) // '' → zero sentinel (initial event)
+		if !okFrom {
+			return nil, corruptStateErr(id, fromStr)
+		}
+		// to_state is NOT NULL and always a real state (never the zero sentinel),
+		// symmetric with the projection-state guard in buildRegistration.
 		to, okTo := registry.ParseState(toStr)
-		if !okFrom || !okTo {
-			return nil, corruptStateErr(id, fromStr+"/"+toStr)
+		if !okTo || to.IsZero() {
+			return nil, corruptStateErr(id, toStr)
 		}
 		out = append(out, registry.RegistrationEvent{
 			RegistrationID: id, Seq: seq, From: from, To: to, Actor: actor, Reason: reason, OccurredAt: occurredAt,
@@ -267,6 +279,24 @@ func (r *Registry) History(ctx context.Context, t tenant.TenantID, id string) ([
 		return nil, queryErr("history-rows", err)
 	}
 	return out, nil
+}
+
+// buildRegistration assembles a ContractRegistration from scanned column values,
+// parsing the sealed state and fail-closing on a corrupt (unparseable or zero)
+// state read from the store. Single source for both scan helpers so adding a
+// projection column changes one place. A projection state is always a real,
+// non-zero state.
+func buildRegistration(
+	id, kind, payloadSchema, submitter, approver, stateStr string, createdAt, updatedAt time.Time,
+) (registry.ContractRegistration, error) {
+	state, ok := registry.ParseState(stateStr)
+	if !ok || state.IsZero() {
+		return registry.ContractRegistration{}, corruptStateErr(id, stateStr)
+	}
+	return registry.ContractRegistration{
+		ID: id, Kind: kind, PayloadSchema: payloadSchema, Submitter: submitter,
+		Approver: approver, State: state, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}, nil
 }
 
 // scanRegistration builds a ContractRegistration from a single-row scanner
@@ -282,14 +312,11 @@ func scanRegistration(row RowScanner, id string) (registry.ContractRegistration,
 		}
 		return registry.ContractRegistration{}, false, queryErr("scan", err)
 	}
-	state, ok := registry.ParseState(stateStr)
-	if !ok || state.IsZero() { // projection state is always a real state
-		return registry.ContractRegistration{}, false, corruptStateErr(id, stateStr)
+	reg, err := buildRegistration(id, kind, payloadSchema, submitter, approver, stateStr, createdAt, updatedAt)
+	if err != nil {
+		return registry.ContractRegistration{}, false, err
 	}
-	return registry.ContractRegistration{
-		ID: id, Kind: kind, PayloadSchema: payloadSchema, Submitter: submitter,
-		Approver: approver, State: state, CreatedAt: createdAt, UpdatedAt: updatedAt,
-	}, true, nil
+	return reg, true, nil
 }
 
 // scanRegistrationRow builds a ContractRegistration from a multi-row scanner
@@ -302,14 +329,7 @@ func scanRegistrationRow(rows Rows) (registry.ContractRegistration, error) {
 	if err := rows.Scan(&id, &kind, &payloadSchema, &submitter, &approver, &stateStr, &createdAt, &updatedAt); err != nil {
 		return registry.ContractRegistration{}, queryErr("list-scan", err)
 	}
-	state, ok := registry.ParseState(stateStr)
-	if !ok || state.IsZero() {
-		return registry.ContractRegistration{}, corruptStateErr(id, stateStr)
-	}
-	return registry.ContractRegistration{
-		ID: id, Kind: kind, PayloadSchema: payloadSchema, Submitter: submitter,
-		Approver: approver, State: state, CreatedAt: createdAt, UpdatedAt: updatedAt,
-	}, nil
+	return buildRegistration(id, kind, payloadSchema, submitter, approver, stateStr, createdAt, updatedAt)
 }
 
 func invalidTenant(err error) error {

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -27,15 +28,30 @@ func newRegistryFromDBTX(db DBTX) *Registry {
 
 // --- mock DBTX (routes QueryRow/Query by SQL substring) ---
 
+type execResult struct {
+	n   int64
+	err error
+}
+
 type mockDB struct {
 	execN     int64
 	execErr   error
+	execSeq   []execResult // if non-empty, consumed in order per Exec call (last repeats)
+	execIdx   int
 	rowsBySQL map[string]*mockRow // SQL substring → single-row result
 	queryRows *mockRows
 	queryErr  error
 }
 
 func (m *mockDB) Exec(context.Context, string, ...any) (int64, error) {
+	if len(m.execSeq) > 0 {
+		i := m.execIdx
+		if i >= len(m.execSeq) {
+			i = len(m.execSeq) - 1
+		}
+		m.execIdx++
+		return m.execSeq[i].n, m.execSeq[i].err
+	}
 	if m.execErr != nil {
 		return 0, m.execErr
 	}
@@ -92,6 +108,12 @@ func (r *mockRows) Scan(dest ...any) error {
 }
 
 func assignScan(dest, values []any) error {
+	if len(dest) != len(values) {
+		// Mirror pgx, which errors on a column/dest count mismatch rather than
+		// silently truncating — so a SELECT column-list / Scan-arity drift fails
+		// the test instead of passing vacuously.
+		return fmt.Errorf("mock scan: dest len %d != values len %d", len(dest), len(values))
+	}
 	for i, v := range values {
 		switch d := dest[i].(type) {
 		case *string:
@@ -146,10 +168,9 @@ func TestRegistry_Create_ExecError(t *testing.T) {
 }
 
 func TestRegistry_Create_Success(t *testing.T) {
-	db := &mockDB{
-		execN:     1,
-		rowsBySQL: map[string]*mockRow{"MAX(seq)": {values: []any{1}}},
-	}
+	// Two Execs: projection INSERT (RowsAffected 1) then the single-statement event
+	// INSERT (seq computed in-SQL, no separate MAX query).
+	db := &mockDB{execN: 1}
 	r := newRegistryFromDBTX(db)
 	reg, err := r.Create(context.Background(), unitTenant, validSubmit())
 	require.NoError(t, err)
@@ -208,12 +229,11 @@ func TestRegistry_Transition_IllegalRejected(t *testing.T) {
 }
 
 func TestRegistry_Transition_LegalSuccess(t *testing.T) {
+	// loadForUpdate (FOR UPDATE QueryRow) → submitted; then UPDATE + event INSERT
+	// (both Exec, RowsAffected 1; seq computed in-SQL).
 	db := &mockDB{
-		execN: 1,
-		rowsBySQL: map[string]*mockRow{
-			"FOR UPDATE": {values: projectionValues("http", "alice", "", "submitted")},
-			"MAX(seq)":   {values: []any{2}},
-		},
+		execN:     1,
+		rowsBySQL: map[string]*mockRow{"FOR UPDATE": {values: projectionValues("http", "alice", "", "submitted")}},
 	}
 	r := newRegistryFromDBTX(db)
 	got, err := r.Transition(context.Background(), unitTenant, registry.AdvanceInput{ID: "x", To: registry.StateProbing(), Actor: "system"})
@@ -256,13 +276,25 @@ func TestRegistry_History_Success(t *testing.T) {
 	assert.Equal(t, 2, evs[1].Seq)
 }
 
-func TestRegistry_Create_AppendEventSeqError(t *testing.T) {
-	db := &mockDB{
-		execN:     1, // projection insert succeeds
-		rowsBySQL: map[string]*mockRow{"MAX(seq)": {scanErr: errors.New("boom")}},
-	}
+func TestRegistry_Create_AppendEventInsertError(t *testing.T) {
+	// Projection INSERT succeeds (1st Exec, RowsAffected 1); the append-only event
+	// INSERT (2nd Exec) fails → the whole Create surfaces ErrRegistrationRepoQuery
+	// (and the enclosing tx rolls back the projection write).
+	db := &mockDB{execSeq: []execResult{{n: 1}, {err: errors.New("boom")}}}
 	r := newRegistryFromDBTX(db)
 	_, err := r.Create(context.Background(), unitTenant, validSubmit())
+	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
+}
+
+func TestRegistry_History_CorruptState(t *testing.T) {
+	// A to_state the store cannot have produced (NOT NULL real state) fail-closes,
+	// symmetric with Get/List corrupt-state guards.
+	now := time.Unix(0, 0).UTC()
+	db := &mockDB{queryRows: &mockRows{rows: [][]any{
+		{1, "", "bogus", "alice", "", now},
+	}}}
+	r := newRegistryFromDBTX(db)
+	_, err := r.History(context.Background(), unitTenant, "x")
 	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
 }
 

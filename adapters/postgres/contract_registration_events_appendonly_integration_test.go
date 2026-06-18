@@ -55,34 +55,53 @@ func TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked(t *testing.T) 
 	require.NoError(t, migrator.Up(ctx), "migrate up")
 
 	// Static assertion: append-only on the history table; mutable projection.
-	var evSelect, evInsert, evUpdate, evDelete, projUpdate bool
+	var evSelect, evInsert, evUpdate, evDelete, evTruncate, projUpdate bool
 	require.NoError(t, owner.DB().QueryRow(ctx,
 		`SELECT has_table_privilege($1, 'contract_registration_events', 'SELECT'),
 		        has_table_privilege($1, 'contract_registration_events', 'INSERT'),
 		        has_table_privilege($1, 'contract_registration_events', 'UPDATE'),
 		        has_table_privilege($1, 'contract_registration_events', 'DELETE'),
+		        has_table_privilege($1, 'contract_registration_events', 'TRUNCATE'),
 		        has_table_privilege($1, 'contract_registrations', 'UPDATE')`,
-		appRole).Scan(&evSelect, &evInsert, &evUpdate, &evDelete, &projUpdate))
+		appRole).Scan(&evSelect, &evInsert, &evUpdate, &evDelete, &evTruncate, &projUpdate))
 	assert.True(t, evSelect, "serving role must keep SELECT on the history (replay/read)")
 	assert.True(t, evInsert, "serving role must keep INSERT on the history (append)")
 	assert.False(t, evUpdate, "append-only: serving role UPDATE on history must be revoked (066)")
 	assert.False(t, evDelete, "append-only: serving role DELETE on history must be revoked (066)")
+	assert.False(t, evTruncate, "append-only: serving role must never hold TRUNCATE on history")
 	assert.True(t, projUpdate, "projection contract_registrations must stay mutable (state transitions UPDATE it)")
 
-	// Behavioral assertion: connect AS gocell_app and prove it at the wire.
+	// Behavioral assertion: connect AS gocell_app (NOSUPERUSER NOBYPASSRLS) and
+	// prove append-only at the wire.
 	app, err := NewPool(ctx, Config{DSN: swapUserInDSN(t, dsn, appRole, appPass)})
 	require.NoError(t, err, "open serving-role pool")
 	defer func() { _ = app.Close(ctx) }()
 
-	_, err = app.DB().Exec(ctx,
+	const tenantA = "00000000-0000-0000-0000-000000000001"
+	// The INSERT must satisfy FORCE ROW LEVEL SECURITY WITH CHECK (tenant_isolation),
+	// so set the tenant GUC for the inserting transaction (SET LOCAL is tx-scoped).
+	// Unlike projection_events (no RLS), this table is tenant-scoped — a bare INSERT
+	// with an unset GUC is correctly rejected by RLS.
+	appTx, err := app.DB().Begin(ctx)
+	require.NoError(t, err)
+	_, err = appTx.Exec(ctx, `SET LOCAL app.tenant_id = '`+tenantA+`'`)
+	require.NoError(t, err)
+	_, err = appTx.Exec(ctx,
 		`INSERT INTO contract_registration_events
 		   (tenant_id, registration_id, seq, from_state, to_state, actor, reason, occurred_at)
-		 VALUES ('00000000-0000-0000-0000-000000000001', 'evt-ao-1', 1, '', 'submitted', 'alice', '', now())`)
-	require.NoError(t, err, "serving role must be able to append (INSERT)")
+		 VALUES ($1, 'evt-ao-1', 1, '', 'submitted', 'alice', '', now())`, tenantA)
+	require.NoError(t, err, "serving role must be able to append (INSERT) within its tenant scope")
+	require.NoError(t, appTx.Commit(ctx))
 
+	// UPDATE / DELETE / TRUNCATE are denied at the privilege layer (SQLSTATE 42501,
+	// evaluated before RLS, so no GUC needed): UPDATE/DELETE by migration-066 REVOKE,
+	// TRUNCATE because it is never default-granted to the serving role.
 	_, err = app.DB().Exec(ctx, `UPDATE contract_registration_events SET actor = 'mutated' WHERE registration_id = 'evt-ao-1'`)
 	assertInsufficientPrivilege(t, err, "UPDATE")
 
 	_, err = app.DB().Exec(ctx, `DELETE FROM contract_registration_events WHERE registration_id = 'evt-ao-1'`)
 	assertInsufficientPrivilege(t, err, "DELETE")
+
+	_, err = app.DB().Exec(ctx, `TRUNCATE contract_registration_events`)
+	assertInsufficientPrivilege(t, err, "TRUNCATE")
 }

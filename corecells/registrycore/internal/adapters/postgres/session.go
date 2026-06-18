@@ -15,15 +15,17 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
-// DBTX abstracts the database operations needed by Registry. Both pgxpool.Pool
-// and pgx.Tx satisfy this interface (via the adapters below).
+// DBTX is the cell-local DB abstraction (mirrors pgx.Tx and pgxpool.Pool);
+// defined here rather than importing adapters/postgres, per the layering rule
+// that corecells/ must not depend on adapters/. Both pgxpool.Pool and pgx.Tx
+// satisfy it via the adapters below.
 type DBTX interface {
 	Exec(ctx context.Context, sql string, args ...any) (int64, error)
 	Query(ctx context.Context, sql string, args ...any) (Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) RowScanner
 }
 
-// Rows abstracts a query result set.
+// Rows abstracts a query result set (cell-local copy; see DBTX).
 type Rows interface {
 	Next() bool
 	Scan(dest ...any) error

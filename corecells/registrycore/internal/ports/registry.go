@@ -62,6 +62,9 @@ type Registry interface {
 	List(ctx context.Context, t tenant.TenantID, afterID string, limit int) ([]registry.ContractRegistration, error)
 
 	// History returns the append-only migration event stream for (t, id), ordered
-	// by Seq ascending, or (nil, nil) if the id is unknown in tenant t.
+	// by Seq ascending. An empty result (nil or empty slice) means "no events" —
+	// callers MUST NOT distinguish an unknown id from one with no events (a
+	// registration always has at least its submit event, so an empty stream in
+	// practice means the id does not exist in tenant t); use Get for existence.
 	History(ctx context.Context, t tenant.TenantID, id string) ([]registry.RegistrationEvent, error)
 }
