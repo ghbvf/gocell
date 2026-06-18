@@ -728,6 +728,11 @@
                           "type": "string",
                           "minLength": 1,
                           "description": "Request message field name (proto field, snake_case, e.g. device_id) whose string value becomes the PDP resource for owner-scoped per-message authz (#2207). The interceptor extracts it via protoreflect, canonicalizes via ParseCanonicalUUID, and forwards it as the PDP resource so the ownership rule (subject.sub == resource.id) can fire. Only valid when permission is also set; mutually exclusive with public. Must be declared when permission refers to an owner-scoped authz.Permission, or the owner is silently locked out. Mirrors HTTP RequirePermissionForResource's path-param role."
+                        },
+                        "passwordResetExempt": {
+                          "type": "boolean",
+                          "const": true,
+                          "description": "Marks this RPC as exempt from the password-reset gate (#1382). const:true rejects passwordResetExempt:false / omitted-passwordResetExempt at the author surface (passwordResetExempt:false is meaningless — absent = blocked). Mutually exclusive with public (a JWT-exempt RPC has no authenticated subject, so the reset gate never runs). Must coexist with permission — the method is still non-public and still requires ABAC authorization (permission is orthogonal). cellgen derives GRPCServiceSpec.PasswordResetExemptMethods from the passwordResetExempt:true entries."
                         }
                       },
                       "allOf": [
@@ -752,6 +757,16 @@
                           "description": "resource ⊕ public mutex: a JWT-exempt RPC has no authenticated subject to compare the resource against.",
                           "if": { "required": ["resource"] },
                           "then": { "not": { "required": ["public"] } }
+                        },
+                        {
+                          "description": "passwordResetExempt ⊕ public mutex: a JWT-exempt RPC has no authenticated subject, so the reset gate (which runs after authn) is contradictory (#1382).",
+                          "if": { "required": ["passwordResetExempt"], "properties": { "passwordResetExempt": { "const": true } } },
+                          "then": { "not": { "required": ["public"] } }
+                        },
+                        {
+                          "description": "passwordResetExempt ⇒ permission: an exempt method is still non-public and still requires an ABAC gate (#1382). Omitting permission would make it a dead 403.",
+                          "if": { "required": ["passwordResetExempt"], "properties": { "passwordResetExempt": { "const": true } } },
+                          "then": { "required": ["permission"] }
                         }
                       ]
                     }

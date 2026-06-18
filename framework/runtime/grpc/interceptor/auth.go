@@ -194,23 +194,34 @@ func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 	}
 }
 
-// WithPasswordResetExempt installs a predicate marking RPC methods exempt from
-// the password-reset gate (the gRPC analog of the HTTP route-based exempt
-// matcher). The default (nil predicate) is fail-closed — a reset-required token
-// is rejected on every method. Passing a nil predicate is a no-op; any
-// previously installed predicate is retained.
+// WithPasswordResetExempt adds pred to the predicates marking RPC methods exempt
+// from the password-reset gate (the gRPC analog of the HTTP route-based exempt
+// matcher). Multiple WithPasswordResetExempt options COMPOSE: a method is exempt
+// if ANY installed predicate returns true — marking methods exempt is additive,
+// not last-wins. The default (no predicate) is fail-closed: a reset-required token
+// is rejected on every method. A nil predicate is a no-op.
 //
-// NOTE the deliberate asymmetry with WithPublicMethod: this is LAST-WINS (a later
-// non-nil predicate replaces the earlier one), NOT OR-compose. Password-reset
-// exemption has a single source — there is no always-on registrar predicate to
-// union with — so multiple sources would be a configuration conflict, not an
-// additive set. WithPublicMethod composes (OR) precisely because the registrar
-// (#1675) is an always-present second source.
+// In production the registrar is the SINGLE source of the password-reset-exempt set
+// (#1382): runtime/grpc/interceptor/chain.go installs
+// WithPasswordResetExempt(reg.IsPasswordResetExemptMethod) (derived from each cell's
+// endpoints.grpc.methods[].passwordResetExempt overlay), and
+// GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01 forbids any other production reference
+// to WithPasswordResetExempt — so the composed union has exactly one member. Test
+// harnesses may OR-in additional exempt methods for synthetic services not backed by
+// a contract; the union semantics make that safe without weakening the production
+// single-source. (This OR-compose design mirrors WithPublicMethod (#1675); see its
+// godoc for the rationale.)
 func WithPasswordResetExempt(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
-		if pred != nil {
-			c.passwordResetExempt = pred
+		if pred == nil {
+			return
 		}
+		if c.passwordResetExempt == nil {
+			c.passwordResetExempt = pred
+			return
+		}
+		prev := c.passwordResetExempt
+		c.passwordResetExempt = func(m string) bool { return prev(m) || pred(m) }
 	}
 }
 

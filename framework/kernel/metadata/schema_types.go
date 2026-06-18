@@ -269,6 +269,24 @@ type GRPCMethodMeta struct {
 	//
 	// Mirrors HTTP auth.RequirePermissionForResource's path-param role for gRPC.
 	Resource string `yaml:"resource,omitempty" json:"resource,omitempty"`
+	// PasswordResetExempt marks this RPC as exempt from the password-reset gate
+	// (#1382). Codegen derives GRPCServiceSpec.PasswordResetExemptMethods from the
+	// passwordResetExempt:true entries, which the runtime registrar aggregates into
+	// the auth interceptor's exempt set.
+	//
+	// omitempty is intentional: a passwordResetExempt:false entry is meaningless
+	// (absent = blocked on reset).
+	//
+	// Constraints (schema-enforced):
+	//   - Mutually exclusive with Public: a JWT-exempt RPC has no authenticated
+	//     subject, so the reset gate (which runs after authn) is contradictory.
+	//   - Must coexist with Permission: the exempt method is still non-public and
+	//     still requires ABAC authorization — permission is orthogonal to exempt
+	//     (the ABAC gate always runs on the non-public path). Omitting permission
+	//     would make it a dead 403.
+	//
+	// Naming is consistent with HTTPAuthMeta.PasswordResetExempt.
+	PasswordResetExempt bool `yaml:"passwordResetExempt,omitempty" json:"passwordResetExempt,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.

@@ -208,35 +208,21 @@ func TestBuildGrpcServiceSpecFromCU_PasswordResetExemptMethods(t *testing.T) {
 // same guard as the PublicMethods field (empty guard → nothing rendered).
 func TestRenderCell_GRPC_PasswordResetExempt(t *testing.T) {
 	t.Parallel()
+	root := synthGRPCRoot(t)
 
-	cell := &metadata.CellMeta{
-		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
-		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	// passwordResetExempt:true overlay with an accompanying permission (required by
+	// schema: exempt methods are non-public and still need ABAC authorization).
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command", PasswordResetExempt: true},
 	}
-	contract := &metadata.ContractMeta{
-		ID: "grpc.device.command.v1", Kind: "grpc",
-		Endpoints: metadata.EndpointsMeta{
-			Server: "demo",
-			GRPC: &metadata.GRPCTransportMeta{
-				Service: "device.command.v1.DeviceCommandService",
-				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
-				Methods: []metadata.GRPCMethodMeta{
-					{Name: "IssueCommand", Permission: "device:command", PasswordResetExempt: true},
-				},
-			},
-		},
-	}
-	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
-	slc := &metadata.SliceMeta{
-		ID: "command", BelongsToCell: "demo", Dir: "command",
-		File:           "cells/demo/slices/command/slice.yaml",
-		ContractUsages: []metadata.ContractUsage{cu},
-	}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
 
-	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
 	}
 
 	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
@@ -261,35 +247,20 @@ func TestRenderCell_GRPC_PasswordResetExempt(t *testing.T) {
 // PasswordResetExemptMethods when no method in the overlay has passwordResetExempt:true.
 func TestRenderCell_GRPC_PasswordResetExempt_Omitted(t *testing.T) {
 	t.Parallel()
+	root := synthGRPCRoot(t)
 
-	cell := &metadata.CellMeta{
-		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
-		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	// Permission-only overlay — no passwordResetExempt:true entry.
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command"},
 	}
-	contract := &metadata.ContractMeta{
-		ID: "grpc.device.command.v1", Kind: "grpc",
-		Endpoints: metadata.EndpointsMeta{
-			Server: "demo",
-			GRPC: &metadata.GRPCTransportMeta{
-				Service: "device.command.v1.DeviceCommandService",
-				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
-				Methods: []metadata.GRPCMethodMeta{
-					{Name: "IssueCommand", Permission: "device:command"},
-				},
-			},
-		},
-	}
-	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
-	slc := &metadata.SliceMeta{
-		ID: "command", BelongsToCell: "demo", Dir: "command",
-		File:           "cells/demo/slices/command/slice.yaml",
-		ContractUsages: []metadata.ContractUsage{cu},
-	}
-	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
 
-	spec, err := BuildCellSpec(p, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
 	}
 
 	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{

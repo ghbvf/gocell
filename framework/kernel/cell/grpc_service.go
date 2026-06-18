@@ -136,6 +136,29 @@ type GRPCServiceSpec struct {
 	// cellgen cross-check (owner-scoped permission MUST declare resource).
 	// See GRPCServiceSpec.MethodPermissions godoc for the parallel constraint.
 	MethodResources map[string]string
+
+	// PasswordResetExemptMethods lists the FULL method names
+	// (/{proto.Service}/{Method}) that are exempt from the password-reset gate
+	// (#1382). Derived by cellgen from the contract's
+	// endpoints.grpc.methods[] overlay (the passwordResetExempt:true entries),
+	// composed identically to the registrar's own attribution key so the runtime
+	// registrar can aggregate them into the auth interceptor's exempt set. Empty
+	// → every RPC of this service is blocked when the principal requires a
+	// password reset (fail-closed default).
+	//
+	// Semantics (orthogonal to PublicMethods and MethodPermissions):
+	//   - An exempt method is still non-public and still requires a permission
+	//     (ABAC gate always runs on the non-public path). The exempt status only
+	//     bypasses the password-reset gate, NOT the authentication or authorization
+	//     gate.
+	//   - Mutually exclusive with PublicMethods: a JWT-exempt RPC has no
+	//     authenticated subject, so the reset gate never runs.
+	//
+	// This field is cellgen-OWNED: declare password-reset-exempt RPCs in the
+	// contract's endpoints.grpc.methods[] (passwordResetExempt:true), not here.
+	// Hand-writing PasswordResetExemptMethods bypasses the contractgen pre-pass
+	// that validates each name against the .proto method set.
+	PasswordResetExemptMethods []string
 }
 
 // Validate returns a non-nil error when any required field is missing.
