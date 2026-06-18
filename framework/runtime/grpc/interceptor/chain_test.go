@@ -550,6 +550,106 @@ func TestNewServerInterceptors_PasswordResetExempt_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestNewServerInterceptors_StreamPasswordResetExempt_EndToEnd is the stream sibling
+// of TestNewServerInterceptors_PasswordResetExempt_EndToEnd (#1382): it wires the
+// gRPC server through NewServerInterceptors and exercises a server-streaming method
+// declared as password-reset-exempt alongside a MethodPermissions overlay. A caller
+// bearing a token with PasswordResetRequired:true reaches the declared-exempt stream
+// method and is blocked on a non-exempt gated stream method — proving the
+// contract→registrar→interceptor→reset-gate funnel on the stream path end-to-end.
+func TestNewServerInterceptors_StreamPasswordResetExempt_EndToEnd(t *testing.T) {
+	// resetStreamSvcDesc has two server-streaming methods: ResetStream (exempt) and
+	// OtherStream (non-exempt), matching the ServiceDesc used in the unary equivalent.
+	resetStreamSvcDesc := grpc.ServiceDesc{
+		ServiceName: "resetsvc",
+		HandlerType: (*interface{})(nil),
+		Streams: []grpc.StreamDesc{
+			{
+				StreamName:    "ResetStream",
+				ServerStreams: true,
+				Handler:       func(srv any, _ grpc.ServerStream) error { *srv.(*testSvc).handlerReached = true; return nil },
+			},
+			{
+				StreamName:    "OtherStream",
+				ServerStreams: true,
+				Handler:       func(srv any, _ grpc.ServerStream) error { *srv.(*testSvc).handlerReached = true; return nil },
+			},
+		},
+	}
+
+	handlerReached := false
+	bundle := NewServerInterceptors(Deps{
+		Collector:       metrics.NewInMemoryGRPCCollector(),
+		Clock:           clock.Real(),
+		Verifier:        stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}},
+		Authorizer:      stubAuthorizer{dec: mustAllow()},
+		CellIDClosedSet: []string{"svc-cell"},
+	})
+	reg := bundle.Registrar()
+	srv := grpc.NewServer(bundle.ServerOptions()...)
+	reg.BindServer(srv)
+	if err := reg.Register(cell.GRPCServiceSpec{
+		ContractID:                 "grpc.resetsvc.stream.v1",
+		CellID:                     "svc-cell",
+		Listener:                   cell.PrimaryListener,
+		PasswordResetExemptMethods: []string{"/resetsvc/ResetStream"},
+		MethodPermissions: map[string]string{
+			"/resetsvc/ResetStream": authz.PermDeviceCommand().String(),
+			"/resetsvc/OtherStream": authz.PermDeviceCommand().String(),
+		},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&resetStreamSvcDesc, &testSvc{handlerReached: &handlerReached})
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.GracefulStop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer t")
+
+	openStream := func(method string) error {
+		st, serr := conn.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, method)
+		if serr != nil {
+			return serr
+		}
+		return st.RecvMsg(&emptypb.Empty{}) // EOF on handler return; status error on gate denial
+	}
+
+	// Exempt stream method: reset-required token must reach the handler (gate bypassed).
+	// RecvMsg returns io.EOF (codes.Unknown) on clean close — assert NOT PermissionDenied.
+	exemptErr := openStream("/resetsvc/ResetStream")
+	if status.Code(exemptErr) == codes.PermissionDenied {
+		t.Fatalf("exempt stream method must not be PermissionDenied for reset-required token, got %v", exemptErr)
+	}
+	if !handlerReached {
+		t.Fatalf("handler was not reached for the exempt stream method")
+	}
+
+	// Non-exempt gated stream method: reset-required token must be blocked (PermissionDenied).
+	handlerReached = false
+	denyErr := openStream("/resetsvc/OtherStream")
+	if status.Code(denyErr) != codes.PermissionDenied {
+		t.Fatalf("non-exempt stream method must be PermissionDenied for reset-required token, got %v (code=%v)",
+			denyErr, status.Code(denyErr))
+	}
+	if handlerReached {
+		t.Fatalf("handler must not run for the non-exempt stream method with reset-required token")
+	}
+}
+
 // TestNewUnaryChain_RegistrarPublicMethodExempts is the live-path proof for #1675:
 // chain.go installs WithPublicMethod(reg.IsPublicMethod), so a method declared
 // public via GRPCServiceSpec.PublicMethods bypasses auth WITHOUT a token. No

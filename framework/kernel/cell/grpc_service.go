@@ -158,6 +158,18 @@ type GRPCServiceSpec struct {
 	// contract's endpoints.grpc.methods[] (passwordResetExempt:true), not here.
 	// Hand-writing PasswordResetExemptMethods bypasses the contractgen pre-pass
 	// that validates each name against the .proto method set.
+	//
+	// Runtime behavior: the registrar does NOT cross-check this set against
+	// PublicMethods or MethodPermissions. Mutual-exclusion with public and
+	// co-existence with permission are enforced at authoring time by the JSON
+	// Schema (Hard) and governance FMT-41 (Medium) — the same strategy as
+	// MethodResources. The registrar performs only a referential stale-key
+	// check: a key that does not match any method registered for this spec
+	// fail-fasts at startup (analogous to the MethodPermissions stale-key guard).
+	// If a method is mistakenly listed in both PasswordResetExemptMethods and
+	// PublicMethods, the public-method bypass fires first in authorizeWithPrincipal
+	// (return ctx, nil, nil), and the password-reset check is never reached —
+	// the method behaves as fully public regardless of the exempt declaration.
 	PasswordResetExemptMethods []string
 }
 

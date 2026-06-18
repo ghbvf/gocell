@@ -56,8 +56,15 @@ type Deps struct {
 	// A Nop/nil provider leaves Authorizer bare (metrics are best-effort and never gate the
 	// verdict), mirroring the HTTP bootstrap hasRealMetricsProvider gate.
 	MetricsProvider kernelmetrics.Provider
-	// AuthOptions configures the auth interceptor (public-method and
-	// password-reset-exempt predicates).
+	// AuthOptions carries synthetic AuthOption values for test harnesses that
+	// register services not backed by a real contract (no registrar spec). In
+	// production all four auth dimensions (public-method bypass, permission
+	// resolver, PDP authorizer, password-reset-exempt bypass) are installed
+	// exclusively via authChainOptions from the registrar/Authorizer; AuthOptions
+	// is intentionally empty. Package-outside code cannot construct widening
+	// AuthOptions either: authConfig is unexported, and every With* constructor
+	// is the only entry point — so this field cannot weaken the production
+	// single-source invariant.
 	AuthOptions []AuthOption
 	// CellIDClosedSet is the assembly's cell-id set (asm.CellIDs()) the metrics
 	// interceptor validates the attributed cell against (M12b defense-in-depth: an
@@ -100,7 +107,9 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 
 // authChainOptions returns the composition-root AuthOptions with the
 // registrar/authorizer-sourced predicates added. The registrar is the SINGLE
-// runtime source of ALL FOUR gRPC auth dimensions:
+// runtime source of ALL FOUR gRPC auth dimensions (the permission dimension
+// installs two options: WithPermissionResolver + WithPDPAuthorizer, so four
+// dimensions = five AuthOption calls):
 //
 //   - public-method bypass (#1675): WithPublicMethod(reg.IsPublicMethod), derived
 //     from each cell's endpoints.grpc.methods[] (public:true). Guarded by

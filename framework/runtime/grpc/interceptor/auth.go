@@ -386,6 +386,8 @@ func authorizeWithPrincipal(
 	}
 
 	if auth.PasswordResetBlocked(principal, callPredicate(cfg.passwordResetExempt, fullMethod)) {
+		slog.InfoContext(ctx, "grpc auth: password reset required — denying request",
+			slog.String("method", fullMethod), slog.String("subject", principal.Subject))
 		return ctx, nil, deniedStatus(codes.PermissionDenied, msgGRPCPasswordResetRequired,
 			reasonPasswordResetRequired, denyMeta(fullMethod, ""))
 	}

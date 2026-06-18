@@ -2588,6 +2588,17 @@ func TestFMT41(t *testing.T) {
 			wantCount: 2,
 			wantIssue: IssueInvalid,
 		},
+		{
+			// passwordResetExempt + an unregistered permission: exempt does NOT short-circuit
+			// the closed-registry permission check. The vacuous guard does NOT fire (permission
+			// is non-empty), the exempt⇒permission guard does NOT fire (permission is present).
+			// Only the unknown-permission registry check fires → exactly 1 Invalid finding.
+			name:      "passwordResetExempt + invalid permission (#1382) — exempt does not bypass registry check",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", PasswordResetExempt: true, Permission: "not:registered-permission"}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -737,7 +737,7 @@
                       },
                       "allOf": [
                         {
-                          "description": "Vacuous-entry lock (#2008 widens #1675's const:true guard): an entry must assert ≥1 non-default — public:true OR a permission. {name} alone (or public:false) is rejected.",
+                          "description": "Vacuous-entry lock (#2008 widens #1675's const:true guard): an entry must assert ≥1 non-default — public:true OR a permission. {name} alone (or public:false) is rejected. Note: passwordResetExempt:true without permission is also rejected by this anyOf (it requires public or permission), so FMT-41 produces two findings for {passwordResetExempt:true} alone — one vacuous + one exempt⇒permission (#1382).",
                           "anyOf": [
                             { "required": ["public"] },
                             { "required": ["permission"] }
