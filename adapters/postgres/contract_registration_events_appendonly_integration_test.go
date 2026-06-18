@@ -22,34 +22,13 @@ import (
 // privileges.
 func TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 	ctx := context.Background()
-	const (
-		appRole = "gocell_app"
-		// gocell_app is a CLUSTER-GLOBAL role shared with the other *_appendonly
-		// tests (e.g. projection_events). CREATE ROLE ... IF NOT EXISTS does NOT
-		// update an existing role's password, so all such tests MUST use the same
-		// password or whichever runs second fails SASL auth (28P01). Keep in sync.
-		appPass = "projevents_appkey"
-	)
 
 	dsn := sharedPG.EmptyDSN(t)
 	owner := openPerTestPool(t, dsn)
 
-	// Reproduce 10-restricted-role.sh ordering: role + default DML grant BEFORE
-	// migrations, so the history table is born with UPDATE/DELETE for gocell_app
-	// and migration 066's REVOKE has something to remove.
-	provision := []string{
-		`DO $$ BEGIN
-		   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '` + appRole + `') THEN
-		     CREATE ROLE ` + appRole + ` LOGIN PASSWORD '` + appPass + `' NOSUPERUSER NOBYPASSRLS;
-		   END IF;
-		 END $$;`,
-		`GRANT USAGE ON SCHEMA public TO ` + appRole,
-		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ` + appRole,
-	}
-	for _, s := range provision {
-		_, err := owner.DB().Exec(ctx, s)
-		require.NoErrorf(t, err, "provision serving role\nstmt: %s", s)
-	}
+	// Provision the shared serving role + default DML grant BEFORE migrations, so the
+	// history table is born with UPDATE/DELETE that migration 066's REVOKE removes.
+	provisionServingRole(t, ctx, owner)
 
 	fsys, err := MigrationsFS()
 	require.NoError(t, err)
@@ -67,7 +46,7 @@ func TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked(t *testing.T) 
 		        has_table_privilege($1, 'contract_registration_events', 'DELETE'),
 		        has_table_privilege($1, 'contract_registration_events', 'TRUNCATE'),
 		        has_table_privilege($1, 'contract_registrations', 'UPDATE')`,
-		appRole).Scan(&evSelect, &evInsert, &evUpdate, &evDelete, &evTruncate, &projUpdate))
+		servingRoleName).Scan(&evSelect, &evInsert, &evUpdate, &evDelete, &evTruncate, &projUpdate))
 	assert.True(t, evSelect, "serving role must keep SELECT on the history (replay/read)")
 	assert.True(t, evInsert, "serving role must keep INSERT on the history (append)")
 	assert.False(t, evUpdate, "append-only: serving role UPDATE on history must be revoked (066)")
@@ -77,7 +56,7 @@ func TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked(t *testing.T) 
 
 	// Behavioral assertion: connect AS gocell_app (NOSUPERUSER NOBYPASSRLS) and
 	// prove append-only at the wire.
-	app, err := NewPool(ctx, Config{DSN: swapUserInDSN(t, dsn, appRole, appPass)})
+	app, err := NewPool(ctx, Config{DSN: swapUserInDSN(t, dsn, servingRoleName, servingRolePassword)})
 	require.NoError(t, err, "open serving-role pool")
 	defer func() { _ = app.Close(ctx) }()
 
