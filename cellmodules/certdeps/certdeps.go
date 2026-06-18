@@ -42,6 +42,10 @@ func Resolve(clk clock.Clock, topo bootstrap.Topology) (CertDeps, error) {
 	}
 
 	// demo / memory: ephemeral two-tier dev CA + in-memory issuance ledger.
+	// Reaching here means StorageBackend() != postgres; "memory" is the only other
+	// value bootstrap.Topology.validate() admits (a zero-value Topology normalizes
+	// to "memory"), so this branch is not a silent catch-all for an unvalidated
+	// backend string.
 	ca, err := softca.NewDevCA(clk)
 	if err != nil {
 		return CertDeps{}, fmt.Errorf("certdeps: build dev CA: %w", err)

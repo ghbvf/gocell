@@ -17,7 +17,10 @@
 //
 //	postgres topology:
 //	  FAIL-CLOSED. No durable signing CA or issuance-ledger backend exists yet, so
-//	  Resolve returns a startup error rather than serve the dev soft-CA.
+//	  Resolve returns a startup error rather than serve the dev soft-CA. This is the
+//	  expected partial-GA state, not a misconfiguration: until the durable backend
+//	  lands (Epic #2299), a deployment that needs cert issuance must run the demo /
+//	  memory topology (GOCELL_CELL_ADAPTER_MODE unset or "memory").
 //
 // The resolver takes neither a Config nor a context: the demo branch performs no
 // I/O and owns no caller-provided handle, and the postgres branch is fail-closed.
