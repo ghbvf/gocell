@@ -253,8 +253,18 @@ func resolveSSOBFFInfra(ctx context.Context, clk clock.Clock) (ssobffInfra, erro
 	if err != nil {
 		return ssobffInfra{}, fmt.Errorf("ssobff: resolve replay deps: %w", err)
 	}
+	// ssobff is a colocated single-broker example: its one broker cell may set
+	// GOCELL_SSOBFF_AMQP_URL, falling back to the assembly-wide GOCELL_AMQP_URL —
+	// mirroring cmd/corebundle's per-cell convention so a fail-closed error names a
+	// real env var (the key "ssobff" derives GOCELL_SSOBFF_AMQP_URL). Config.Cells
+	// is per-cell (#2152 PR-2); dedup collapses the sole entry to one connection
+	// (same behavior as the previous single-URL wiring).
+	brokerURL := os.Getenv("GOCELL_SSOBFF_AMQP_URL")
+	if brokerURL == "" {
+		brokerURL = os.Getenv("GOCELL_AMQP_URL")
+	}
 	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
-		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
+		Cells: map[string]string{"ssobff": brokerURL},
 	})
 	if err != nil {
 		closeManagedResources(ctx, rd.Resources)

@@ -147,7 +147,9 @@ When cells are split across processes, the following infrastructure is required:
 
 - **Event transport broker** (US3 #1965, enforced): remote cells need a real
   message broker (e.g. RabbitMQ) to exchange events across process boundaries.
-  In postgres topology this is provisioned via `GOCELL_AMQP_URL`. A split
+  In postgres topology this is provisioned per cell via `GOCELL_<CELLID>_AMQP_URL`
+  (falling back to the assembly-wide `GOCELL_AMQP_URL`; #2152 PR-2 — colocated cells
+  dedup to one connection, distinct broker URLs are currently fail-closed). A split
   topology combined with an in-memory EventBus is rejected by a **double gate**:
   the static `gocell validate` rule TOPO-13 and a bootstrap **phase0 runtime
   gate** (`validateSplitTopologyBroker`) that fail-fasts when the deployment has

@@ -434,6 +434,14 @@ relay 到 broker），此部分追踪在 **#2152** 中；在该 issue 落地前�
 进程内 per-cell publisher/subscriber 扇出（即在同一 broker 连接上为每个 cell 派生独立的 exchange /
 routing-key 命名空间）属于 per-cell relay 扇出范畴，与 per-cell DB relay 一起追踪在 **#2152** 中。
 
+> **更新 2026-06-18（PR #2364，#2152 PR-2）**：上段「per-cell 独立 broker 连接不是有意义的 seam」论据
+> **已被取代**。#2152 PR-2 引入了 **egress-only 的 per-cell broker URL seam**：broker URL 现按 cell 读
+> `GOCELL_<CELLID>_AMQP_URL`（缺省回退 assembly 级 `GOCELL_AMQP_URL`），由 `eventtransport.dedupBrokerURL`
+> 去重——同 URL（colocated）→ 单连接（行为不变），distinct URL → **fail-closed**（单 subscriber 无法消费
+> N broker，会孤儿化事件）。上段担心的「publish/subscribe 链被切断」正是 distinct fail-closed 守住的边界。
+> 真 N-broker fan-out（ingress subscriber 单→N + phase6 N-router）追踪在 **#2366**，与 per-cell relay/pool
+> 源 **#2341** 联合 lift。权威语义见 ADR `202606131500-1940` §"Amendment 2026-06-18（#2152 PR-2）"。
+
 ### #1967 Amendment — 「彻底拆分」能力落地：groups/role 子集挂载 + 双拓扑验收（2026-06-17）
 
 US7（#1967）把 SC-001 验收信号「可执行化」时暴露一个**模型缺口**（非疏忽）：所有拆分 seam（US2-US6/US8）
