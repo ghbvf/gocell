@@ -49,6 +49,9 @@ func TestNewForRole_SplitMountsColocatedSubset(t *testing.T) {
 		Colocated: []string{"mod1"},
 		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "mod2", Endpoint: "mod2.svc:9090"}},
 	}
+	// In production shared.DeploymentTopology and the spec passed to NewForRole are
+	// the SAME value (both = SpecForRole(generatedTopologyGroups(), role)); the test
+	// aligns them explicitly to mirror that single-source contract.
 	shared := minimalSharedDeps(t)
 	shared.DeploymentTopology = spec
 
@@ -90,6 +93,30 @@ func TestNewForRole_SplitMissingColocatedModuleFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mod3")
 	assert.Contains(t, err.Error(), "no module provides it")
+}
+
+// TestNewForRole_SplitStrangerModuleRejected verifies that a module whose cell is
+// in NEITHER the colocated set nor the remote set (a "stranger" — generatedCellModules
+// drifted from the topology groups) is NOT silently dropped: NewForRole drops only
+// known-remote modules, so the stranger reaches Build and is rejected by the
+// closed-set guard "not in the assembly closed set" (#2278 review).
+func TestNewForRole_SplitStrangerModuleRejected(t *testing.T) {
+	ctx := context.Background()
+	spec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"mod1"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "mod2", Endpoint: "mod2.svc:9090"}},
+	}
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = spec
+
+	m1 := &fakeCellModule{id: "mod1", cell: stubCell("mod1")}
+	m2 := &fakeCellModule{id: "mod2", cell: stubCell("mod2")} // remote → dropped
+	mStranger := &fakeCellModule{id: "zzz", cell: stubCell("zzz")}
+
+	_, err := NewForRole([]string{"mod1", "mod2"}, spec, m1, m2, mStranger).Build(ctx, shared, noopRuntimeOpts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "zzz")
+	assert.Contains(t, err.Error(), "closed set")
 }
 
 // TestNewForRole_MonolithDoesNotFilter_M12aDriftDetected is the regression guard

@@ -120,6 +120,26 @@ func TestValidateMountedEqualsColocated(t *testing.T) {
 	}
 }
 
+// TestValidateMountedEqualsColocated_NilAssemblySkips documents the intentional
+// nil-assembly skip: phase0 supports an assembly-less validation mode (the sibling
+// validateAssemblyClockAlignment skips the same way), and the production flow always
+// wires WithAssembly via composition.Builder.Build. So even with an explicit split
+// topology, a nil assemblyCore passes — the guard has no mounted set to compare.
+// (anti-vacuity for the nil short-circuit: deleting it would panic, not silently pass.)
+func TestValidateMountedEqualsColocated_NilAssemblySkips(t *testing.T) {
+	dt, err := newDeploymentTopology(DeploymentTopologySpec{
+		Colocated: []string{"alpha"},
+		Remote:    []RemoteCellEndpoint{{CellID: "beta", Endpoint: "edge.svc:9001"}},
+	})
+	if err != nil {
+		t.Fatalf("newDeploymentTopology: %v", err)
+	}
+	b := &Bootstrap{deploymentTopology: dt} // assemblyCore is nil
+	if err := b.validateMountedEqualsColocated(); err != nil {
+		t.Fatalf("nil assemblyCore must skip the guard, got error: %v", err)
+	}
+}
+
 // TestPhase0_RejectsMountedRemoteCell verifies the guard is wired into phase0
 // end-to-end: a split topology whose mounted assembly includes a remote cell is
 // rejected before any side effects start. The broker-mandatory gate is satisfied

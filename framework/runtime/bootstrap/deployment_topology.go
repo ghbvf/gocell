@@ -68,11 +68,25 @@ func SpecForRole(groups []TopologyGroup, role string) (DeploymentTopologySpec, e
 		if len(groups) >= 2 {
 			return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgDeployTopoRoleRequired,
-				errcode.WithInternal(errcode.InternalAttr("groupCount", len(groups))))
+				errcode.WithInternal(
+					errcode.InternalAttr("groupCount", len(groups)),
+					errcode.InternalAttr("availableRoles", topoGroupRoles(groups))))
 		}
 		return DeploymentTopologySpec{}, nil // 0/1 group → all-colocated monolith
 	}
 	return deriveRoleSpec(groups, role)
+}
+
+// topoGroupRoles renders the declared role names (sorted, comma-joined) for
+// diagnostic InternalAttrs — lets an operator see the valid GOCELL_CELL_ROLE
+// values in the server log without consulting assembly.yaml.
+func topoGroupRoles(groups []TopologyGroup) string {
+	roles := make([]string, 0, len(groups))
+	for _, g := range groups {
+		roles = append(roles, g.Role)
+	}
+	sort.Strings(roles)
+	return strings.Join(roles, ",")
 }
 
 // deriveRoleSpec builds the per-process spec for a named role: Colocated = the
@@ -97,7 +111,9 @@ func deriveRoleSpec(groups []TopologyGroup, role string) (DeploymentTopologySpec
 	if !found {
 		return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			errMsgDeployTopoUnknownRole,
-			errcode.WithInternal(errcode.InternalAttr("role", role)),
+			errcode.WithInternal(
+				errcode.InternalAttr("role", role),
+				errcode.InternalAttr("availableRoles", topoGroupRoles(groups))),
 			errcode.WithDetails(errcode.PublicString("role", role)))
 	}
 	sort.Strings(spec.Colocated)

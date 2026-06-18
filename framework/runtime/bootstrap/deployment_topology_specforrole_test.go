@@ -66,18 +66,32 @@ func TestSpecForRole_EmptyRoleColocatedMonolith(t *testing.T) {
 // reversal: a multi-group topology declares an intended split, so running it
 // with no GOCELL_CELL_ROLE is a misconfiguration — fail-fast rather than
 // silently mounting the monolith (which would mask the misconfig). 12-factor:
-// the env is consumed or it errors.
+// the env is consumed or it errors. Covers the `len >= 2` boundary (exactly 2)
+// and a >2 case to prove the gate is "≥2", not "exactly 2".
 func TestSpecForRole_EmptyRoleMultiGroupFailsClosed(t *testing.T) {
-	_, err := SpecForRole(twoGroupGraph(), "")
-	if err == nil {
-		t.Fatal("empty role + ≥2 groups must fail closed, got nil error")
+	threeGroupGraph := append(twoGroupGraph(),
+		TopologyGroup{Role: "rim", Cells: []string{"delta"}, Endpoint: "rim.svc:9002"})
+	cases := []struct {
+		name   string
+		groups []TopologyGroup
+	}{
+		{name: "exactly 2 groups (lower boundary)", groups: twoGroupGraph()},
+		{name: "3 groups", groups: threeGroupGraph},
 	}
-	var ec *errcode.Error
-	if !errors.As(err, &ec) {
-		t.Fatalf("fail-closed error must be *errcode.Error, got %T", err)
-	}
-	if ec.Code != errcode.ErrValidationFailed {
-		t.Fatalf("fail-closed error code = %v, want ErrValidationFailed", ec.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := SpecForRole(tc.groups, "")
+			if err == nil {
+				t.Fatal("empty role + ≥2 groups must fail closed, got nil error")
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("fail-closed error must be *errcode.Error, got %T", err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Fatalf("fail-closed error code = %v, want ErrValidationFailed", ec.Code)
+			}
+		})
 	}
 }
 

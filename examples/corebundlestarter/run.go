@@ -77,7 +77,10 @@ func runStarter(ctx context.Context) error {
 	// composition.NewForRole(...).Build(...) is the public subset-mount API
 	// (#2278): the demo SharedDeps carries the zero DeploymentTopology, so this
 	// example mounts every cell (all-colocated monolith) — equivalent to the old
-	// composition.New + closed-set guard. Module order mirrors corebundle
+	// composition.New + closed-set guard. This example is always memory-mode and
+	// has no topology.groups, so GOCELL_CELL_ROLE is intentionally NOT read here
+	// (unlike cmd/corebundle, which derives the spec via SpecForRole) — do not copy
+	// this monolith shortcut into a split deployment. Module order mirrors corebundle
 	// assembly.yaml cell order purely for convention/determinism — it is NOT
 	// runtime-significant. corebundlestarter mirrors the corebundle cell set; the
 	// closed set is sealed by Build (M12a #1093).

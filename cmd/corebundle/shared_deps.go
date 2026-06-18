@@ -189,6 +189,16 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
+	// Deployment-role placement: lets an operator confirm, per process, which
+	// cells this process hosts (colocated) vs reaches remotely. The colocated set
+	// IS the selected role's footprint; we log the DERIVED spec (validated by
+	// SpecForRole) rather than the raw GOCELL_CELL_ROLE env to avoid log-injection
+	// taint (gosec G706). split=false ∧ empty colocated = the all-colocated monolith.
+	slog.Info("corebundle: deployment role",
+		slog.Bool("split", len(deployTopoSpec.Colocated) > 0 || len(deployTopoSpec.Remote) > 0),
+		slog.Any("colocated_cells", deployTopoSpec.Colocated),
+		slog.Int("remote_cells", len(deployTopoSpec.Remote)))
+
 	loaded = true
 	return compShared, locals, nil
 }

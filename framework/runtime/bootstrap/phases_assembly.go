@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
@@ -139,19 +141,26 @@ const (
 	errMsgColocatedCellNotMounted = "deployment topology: a cell in this role's colocated set is not mounted in this process"
 )
 
-// validateMountedEqualsColocated enforces MOUNTED-EQUALS-COLOCATED: in an
+// validateMountedEqualsColocated enforces MOUNTED-EQUALS-COLOCATED-01: in an
 // explicit split topology, the set of cells this process mounts (b.assemblyCore)
 // MUST equal the topology's colocated set, and no mounted cell may be declared
 // remote. This is the upstream backstop for composition.NewForRole — even a root
 // that bypasses NewForRole and mounts the full cell set directly
 // (New(allCells).With(allMods)) fails fast here instead of silently
-// double-mounting a remote cell. A zero (all-colocated) topology, or a process
-// with no assembly, trivially satisfies the invariant.
+// double-mounting a remote cell.
+//
+// A zero (all-colocated) topology trivially satisfies the invariant. A nil
+// assemblyCore is also skipped: phase0 supports an assembly-less validation mode
+// (the sibling validateAssemblyClockAlignment skips the same way), and the
+// production composition flow always wires WithAssembly via
+// composition.Builder.Build, so a split topology always has its mounted set here.
 //
 // AI-robust grade: Medium (runtime bijection over runtime cellID strings — the
 // same honest ceiling as M12a / the broker-mandatory gate; cellID is not a
-// compile-time fact). Called at phase0 after the topology is sealed and the
-// assembly is wired.
+// compile-time fact). Blind spot: the mounted/colocated sets are runtime-derived,
+// so this cannot be Hard; static reachability of consumed providers is the
+// separate gocell-validate TOPO gate. Called at phase0 after the topology is
+// sealed and the assembly is wired.
 func (b *Bootstrap) validateMountedEqualsColocated() error {
 	dt := b.deploymentTopology
 	if !dt.explicit {
@@ -161,19 +170,26 @@ func (b *Bootstrap) validateMountedEqualsColocated() error {
 		return nil // no mounted cells to validate (assembly presence handled elsewhere)
 	}
 	mounted := b.assemblyCore.CellIDs()
+	// Diagnostic context shared by every failure path: the full mounted +
+	// colocated sets let an operator see the whole bijection mismatch, not just
+	// the first offending cell.
+	ctxAttrs := []errcode.InternalDetail{
+		errcode.InternalAttr("mounted", strings.Join(mounted, ",")),
+		errcode.InternalAttr("colocated", deployTopoSortedKeys(dt.colocated)),
+	}
 	mountedSet := make(map[string]struct{}, len(mounted))
 	for _, id := range mounted {
 		mountedSet[id] = struct{}{}
 		if _, isRemote := dt.remote[id]; isRemote {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgMountedCellRemote,
-				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
 				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 		if _, isColoc := dt.colocated[id]; !isColoc {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgMountedCellNotColocated,
-				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
 				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 	}
@@ -181,11 +197,22 @@ func (b *Bootstrap) validateMountedEqualsColocated() error {
 		if _, ok := mountedSet[id]; !ok {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				errMsgColocatedCellNotMounted,
-				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
 				errcode.WithDetails(errcode.PublicString("cellID", id)))
 		}
 	}
 	return nil
+}
+
+// deployTopoSortedKeys returns the map keys joined by "," in sorted order — a
+// deterministic rendering of a cell-ID set for diagnostic InternalAttrs.
+func deployTopoSortedKeys(m map[string]struct{}) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // validateSplitTopologyBroker rejects the illegal combination of a split
