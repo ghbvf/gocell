@@ -530,7 +530,13 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 	// id runtime composition, not a const) and passes the results to NewProbe —
 	// same funnel-internal shape as emitter.go / kernel/projection/probe.go
 	// (#2152 PR-1, relay fan-out).
-	"runtime/bootstrap/relay_adapter.go":                       {},
+	"runtime/bootstrap/relay_adapter.go": {},
+	// poolInstanceAdapter.Probes scopes a fanned-out per-cell serving pool's
+	// readiness probes by infra instance id via the sanctioned PoolInstanceProbeName
+	// constructor (instance id runtime composition, not a const) and passes the
+	// results to NewProbe — the pool twin of relay_adapter.go (#2341, per-cell pool
+	// fan-out; split topology cannot boot without per-instance pool probe names).
+	"runtime/bootstrap/pool_instance_adapter.go":               {},
 	"runtime/bootstrap/bootstrap_phases.go":                    {},
 	"runtime/bootstrap/phases_lifecycle.go":                    {},
 	"runtime/observability/healthz/healthztest/conformance.go": {},
