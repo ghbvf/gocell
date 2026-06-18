@@ -70,7 +70,7 @@ func freeLoopbackAddr(t *testing.T) string {
 // pollGreen GETs url until it returns 200 or the deadline passes.
 func pollGreen(url string, deadline time.Time) bool {
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url) //nolint:noctx // test poll loop
+		resp, err := http.Get(url) //nolint:gosec,noctx // test polls a self-constructed loopback health URL, not attacker input
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()

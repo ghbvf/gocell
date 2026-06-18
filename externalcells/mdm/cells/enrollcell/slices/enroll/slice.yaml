@@ -4,7 +4,12 @@ consistencyLevel: L2
 lifecycle: experimental
 contractUsages: []
 verify:
-  unit: []
+  # FMT-12 requires >=1 verify.unit. The enroll slice is an empty PR-0 placeholder;
+  # its real enrollment logic + unit tests land in MDM-PR1+ (epic #2299). This is a
+  # forward-declared target (VERIFY-02 target resolution is a `gocell check`/PhaseHealth
+  # concern, not validate), symmetric with cell.yaml's smoke target.
+  unit:
+    - unit.enroll.skeleton
   contract: []
   waivers: []
 allowedFiles:
