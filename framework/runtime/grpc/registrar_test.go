@@ -670,9 +670,9 @@ func TestServiceRegistrar_IsPasswordResetExemptMethod_MultiSpecAggregation(t *te
 
 	// A second spec registering a DIFFERENT service contributes its own exempt set.
 	specB := cell.GRPCServiceSpec{
-		ContractID:                "grpc.spy.b.v1",
-		CellID:                    "cell-b",
-		Listener:                  cell.PrimaryListener,
+		ContractID:                 "grpc.spy.b.v1",
+		CellID:                     "cell-b",
+		Listener:                   cell.PrimaryListener,
 		PasswordResetExemptMethods: []string{"/spy.v1.Spy/Ping"},
 		MethodPermissions: map[string]string{
 			"/spy.v1.Spy/Ping": authz.PermDeviceCommand().String(),

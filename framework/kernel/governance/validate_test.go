@@ -2564,6 +2564,30 @@ func TestFMT41(t *testing.T) {
 			codegen:   true,
 			wantCount: 0,
 		},
+		{
+			name:      "passwordResetExempt with permission (#1382) — passes (orthogonal to ABAC)",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Permission: "policy:read", PasswordResetExempt: true}},
+			codegen:   true,
+			wantCount: 0,
+		},
+		{
+			name:      "passwordResetExempt ⊕ public mutex (#1382) rejected — JWT-exempt has no reset gate",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true, PasswordResetExempt: true}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
+		{
+			// passwordResetExempt without permission is ALSO vacuous (no public, no
+			// permission), so both the vacuous guard (switch 1) and the
+			// exempt⇒permission guard fire — two Invalid findings. count=2 (vs the
+			// vacuous-only count=1) proves the exempt guard added a finding.
+			name:      "passwordResetExempt without permission rejected (#1382) — also vacuous",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", PasswordResetExempt: true}},
+			codegen:   true,
+			wantCount: 2,
+			wantIssue: IssueInvalid,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

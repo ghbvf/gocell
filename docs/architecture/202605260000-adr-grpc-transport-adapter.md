@@ -522,3 +522,57 @@ or a consume doorbell.
 | Layering | **Safe.** `MethodResources` is `map[string]string` in kernel (no authz/proto import). The interceptor adds `google.golang.org/protobuf` — curated into the `runtime-isolation` depguard allow-list (the canonical companion to the already-allowed `google.golang.org/grpc`, scoped to per-message field reflection). cellgen→pkg/authz (for `IsOwnerScoped`) is tooling, layering-legal. |
 | Auth granularity / security | **Improves (fail-closed, owner-scoped).** A device authorizes against its OWN id (`subject == resource`), not a coarse role gate; cross-device access is denied by the tenant/device-agnostic ownership rule (e2e `cross-device` case). Owner-scoped streaming defers the gate to first-RecvMsg but still BEFORE the user handler runs (the generated server-stream handler Recvs the single request first). Structural extraction failure fails closed. |
 | AI-robustness | **Improves.** The coarse-vs-owner taxonomy is now a typed `Permission` bit (Hard sealed marker) instead of prose; the owner-scoped⟺resource symmetry is a Hard generate-time build failure (prevents the silent owner lock-out — the most security-relevant regression); derivation is golden-locked; the resolver wiring is funnel-locked. The owner-scoped permission set is frozen by a value-golden test (anti-vacuity: count + membership). |
+
+## Amendment 2026-06-18 — #1382: password-reset-exempt overlay (the 4th contract-derived auth dimension)
+
+#1379 (PR-4) shipped the `WithPasswordResetExempt` interceptor option fail-closed-by-default but
+left its concrete predicate UNWIRED ("the source does not exist until cells declare grpc services").
+The result was an **incoherent production state**: the gRPC auth core already runs
+`auth.PasswordResetBlocked` on every authenticated RPC (it assumes user JWTs can reach gRPC), yet
+NO method could be exempted — a reset-required user forced onto gRPC was permanently locked out (can
+never reach a change-password RPC). #1382 resolves this by delivering the exempt source as the
+**fourth contract-derived auth dimension**, a precise mirror of the #1675 public-method carrier
+chain. The alternative (DELETE the whole reset gate from gRPC) was rejected: the gate's presence is
+a deliberate HTTP/gRPC parity + defense-in-depth decision, and the standard fix for the
+"source-needs-consumer / consumer-needs-source" deadlock is to provide the framework capability
+first (consumers — a gRPC change-password RPC — land later via contract-fanout).
+
+### Mechanism
+
+- **Contract**: `endpoints.grpc.methods[].passwordResetExempt: true` (const:true) marks a method
+  exempt from the password-reset gate. **Mutually exclusive with `public`** (a JWT-exempt RPC has no
+  authenticated subject, so the gate — which runs after authn — never executes); **orthogonal to
+  and MUST coexist with `permission`** (an exempt method is still non-public and still ABAC-gated —
+  a change-password RPC needs e.g. `user:write`). Enforced in TWO layers: JSON Schema `allOf`
+  (`passwordResetExempt ⊕ public`, `passwordResetExempt ⇒ permission`) — **Hard**, structural — and
+  governance `FMT-41` (`validateFMT41PasswordResetExempt`, the sibling of `validateFMT41Resource`)
+  for an actionable finding — the same dual-layer the other 3 dimensions use.
+- **Derivation + startup re-check (Medium)**: cellgen derives `GRPCServiceSpec.PasswordResetExemptMethods`
+  (`grpcPasswordResetExemptMethods`, golden-locked; a referential-only loop in
+  `validateGrpcMethodOverlayAgainstProto` — exempt entries are deliberately NOT added to the
+  completeness `covered` set, since an exempt method is covered by its `permission`, not by the
+  exemption). The registrar validates each exempt method-key against the registered method set
+  (stale-key fail-fast, reusing `grpc-registrar-unknown-method-key`) and exposes
+  `IsPasswordResetExemptMethod`.
+- **Interceptor**: `chain.go` installs `WithPasswordResetExempt(reg.IsPasswordResetExemptMethod)` as
+  the 4th `authChainOptions` entry. `WithPasswordResetExempt` is **changed from LAST-WINS to
+  OR-compose**, an exact mirror of `WithPublicMethod`: #1382 introduces the always-on registrar
+  predicate that the pre-#1382 godoc explicitly cited as ABSENT ("there is no always-on registrar
+  predicate to union with") to justify LAST-WINS — that rationale is obsoleted by this very change,
+  so the two structurally-identical dimensions now share OR-compose semantics. The consumption point
+  (`auth.PasswordResetBlocked(principal, callPredicate(cfg.passwordResetExempt, fullMethod))`) is
+  unchanged.
+- **Wiring funnel**: `WithPasswordResetExempt` references (production) and `authConfig.passwordResetExempt`
+  field writes are both allowlisted to `chain.go` / `auth.go` by archtest
+  **GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01** (Medium, two dimensions + NegativeControl), the
+  exact mirror of GRPC-PUBLIC-METHOD-WIRING-FUNNEL-01.
+
+### 威胁矩阵 re-eval (#1382)
+
+| Concern | Re-eval (#1382) |
+|---|---|
+| Wire / schema break | **Safe (pre-GA window).** `passwordResetExempt` is additive; no current contract uses it (sparse overlay, golden byte-stable). When a gRPC change-password RPC lands it declares the flag in the same PR (contract-fanout). |
+| Auth granularity / security | **Improves (removes a fail-closed lock-out hole).** The pre-#1382 state could permanently lock a reset-required user out of gRPC with no exempt path; #1382 gives the exempt path WITHOUT weakening the default (absent flag ⇒ still blocked). Exempt is orthogonal to ABAC — an exempt method still passes the PDP gate (schema + FMT-41 + registrar all require a coexisting `permission`), so exemption never widens authorization. OR-compose widening risk (a non-chain.go caller OR-ing in extra exempt methods) is funnel-locked, exactly as for public-method. |
+| PII / redaction | **Unchanged.** The exempt predicate consumes only `fullMethod`; no principal/token data enters any wire surface. |
+| Layering | **Safe.** `PasswordResetExemptMethods` is `[]string` in kernel (no new imports). The carrier chain reuses the existing public-method shape end-to-end. |
+| AI-robustness | **Improves (closes the 4th-dimension asymmetry).** Before #1382 the gRPC auth chain mirrored HTTP in 3 of 4 dimensions but left password-reset-exempt with an option, a consumption point, and NO contract source — an asymmetry that read as "wired" but was inert. #1382 makes all 4 dimensions structurally symmetric: schema mutex (Hard) + cellgen golden (Hard) + registrar stale-key fail-fast (Medium) + wiring funnel with NegativeControl (Medium) + FMT-41 governance (Medium). The OR-compose alignment also retires a now-false godoc rationale rather than letting it rot. |

@@ -126,9 +126,18 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   + 非 PII metadata：method/permission，无 subject/token），客户端无需解析英文文本区分 no-mapping/not-wired/
   denied/obligation/unavailable。**PDP 决策指标同构**：gRPC PDP 决策经 `NewObservableAuthorizer` 包装（真实
   provider 时，`kernelmetrics.IsReal` 单源与 HTTP `hasRealMetricsProvider` 共用），落同一 `auth_pdp_decision_*`
-  series（无 transport 标签，registerOrReuse 共享 family）。机制/评级/威胁矩阵见 grpc-transport-adapter ADR
-  §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + §"Amendment 2026-06-18 — #2207"
-  + archtest `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` + 治理 `FMT-41`。
+  series（无 transport 标签，registerOrReuse 共享 family）。
+  **password-reset-exempt 第 4 契约派生维度（#1382）**：reset-required principal 默认在每个 gRPC 方法被
+  `auth.PasswordResetBlocked` 拦（fail-closed）；豁免口由 `endpoints.grpc.methods[].passwordResetExempt: true`
+  声明（与 `public` 互斥、与 `permission` 正交且必须共存——改密方法仍需 ABAC gate），经 cellgen 派生入
+  `GRPCServiceSpec.PasswordResetExemptMethods`，registrar `IsPasswordResetExemptMethod` 作运行时单源，
+  `chain.go` 装 `WithPasswordResetExempt(reg.…)`（OR-compose，与 public-method 同构）。与 public-method 同
+  载体链路：互斥/必带-permission 由 schema（Hard）+ 治理 `FMT-41` 双守，源单一性由 archtest
+  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01`（Medium，双维 + NegativeControl）守。机制/评级/威胁矩阵见
+  grpc-transport-adapter ADR §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204"
+  + §"Amendment 2026-06-18 — #2207" + §"Amendment 2026-06-18 — #1382" + archtest
+  `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` /
+  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01` + 治理 `FMT-41`。
 - **HTTP 授权 contract-derived 化（#2205）**：HTTP route gate 与 gRPC 同源——
   transport-neutral `authz.MethodPolicyResolver`（gRPC `ServiceRegistrar` 与 HTTP cell 级
   `auth.NewStaticMethodPolicyResolver` 双实现），HTTP route→permission 由契约 `endpoints.http.permission`

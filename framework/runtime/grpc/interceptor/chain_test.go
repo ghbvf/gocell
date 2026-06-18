@@ -498,12 +498,12 @@ func TestNewServerInterceptors_PasswordResetExempt_EndToEnd(t *testing.T) {
 	srv := grpc.NewServer(bundle.ServerOptions()...)
 	reg.BindServer(srv)
 	if err := reg.Register(cell.GRPCServiceSpec{
-		ContractID:                "grpc.resetsvc.v1",
-		CellID:                    "svc-cell",
-		Listener:                  cell.PrimaryListener,
+		ContractID:                 "grpc.resetsvc.v1",
+		CellID:                     "svc-cell",
+		Listener:                   cell.PrimaryListener,
 		PasswordResetExemptMethods: []string{"/resetsvc/Reset"},
 		MethodPermissions: map[string]string{
-			"/resetsvc/Reset":  authz.PermDeviceCommand().String(),
+			"/resetsvc/Reset": authz.PermDeviceCommand().String(),
 			"/resetsvc/Other": authz.PermDeviceCommand().String(),
 		},
 		Register: func(r grpc.ServiceRegistrar) {

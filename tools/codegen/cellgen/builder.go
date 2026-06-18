@@ -1215,6 +1215,30 @@ func grpcMethodSimpleName(full string) string {
 //     same FullMethod), or the device owner is silently locked out (fullMethod never
 //     equals device-id, so the PDP ownership rule never fires). Conversely, a coarse
 //     permission must NOT declare a resource selector (it is ignored, a misconfiguration).
+//
+// validateGrpcExemptReferential checks each passwordResetExempt overlay entry (#1382)
+// names a real proto RPC. Exempt entries accumulate NOTHING (unlike public/permission,
+// which feed `covered`): a reset-exempt method is non-public and still requires a
+// permission — that permission is what covers it (#2008 completeness). Accumulating the
+// exempt entry into `covered` would mask a reset-exempt-only method with no permission
+// (a dead 403 at the ABAC gate). Pure referential guard, factored out of
+// validateGrpcMethodOverlayAgainstProto to keep that function under the
+// cognitive-complexity limit (the sibling of FMT-41's validateFMT41Resource split).
+func validateGrpcExemptReferential(gs *GrpcServiceGenSpec, protoMethods map[string]struct{}) error {
+	for _, full := range gs.PasswordResetExemptMethods {
+		name := grpcMethodSimpleName(full)
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods passwordResetExempt entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
+	}
+	return nil
+}
+
 func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
 	protoMethods := make(map[string]struct{}, len(info.Methods))
 	for _, pm := range info.Methods {
@@ -1267,23 +1291,10 @@ func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contract
 		resourceByFullMethod[mr.FullMethod] = mr.Field
 	}
 
-	// Referential check for passwordResetExempt entries (#1382): each must name a
-	// real proto RPC. NOTE: exempt entries are NOT added to covered — a reset-exempt
-	// method is non-public and still requires a permission, which must appear in
-	// MethodPermissions (and therefore already contributes to covered). Adding it
-	// again to covered here would silently allow a reset-exempt-only entry with no
-	// permission (a dead 403 at the ABAC gate), contradicting the orthogonal
-	// semantics.
-	for _, full := range gs.PasswordResetExemptMethods {
-		name := grpcMethodSimpleName(full)
-		if _, ok := protoMethods[name]; !ok {
-			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"cellgen enrich grpc-serve: endpoints.grpc.methods passwordResetExempt entry is not an RPC of the proto service",
-				errcode.WithDetails(
-					errcode.PublicString("contract", gs.ContractID),
-					errcode.PublicString("service", gs.Service),
-					errcode.PublicString("method", name)))
-		}
+	// Referential check for passwordResetExempt entries (#1382). Factored into a helper
+	// to keep this function under the cognitive-complexity limit.
+	if err := validateGrpcExemptReferential(gs, protoMethods); err != nil {
+		return err
 	}
 
 	// Completeness (#2008): every proto RPC must be public or permissioned.
