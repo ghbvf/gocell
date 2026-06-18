@@ -131,7 +131,10 @@ func TestEnrollmentCredentialVerifier_Verify_NonReuseBothDirections(t *testing.T
 	enrollVer, err := NewEnrollmentCredentialVerifier(jwtVer)
 	require.NoError(t, err)
 
-	accessTok, err := accessIss.Issue(TokenIntentAccess, testEnrollDevice, IssueOptions{TenantID: testEnrollTenant, PrincipalKind: PrincipalKindClaimDevice})
+	accessTok, err := accessIss.Issue(TokenIntentAccess, testEnrollDevice, IssueOptions{
+		TenantID:      testEnrollTenant,
+		PrincipalKind: PrincipalKindClaimDevice,
+	})
 	require.NoError(t, err)
 	enrollTok, err := enrollIss.Issue(testEnrollTenant, testEnrollDevice)
 	require.NoError(t, err)
@@ -212,4 +215,10 @@ func TestNewEnrollmentCredentialVerifier_RejectsNilVerifier(t *testing.T) {
 	_, err := NewEnrollmentCredentialVerifier(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_VERIFIER_CONFIG")
+}
+
+func TestNewEnrollmentCredentialIssuer_RejectsNilKeys(t *testing.T) {
+	_, err := NewEnrollmentCredentialIssuer(nil, "gocell", clock.Real())
+	require.Error(t, err, "nil signing key provider must fail-fast, not silently noop")
+	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
 }

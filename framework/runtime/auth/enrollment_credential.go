@@ -106,7 +106,13 @@ func (e EnrollmentIdentity) JTI() string { return e.jti }
 // and mintDevicePrincipal). It exists only in this file; the archtest funnel
 // ENROLLMENT-CREDENTIAL-MINT-CALLER-01 rejects any other in-package construction.
 func newEnrollmentIdentity(tenant, subject, jti string) (EnrollmentIdentity, error) {
-	panic("TODO #2303: not implemented")
+	if tenant == "" {
+		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantMissing)
+	}
+	if subject == "" {
+		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentSubjectMissing)
+	}
+	return EnrollmentIdentity{tenant: tenant, subject: subject, jti: jti}, nil
 }
 
 // EnrollmentCredentialIssuer mints device first-enrollment credentials. It is the
@@ -126,7 +132,9 @@ type EnrollmentCredentialIssuer struct {
 //
 // clk is required; pass clock.Real() at the composition root or clockmock.New(...)
 // in tests. Panics on nil or typed-nil clock.
-func NewEnrollmentCredentialIssuer(keys SigningKeyProvider, issuer string, clk clock.Clock, opts ...JWTIssuerOption) (*EnrollmentCredentialIssuer, error) {
+func NewEnrollmentCredentialIssuer(
+	keys SigningKeyProvider, issuer string, clk clock.Clock, opts ...JWTIssuerOption,
+) (*EnrollmentCredentialIssuer, error) {
 	clock.MustHaveClock(clk, "auth.NewEnrollmentCredentialIssuer")
 	inner, err := NewJWTIssuer(keys, issuer, EnrollmentCredentialTTL, clk, opts...)
 	if err != nil {
@@ -140,7 +148,23 @@ func NewEnrollmentCredentialIssuer(keys SigningKeyProvider, issuer string, clk c
 // is a short-lived RS256 JWT with token_use=enrollment, principal_kind=device,
 // and a random jti.
 func (i *EnrollmentCredentialIssuer) Issue(tenantID, deviceSubject string) (string, error) {
-	panic("TODO #2303: not implemented")
+	if deviceSubject == "" {
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentSubjectMissing)
+	}
+	if tenantID == "" {
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantMissing)
+	}
+	jti, err := newEnrollmentJTI()
+	if err != nil {
+		return "", err
+	}
+	// Sole sanctioned JWTIssuer.Issue(TokenIntentEnrollment, ...) call site
+	// (ENROLLMENT-CREDENTIAL-MINT-CALLER-01): device-scoped, short-TTL, jti-bound.
+	return i.jwt.Issue(TokenIntentEnrollment, deviceSubject, IssueOptions{
+		PrincipalKind: PrincipalKindClaimDevice,
+		TenantID:      tenantID,
+		JTI:           jti,
+	})
 }
 
 // EnrollmentCredentialVerifier verifies a device first-enrollment credential and
@@ -168,7 +192,19 @@ func NewEnrollmentCredentialVerifier(verifier IntentTokenVerifier) (*EnrollmentC
 // credential presented at a business access endpoint — is rejected by the
 // two-channel token-confusion defense in VerifyIntent.
 func (v *EnrollmentCredentialVerifier) Verify(ctx context.Context, token string) (EnrollmentIdentity, error) {
-	panic("TODO #2303: not implemented")
+	claims, err := v.verifier.VerifyIntent(ctx, token, TokenIntentEnrollment)
+	if err != nil {
+		return EnrollmentIdentity{}, err
+	}
+	// principal_kind absent/unknown is already fail-closed at decode
+	// (validatePrincipalKind); here we only assert it IS device — an
+	// enrollment credential must be device-scoped (not a user/service token).
+	if claims.PrincipalKind != PrincipalKindClaimDevice {
+		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentKindForbidden)
+	}
+	// claims.TenantID is canonical-UUID-or-empty (validated in VerifyIntent);
+	// newEnrollmentIdentity fail-closes on empty tenant/subject.
+	return newEnrollmentIdentity(claims.TenantID, claims.Subject, claims.JTI)
 }
 
 // newEnrollmentJTI returns a fresh random JWT ID for an enrollment credential.
