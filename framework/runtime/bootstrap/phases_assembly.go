@@ -251,7 +251,8 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
 const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
 	"the in-memory EventBus cannot deliver events across process boundaries — " +
-	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL so " +
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and a per-cell " +
+	"GOCELL_<CELLID>_AMQP_URL (fallback GOCELL_AMQP_URL; see docs/ops/env-vars.md) so " +
 	"eventtransport.Resolve selects a real broker, and thread its Transport.Kind via " +
 	"WithEventTransportKind plus a non-nil publisher/subscriber via WithPublisher/WithSubscriber" +
 	" — or co-locate all cells in a single deployment group (assembly topology.groups; omit topology " +
