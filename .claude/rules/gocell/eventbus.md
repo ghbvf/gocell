@@ -16,7 +16,7 @@ in-memory bus **仅** demo 拓扑可达：**composition root**（`cmd/corebundle
 broker（mqtt）在 `eventtransport` 的 `brokerKind` switch 加分支 + 暴露选择 env，不在本约束外另开旁路。
 权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
 
-## per-cell AMQP vhost/credential 隔离（#2152 PR-3）
+## per-cell AMQP vhost/credential 隔离
 
 per-cell URL 携带 per-cell 凭据（user:pass）和 vhost。split 拓扑下 operator 为每个 cell
 provision 独立的 vhost 和 AMQP user，使每个进程只持有访问自身 broker 资源所需凭据——
