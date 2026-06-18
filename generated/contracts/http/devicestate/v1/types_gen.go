@@ -17,7 +17,7 @@ import (
 
 // Request — http.devicestate.v1.request
 type Request struct {
-	DeviceID string `json:"deviceId"`
+	ID string `json:"id"`
 }
 
 // Response — http.devicestate.v1.response

@@ -341,6 +341,51 @@ func TestDLXExchange_StableName(t *testing.T) {
 	assert.NotEmpty(t, dlxExchange, "DLXExchange must be non-empty or rabbitmq Setup fail-fasts")
 }
 
+// TestResolve_Postgres_DistinctURLs_FailClosed_CredIsolationMessage asserts that
+// the distinct-URL fail-closed error message mentions credential/vhost isolation
+// semantics, documenting that per-cell AMQP URL = per-cell credential+vhost seam
+// (operator-provisioned, not framework-derived). This test drives change #5.
+func TestResolve_Postgres_DistinctURLs_FailClosed_CredIsolationMessage(t *testing.T) {
+	t.Parallel()
+
+	_, err := Resolve(clock.Real(), mkTopo(t, "postgres"), Config{
+		Cells: map[string]string{
+			"accesscore": "amqp://a:5672/",
+			"configcore": "amqp://b:5672/",
+		},
+	})
+	require.Error(t, err)
+	// The message must state that per-cell credential/vhost isolation is the
+	// blocking concern — not just the ingress fan-out wiring. This is the PR-3
+	// documentation gate for the security model closure (#2152 PR-3).
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Contains(t, ec.Message, "credential/vhost isolation",
+		"distinct-URL fail-closed message must document that per-cell URL = "+
+			"per-cell credential/vhost seam; isolation is gated by #2366/#2341")
+}
+
+// TestDedupBrokerURL_CredentialNonLeak asserts that dedupBrokerURL never leaks
+// embedded URL credentials into the error string. This closes the archtest
+// AMQP-URL-REDACTION-FUNNEL-01 blind spot for the cells[id] local-var path
+// (map-value reads are not field selections and therefore outside the AST scan).
+func TestDedupBrokerURL_CredentialNonLeak(t *testing.T) {
+	t.Parallel()
+
+	const secret = "SECRETPW"
+	// Inject a password into the per-cell URLs. Distinct hosts trigger the
+	// fail-closed distinct-URL path — the most likely place credentials could
+	// appear in an error string.
+	cells := map[string]string{
+		"accesscore": "amqp://u:" + secret + "@a:5672/vh",
+		"configcore": "amqp://u:" + secret + "@b:5672/vh",
+	}
+	_, err := dedupBrokerURL(cells)
+	require.Error(t, err, "distinct per-cell URLs must fail-closed")
+	assert.NotContains(t, err.Error(), secret,
+		"dedupBrokerURL must not leak embedded AMQP credentials into the error string")
+}
+
 func TestDispatchTransport_UnhandledBrokerKind_FailClosed(t *testing.T) {
 	t.Parallel()
 	// White-box: resolveBrokerSpec can only emit the two valid kinds, so the

@@ -116,6 +116,26 @@ type GRPCServiceSpec struct {
 	// PublicMethods — the cellgen completeness pre-pass guarantees every authed
 	// proto method has a permission entry, which hand-writing would bypass.
 	MethodPermissions map[string]string
+
+	// MethodResources maps each owner-scoped FULL method name
+	// (/{proto.Service}/{Method}) to the REQUEST MESSAGE field name (proto field,
+	// snake_case, e.g. "device_id") whose string value is extracted and forwarded
+	// as the PDP resource for per-message ownership authz (#2207). The interceptor
+	// extracts the field via protoreflect on the first received message and
+	// canonicalizes it (ParseCanonicalUUID) before forwarding as the PDP resource,
+	// enabling the ownership rule (subject.sub == resource.id) to fire.
+	//
+	// Methods NOT in this map use fullMethod as the resource (coarse, current
+	// behavior). Methods IN this map MUST also appear in MethodPermissions (the
+	// permission gate always runs; resource extraction only changes which resource
+	// the PDP sees). Derived by cellgen from endpoints.grpc.methods[].resource
+	// alongside MethodPermissions — keyed identically to the registrar's maps.
+	//
+	// This field is cellgen-OWNED: declare owner-scoped resource extraction via
+	// endpoints.grpc.methods[].resource, not here. Hand-writing bypasses the
+	// cellgen cross-check (owner-scoped permission MUST declare resource).
+	// See GRPCServiceSpec.MethodPermissions godoc for the parallel constraint.
+	MethodResources map[string]string
 }
 
 // Validate returns a non-nil error when any required field is missing.

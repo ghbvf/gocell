@@ -278,6 +278,15 @@ type Bootstrap struct {
 	// endpoint not mounted (rebuild remains programmatic-only).
 	projectionRebuildEnabled bool
 
+	// frameworkServingRoutes are the wired framework-owned HTTP RouteGroups, set by
+	// WithFrameworkHTTPServing. The must-serve EXPECTATION is NOT stored here — it
+	// rides on the assembly (assembly.Config.FrameworkContracts, read via
+	// frameworkServedExpected()), so omitting WithFrameworkHTTPServing cannot
+	// silently pass. phase0 (validateFrameworkServing) reconciles the assembly's
+	// declared framework contracts against these routes (DEAD-CONTRACT analog);
+	// phase5 mounts frameworkServingRouteGroups() on each route's listener (CellID=="").
+	frameworkServingRoutes []FrameworkServedRoute
+
 	// --- saga-journal projection: Tailer harness dependencies (EPIC #1609 PR-05) ---
 	// Injected via WithSagaJournalReader / WithSagaProjectionOwnerCheckpointStore /
 	// WithSagaProjectionLocker (+ optional WithSagaTailerConfig); the TxRunner is

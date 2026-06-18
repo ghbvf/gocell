@@ -173,6 +173,11 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	if b.projectionRebuildEnabled {
 		groups = append(groups, b.projectionRebuildRouteGroup())
 	}
+	// Framework-owned HTTP serving (ownerCell: _framework; opt-in via
+	// WithFrameworkHTTPServing). These RouteGroups keep CellID=="" (framework-owned,
+	// not cell-owned); phase0 (validateFrameworkServing) reconciled the wired set
+	// against generatedFrameworkServedContracts() before reaching here.
+	groups = append(groups, b.frameworkServingRouteGroups()...)
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {

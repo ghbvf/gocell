@@ -61,6 +61,14 @@
         }
       }
     },
+    "frameworkContracts": {
+      "type": "array",
+      "description": "OPTIONAL per-deployment serving opt-in for framework-owned contracts (ownerCell: _framework). A framework-owned contract has no cell (ADR 202606130635-1939 D4), so the boundary-contract derivation cannot surface it; the assembly that serves such a contract declares its id here. Single source for governance serving-scan (FRAMEWORK-OWNED-CONTRACT-SCOPED-01) and codegen generatedFrameworkServedContracts(). Each entry must be the id of an existing, active, framework-owned http/event contract. Omit for assemblies serving no framework contract.",
+      "items": {
+        "type": "string",
+        "description": "Contract id of a framework-owned contract this assembly serves (e.g. http.devicestate.v1)."
+      }
+    },
     "build": {
       "type": "object",
       "description": "Build configuration for the assembly. All fields optional; defaults are derived.",

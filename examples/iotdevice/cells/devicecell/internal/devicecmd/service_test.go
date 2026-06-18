@@ -667,3 +667,74 @@ func TestEnqueue_BareCtx_NoIdempotencyKeyNoDeadline(t *testing.T) {
 	transitions := command.SweepOnce(active, time.Now().Add(testSweepFarOut))
 	assert.Empty(t, transitions, "bare-ctx commands have no OverallDeadline — Sweeper must not expire them")
 }
+
+// TestWithOnEnqueue_FiredAfterSuccessfulEnqueue asserts that the onEnqueue hook
+// fires exactly once after a successful Enqueue, carrying the enqueued entry.
+// It also asserts the hook does NOT fire when Enqueue fails (unknown device).
+func TestWithOnEnqueue_FiredAfterSuccessfulEnqueue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fires once on success", func(t *testing.T) {
+		t.Parallel()
+		devRepo := mem.NewDeviceRepository()
+		q := commandtest.NewInMemQueue()
+		seedDevice(devRepo, "dev-hook", "sensor-hook")
+
+		var gotEntry command.Entry
+		called := 0
+		hook := func(_ context.Context, e command.Entry) {
+			called++
+			gotEntry = e
+		}
+
+		svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+			WithOnEnqueue(hook))
+		require.NoError(t, err)
+
+		entry, err := svc.Enqueue(context.Background(), "dev-hook", "reboot", `{}`)
+		require.NoError(t, err)
+
+		require.Equal(t, 1, called, "hook must fire exactly once after successful enqueue")
+		assert.Equal(t, entry.ID, gotEntry.ID)
+		assert.Equal(t, "dev-hook", gotEntry.DeviceID)
+		assert.Equal(t, "reboot", gotEntry.CommandType)
+	})
+
+	t.Run("does not fire when enqueue fails (unknown device)", func(t *testing.T) {
+		t.Parallel()
+		devRepo := mem.NewDeviceRepository()
+		q := commandtest.NewInMemQueue()
+
+		called := 0
+		hook := func(_ context.Context, _ command.Entry) { called++ }
+
+		svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+			WithOnEnqueue(hook))
+		require.NoError(t, err)
+
+		_, err = svc.Enqueue(context.Background(), "dev-missing", "reboot", `{}`)
+		require.Error(t, err)
+		assert.Equal(t, 0, called, "hook must NOT fire when enqueue fails")
+	})
+
+	t.Run("nil hook is ignored (accumulative nil-guard)", func(t *testing.T) {
+		t.Parallel()
+		devRepo := mem.NewDeviceRepository()
+		q := commandtest.NewInMemQueue()
+		seedDevice(devRepo, "dev-nil", "sensor-nil")
+
+		called := 0
+		realHook := func(_ context.Context, _ command.Entry) { called++ }
+
+		svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+			WithOnEnqueue(realHook))
+		require.NoError(t, err)
+
+		// Applying nil must leave the previously-wired hook in place.
+		WithOnEnqueue(nil)(svc)
+
+		_, err = svc.Enqueue(context.Background(), "dev-nil", "reboot", `{}`)
+		require.NoError(t, err)
+		assert.Equal(t, 1, called, "nil WithOnEnqueue must not clear a previously-wired hook")
+	})
+}

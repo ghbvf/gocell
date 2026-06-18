@@ -238,7 +238,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 
-	_, err = buildAssembly(promStackToLocals(ps), "corebundle", outbox.DurabilityDemo, clock.Real(), c1, c2)
+	_, err = buildAssembly(promStackToLocals(ps), "corebundle", outbox.DurabilityDemo, clock.Real(), nil, c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")

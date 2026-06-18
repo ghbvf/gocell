@@ -114,15 +114,18 @@ type cellIDFieldPosition struct {
 	structName     string // e.g. "CellMeta"; package path is always metadataPkgPath
 	fieldName      string // e.g. "ID"
 	isSliceElement bool   // true when value is []string and each element is a cell-id
-	// allowFrameworkSentinel marks the owner/provider-endpoint positions where the
-	// reserved metadata.FrameworkOwnerSentinel ("_framework", #1939) is a sanctioned
-	// value (the framework names ITSELF as the contract owner/provider). It is false
-	// at every real-cell position — CellMeta.ID, ProjectMeta.Cells map keys,
-	// SliceMeta.BelongsToCell, AssemblyCellRef.ID, L0DepMeta.Cell, consumer endpoint
-	// lists — where a legal cell id is required and the sentinel must be REJECTED.
-	// A1 stays field-position-aware here; whether a framework-owned command/projection
-	// is *eligible* is a separate concern (FRAMEWORK-OWNED-CONTRACT-SCOPED), so all
-	// provider endpoints (Server/Publisher/Handler/Provider) accept the sentinel.
+	// allowFrameworkSentinel marks the positions where the reserved
+	// metadata.FrameworkOwnerSentinel ("_framework", #1939) is a sanctioned value.
+	// True at: (a) owner/provider-endpoint positions (the framework names ITSELF as
+	// the contract owner/provider — Server/Publisher/Handler/Provider/OwnerCell);
+	// (b) JourneyMeta.Cells (#2037) — a framework-serving journey legitimately
+	// anchors on `_framework` as its serving cell, and REF-06 structurally exempts
+	// the sentinel there. It is false at every real-cell position — CellMeta.ID,
+	// ProjectMeta.Cells map keys, SliceMeta.BelongsToCell, AssemblyCellRef.ID,
+	// L0DepMeta.Cell, consumer endpoint lists (Clients/Invokers/Readers) — where a
+	// legal cell id is required and the sentinel must be REJECTED. A1 stays
+	// field-position-aware here; whether a framework-owned command/projection is
+	// *eligible* is a separate concern (FRAMEWORK-OWNED-CONTRACT-SCOPED).
 	allowFrameworkSentinel bool
 }
 
@@ -138,7 +141,7 @@ var cellIDFieldPositions = []cellIDFieldPosition{
 	{"EndpointsMeta", "Invokers", true, false},
 	{"EndpointsMeta", "Provider", false, true},
 	{"EndpointsMeta", "Readers", true, false},
-	{"JourneyMeta", "Cells", true, false},
+	{"JourneyMeta", "Cells", true, true}, // _framework: framework-serving journey anchor (#2037)
 	// AssemblyMeta.Cells is []AssemblyCellRef (#1086): the cell-id moved from
 	// the slice element to AssemblyCellRef.ID, so the enforced position is the
 	// ID field of each AssemblyCellRef struct literal (not the slice element).

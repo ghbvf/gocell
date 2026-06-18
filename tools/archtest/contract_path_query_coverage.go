@@ -53,6 +53,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/archtest/internal/scanner"
 )
 
@@ -428,6 +429,17 @@ func parseContractPQRequirementFromBytes(t *testing.T, path string, data []byte)
 		t.Fatalf("CONTRACT-PATH-QUERY-COVERAGE-01: parse %s: %v", path, err)
 	}
 	if cy.Lifecycle != "active" {
+		return contractPQParamInfo{}, false
+	}
+	// Framework-owned contracts (endpoints.server: _framework) are structurally
+	// exempt: they have no cell (ADR 202606130635-1939 D4), so there is no
+	// cells/**/contract_test.go to host the MustReject{Path,Query}Param coverage.
+	// Their param-rejection coverage lives in the composition-root serving test
+	// (cellmodules/deviceserving) + the bootstrap framework RouteGroup; serving is
+	// governed by FRAMEWORK-OWNED-CONTRACT-SCOPED-01 + the bootstrap startup
+	// fail-fast. Same structural exclusion as DEAD-CONTRACT-01 / the governance
+	// CONTRACT-ENDPOINT-TEST-MAPPING-01 framework exemption.
+	if cy.Endpoints.Server == metadata.FrameworkOwnerSentinel {
 		return contractPQParamInfo{}, false
 	}
 	if cy.Endpoints.HTTP == nil {

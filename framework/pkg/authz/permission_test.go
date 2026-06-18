@@ -383,15 +383,17 @@ func parsePermissionAccessorActions(t *testing.T) map[string]string {
 	return out
 }
 
-// newPermissionLiteral reports the action string of a `newPermission("action")`
-// call expression.
+// newPermissionLiteral reports the action string of a
+// `newPermission("action", scope)` call expression.
+// The first argument is the action string; the second is the permScope enum.
+// This function extracts only the first argument (the action).
 func newPermissionLiteral(expr ast.Expr) (string, bool) {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
 		return "", false
 	}
 	fn, ok := call.Fun.(*ast.Ident)
-	if !ok || fn.Name != "newPermission" || len(call.Args) != 1 {
+	if !ok || fn.Name != "newPermission" || len(call.Args) < 1 {
 		return "", false
 	}
 	lit, ok := call.Args[0].(*ast.BasicLit)
@@ -452,6 +454,63 @@ func TestIsKnownPermissionString(t *testing.T) {
 		if IsKnownPermissionString(s) {
 			t.Errorf("IsKnownPermissionString(%q) = true, want false", s)
 		}
+	}
+}
+
+// TestPermissions_OwnerScopedPinnedSet pins the EXACT set of owner-scoped
+// permissions (IsOwnerScoped()==true). This is the Hard sealed-marker pin for the
+// gRPC per-message resource extraction cross-check (#2207): the cellgen builder uses
+// IsOwnerScoped() to enforce that every owner-scoped permission on a gRPC method
+// declares endpoints.grpc.methods[].resource. If a permission's scope is misclassified
+// here, the cross-check silently admits or rejects gRPC method overlays incorrectly.
+//
+// Anti-vacuity: the owner-scoped count is exactly 8 (not zero; not the full set).
+// Changing any scope in permission.go must update this test.
+func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
+	t.Parallel()
+
+	// The owner-scoped permissions. These are the ones used with
+	// RequirePermissionForResource / RequirePermissionForSelf on HTTP, or
+	// resource: <field> on gRPC (subject.sub == resource.id ownership rule).
+	wantOwnerScoped := map[string]bool{
+		"device:consume": true,
+		"device:read":    true,
+		"user:read":      true,
+		"user:write":     true,
+		"role:read":      true,
+		"order:read":     true,
+		"order:update":   true,
+		"access:decide":  true,
+	}
+	const wantOwnerScopedCount = 8
+
+	ownerScopedCount := 0
+	for _, p := range Permissions() {
+		if p.IsOwnerScoped() {
+			ownerScopedCount++
+			if !wantOwnerScoped[p.String()] {
+				t.Errorf("unexpected owner-scoped permission: %q — add to wantOwnerScoped or fix scope in permission.go", p.String())
+			}
+		} else if wantOwnerScoped[p.String()] {
+			t.Errorf("permission %q is expected to be owner-scoped but IsOwnerScoped()==false — fix scope in permission.go", p.String())
+		}
+	}
+	if ownerScopedCount != wantOwnerScopedCount {
+		t.Errorf("owner-scoped permission count = %d, want %d (anti-vacuity: update this count if you intentionally change the set)",
+			ownerScopedCount, wantOwnerScopedCount)
+	}
+	// Coarse-count assertion: total = coarse + owner-scoped must equal len(Permissions()).
+	// Anti-vacuity: ensures both sides of the partition are machine-verified.
+	wantCoarseCount := len(Permissions()) - wantOwnerScopedCount
+	coarseCount := len(Permissions()) - ownerScopedCount
+	if coarseCount != wantCoarseCount {
+		t.Errorf("coarse permission count = %d, want %d (total=%d - ownerScoped=%d)",
+			coarseCount, wantCoarseCount, len(Permissions()), wantOwnerScopedCount)
+	}
+	// Zero-value Permission must report IsOwnerScoped()==false (fail-closed for forged values).
+	var zero Permission
+	if zero.IsOwnerScoped() {
+		t.Error("zero Permission must report IsOwnerScoped()==false")
 	}
 }
 

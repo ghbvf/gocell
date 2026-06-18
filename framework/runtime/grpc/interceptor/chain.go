@@ -100,7 +100,7 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 
 // authChainOptions returns the composition-root AuthOptions with the
 // registrar/authorizer-sourced predicates added. The registrar is the SINGLE
-// runtime source of BOTH gRPC auth dimensions:
+// runtime source of ALL THREE gRPC auth dimensions:
 //
 //   - public-method bypass (#1675): WithPublicMethod(reg.IsPublicMethod), derived
 //     from each cell's endpoints.grpc.methods[] (public:true). Guarded by
@@ -109,20 +109,25 @@ func newUnaryChain(deps Deps, reg *runtimegrpc.ServiceRegistrar) grpc.ServerOpti
 //     derived from endpoints.grpc.methods[].permission, plus WithPDPAuthorizer(deps.Authorizer)
 //     — the cell-provided PDP, the gRPC analog of bootstrap.WithPrimaryAuthorizer.
 //     Guarded by GRPC-PERMISSION-GATE-WIRING-FUNNEL-01.
+//   - owner-scoped resource extraction (#2207): WithResourceResolver(reg.ResourceFieldForMethod),
+//     derived from endpoints.grpc.methods[].resource — the field whose value is
+//     extracted from the first received message and forwarded as the PDP resource.
+//     Guarded by GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01.
 //
-// chain.go is the SOLE production installer of all three; the funnel archtests
+// chain.go is the SOLE production installer of all four options; the funnel archtests
 // forbid any other production reference, so each composed source has exactly one
 // member in production: the registrar/authorizer. Test harnesses may add synthetic
 // options via deps.AuthOptions (allowed only in _test.go). A fresh slice is returned
 // so the unary and stream chains (sharing one Deps) never alias-append into the same
 // backing array.
 func authChainOptions(deps Deps, reg *runtimegrpc.ServiceRegistrar) []AuthOption {
-	out := make([]AuthOption, 0, len(deps.AuthOptions)+3)
+	out := make([]AuthOption, 0, len(deps.AuthOptions)+4)
 	out = append(out, deps.AuthOptions...)
 	out = append(out,
 		WithPublicMethod(reg.IsPublicMethod),
 		WithPermissionResolver(reg.PermissionForMethod),
 		WithPDPAuthorizer(deps.Authorizer),
+		WithResourceResolver(reg.ResourceFieldForMethod),
 	)
 	return out
 }

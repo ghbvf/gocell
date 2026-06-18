@@ -106,7 +106,19 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   method→permission 由契约 `endpoints.grpc.methods[].permission` overlay 经 cellgen 派生入
   `GRPCServiceSpec.MethodPermissions`，registrar 解析成 sealed `authz.Permission`（未知即启动 fail-fast）。
   严格 fail-closed：非 public 方法缺 permission overlay = gate deny，且 codegen completeness 预检在构建期
-  拒绝（dead 403 不可静默上线）。resource = full method name（coarse，owner-scoped 取 message 字段延后）。
+  拒绝（dead 403 不可静默上线）。
+  **owner-scoped per-message resource（#2207）**：coarse permission 的 resource = full method name；
+  owner-scoped permission（`authz.Permission` 的 typed `IsOwnerScoped()` 位——闭值集是机器源，由
+  `framework/pkg/authz/permission_test.go` 的 `TestPermissions_OwnerScopedPinnedSet` 冻结，规则文件不再
+  手写该清单）的 gRPC 方法须声明
+  `endpoints.grpc.methods[].resource: <请求消息字段>`，interceptor 用 protoreflect 取该字段、经与 HTTP 同一
+  `httputil.ParseCanonicalUUID` 规范化后作 PDP `resource`（HTTP `RequirePermissionForResource` 的 gRPC 对偶，
+  让设备 watch 自己的队列）。unary 在入口取 `req`；server-streaming 把整个 permission 门**延后到首个
+  `RecvMsg`**（`resourceGatedStream`，open 时跑 coarse 门会误拒 owner）。owner-scoped⟺resource 对称由 cellgen
+  generate-time 交叉校验强制（**Hard**：缺 resource = owner 静默锁死即 build 失败；coarse 带 resource 即失败）。
+  F3 fail-closed：仅结构性提取失败（非 proto.Message / 字段不存在 / 非 string）→ deny（`RESOURCE_UNRESOLVED`，
+  不回退 fullMethod）；空 / 非 UUID 值转发给 PDP（admin/operator coarse 仍过，不被误拒）。提取值绝不进 ErrorInfo
+  metadata（PII 安全）。resolver 单源 = chain.go（archtest `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01`）。
   **启动期 fail-fast 与 HTTP 同构**（#2204）：spec 含 permission-gated 方法但未 wire Authorizer，注册期
   （phase7b drain，Init 后 / serve 前）fail-fast，不再 boot+请求期才 403——对齐 HTTP `ResolveAuthorizer`；
   overlay method-key 在注册期对本 spec 已注册方法集做闭集校验（stale/typo key fail-fast，非请求期 dead 403）。
@@ -115,8 +127,8 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   denied/obligation/unavailable。**PDP 决策指标同构**：gRPC PDP 决策经 `NewObservableAuthorizer` 包装（真实
   provider 时，`kernelmetrics.IsReal` 单源与 HTTP `hasRealMetricsProvider` 共用），落同一 `auth_pdp_decision_*`
   series（无 transport 标签，registerOrReuse 共享 family）。机制/评级/威胁矩阵见 grpc-transport-adapter ADR
-  §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + archtest
-  `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` + 治理 `FMT-41`。
+  §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + §"Amendment 2026-06-18 — #2207"
+  + archtest `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` + 治理 `FMT-41`。
 - **HTTP 授权 contract-derived 化（#2205）**：HTTP route gate 与 gRPC 同源——
   transport-neutral `authz.MethodPolicyResolver`（gRPC `ServiceRegistrar` 与 HTTP cell 级
   `auth.NewStaticMethodPolicyResolver` 双实现），HTTP route→permission 由契约 `endpoints.http.permission`
