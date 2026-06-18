@@ -24,7 +24,11 @@ func TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked(t *testing.T) 
 	ctx := context.Background()
 	const (
 		appRole = "gocell_app"
-		appPass = "contractreg_appkey"
+		// gocell_app is a CLUSTER-GLOBAL role shared with the other *_appendonly
+		// tests (e.g. projection_events). CREATE ROLE ... IF NOT EXISTS does NOT
+		// update an existing role's password, so all such tests MUST use the same
+		// password or whichever runs second fails SASL auth (28P01). Keep in sync.
+		appPass = "projevents_appkey"
 	)
 
 	dsn := sharedPG.EmptyDSN(t)
