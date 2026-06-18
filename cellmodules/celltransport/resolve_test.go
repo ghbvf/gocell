@@ -211,6 +211,28 @@ func TestResolve_ZeroTopoIsColocated(t *testing.T) {
 	}
 }
 
+// TestResolve_ZeroTopoNilInProcIsLocalDependencyMissing covers the "local
+// dependency missing" failure class via the zero-topology (all-colocated)
+// IsColocated path: a zero topo treats any cellID as co-located, so a nil inProc
+// is the same local-provider-not-mounted failure as the explicit-colocated case
+// (TestResolve_ColocatedNilInProcReturnsError) but reached through the !explicit
+// branch — guards both entry conditions for the renamed diagnostic (#2278 PR-3).
+func TestResolve_ZeroTopoNilInProcIsLocalDependencyMissing(t *testing.T) {
+	t.Parallel()
+
+	topo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{})
+	if err != nil {
+		t.Fatalf("NewDeploymentTopology: %v", err)
+	}
+
+	_, _, resolveErr := celltransport.Resolve(topo, "configcore", nil, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if resolveErr == nil {
+		t.Fatal("expected error for nil inProc under zero topo, got nil")
+	}
+	assertKindInternal(t, resolveErr)
+	assertMessageContains(t, resolveErr, "local dependency missing")
+}
+
 // --- #2251 P1.3: tracer propagation through the sealed bundle ---
 
 // TestResolve_Remote_PropagatesTracer asserts the remote transport opens a span

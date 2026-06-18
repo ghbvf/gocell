@@ -116,6 +116,16 @@ never surfaces only at request time:
   the topology) and `local dependency missing` (the provider is co-located but not
   mounted in this process).
 
+The offending `cellID` is on the `KindInternal` error in the **server log**
+(`InternalAttr`, never on the wire). Operator action by class:
+
+- `topology under-declared` → the provider is not in any group: add it to the right
+  `topology.groups` group (co-located here, or another group whose endpoint this
+  process reaches as remote).
+- `local dependency missing` → the provider is declared co-located for this role but
+  its module was not wired: confirm the composition root mounts that cell (e.g. it is
+  in the role's group and `composition.NewForRole` selected it).
+
 The event dimension is covered separately by the broker gate (TOPO-13 + bootstrap
 phase0, US3 #1965). There is **no** separate phase0 missing-dependency gate — the
 eager `celltransport.Resolve` seam already provides the runtime fail-fast (see ADR

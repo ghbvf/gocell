@@ -511,8 +511,8 @@ remote → `KindInternal` fail-fast、错误冒泡 → 进程起不来（FR-004�
 `ProviderEndpoint()`、引入 owner≠server 盲区（两条 truth）；`MOUNTED-EQUALS-COLOCATED` 先保证 colocated==mounted 后其
 「本地依赖缺失」分支为死代码；funnel 已禁绕过 seam 的裸 http 兄弟调用 → 闸在 sanctioned 路径零触发。按「抽象前提消失第一
 选择是删除」，PR-3 收敛为本收口注（载体重评）+ `celltransport.Resolve` 两类失败诊断命名（`topology under-declared` /
-`local dependency missing`，单源于该 seam）。**本收口是 config-correctness 控制的载体重评，不触及上文 §威胁矩阵的安全
-模型**（MAC 完整性 / per-cell 身份 #2153 / mTLS #2263 不变）。
+`local dependency missing`，单源于该 seam）。**本收口是部署配置正确性（deployment config correctness）控制的载体重评，
+不改变任何安全边界、不触及上文 §威胁矩阵的安全模型**（MAC 完整性 / per-cell 身份 #2153 / mTLS #2263 不变）。
 
 **威胁矩阵重评（AI-robust 章程：amendment 必须同步重评）**：本 amendment 使 split **真实端到端可发生**（此前
 seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring」缺口经 **#2153（per-cell HKDF 子密钥 + master 缺席）
