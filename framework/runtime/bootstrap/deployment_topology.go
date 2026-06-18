@@ -39,26 +39,70 @@ type TopologyGroup struct {
 	Endpoint string
 }
 
-const errMsgDeployTopoRoleUnsupported = "deployment topology: per-role process selection is not supported in this build; " +
-	"leave GOCELL_CELL_ROLE empty to run the all-colocated monolith"
+// Deployment-role selection error message constants — MESSAGE-CONST-LITERAL-01.
+const (
+	errMsgDeployTopoRoleRequired = "deployment topology: GOCELL_CELL_ROLE must be set when the assembly declares " +
+		"multiple deployment groups; a multi-group topology is a split deployment, so this process must select its role"
+	errMsgDeployTopoUnknownRole = "deployment topology: GOCELL_CELL_ROLE names a role not declared in the assembly topology groups"
+)
 
 // SpecForRole derives the per-process DeploymentTopologySpec from the full
-// topology group graph for the deployment role this process runs as.
+// topology group graph for the deployment role this process runs as (selected at
+// startup by GOCELL_CELL_ROLE, WriteOnce).
 //
-// PR-1 (#1423) implements only the no-role path: an empty role selects the
-// all-colocated monolith — every cell mounted in one process (the single-binary
-// deployment that #1423 preserves), expressed as the zero DeploymentTopologySpec.
-// A non-empty role is fail-closed (errcode) here: role-based subset derivation
-// (colocated = the role's cells, remote = every other group's cells × endpoint)
-// plus the multi-group-without-role startup gate land in PR-2 via GOCELL_CELL_ROLE.
+//   - empty role + 0/1 group → the zero (all-colocated monolith) spec: every
+//     cell mounted in one process, the single-binary zero-migration default #1423
+//     preserves.
+//   - empty role + ≥2 groups → fail-closed: a multi-group topology declares an
+//     intended split, so running it with no role is a misconfiguration that a
+//     silent monolith would mask (12-factor: the env is consumed or it errors).
+//   - role ∈ declared set → Colocated = the role's own cells, Remote = every
+//     other group's cells mapped to that group's endpoint (the form
+//     celltransport.Resolve consumes).
+//   - role ∉ declared set → fail-closed.
+//
+// ref: akka/akka cluster-sharding withRole — one artifact, a static role config
+// selects which cells the node hosts.
 func SpecForRole(groups []TopologyGroup, role string) (DeploymentTopologySpec, error) {
 	if role == "" {
-		return DeploymentTopologySpec{}, nil // all-colocated monolith
+		if len(groups) >= 2 {
+			return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgDeployTopoRoleRequired,
+				errcode.WithInternal(errcode.InternalAttr("groupCount", len(groups))))
+		}
+		return DeploymentTopologySpec{}, nil // 0/1 group → all-colocated monolith
 	}
-	return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		errMsgDeployTopoRoleUnsupported,
-		errcode.WithInternal(errcode.InternalAttr("role", role), errcode.InternalAttr("groupCount", len(groups))),
-		errcode.WithDetails(errcode.PublicString("role", role)))
+	return deriveRoleSpec(groups, role)
+}
+
+// deriveRoleSpec builds the per-process spec for a named role: Colocated = the
+// role's own cells; Remote = every other group's cells mapped to that group's
+// endpoint. Fails closed if role is not a declared group. Extracted to keep
+// SpecForRole within the cognitive-complexity budget. Output is sorted by cellID
+// for determinism (newDeploymentTopology builds maps, so order is otherwise
+// irrelevant — sorting only aids tests and diagnostics).
+func deriveRoleSpec(groups []TopologyGroup, role string) (DeploymentTopologySpec, error) {
+	var spec DeploymentTopologySpec
+	found := false
+	for _, g := range groups {
+		if g.Role == role {
+			found = true
+			spec.Colocated = append([]string(nil), g.Cells...)
+			continue
+		}
+		for _, c := range g.Cells {
+			spec.Remote = append(spec.Remote, RemoteCellEndpoint{CellID: c, Endpoint: g.Endpoint})
+		}
+	}
+	if !found {
+		return DeploymentTopologySpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			errMsgDeployTopoUnknownRole,
+			errcode.WithInternal(errcode.InternalAttr("role", role)),
+			errcode.WithDetails(errcode.PublicString("role", role)))
+	}
+	sort.Strings(spec.Colocated)
+	sort.Slice(spec.Remote, func(i, j int) bool { return spec.Remote[i].CellID < spec.Remote[j].CellID })
+	return spec, nil
 }
 
 // DeploymentTopologySpec is the PLAIN, codegen-produced input describing the

@@ -73,6 +73,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateAssemblyClockAlignment(); err != nil {
 		return err
 	}
+	// MOUNTED-EQUALS-COLOCATED: runs after the assembly is known (mounted cell
+	// set) and the deployment topology is sealed — the upstream backstop for
+	// role-based subset mounting.
+	if err := b.validateMountedEqualsColocated(); err != nil {
+		return err
+	}
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
@@ -122,6 +128,63 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 		return err
 	}
 	b.deploymentTopology = dt
+	return nil
+}
+
+// MOUNTED-EQUALS-COLOCATED error message constants — MESSAGE-CONST-LITERAL-01.
+const (
+	errMsgMountedCellRemote = "deployment topology: a cell mounted in this process is declared remote for this role; " +
+		"a remote cell must not be hosted locally (mount the colocated subset via composition.NewForRole)"
+	errMsgMountedCellNotColocated = "deployment topology: a cell mounted in this process is not in this role's colocated set"
+	errMsgColocatedCellNotMounted = "deployment topology: a cell in this role's colocated set is not mounted in this process"
+)
+
+// validateMountedEqualsColocated enforces MOUNTED-EQUALS-COLOCATED: in an
+// explicit split topology, the set of cells this process mounts (b.assemblyCore)
+// MUST equal the topology's colocated set, and no mounted cell may be declared
+// remote. This is the upstream backstop for composition.NewForRole — even a root
+// that bypasses NewForRole and mounts the full cell set directly
+// (New(allCells).With(allMods)) fails fast here instead of silently
+// double-mounting a remote cell. A zero (all-colocated) topology, or a process
+// with no assembly, trivially satisfies the invariant.
+//
+// AI-robust grade: Medium (runtime bijection over runtime cellID strings — the
+// same honest ceiling as M12a / the broker-mandatory gate; cellID is not a
+// compile-time fact). Called at phase0 after the topology is sealed and the
+// assembly is wired.
+func (b *Bootstrap) validateMountedEqualsColocated() error {
+	dt := b.deploymentTopology
+	if !dt.explicit {
+		return nil // monolith / no explicit topology: all colocated, no remotes
+	}
+	if b.assemblyCore == nil {
+		return nil // no mounted cells to validate (assembly presence handled elsewhere)
+	}
+	mounted := b.assemblyCore.CellIDs()
+	mountedSet := make(map[string]struct{}, len(mounted))
+	for _, id := range mounted {
+		mountedSet[id] = struct{}{}
+		if _, isRemote := dt.remote[id]; isRemote {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgMountedCellRemote,
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+		if _, isColoc := dt.colocated[id]; !isColoc {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgMountedCellNotColocated,
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+	}
+	for id := range dt.colocated {
+		if _, ok := mountedSet[id]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgColocatedCellNotMounted,
+				errcode.WithInternal(errcode.InternalAttr("cellID", id)),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+	}
 	return nil
 }
 

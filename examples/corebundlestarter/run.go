@@ -74,22 +74,20 @@ func runStarter(ctx context.Context) error {
 		return fmt.Errorf("corebundlestarter: build shared deps: %w", err)
 	}
 
-	// composition.New().With(...).Build(...) is the public API under test (#1085).
-	// Module order mirrors corebundle assembly.yaml cell order purely for
-	// convention/determinism — it is NOT runtime-significant. The former
-	// auditcore→accesscore BootstrapLedgerStore handoff was removed in #1423
-	// (bootstrap auth-fail is now event-driven via event.auth.bootstrap-failed.v1),
-	// so module Provide order carries no cross-cell dependency.
-	// composition.New(<cell ids>) seals the assembly's cell-id closed set (M12a
-	// #1093): Build fail-fasts if the composed modules drift from this declared
-	// set. corebundlestarter mirrors the corebundle cell set.
-	app, err := composition.New("auditcore", "accesscore", "configcore").
-		With(
-			cellmodulesauditcore.Module(),
-			cellmodulesaccesscore.Module(),
-			cellmodulesconfigcore.Module(),
-		).
-		Build(ctx, shared, starterRuntimeOptions(shared))
+	// composition.NewForRole(...).Build(...) is the public subset-mount API
+	// (#2278): the demo SharedDeps carries the zero DeploymentTopology, so this
+	// example mounts every cell (all-colocated monolith) — equivalent to the old
+	// composition.New + closed-set guard. Module order mirrors corebundle
+	// assembly.yaml cell order purely for convention/determinism — it is NOT
+	// runtime-significant. corebundlestarter mirrors the corebundle cell set; the
+	// closed set is sealed by Build (M12a #1093).
+	app, err := composition.NewForRole(
+		[]string{"auditcore", "accesscore", "configcore"},
+		shared.DeploymentTopology,
+		cellmodulesauditcore.Module(),
+		cellmodulesaccesscore.Module(),
+		cellmodulesconfigcore.Module(),
+	).Build(ctx, shared, starterRuntimeOptions(shared))
 	if err != nil {
 		return fmt.Errorf("corebundlestarter: Build: %w", err)
 	}

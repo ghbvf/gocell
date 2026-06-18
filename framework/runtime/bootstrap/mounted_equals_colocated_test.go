@@ -29,7 +29,7 @@ import (
 )
 
 // mountedAssembly builds an un-started CoreAssembly with the given cell IDs
-// registered, modelling the cells THIS process actually mounts.
+// registered, modeling the cells THIS process actually mounts.
 func mountedAssembly(t *testing.T, ids ...string) *assembly.CoreAssembly {
 	t.Helper()
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "mec-test", DurabilityMode: outbox.DurabilityDemo})
