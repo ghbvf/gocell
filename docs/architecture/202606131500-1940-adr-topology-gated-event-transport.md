@@ -123,6 +123,34 @@ sealed `IsRealBroker()`（«non-nil ≠ real broker» 收口，见 ADR 1423 的 
 - **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01）+
   `framework/runtime/bootstrap/event_transport_kind.go`。
 
+## Amendment 2026-06-18（#2152 PR-2）：per-cell broker URL dedup（egress-only）
+
+`Config` 从单 `AMQPURL string` 改为 `Cells map[string]string`（per-cell broker URL）。composition root
+按 cell 读 `GOCELL_<CELLID>_AMQP_URL`（缺省回退 assembly 级 `GOCELL_AMQP_URL`），传入 `Resolve`；新增纯函数
+`dedupBrokerURL` 按 URL 去重，是 `cellmodules/percellpg.Resolve`（per-cell DSN 去重）的 broker 侧孪生。
+
+- **去重语义**：同一 URL（colocated）→ 单 broker 连接（行为不变——旧的单 `GOCELL_AMQP_URL` 接线即「每个 cell
+  回退到同值」这一情形）；distinct URL → **fail-closed**。三道 fail-closed（空 cell 集 / 任一空 URL / >1 distinct）
+  逐字镜像 percellpg。
+- **distinct fail-closed = egress-only 边界**：#2152 PR-1（`bootstrap.WithRelay` keyed-by-instance）只 fan-out
+  了 relay（publisher）侧；subscriber 仍单例（phase6 单 event router）。单 subscriber 下 distinct broker 会孤儿化
+  事件（cell A 发到 broker A，唯一 subscriber 只消费 agreed broker），故 resolver 拒绝 distinct 而非静默切断
+  publish/subscribe 链。lifting（真 N-broker fan-out）需：① ingress fan-out（subscriber 单→N + phase6 N-router，
+  follow-up）；② relay/pool 源 #2341（per-cell PGProvider → N pools → N relays），与 percellpg 的同构 `>1` DSN
+  fail-closed 同步 lift。
+- **评级（AI-robust）**：现有 Hard 边界全保持——`COREBUNDLE-EVENTBUS-FUNNEL-01`（depguard）、
+  `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01`（mint 仍本包，循环 mint N 次不破包级 allowlist）、
+  `SHAREDDEPS-FIELDSET-FROZEN-01`（`Publisher`/`Subscriber` 保持单字段——egress-only 不引入 N subscriber 字段）、
+  `RELAY-SOLE-HOLDER-01`（无新 relay）。唯一新约束 = `dedupBrokerURL` 三道 fail-closed，**Medium**（纯函数
+  startup fail-fast；env URL 组合 type 不可表达，runtime/纯函数 guard 是宪章认可载体；单一 sanctioned 守门点 +
+  穷举单测 + anti-vacuity；blind spot = 无 archtest，与 percellpg 同先例，无低成本 Hard 路径，不立 issue）。
+  **零新增 Soft**。unsafe 态（egress-only + distinct broker）经唯一构造路径 `Resolve` 直接不可得。
+- **威胁矩阵重评**：#1940 原断言「broker 是 assembly 级单连接、per-cell broker seam 有意不建模」**被本 amendment
+  取代**——per-cell broker URL seam 现已建模（egress-only 子集），distinct broker 由 fail-closed 守而非「不可表达」。
+  「postgres 缺 broker URL → fail-closed，不静默降级 in-memory」的核心不变式保持（现按 per-cell 粒度，错误命名
+  `GOCELL_<CELLID>_AMQP_URL`）。
+- **权威语义**：`cellmodules/eventtransport/doc.go`（§"Per-cell broker URL dedup (egress-only, #2152 PR-2)"）。
+
 ## 参考
 
 - 对称 funnel：`kernel/outbox/mode_resolver.go`（`ResolveEmitter`）、`cellmodules/replaydeps`（#825/#2017）
