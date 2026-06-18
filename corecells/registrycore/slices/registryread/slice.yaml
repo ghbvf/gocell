@@ -1,0 +1,15 @@
+id: registryread
+belongsToCell: registrycore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages:
+  - contract: http.registry.contract.list.v1
+    role: serve
+verify:
+  unit:
+    - unit.registryread.service
+  contract:
+    - contract.http.registry.contract.list.v1.serve
+  waivers: []
+allowedFiles:
+  - corecells/registrycore/slices/registryread/**

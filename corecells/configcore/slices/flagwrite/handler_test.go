@@ -222,9 +222,17 @@ func TestFlagUpdateAdapter_MissingTenant_Returns403Typed(t *testing.T) {
 
 const flagwriteBasePath = "/api/v1/flags"
 
+// testFlagWriteResolver mirrors the cellHTTPResolver for flagwrite handler tests.
+var testFlagWriteResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.flags.create.v1": "flag:write",
+	"http.config.flags.update.v1": "flag:write",
+	"http.config.flags.toggle.v1": "flag:write",
+	"http.config.flags.delete.v1": "flag:write",
+})
+
 // setupFlagwriteHTTPHandler builds an HTTP handler for flagwrite HTTP-level tests.
-// It uses NewHandler (which now wires RequirePermission(authz.PermFlagWrite()))
-// and is the same construction path as production.
+// It uses NewHandler with the contract-derived resolver (#2205) — the same
+// construction path as production.
 func setupFlagwriteHTTPHandler(t *testing.T) http.Handler {
 	t.Helper()
 	repo := mem.NewFlagRepository(clock.Real())
@@ -235,7 +243,7 @@ func setupFlagwriteHTTPHandler(t *testing.T) http.Handler {
 	}
 	mux := celltest.NewTestMux()
 	mux.Route(flagwriteBasePath, func(sub kcell.RouteMux) {
-		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+		if err := NewHandler(svc, testFlagWriteResolver).RegisterRoutes(sub); err != nil {
 			t.Fatalf("RegisterRoutes: %v", err)
 		}
 	})
@@ -354,7 +362,7 @@ func TestFlagwriteHandler_ActionPin_FlagWrite(t *testing.T) {
 
 	mux := celltest.NewTestMux()
 	mux.Route(flagwriteBasePath, func(sub kcell.RouteMux) {
-		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+		if err := NewHandler(svc, testFlagWriteResolver).RegisterRoutes(sub); err != nil {
 			t.Fatalf("RegisterRoutes: %v", err)
 		}
 	})

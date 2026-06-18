@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	evaluate "github.com/ghbvf/gocell/generated/contracts/http/config/flags/evaluate/v1"
 	flagsget "github.com/ghbvf/gocell/generated/contracts/http/config/flags/get/v1"
 	flagslist "github.com/ghbvf/gocell/generated/contracts/http/config/flags/list/v1"
@@ -121,14 +120,14 @@ type Handler struct {
 }
 
 // NewHandler creates a featureflag Handler with generated per-contract handlers.
-// Endpoints are gated by auth.RequirePermission(authz.PermFlagRead()); the ABAC
-// PDP decides — baseline grants admin/super-admin (PR-10b #1348).
-func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermission(authz.PermFlagRead())
+// Endpoints are gated via the contract-derived resolver
+// (endpoints.http.permission overlay, #2205); the ABAC PDP decides — baseline
+// grants admin/super-admin (PR-10b #1348).
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		getH:      flagsget.NewHandler(GetAdapter{svc}, policy),
-		listH:     flagslist.NewHandler(ListAdapter{svc}, policy),
-		evaluateH: evaluate.NewHandler(EvaluateAdapter{svc}, policy),
+		getH:      flagsget.NewHandler(GetAdapter{svc}, resolver),
+		listH:     flagslist.NewHandler(ListAdapter{svc}, resolver),
+		evaluateH: evaluate.NewHandler(EvaluateAdapter{svc}, resolver),
 	}
 }
 

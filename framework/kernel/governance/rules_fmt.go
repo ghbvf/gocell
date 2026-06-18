@@ -1103,6 +1103,72 @@ func (v *Validator) validateFMT41Resource(c *metadata.ContractMeta, file string,
 	return nil
 }
 
+// fieldEndpointsHTTPPermission anchors FMT-42 findings on the user-editable HTTP
+// permission overlay field (endpoints.http.permission, #2205).
+const fieldEndpointsHTTPPermission = "endpoints.http.permission"
+
+// validateFMT42 validates the HTTP route permission overlay (endpoints.http.permission,
+// #2205) — the HTTP sibling of FMT-41's gRPC permission guards. The overlay is SPARSE
+// and OPTIONAL during the #2205 migration: a standard route WITHOUT it keeps the legacy
+// hand-wired gate, so an absent permission is legal and NOT flagged here ("standard
+// route MUST declare permission" is the PR-13 Hard-ification, not this rule). When the
+// overlay IS present, FMT-42 owns the two metadata-pure guards governance can decide
+// without reading code:
+//
+//   - no-gate mutex: permission requires a RequirePermission gate, but the no-gate auth
+//     modes (public / bootstrap / clientsOnly / serviceOwned) replace or delegate that
+//     gate — carrying an action on them is contradictory (mirrors FMT-41's public⊕permission).
+//   - permission closed-set: a non-empty permission must be a member of the closed authz
+//     registry (authz.IsKnownPermissionString) — a typo fails at validate time rather
+//     than at the runtime resolver. The schema if/then also enforces the mutex; FMT-42 is
+//     the governance-layer sibling that additionally checks registry membership (which
+//     JSON Schema cannot express) and produces an actionable finding.
+//
+// AI-robust: Medium (governance YAML-metadata validate layer, same tier as FMT-41). The
+// Hard binding is the codegen funnel: cellgen renders the cell resolver from this overlay
+// and runtime/auth.NewStaticMethodPolicyResolver fail-fasts on an unknown action at
+// construction (defense-in-depth). The reach into pkg/authz is legal because authz is a
+// leaf pkg package (kernel→pkg is allowed), same as FMT-41.
+func (v *Validator) validateFMT42() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if cellvocab.ContractKind(c.Kind) != cellvocab.ContractHTTP {
+			continue
+		}
+		h := c.Endpoints.HTTP
+		if h == nil || h.Permission == "" {
+			// Sparse overlay: an absent permission is legal during the #2205 migration.
+			continue
+		}
+		results = append(results, v.validateFMT42ForContract(c, h)...)
+	}
+	return results
+}
+
+// validateFMT42ForContract runs the FMT-42 guards for a single http contract that
+// declares a non-empty endpoints.http.permission overlay.
+func (v *Validator) validateFMT42ForContract(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) []ValidationResult {
+	file := contractFile(c)
+	var results []ValidationResult
+	if h.Auth.Public || h.Auth.Bootstrap || h.Auth.ClientsOnly || h.Auth.ServiceOwned {
+		results = append(results, v.newError(
+			codeFMT42, IssueInvalid, file, fieldEndpointsHTTPPermission,
+			fmt.Sprintf("http contract %q sets endpoints.http.permission %q together with a no-gate auth mode "+
+				"(public/bootstrap/clientsOnly/serviceOwned), which has no RequirePermission gate to carry an action", c.ID, h.Permission),
+			"remove endpoints.http.permission, or drop the conflicting auth mode (permission applies to standard or passwordResetExempt routes)",
+		))
+	}
+	if !authz.IsKnownPermissionString(h.Permission) {
+		results = append(results, v.newError(
+			codeFMT42, IssueInvalid, file, fieldEndpointsHTTPPermission,
+			fmt.Sprintf("http contract %q has endpoints.http.permission %q, which is not a member of the "+
+				"closed authz permission registry", c.ID, h.Permission),
+			"use a registered authz action string (e.g. config:read); add a new Perm* to framework/pkg/authz if needed",
+		))
+	}
+	return results
+}
+
 // dupKey reports whether name is already in seen, inserting it when absent. It
 // keeps validateFMT41ForContract's per-entry switch a flat dispatch (cognitive
 // complexity ≤ 15) instead of nesting a seen-check inside the loop body.

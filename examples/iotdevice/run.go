@@ -273,7 +273,8 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	// Relay registered LAST → stopped FIRST (LIFO): the relay must stop before the
 	// pool closes (durable) so no in-flight poll touches a closed pool.
-	opts = append(opts, bootstrap.WithRelay(crs.relay))
+	// Colocated single-pod: one relay under the default infra instance (#2152 PR-1).
+	opts = append(opts, bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), crs.relay))
 	app := bootstrap.New(clk, opts...)
 
 	logger.Info("iotdevice: starting on :8083; protected routes require an RS256 bearer token")

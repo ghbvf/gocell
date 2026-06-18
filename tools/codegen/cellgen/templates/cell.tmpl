@@ -8,6 +8,9 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+{{- if .HTTPMethodPermissions }}
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+{{- end }}
 {{- if or .WebhookReceivers .WebhookDispatches }}
 	webhook "github.com/ghbvf/gocell/framework/kernel/webhook"
 {{- end }}
@@ -34,6 +37,19 @@ var _ cell.Cell = (*{{.StructName}})(nil)
 var cellMeta = {{ .RenderedMetaLiteral }}
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+{{- if .HTTPMethodPermissions }}
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+{{- range .HTTPMethodPermissions }}
+	{{ printf "%q" .FullMethod }}: {{ printf "%q" .Permission }},
+{{- end }}
+})
+{{- end }}
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {

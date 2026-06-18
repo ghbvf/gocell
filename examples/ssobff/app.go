@@ -253,8 +253,18 @@ func resolveSSOBFFInfra(ctx context.Context, clk clock.Clock) (ssobffInfra, erro
 	if err != nil {
 		return ssobffInfra{}, fmt.Errorf("ssobff: resolve replay deps: %w", err)
 	}
+	// ssobff is a colocated single-broker example: its one broker cell may set
+	// GOCELL_SSOBFF_AMQP_URL, falling back to the assembly-wide GOCELL_AMQP_URL —
+	// mirroring cmd/corebundle's per-cell convention so a fail-closed error names a
+	// real env var (the key "ssobff" derives GOCELL_SSOBFF_AMQP_URL). Config.Cells
+	// is per-cell (#2152 PR-2); dedup collapses the sole entry to one connection
+	// (same behavior as the previous single-URL wiring).
+	brokerURL := os.Getenv("GOCELL_SSOBFF_AMQP_URL")
+	if brokerURL == "" {
+		brokerURL = os.Getenv("GOCELL_AMQP_URL")
+	}
 	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
-		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
+		Cells: map[string]string{"ssobff": brokerURL},
 	})
 	if err != nil {
 		closeManagedResources(ctx, rd.Resources)
@@ -300,7 +310,8 @@ func buildSSOBFFBootstrapOptions(
 		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
 	// LIFO close: relay registered last → stopped first; relay must stop before pool closes.
-	opts = append(opts, bootstrap.WithRelay(relayWorker))
+	// Colocated single-pod: one relay under the default infra instance (#2152 PR-1).
+	opts = append(opts, bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker))
 	// ABAC PDP injector for the primary listener (#1348 PR-10a) + the mandatory gRPC
 	// listener (accesscore registers grpc.auth.session.verify.v1 unconditionally, #1154).
 	opts = append(opts, authGRPCOpts...)

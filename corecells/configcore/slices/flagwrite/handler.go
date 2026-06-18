@@ -9,7 +9,6 @@ import (
 	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	create "github.com/ghbvf/gocell/generated/contracts/http/config/flags/create/v1"
 	flagsdelete "github.com/ghbvf/gocell/generated/contracts/http/config/flags/delete/v1"
 	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
@@ -125,15 +124,15 @@ type Handler struct {
 }
 
 // NewHandler creates a flagwrite Handler with generated per-contract handlers.
-// Endpoints are gated by auth.RequirePermission(authz.PermFlagWrite()); the ABAC
-// PDP decides — baseline grants admin/super-admin (PR-10b #1348).
-func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermission(authz.PermFlagWrite())
+// Endpoints are gated via the contract-derived resolver
+// (endpoints.http.permission overlay, #2205); the ABAC PDP decides — baseline
+// grants admin/super-admin (PR-10b #1348).
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		createH: create.NewHandler(CreateAdapter{svc}, policy),
-		updateH: update.NewHandler(UpdateAdapter{svc}, policy),
-		toggleH: toggle.NewHandler(ToggleAdapter{svc}, policy),
-		deleteH: flagsdelete.NewHandler(FlagDeleteAdapter{svc}, policy),
+		createH: create.NewHandler(CreateAdapter{svc}, resolver),
+		updateH: update.NewHandler(UpdateAdapter{svc}, resolver),
+		toggleH: toggle.NewHandler(ToggleAdapter{svc}, resolver),
+		deleteH: flagsdelete.NewHandler(FlagDeleteAdapter{svc}, resolver),
 	}
 }
 

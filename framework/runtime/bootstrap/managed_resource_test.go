@@ -406,7 +406,7 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Relay-via-WithRelay tests (TM2/TM3/TM4)
-// These tests use WithRelay(relay) — *Relay does not satisfy ManagedResource
+// These tests use WithRelay(DefaultInstanceKey(), relay) — *Relay does not satisfy ManagedResource
 // at the type level (see relay_adapter.go + ADR
 // docs/architecture/202605201400-adr-relay-managedresource-isolation.md), so
 // WithManagedResource(relay) is a compile-time type-mismatch and the relay
@@ -479,7 +479,7 @@ func TestWithRelay_RegistersProbes(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -550,7 +550,7 @@ func TestWithRelay_TrippedBudget_Returns503(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -649,7 +649,7 @@ func TestWithRelay_DisabledBudget_SkipsChecker(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []auth.ListenerAuth{auth.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(testtime.D2s),
-		WithRelay(relay),
+		WithRelay(DefaultInstanceKey(), relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 

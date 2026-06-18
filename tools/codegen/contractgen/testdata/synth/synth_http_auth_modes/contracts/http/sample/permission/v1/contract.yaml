@@ -1,0 +1,25 @@
+id: http.sample.permission.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  http:
+    method: DELETE
+    path: /api/v1/sample/permission/{id}
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    permission: config:read
+    successStatus: 204
+    noContent: true
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

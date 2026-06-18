@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 )
@@ -37,6 +38,28 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.delete.v1":         "config:write",
+	"http.config.flags.create.v1":   "flag:write",
+	"http.config.flags.delete.v1":   "flag:write",
+	"http.config.flags.evaluate.v1": "flag:read",
+	"http.config.flags.get.v1":      "flag:read",
+	"http.config.flags.list.v1":     "flag:read",
+	"http.config.flags.toggle.v1":   "flag:write",
+	"http.config.flags.update.v1":   "flag:write",
+	"http.config.get.v1":            "config:read",
+	"http.config.list.v1":           "config:read",
+	"http.config.publish.v1":        "config:publish",
+	"http.config.rollback.v1":       "config:publish",
+	"http.config.update.v1":         "config:write",
+	"http.config.write.v1":          "config:write",
+})
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *ConfigCore) Init(ctx context.Context, reg cell.Registrar) error {

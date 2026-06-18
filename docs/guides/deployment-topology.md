@@ -2,49 +2,68 @@
 
 ## What is `assembly.yaml topology`?
 
-The optional `topology` section in `assembly.yaml` declares the **deployment
-placement** of an assembly's cells: which cells run in the same process
-(colocated) and which run as separate remote services (remote).
+The optional `topology` section in `assembly.yaml` declares the **complete
+deployment-partition graph** of an assembly's cells: one `group` per deployment
+role, each hosting a set of cells reachable at an `endpoint`. A process selects
+one role at startup (`GOCELL_CELL_ROLE`, #1423 PR-2); that group's cells run
+in-process, every other group is a remote peer.
 
 ```yaml
 topology:
-  colocated:
-    - accesscore
-    - configcore
-  remote:
-    - cellID: auditcore
-      endpoint: "auditcore.internal:9090"
+  groups:
+    - role: core
+      cells: [accesscore, configcore]
+      endpoint: "https://core.internal:9443"
+    - role: edge
+      cells: [auditcore]
+      endpoint: "https://auditcore.internal:9090"
 ```
 
 ## Default: omit for single-process (all-colocated)
 
 Omitting `topology` entirely means **all cells are co-located in the same
-process** — the zero-migration default. This is the correct choice for most
-assemblies and requires no configuration change.
+process** — the zero-migration default (the single-binary monolith). This is the
+correct choice for most assemblies and requires no configuration change.
 
 ## Rules
 
 - **Exhaustive partition**: every cell declared in the assembly's `cells[]`
-  must appear in exactly one of `colocated[]` or `remote[]`.
-- **Mutual exclusion**: a cell cannot appear in both lists simultaneously.
-- **Endpoint format**: remote cell endpoints must be a bare `host:port` or an
-  `http`/`https` URL with a non-empty host. Other schemes (e.g. `grpc://`) are
-  rejected. **Non-loopback remote endpoints must use `https` scheme** (enforced
-  by `gocell validate` rule TOPO-14, #2263). Loopback endpoints
-  (`localhost`/`127.x.x.x`/`::1`) may use bare `host:port` or `http` for local
-  multi-process dev.
-- **Remote placement**: declaring `topology.remote` is now production-reachable.
-  US4 #1963 wired in-process transport selection; US5 #1966 added the
-  `RemoteHTTPTransport` and removed the TOPO-12 fail-close gate. A real event
-  broker is required for split topologies (TOPO-13).
+  must appear in exactly one `group`.
+- **Mutual exclusion**: a cell cannot appear in more than one group.
+- **Unique role**: each group's `role` is non-empty and unique within the assembly.
+- **Endpoint per group**: every group declares a reachable `endpoint` (from any
+  other role's perspective it is a remote peer). The endpoint must be a bare
+  `host:port` or an `http`/`https` URL with a non-empty host. Other schemes
+  (e.g. `grpc://`) are rejected. **Non-loopback group endpoints must use `https`
+  scheme** in a split (≥2 groups) topology (enforced by `gocell validate` rule
+  TOPO-14, #2263). Loopback endpoints (`localhost`/`127.x.x.x`/`::1`) may use
+  bare `host:port` or `http` for local multi-process dev.
+- **Split requires a broker**: when an event's publisher and subscriber land in
+  different groups, a real event broker is required (TOPO-13).
 
-## Current status: `topology.remote` is production-reachable (US5 #1966)
+## Current status: `topology.groups` authoring + runtime role selection (PR-2)
 
-`topology.remote` is now active. US4 #1963 wired topology-gated transport
-selection (`celltransport.Resolve`) and in-process dispatch; US5 #1966
-introduced `RemoteHTTPTransport` + `StaticResolver` and removed the TOPO-12
-fail-close gate. Both `topology.colocated` and `topology.remote` are honored
-by `gocell validate`, `gocell generate`, and the composition root.
+`topology.groups` is the authoring model (#2278 PR-1, replacing the earlier
+single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/13/14),
+`gocell generate` (emits `generatedTopologyGroups()`), and the catalog export all
+operate on groups.
+
+Runtime role selection landed in #2278 PR-2: the composition root calls
+`bootstrap.SpecForRole(generatedTopologyGroups(), os.Getenv("GOCELL_CELL_ROLE"))`
+and mounts the result via `composition.NewForRole`:
+
+- **empty `GOCELL_CELL_ROLE` + 0/1 group** → all-colocated monolith (zero spec).
+- **empty role + ≥2 groups** → fail-fast: a multi-group topology is a split
+  deployment, so the process MUST select its role (a silent monolith would mask
+  the misconfiguration).
+- **`GOCELL_CELL_ROLE=<role>`** → this process hosts that group's cells
+  (colocated) and reaches every other group's cells as remote.
+- **unknown role** → fail-fast (the server log lists the declared `availableRoles`).
+
+The bootstrap `MOUNTED-EQUALS-COLOCATED-01` phase guard fail-fasts if a process
+ever mounts a cell declared remote for its role (the upstream backstop for
+`NewForRole`). End-to-end dual-topology acceptance (same image, 2 processes +
+broker + PG) is tracked by #1967 (PR-4).
 
 A split topology requires a real event broker (TOPO-13 enforces this). See the
 §Split topology requirements section below for the full infrastructure checklist.
@@ -67,17 +86,50 @@ Four governance rules enforce deployment topology:
 
 | Rule | What it checks |
 |------|---------------|
-| **TOPO-10** | Structural validity: mutual exclusion, exhaustive partition, valid endpoints |
-| **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell reachable (colocated or remote) within that assembly |
-| **TOPO-13** | Active broker gate (US3 #1965): in a split topology, an event contract whose publisher and subscriber fall on opposite sides of the process boundary requires a real broker — the in-memory EventBus cannot deliver events across processes |
-| **TOPO-14** | mTLS scheme gate (#2263): a non-loopback remote cell endpoint must use `https` scheme — bare `host:port` or `http://` is rejected for non-loopback addresses |
+| **TOPO-10** | Structural validity: groups exhaustively + mutually-exclusively partition the assembly's cells; unique non-empty roles; valid per-group endpoints |
+| **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell as a member of that assembly |
+| **TOPO-13** | Active broker gate (US3 #1965): in a split topology (≥2 groups), an event contract whose publisher and subscriber fall in different groups requires a real broker — the in-memory EventBus cannot deliver events across processes |
+| **TOPO-14** | mTLS scheme gate (#2263): in a split topology, a non-loopback group endpoint must use `https` scheme — bare `host:port` or `http://` is rejected for non-loopback addresses |
 
-Run `gocell validate` to check all three. TOPO-12 (the former topology.remote
-fail-close gate) was removed by US5 #1966 — `topology.remote` is now
-production-reachable. TOPO-13 is the active event-specific broker gate for split
-topologies: it fires when a split topology uses an in-memory EventBus for a
-cross-process event contract. Correctness is proven by synthetic RED/GREEN unit
-tests.
+Run `gocell validate` to check all four. TOPO-12 (the former topology.remote
+fail-close gate) was removed by US5 #1966. TOPO-13 is the active event-specific
+broker gate for split topologies: it fires when a split topology uses an
+in-memory EventBus for a cross-process (different-group) event contract.
+Correctness is proven by synthetic RED/GREEN unit tests.
+
+### Missing-dependency fail-fast (sync dimension)
+
+A consumed `http` (sync) contract whose provider cell is not reachable in the
+deployment topology is rejected at **two** layers, so a missing sync dependency
+never surfaces only at request time:
+
+- **Static** (`gocell validate` **TOPO-11**, above): the provider must be a member
+  of the assembly — with TOPO-10's exhaustive partition that means it is placed in
+  some group (co-located here, or remote elsewhere).
+- **Runtime** (`celltransport.Resolve`, eager at module-wiring / startup): the
+  composition root resolves each consumed sync client's transport against the
+  sealed topology. A provider that is neither co-located nor remote fails closed
+  with `KindInternal`; the error bubbles up and the process does not start
+  (FR-004). `CELLTRANSPORT-SELECT-FUNNEL-01` makes this seam the sole construction
+  site for cross-cell sync transports, so no sync call can bypass it. The diagnostic
+  names two failure classes: `topology under-declared` (the provider has no place in
+  the topology) and `local dependency missing` (the provider is co-located but not
+  mounted in this process).
+
+The offending `cellID` is on the `KindInternal` error in the **server log**
+(`InternalAttr`, never on the wire). Operator action by class:
+
+- `topology under-declared` → the provider is not in any group: add it to the right
+  `topology.groups` group (co-located here, or another group whose endpoint this
+  process reaches as remote).
+- `local dependency missing` → the provider is declared co-located for this role but
+  its module was not wired: confirm the composition root mounts that cell (e.g. it is
+  in the role's group and `composition.NewForRole` selected it).
+
+The event dimension is covered separately by the broker gate (TOPO-13 + bootstrap
+phase0, US3 #1965). There is **no** separate phase0 missing-dependency gate — the
+eager `celltransport.Resolve` seam already provides the runtime fail-fast (see ADR
+`202606131142-1423` §#1967 Amendment).
 
 ## Example YAML
 
@@ -90,13 +142,13 @@ cells:
   - id: configcore
 
 topology:
-  colocated:
-    - accesscore
-    - configcore
-  remote:
-    - cellID: auditcore
-      endpoint: "auditcore.svc:9090"
-      # or: endpoint: "https://auditcore.internal/"
+  groups:
+    - role: core
+      cells: [accesscore, configcore]
+      endpoint: "https://core.svc:9443"
+    - role: edge
+      cells: [auditcore]
+      endpoint: "https://auditcore.svc:9090"
 ```
 
 ## Split topology requirements (US4 #1963 + US5 #1966, now active)
@@ -105,7 +157,9 @@ When cells are split across processes, the following infrastructure is required:
 
 - **Event transport broker** (US3 #1965, enforced): remote cells need a real
   message broker (e.g. RabbitMQ) to exchange events across process boundaries.
-  In postgres topology this is provisioned via `GOCELL_AMQP_URL`. A split
+  In postgres topology this is provisioned per cell via `GOCELL_<CELLID>_AMQP_URL`
+  (falling back to the assembly-wide `GOCELL_AMQP_URL`; #2152 PR-2 — colocated cells
+  dedup to one connection, distinct broker URLs are currently fail-closed). A split
   topology combined with an in-memory EventBus is rejected by a **double gate**:
   the static `gocell validate` rule TOPO-13 and a bootstrap **phase0 runtime
   gate** (`validateSplitTopologyBroker`) that fail-fasts when the deployment has
@@ -167,14 +221,15 @@ When cells are split across processes, the following infrastructure is required:
   完整威胁矩阵见 ADR `202606171200-2263-adr-cross-cell-transport-mtls.md` §威胁矩阵。
 
 Currently, `cmd/corebundle` is an all-colocated assembly and does not use
-split topology in production. `topology.remote` is production-reachable as of
-US5 #1966; token-layer per-cell identity isolation landed in #2153; transport-layer
-mTLS peer authentication landed in #2263 (non-loopback split now requires mTLS,
-fail-closed — see §Split mTLS 配置 checklist below).
+split topology in production. A split `topology.groups` topology is
+production-reachable as of US5 #1966; token-layer per-cell identity isolation
+landed in #2153; transport-layer mTLS peer authentication landed in #2263
+(non-loopback split now requires mTLS, fail-closed — see §Split mTLS 配置
+checklist below).
 
 ## Split mTLS 配置 checklist
 
-适用于 `topology.remote` 含**非 loopback** remote cell 的所有生产部署（#2263，ZT-1）。
+适用于 `topology.groups` 含**非 loopback** group endpoint 的所有 split 生产部署（#2263，ZT-1）。
 
 ### 前置条件：证书要求
 
@@ -241,8 +296,12 @@ openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 
 ```yaml
 topology:
-  remote:
-    - cellID: auditcore
+  groups:
+    - role: core
+      cells: [accesscore]
+      endpoint: "https://core.internal:9443"
+    - role: edge
+      cells: [auditcore]
       endpoint: "https://auditcore.internal:9090"  # 正确：https
       # endpoint: "auditcore.internal:9090"         # 错误：非 loopback 裸 host:port 被 TOPO-14 拒绝
       # endpoint: "http://auditcore.internal:9090"  # 错误：非 loopback http 被 TOPO-14 拒绝

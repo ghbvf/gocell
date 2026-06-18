@@ -156,6 +156,73 @@ Repro: go test ./tools/archtest -run 'TestRELAY_NOT_MANAGEDRESOURCE_01' -count=1
 Dependent contracts (governance scan): none — ManagedResource interface signature unchanged
 ```
 
+## Amendment 2026-06-18 — #2152 PR-1：relay 运行期 fan-out（keyed-by-instance）
+
+> 本 amendment 重写上文 §Decision D2 与 §威胁矩阵中「单 relay per Bootstrap」的隐含前提。
+> 原文针对 PR #593 单 relay 边界 bug；#2152 把 relay 通道提升为按去重基建实例 keyed 的集合。
+
+### 背景
+
+#1964（PR #2151，MERGED）落地 per-cell DB 凭据/连接 seam（`cellmodules/percellpg`），但运行期
+relay 仍是单例：`WithRelay` 第二次调用 panic（单 relay 不变式），故 distinct per-cell 基建连接
+无法真正运行（percellpg 对 >1 distinct DSN fail-closed）。#2152 PR-1 建立 **bootstrap relay
+fan-out seam**：relay 通道一体重构为「按去重基建实例 keyed」集合。
+
+### 变更
+
+- **keying 维度 = sealed `InfraInstanceKey`**（`runtime/bootstrap/infra_instance_key.go`）：
+  unexported `id` 字段 → 包外不可 struct-literal 伪造非默认值（Hard sealed construction）；
+  `DefaultInstanceKey()` = 零值（colocated 单实例哨兵），`NewInfraInstanceKey(id)` 在 mint 期
+  校验 id 为 snake_case 标识符（≤32）。**该键在 PR-1 冻结，PR-2 复用给 pub/sub，不改键、不重写
+  relay 第二遍。**
+- **`WithRelay(key, r)`**：`b.relay *Relay` 单字段 → `b.relaysByInstance map[InfraInstanceKey]*Relay`。
+  同 key 重绑 panic（语义从「per Bootstrap 唯一」→「per instance key 唯一」，仍防 double-managed
+  危害）；不同 key 累加（fan-out），各 append 一个 `relayAdapter`。
+- **`relayAdapter` 结构不变**——仍包单个 relay；现在有 N 个实例。LIFO teardown（slice）天然支持 N。
+  唯一新增：非默认实例的 relay 操作 probe 经 sanctioned `healthz.RelayInstanceProbeName` 按 instance
+  id 命名空间化（`outbox_relay_poll_<id>`），避免 N relay 在全局 probe 名冲突；colocated 默认实例
+  probe 名不变（运维契约保持）。relay_adapter.go 因此进 `PROBENAME-SEALED-FUNNEL-01/A2` 内部
+  allowlist（与 emitter/projection/tailer 同族 composed-name 构造）。
+- **`pub/sub` 通道不动**（仍单例）：relay 各自在构造期已持自己的 publisher，故 relay 通道独立可 key；
+  broker（pub/sub）fan-out 归 PR-2。
+- **不在本 PR**：`percellpg` fail-closed 保留（生产 per-cell-provider 馈送未接前放行 distinct DSN 会
+  不一致）；composition `SharedDeps.PG` 单例→per-cell 线程化、`cap_wiring` 开 N 池 = follow-up issue。
+
+### `RELAY-SOLE-HOLDER-01` 重写（D4 扩展，Hard 不变）
+
+`RELAY-NOT-MANAGEDRESOURCE-01` 不变。`RELAY-SOLE-HOLDER-01`（原 PR-593 后续新增）**直接重写**为
+keyed-by-instance 不变式（不走「先保留后推翻」）：
+
+- 保留**类型级 sole-holder**：ManagedResource 实现者中只有 `relayAdapter` 类型可持 relay。N 个
+  relayAdapter **实例**合法（即 fan-out）；替代 holder **类型**仍拒。
+- **强化**：`fieldHoldsRelay` 递归 slice/array/map element——任何 MR 类型持 `[]*Relay`/`map[K]*Relay`
+  relay 集合都被拒（堵 keyed 世界出现的「替代 collection-holder MR」绕过路径）。fan-out 集合本身
+  （`Bootstrap.relaysByInstance`）合法且不被扫描：`*Bootstrap` 不实现 ManagedResource。
+- 新增 synthetic-type 单测 `TestFieldHoldsRelay_DetectsCollections` 证明 collection 递归非空挂。
+
+### 威胁矩阵（重评，supersede 上文相关行）
+
+| 威胁 | 本 amendment 后状态 |
+|------|--------------------|
+| 同一 instance key 二次 `WithRelay` | panic via panicregister.Approved（B 类）fail-fast（上文行的 keyed 化等价物） |
+| 不同 instance key `WithRelay`（fan-out） | **合法累加**（上文「静默覆盖」行在 keyed 模型下被此取代：不同实例本就该各有 relay） |
+| 替代 ManagedResource 类型持 `*Relay` 或 `[]*Relay`/`map[K]*Relay` relay 集合 | archtest `RELAY-SOLE-HOLDER-01` 红（强化后含 collection） |
+| N relay 全局 probe 名冲突 | `expandManagedResources` fail-fast；非默认实例经 `RelayInstanceProbeName` 命名空间化避免 |
+| 未来恢复 `Close` 方法绕过 type isolation | `RELAY-NOT-MANAGEDRESOURCE-01` 红（不变） |
+
+### 影响面（增量）
+
+| 文件 | 变更 |
+|------|------|
+| `runtime/bootstrap/infra_instance_key.go` | **新增** sealed `InfraInstanceKey` + 2 minter |
+| `runtime/bootstrap/bootstrap.go` | `relay` 单字段 → `relaysByInstance` keyed map |
+| `runtime/bootstrap/options_events.go` | `WithRelay(key, r)`；同-key panic；godoc |
+| `runtime/bootstrap/relay_adapter.go` | `newRelayAdapter(key, r)`；非默认实例 probe 命名空间化 |
+| `kernel/healthz/probename.go` | **新增** `RelayInstanceProbeName` composed-name 构造器 |
+| `tools/archtest/relay_isolation_test.go` | `RELAY-SOLE-HOLDER-01` keyed 重写 + collection 强化 + synthetic 单测 |
+| `tools/archtest/probename_sealed_funnel_test.go` | A2 内部 allowlist 加 relay_adapter.go |
+| `cellmodules/configcore/storage.go`、`examples/{iotdevice,ssobff}` | `WithRelay(DefaultInstanceKey(), r)` |
+
 ## 参考
 
 - 上游 backlog: `docs/backlog/20260520/202605191800-pr589-review-fixup-backlog.md`

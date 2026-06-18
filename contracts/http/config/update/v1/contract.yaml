@@ -12,6 +12,7 @@ endpoints:
   http:
     method: PUT
     path: /api/v1/config/{key}
+    permission: config:write
     pathParams:
       key:
         type: string

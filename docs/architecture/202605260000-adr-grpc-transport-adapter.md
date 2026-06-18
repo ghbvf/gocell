@@ -362,7 +362,14 @@ mirrors HTTP `RequirePermission` forwarding `r.URL.Path`).
 
 - **transport-neutral `authz.MethodPolicyResolver`** (the issue's "重构"): would
   require migrating HTTP's per-route hand-written gates to contract-derived metadata —
-  **#2205** (still open).
+  **#2205**. **Delivered (base wave) in PR #2350** — `authz.MethodPolicyResolver`
+  interface (`pkg/authz`), `auth.NewStaticMethodPolicyResolver` + `RequirePermissionForContract`
+  (`runtime/auth`), `endpoints.http.permission` overlay + cellgen-derived cell resolver,
+  governance `FMT-42`, archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`, and the configcore
+  pilot (all 5 HTTP slices). The gRPC `ServiceRegistrar` satisfies the same interface via a
+  one-line assertion (zero wiring change). Remaining HTTP cells (accesscore owner-scoped /
+  auditcore / examples) + the PERMISSION-BASED-AUTHZ-01 Hard-ification stay deferred to the
+  PR-13 follow-ups tracked off #2205.
 - **`internalOnly`**: PR-11 internal cell-to-cell gRPC boundary.
 
 > **Delivered in #2207** (see "Amendment 2026-06-18 — #2207" below), no longer

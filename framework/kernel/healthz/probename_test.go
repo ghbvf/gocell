@@ -145,6 +145,82 @@ func TestEmitterFailOpenProbeName_InvalidCellID(t *testing.T) {
 	}
 }
 
+func TestRelayInstanceProbeName_Valid(t *testing.T) {
+	t.Parallel()
+
+	got, err := RelayInstanceProbeName(ProbeName("outbox_relay_poll"), "poola")
+	if err != nil {
+		t.Fatalf("RelayInstanceProbeName unexpected error: %v", err)
+	}
+	if want := ProbeName("outbox_relay_poll_poola"); got != want {
+		t.Errorf("RelayInstanceProbeName = %q, want %q", got, want)
+	}
+}
+
+// TestRelayInstanceProbeName_MaxBudget exercises the worst-case composed length:
+// the longest relay base ("outbox_relay_cleanup", 20) + "_" + a 32-char instance
+// id (runtime/bootstrap.infraInstanceIDMaxLen) = 53 chars, which must stay within
+// probeNameMaxLen (64). This is the executable proof behind the "unreachable
+// panic" claim in runtime/bootstrap/relay_adapter.go: any id accepted at key mint
+// composes into a valid probe name.
+func TestRelayInstanceProbeName_MaxBudget(t *testing.T) {
+	t.Parallel()
+
+	id := strings.Repeat("a", 32)
+	got, err := RelayInstanceProbeName(ProbeName("outbox_relay_cleanup"), id)
+	if err != nil {
+		t.Fatalf("RelayInstanceProbeName(longest base, 32-char id) unexpected error: %v", err)
+	}
+	if want := ProbeName("outbox_relay_cleanup_" + id); got != want {
+		t.Errorf("RelayInstanceProbeName(max budget) = %q, want %q", got, want)
+	}
+	if len(string(got)) > probeNameMaxLen {
+		t.Fatalf("composed name %d chars exceeds probeNameMaxLen %d", len(string(got)), probeNameMaxLen)
+	}
+}
+
+func TestRelayInstanceProbeName_Invalid(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"hyphen", "pool-a"},
+		{"uppercase", "PoolA"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := RelayInstanceProbeName(ProbeName("outbox_relay_poll"), tc.id)
+			if err == nil {
+				t.Errorf("RelayInstanceProbeName(id=%q) expected error, got nil", tc.id)
+			}
+		})
+	}
+}
+
+// TestRelayInstanceProbeName_InvalidBase verifies the base allowlist (F2 #2338):
+// a non-relay-operation base must be rejected, so this relay-specific composer
+// cannot mint a misleading "outbox_relay_*"-shaped name from an arbitrary
+// ProbeName. The three real relay bases must be accepted.
+func TestRelayInstanceProbeName_InvalidBase(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []ProbeName{"postgres_ready", "outbox_relay", "outbox_relay_poll_extra", "config_watcher", ""} {
+		if _, err := RelayInstanceProbeName(bad, "poola"); err == nil {
+			t.Errorf("RelayInstanceProbeName(base=%q) expected error, got nil", bad)
+		}
+	}
+	for _, ok := range []ProbeName{"outbox_relay_poll", "outbox_relay_reclaim", "outbox_relay_cleanup"} {
+		if _, err := RelayInstanceProbeName(ok, "poola"); err != nil {
+			t.Errorf("RelayInstanceProbeName(base=%q) unexpected error: %v", ok, err)
+		}
+	}
+}
+
 func TestProjectionStoreReadyProbeName(t *testing.T) {
 	t.Parallel()
 

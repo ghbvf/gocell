@@ -305,7 +305,7 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		}
 		return fooCoreModuleResult{
 			cellOptions:   cellOpts,
-			bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(relayWorker)},
+			bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)},
 			// provisional is empty for foocore postgres path — pool is owned by
 			// shared.PG (shared across cells); only cell-exclusive resources go here.
 		}, nil
@@ -362,14 +362,18 @@ Close）；单源把两个阶段绑定到**同一个** `Resources` 声明——�
 > steady-state 路径只在**成功**时由 `bootstrap.Run` 接管——两条路径互斥，同一资源在 bootstrap
 > managed 集合中至多出现一次。
 
-后台 worker 型资源（例如 outbox relay）走独立的 `bootstrap.WithRelay(relayWorker)` 进
-`ModuleResult.Opts`（**不**进 `Resources`、**不**经 `WithManagedResource`）。`WithRelay` 是
-relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由 package-private
+后台 worker 型资源（例如 outbox relay）走独立的
+`bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)` 进 `ModuleResult.Opts`
+（**不**进 `Resources`、**不**经 `WithManagedResource`）。`WithRelay` 第一参是
+`bootstrap.InfraInstanceKey`——共址（colocated）单池用 `bootstrap.DefaultInstanceKey()`；split
+拓扑下每个去重基建实例用 `bootstrap.NewInfraInstanceKey(<id>)` 各注册一个 relay（#2152 PR-1 fan-out）。
+`WithRelay` 是 relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由 package-private
 `relayAdapter` 包装到 ManagedResource 流水线（详见 ADR
 `docs/architecture/202605201400-adr-relay-managedresource-isolation.md` + archtest
 `RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01`）——`*Relay` 自身不实现
-ManagedResource，直接传给 `WithManagedResource` 是编译期 type-mismatch，二次调用 `WithRelay`
-会通过 panic-taxonomy funnel 触发 `panicregister.Approved + errcode.Assertion(B 类)` panic。
+ManagedResource，直接传给 `WithManagedResource` 是编译期 type-mismatch；对**同一 instance key**
+二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
+`panicregister.Approved + errcode.Assertion(B 类)` panic（不同 key 累加 = 正常 fan-out）。
 **共享** PG pool 由 `SharedDeps.PG` 持有，其 ManagedResource 在 composition root 的 base
 options 中先于所有 cell opts 注册 → LIFO 下最后 Close（晚于每个 cell 的 relay）；只有 cell
 **独占**的资源才进 `ModuleResult.Resources`。foocore 走共享 pool，故其 `Resources` 为空，
@@ -378,7 +382,7 @@ options 中先于所有 cell opts 注册 → LIFO 下最后 Close（晚于每个
 ```
 每个 module Provide 返回 ModuleResult{Cell, Opts, Resources}:
   Resources = [resX]                        // 单源——Builder 派生 steady-state + rollback
-  Opts      = [..., bootstrap.WithRelay(w)] // 后台 worker（非 ManagedResource）
+  Opts      = [..., bootstrap.WithRelay(DefaultInstanceKey(), w)] // 后台 worker（非 ManagedResource）
 
 —— 全部成功 ——
 Builder 从各 module 的 Resources 派生 WithManagedResource(resX)

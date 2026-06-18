@@ -10,6 +10,7 @@ endpoints:
   http:
     method: PUT
     path: /api/v1/flags/{key}
+    permission: flag:write
     pathParams:
       key:
         type: string

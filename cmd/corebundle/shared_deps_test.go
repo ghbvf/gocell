@@ -124,3 +124,34 @@ func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyW
 	assert.Equal(t, "127.0.0.1:9091", compShared.HealthHTTPAddr)
 	assert.True(t, compShared.HealthLocalOnly)
 }
+
+// TestLoadSharedDepsFromEnv_NonEmptyCellRoleFailsClosed verifies the #2278 F1 fix:
+// the composition root reads GOCELL_CELL_ROLE and forwards it to
+// bootstrap.SpecForRole. PR-1 supports only the all-colocated monolith, so a
+// non-empty role must fail closed at startup (ERR_VALIDATION_FAILED) rather than
+// be silently ignored (which would mount the full monolith while the operator
+// believes they selected a split role).
+func TestLoadSharedDepsFromEnv_NonEmptyCellRoleFailsClosed(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "memory")
+	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", "")
+	t.Setenv("GOCELL_HTTP_HEALTH_LOCAL_ONLY", "1")
+	t.Setenv("GOCELL_SINGLE_POD", "1")
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+	// The role selector that PR-1 does not yet support → must fail closed.
+	t.Setenv("GOCELL_CELL_ROLE", "core")
+
+	_, _, err := LoadSharedDepsFromEnv(context.Background())
+	require.Error(t, err, "a non-empty GOCELL_CELL_ROLE must fail closed on a PR-1 build")
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED",
+		"fail-closed role error must surface SpecForRole's ERR_VALIDATION_FAILED")
+}

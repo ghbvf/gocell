@@ -524,7 +524,13 @@ var a2FunnelInternalAllowlist = map[string]struct{}{
 	// SagaTailerReadyProbeName constructor (cellID+projectionID runtime composition,
 	// not a const) and passes the result to NewProbe — same funnel-internal shape
 	// as kernel/projection/probe.go (#1609 PR-04).
-	"runtime/saga/tailer/probe.go":                             {},
+	"runtime/saga/tailer/probe.go": {},
+	// relayAdapter.Probes scopes a fanned-out relay's operation probes by infra
+	// instance id via the sanctioned RelayInstanceProbeName constructor (instance
+	// id runtime composition, not a const) and passes the results to NewProbe —
+	// same funnel-internal shape as emitter.go / kernel/projection/probe.go
+	// (#2152 PR-1, relay fan-out).
+	"runtime/bootstrap/relay_adapter.go":                       {},
 	"runtime/bootstrap/bootstrap_phases.go":                    {},
 	"runtime/bootstrap/phases_lifecycle.go":                    {},
 	"runtime/observability/healthz/healthztest/conformance.go": {},
