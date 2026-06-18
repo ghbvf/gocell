@@ -17,10 +17,14 @@ import (
 )
 
 // TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
-// produces a non-nil app from composition.Builder.Build (which exercises the relay
-// path and produces non-empty bootstrap opts carrying WithRelay). The test
-// self-provisions PostgreSQL via testcontainers so CI cannot go green by omitting
-// external DSN configuration.
+// produces a non-nil app from composition.Builder.Build. The test self-provisions
+// PostgreSQL via testcontainers so CI cannot go green by omitting external DSN
+// configuration.
+//
+// After #2341, configcore no longer contributes relay bootstrap opts; relay
+// registration is handled by cap_wiring (composition root) and its assertion lives
+// in corebundle_pg_env_integration_test.go (locals.relayOpts non-empty). This test
+// only verifies that postgres-mode Build succeeds (app != nil).
 //
 // Pool provisioning has moved to provisionCapabilities; this test opens a pool
 // directly, wraps it into a capability.PGProvider, and injects it via a minimal
@@ -55,25 +59,11 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 
 	mods := generatedCellModules()
 	_ = locals // locals used only for shared deps construction, not module wiring
-	// The RuntimeOptionsFunc captures bootstrap options contributed by cell modules
-	// (e.g. WithRelay from the configcore postgres path). These are exercised by
-	// the composition.Builder.Build call here; we assert they are non-empty to guard
-	// the A11 regression (relay not started).
-	var capturedBootstrapOpts []bootstrap.Option
 	app, buildErr := composition.New(corebundleCellIDs()...).With(mods...).Build(ctx, shared,
 		func(cells []cell.Cell) ([]bootstrap.Option, error) {
-			// Return nil from the runtime func; bootstrap opts from cell modules
-			// are appended inside Build and returned as part of App.opts.
 			_ = cells
 			return nil, nil
 		})
 	require.NoError(t, buildErr, "postgres mode must not error when DSN is valid")
 	assert.NotNil(t, app, "postgres mode must return a non-nil App")
-
-	// The relay is registered via cell module bootstrap opts (A11 fix).
-	// capturedBootstrapOpts is empty because the RuntimeOptionsFunc returns nil;
-	// the relay opts live inside App.opts and are consumed when app.Run is called.
-	// We confirm Build succeeds (non-nil App) as the primary assertion; relay
-	// registration is verified end-to-end in TestOutboxE2E_PGMode_WriteToSubscribe.
-	_ = capturedBootstrapOpts
 }

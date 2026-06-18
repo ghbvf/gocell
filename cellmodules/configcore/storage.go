@@ -31,8 +31,7 @@ type configCoreModuleConfig struct {
 
 // configCoreModuleResult bundles outputs from buildConfigCoreOpts.
 type configCoreModuleResult struct {
-	cellOptions   []configcell.Option
-	bootstrapOpts []bootstrap.Option
+	cellOptions []configcell.Option
 }
 
 // buildConfigCoreOpts selects storage-adapter options based on topology.
@@ -92,25 +91,26 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 }
 
 // buildConfigCoreResult assembles the configcore module result: the cell, the
-// non-resource bootstrap opts, and the single-source ManagedResource list. When
-// the KeyProvider is itself a ManagedResource (vault-transit) it is returned ONLY
-// in the resources slice — Builder.Build derives both the steady-state
-// bootstrap.WithManagedResource registration and the pre-Run rollback from it. This
-// function must NOT call bootstrap.WithManagedResource (banned in cellmodules/ by
-// WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01). Today modResult.bootstrapOpts is empty
-// (the relay moved to the composition root, #2341), but the channel is preserved.
+// non-resource bootstrap opts (always nil — relay moved to composition root,
+// #2341, RELAY-CONSTRUCTION-CELLMODULE-BAN-01), and the single-source
+// ManagedResource list. When the KeyProvider is itself a ManagedResource
+// (vault-transit) it is returned ONLY in the resources slice — Builder.Build
+// derives both the steady-state bootstrap.WithManagedResource registration and the
+// pre-Run rollback from it. This function must NOT call
+// bootstrap.WithManagedResource (banned in cellmodules/ by
+// WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+//
+//nolint:unparam // R2-approved: opts always nil post-#2341; signature kept for call-site symmetry
 func buildConfigCoreResult(
 	c *configcell.ConfigCore,
 	kp kcrypto.KeyProvider,
-	modResult configCoreModuleResult,
+	_ configCoreModuleResult,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource) {
-	opts := modResult.bootstrapOpts
-
 	var resources []kernellifecycle.ManagedResource
 	if kpRes, ok := kp.(kernellifecycle.ManagedResource); ok {
 		resources = append(resources, kpRes)
 	}
-	return c, opts, resources
+	return c, nil, resources
 }
 
 func buildConfigCorePGStorage(

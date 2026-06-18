@@ -50,7 +50,8 @@ func LoadSourceStore(ctx context.Context, shared *composition.SharedDeps) (kwh.S
 	// #2341: shared.PG is now a per-cell PGSet. webhooksource has no assembly/cell
 	// binding today (forward-provisioned, unwired), so it resolves the colocated sole
 	// pool. Split topology (per-cell pools) fails closed here; when a webhook cell is
-	// wired into an assembly its module should resolve shared.PG.ForCell(<cellID>).
+	// wired into an assembly its module should resolve shared.PG.ForCell(<cellID>)
+	// （见 GitHub #2391）.
 	if shared.PG == nil {
 		return nil, fmt.Errorf("webhooksource: postgres mode requires the postgres capability provider")
 	}

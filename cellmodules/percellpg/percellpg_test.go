@@ -261,6 +261,68 @@ func TestResolve_SingleCell(t *testing.T) {
 	}
 }
 
+// TestResolve_SameDSN_DifferentPoolKnobs_FailClosed: two cells sharing the same DSN but
+// declaring different pool knobs (MaxConns) must fail-closed at startup — not silently
+// adopt the first cell's knobs. This is the F2 fix: knob mismatch within a DSN group
+// is a misconfiguration, not a Soft operator convention.
+func TestResolve_SameDSN_DifferentPoolKnobs_FailClosed(t *testing.T) {
+	t.Parallel()
+	topo := mkTopo(t, "real", "postgres", true)
+	const dsn = "postgres://host/db"
+	cfg := Config{
+		Cells: map[string]adapterpg.Config{
+			"accesscore": {DSN: dsn, MaxConns: 10},
+			"auditcore":  {DSN: dsn, MaxConns: 20}, // different MaxConns — must fail
+		},
+	}
+	_, ok, err := Resolve(topo, cfg)
+	if err == nil {
+		t.Fatal("Resolve(same DSN, different MaxConns) = nil error, want fail-closed startup error")
+	}
+	if ok {
+		t.Error("Resolve(same DSN, different MaxConns): want ok=false")
+	}
+	// Error must identify the conflicting cells.
+	if !strings.Contains(err.Error(), "accesscore") {
+		t.Errorf("error = %q, want it to mention cell 'accesscore'", err)
+	}
+	if !strings.Contains(err.Error(), "auditcore") {
+		t.Errorf("error = %q, want it to mention cell 'auditcore'", err)
+	}
+	// Error must carry ERR_VALIDATION_FAILED code.
+	if !strings.Contains(err.Error(), "ERR_VALIDATION_FAILED") {
+		t.Errorf("error = %q, want it to contain ERR_VALIDATION_FAILED", err)
+	}
+}
+
+// TestResolve_SameDSN_SamePoolKnobs_OK: two cells sharing the same DSN with identical
+// pool knobs must succeed — this is the normal colocated case with explicit knob parity.
+func TestResolve_SameDSN_SamePoolKnobs_OK(t *testing.T) {
+	t.Parallel()
+	topo := mkTopo(t, "real", "postgres", true)
+	const dsn = "postgres://host/db"
+	cfg := Config{
+		Cells: map[string]adapterpg.Config{
+			"accesscore": {DSN: dsn, MaxConns: 15},
+			"auditcore":  {DSN: dsn, MaxConns: 15}, // identical knobs — must succeed
+		},
+	}
+	res, ok, err := Resolve(topo, cfg)
+	if err != nil {
+		t.Fatalf("Resolve(same DSN, identical knobs): unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Resolve(same DSN, identical knobs): want ok=true")
+	}
+	if len(res.Instances) != 1 {
+		t.Fatalf("len(Instances) = %d, want 1 (colocated dedup)", len(res.Instances))
+	}
+	inst := res.Instances[bootstrap.DefaultInstanceKey()]
+	if inst.MaxConns != 15 {
+		t.Errorf("instance.MaxConns = %d, want 15", inst.MaxConns)
+	}
+}
+
 func instanceKeys(res Resolution) []bootstrap.InfraInstanceKey {
 	keys := make([]bootstrap.InfraInstanceKey, 0, len(res.Instances))
 	for k := range res.Instances {

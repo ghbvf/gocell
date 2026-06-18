@@ -47,6 +47,10 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
+// accessCellID is the stable cell identifier used in error messages, logs, and
+// ForCell routing.
+const accessCellID = "accesscore"
+
 // envSessionCacheTTL is the env knob that enables AUTH-CACHE-01.
 const envSessionCacheTTL = "GOCELL_SESSION_CACHE_TTL"
 
@@ -70,7 +74,7 @@ type module struct{}
 func Module() composition.CellModule { return module{} }
 
 // ID returns the stable identifier used in error messages and logs.
-func (module) ID() string { return "accesscore" }
+func (module) ID() string { return accessCellID }
 
 // bootstrapAppendDetachedTimeout caps the audit-append emit write so a stalled
 // PG outbox write cannot block the bootstrap rate-limited endpoint indefinitely.
@@ -244,7 +248,7 @@ func accessPostgresOptions(
 	}
 	// Resolve THIS cell's pool provider (#2341): colocated → the shared pool; split →
 	// accesscore's own pool. Fails closed if accesscore has no provisioned pool.
-	pg, pgErr := shared.PG.ForCell("accesscore")
+	pg, pgErr := shared.PG.ForCell(accessCellID)
 	if pgErr != nil {
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: %w", pgErr)
 	}

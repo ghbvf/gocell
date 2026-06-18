@@ -1,6 +1,7 @@
 package percellpg
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -89,30 +90,10 @@ func Resolve(topo bootstrap.Topology, cfg Config) (Resolution, bool, error) {
 				"with a database URL; refusing to start with an empty cell set")
 	}
 
-	// Group cells by trimmed DSN (fail-closed on empty DSN). dsnGroups preserves
-	// the sorted cell order within each group, so groups[0] is the alphabetically
-	// -first cell (the rep). dsnConfig keeps each DSN's pool knobs (first cell wins;
-	// cells sharing a DSN must configure identical knobs since they share the pool).
-	dsnGroups := make(map[string][]string)
-	dsnConfig := make(map[string]adapterpg.Config)
-	var dsnOrder []string
-	for _, id := range cellIDs {
-		cellCfg := cfg.Cells[id]
-		trimmed := strings.TrimSpace(cellCfg.DSN)
-		if trimmed == "" {
-			envVar := "GOCELL_" + strings.ToUpper(id) + "_DATABASE_URL"
-			return Resolution{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"percellpg: postgres-requiring cell is missing its per-cell database URL; "+
-					"refusing to silently share another cell's pool",
-				errcode.WithInternal(errcode.InternalAttr("cell_id", id)),
-				errcode.WithInternal(errcode.InternalAttr("env_var", envVar)),
-			)
-		}
-		if _, seen := dsnConfig[trimmed]; !seen {
-			dsnConfig[trimmed] = cellCfg
-			dsnOrder = append(dsnOrder, trimmed)
-		}
-		dsnGroups[trimmed] = append(dsnGroups[trimmed], id)
+	// Group cells by trimmed DSN, fail-closing on empty DSN and knob mismatches.
+	dsnGroups, dsnConfig, dsnOrder, err := groupCellsByDSN(cellIDs, cfg.Cells)
+	if err != nil {
+		return Resolution{}, false, err
 	}
 
 	res := Resolution{
@@ -140,4 +121,149 @@ func Resolve(topo bootstrap.Topology, cfg Config) (Resolution, bool, error) {
 	}
 
 	return res, true, nil
+}
+
+// groupCellsByDSN groups sorted cell IDs by their trimmed DSN. It is extracted
+// from Resolve to keep that function's cognitive complexity within the ≤15 limit.
+//
+// Returns:
+//   - dsnGroups: DSN → sorted cell IDs.
+//   - dsnConfig: DSN → the Config of the alphabetically-first cell in the group
+//     (all pool knobs are identical after the knobs consistency check).
+//   - dsnOrder: DSNs in first-seen order (stable because cellIDs is pre-sorted).
+//   - error: fail-closed on empty DSN or pool-knob mismatch within a DSN group.
+func groupCellsByDSN(cellIDs []string, cells map[string]adapterpg.Config) (
+	dsnGroups map[string][]string,
+	dsnConfig map[string]adapterpg.Config,
+	dsnOrder []string,
+	err error,
+) {
+	dsnGroups = make(map[string][]string)
+	dsnConfig = make(map[string]adapterpg.Config)
+
+	for _, id := range cellIDs {
+		cellCfg := cells[id]
+		trimmed := strings.TrimSpace(cellCfg.DSN)
+		if trimmed == "" {
+			envVar := "GOCELL_" + strings.ToUpper(id) + "_DATABASE_URL"
+			return nil, nil, nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"percellpg: postgres-requiring cell is missing its per-cell database URL; "+
+					"refusing to silently share another cell's pool",
+				errcode.WithInternal(errcode.InternalAttr("cell_id", id)),
+				errcode.WithInternal(errcode.InternalAttr("env_var", envVar)),
+			)
+		}
+		if _, seen := dsnConfig[trimmed]; !seen {
+			dsnConfig[trimmed] = cellCfg
+			dsnOrder = append(dsnOrder, trimmed)
+		}
+		dsnGroups[trimmed] = append(dsnGroups[trimmed], id)
+	}
+
+	// Knobs consistency gate: within each DSN group every cell must declare the
+	// same pool knobs (MaxConns, IdleTimeout, MaxLifetime, ConnectTimeout). Sharing
+	// a DSN means sharing a pool — mismatched knobs are a misconfiguration; the
+	// previous "first cell wins" behavior was a silent data loss.
+	for _, dsn := range dsnOrder {
+		if kerr := checkGroupKnobs(dsn, dsnGroups[dsn], cells); kerr != nil {
+			return nil, nil, nil, kerr
+		}
+	}
+
+	return dsnGroups, dsnConfig, dsnOrder, nil
+}
+
+// poolKnobs holds only the connection-pool tuning fields of an adapterpg.Config
+// that all cells sharing the same DSN must agree on.
+type poolKnobs struct {
+	MaxConns       int32
+	IdleTimeout    interface{}
+	MaxLifetime    interface{}
+	ConnectTimeout interface{}
+}
+
+// checkGroupKnobs verifies that all cells in a DSN group declare identical pool
+// knobs (MaxConns / IdleTimeout / MaxLifetime / ConnectTimeout). DSN and
+// RequireRestrictedRole are intentionally excluded: RequireRestrictedRole is
+// applied uniformly from cfg.RequireRestrictedRole; DSN equality is what defines
+// the group in the first place.
+//
+// Returns a fail-closed errcode error naming the conflicting cell IDs and the
+// first differing knob when any mismatch is detected. The error carries
+// WithInternal attrs (cell_ids, knob) so the detail stays server-side only.
+func checkGroupKnobs(dsn string, group []string, cells map[string]adapterpg.Config) error {
+	if len(group) <= 1 {
+		return nil
+	}
+	ref := cells[group[0]]
+	refKnobs := poolKnobs{
+		MaxConns:       ref.MaxConns,
+		IdleTimeout:    ref.IdleTimeout,
+		MaxLifetime:    ref.MaxLifetime,
+		ConnectTimeout: ref.ConnectTimeout,
+	}
+	for _, id := range group[1:] {
+		c := cells[id]
+		cKnobs := poolKnobs{
+			MaxConns:       c.MaxConns,
+			IdleTimeout:    c.IdleTimeout,
+			MaxLifetime:    c.MaxLifetime,
+			ConnectTimeout: c.ConnectTimeout,
+		}
+		if knob := firstDifferingKnob(refKnobs, cKnobs); knob != "" {
+			cellIDs := strings.Join(group, ", ")
+			return errcode.New(
+				errcode.KindInvalid,
+				errcode.ErrValidationFailed,
+				"percellpg: cells sharing the same DSN must declare identical pool knobs; "+
+					"refusing to start with ambiguous pool configuration",
+				errcode.WithInternal(errcode.InternalAttr("cell_ids", cellIDs)),
+				errcode.WithInternal(errcode.InternalAttr("knob", knob)),
+				errcode.WithInternal(errcode.InternalAttr("dsn_prefix", dsnPrefix(dsn))),
+			)
+		}
+	}
+	return nil
+}
+
+// firstDifferingKnob returns the name of the first knob that differs between a
+// and b, or "" if all knobs are identical. The check order is deterministic so
+// error messages are stable across runs.
+func firstDifferingKnob(a, b poolKnobs) string {
+	if a.MaxConns != b.MaxConns {
+		return "MaxConns"
+	}
+	if a.IdleTimeout != b.IdleTimeout {
+		return "IdleTimeout"
+	}
+	if a.MaxLifetime != b.MaxLifetime {
+		return "MaxLifetime"
+	}
+	if a.ConnectTimeout != b.ConnectTimeout {
+		return "ConnectTimeout"
+	}
+	return ""
+}
+
+// dsnPrefix returns a non-sensitive prefix of the DSN for diagnostic context,
+// truncated after the host to avoid leaking credentials or database names.
+func dsnPrefix(dsn string) string {
+	const maxLen = 40
+	// Strip userinfo (credentials) from the prefix: find "://" and skip to host.
+	if i := strings.Index(dsn, "://"); i >= 0 {
+		rest := dsn[i+3:]
+		// Skip userinfo@: everything up to the last '@' before the first '/'.
+		if at := strings.LastIndex(strings.SplitN(rest, "/", 2)[0], "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		candidate := fmt.Sprintf("%s://%s", dsn[:i], rest)
+		if len(candidate) > maxLen {
+			return candidate[:maxLen] + "…"
+		}
+		return candidate
+	}
+	if len(dsn) > maxLen {
+		return dsn[:maxLen] + "…"
+	}
+	return dsn
 }

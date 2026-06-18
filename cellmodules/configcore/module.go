@@ -34,6 +34,10 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
 
+// configCellID is the stable cell identifier used in error messages, logs, and
+// ForCell routing.
+const configCellID = "configcore"
+
 // ModuleOption configures a configcore module.
 type ModuleOption func(*module)
 
@@ -62,7 +66,7 @@ func Module(opts ...ModuleOption) composition.CellModule {
 }
 
 // ID returns the stable identifier used in error messages and logs.
-func (*module) ID() string { return "configcore" }
+func (*module) ID() string { return configCellID }
 
 // Provide resolves all configcore-specific dependencies and returns the
 // constructed cell, non-resource bootstrap options, and the single-source
@@ -114,7 +118,7 @@ func (m *module) Provide(
 	// (buildConfigCorePostgresOpts is never reached); fails closed on a missing pool.
 	var configPG capability.PGProvider
 	if shared.PG != nil {
-		p, pgErr := shared.PG.ForCell("configcore")
+		p, pgErr := shared.PG.ForCell(configCellID)
 		if pgErr != nil {
 			return composition.ModuleResult{}, fmt.Errorf("configcore: %w", pgErr)
 		}

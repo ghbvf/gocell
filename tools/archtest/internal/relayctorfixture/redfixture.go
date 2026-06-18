@@ -5,6 +5,13 @@
 // RELAY-CONSTRUCTION-CELLMODULE-BAN-01 (see
 // relay_construction_cellmodule_ban_test.go).
 //
+// Note: the archtest_fixture build tag used on this file is NOT a standard
+// `go build` tag recognised by the toolchain. It is injected internally by
+// archtest.Fixture() when loading fixture packages for scanner red-case
+// verification. A plain `go build ./cellmodules/...` (or `./tools/...`) never
+// activates this tag and therefore never compiles this file into production
+// binaries.
+//
 // Gated by the archtest_fixture build tag; production builds never see this
 // file. Loaded by TestRelayConstructionCellmoduleBan_RedFixtureDetected via
 // Run(t, archtest.Fixture(...)) (which injects the archtest_fixture tag) and run

@@ -106,6 +106,11 @@ func (pgSet) isPGSet() {
 // no cells, or a cell mapped to two pools — rather than building a half-wired set.
 // Sole() reports true iff there is exactly one instance (colocated). Called only
 // from the assembly wiring site (cmd/<id>/cap_wiring.go).
+//
+// A nil or empty instances slice is valid by design: it produces an empty set where
+// every ForCell call returns an error (fail-closed) and Sole() returns (nil, false).
+// This is the memory-topology path where no postgres pool is provisioned; cell
+// modules take their in-memory repository path instead.
 func NewPGSet(instances []PGInstance) (PGSet, error) {
 	byCell := make(map[string]PGProvider)
 	for _, inst := range instances {

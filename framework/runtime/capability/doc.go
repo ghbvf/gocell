@@ -5,10 +5,18 @@
 // # Why assembly-level (not per-cell)
 //
 // A capability is a fx.Supply-shaped shared value, not a per-cell constructor.
-// The composition root provisions one postgres pool / one redis client and
-// hands the same handle to every module that needs it. Per-cell construction
-// would open one pool per cell, breaking the single-pool + LIFO-shutdown
-// invariant and contradicting the one-outbox-table / one-relay model. See ADR
+// The composition root provisions postgres pool(s) / one redis client and
+// injects them into every consuming cell module via the sealed PGSet resolver:
+//
+//   - Colocated topology: one pool serves all cells; every ForCell call returns
+//     the same PGProvider (Sole() reports true). This preserves the single-pool
+//   - LIFO-shutdown invariant and the one-outbox-table / one-relay model.
+//   - Split topology (#2341): N distinct-DSN pools are provisioned, one per
+//     distinct DSN group. Each cell module calls ForCell(cellID) to obtain its
+//     own pool's PGProvider; Sole() returns (nil, false). One relay per pool
+//     drains that pool's outbox traffic.
+//
+// Redis is always single-instance (no per-cell Redis today). See ADR
 // docs/architecture/202605251500-adr-capability-provider-interface.md.
 //
 // # Layering: runtime/capability never imports adapters/

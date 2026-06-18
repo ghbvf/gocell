@@ -47,6 +47,18 @@
 //   - BS-2 Reflection construction: out of scope per ai-robust.md §3.
 //   - BS-3 _test.go scope: Typed(Tests:false) loads production variants only; the
 //     scanner additionally filters _test.go by rel suffix as defense-in-depth.
+//   - BS-4 examples/ composition roots: the scanner covers ./cellmodules/... only and
+//     intentionally excludes examples/. examples/ssobff/app.go and
+//     examples/iotdevice/run.go are composition roots that legitimately call
+//     outboxruntime.NewRelay and bootstrap.WithRelay — these are the correct
+//     sanctioned sites for those examples (analogous to cmd/corebundle/cap_wiring.go).
+//     Extending the scan to ./examples/... would false-positive on those root files.
+//     Narrowing to examples/*/cells/** to catch only example cell implementations is
+//     structurally fragile (example directory layouts are not enforced). This gap is
+//     accepted: example cell directories currently hold zero relay constructions, and
+//     the pattern is documented in code review guidance. Hard-ening path: if a
+//     standard examples/cells/ layout is enforced, extend the scan with a path filter
+//     that excludes root files (run.go / app.go). Filed as a known Medium→Hard gap.
 
 package archtest
 

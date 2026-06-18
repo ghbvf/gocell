@@ -45,11 +45,15 @@
 //
 // # Pool knobs
 //
-// For each DSN group the agreed pool knobs (MaxConns / IdleTimeout / MaxLifetime)
-// are taken from the alphabetically-first cell in that group. In colocated mode this
-// is always accesscore (a < au < c). In split mode each group uses its own rep
-// cell's knobs — operators MUST set pool knobs identically within each DSN group;
-// per-cell pool-knob isolation across groups is naturally achieved by distinct DSNs.
+// All cells within a DSN group must declare identical pool knobs
+// (MaxConns / IdleTimeout / MaxLifetime / ConnectTimeout). Sharing a DSN means
+// sharing a pool — any mismatch is fail-closed at startup with an errcode error
+// that carries the conflicting cell IDs and the first differing knob name in
+// its WithInternal context (server-side only, never on wire). This replaces the
+// former Soft convention ("operators MUST set identically; first cell wins"),
+// which silently discarded non-rep cell knobs. In split mode each group uses its
+// own rep cell's knobs; per-cell pool-knob isolation across groups is naturally
+// achieved by distinct DSNs.
 //
 // # Fail-closed invariants (the two surviving gates)
 //
