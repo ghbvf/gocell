@@ -184,8 +184,9 @@ local-var laundering + map-value 读，由 `TestDedupBrokerURL_CredentialNonLeak
 ### 威胁矩阵补全
 
 本 amendment 补全 ADR 1423 §"安全模型与已知缺口"中「共享 AMQP broker 凭据」行（详见 ADR 1423
-的对应 amendment）。PR-2 的 fail-closed 是隔离的充分前提——distinct URL 被拒绝即意味着今天
-colocated 模式下所有 cell 共享同一 AMQP 凭据（预期行为），而 split 运行期隔离须等 #2366/#2341。
+的对应 amendment）。PR-2 的 distinct-URL fail-closed 是当前的安全边界守门：它**拒绝** distinct
+per-cell URL，故今天 colocated 模式下所有 cell 共享同一 AMQP 凭据（预期行为）；真正的 split
+运行期隔离（每 cell 独立凭据/连接）须等 distinct-URL 被允许，即 #2366/#2341 lift egress-only 之后。
 
 **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01
 + §Per-cell credential/vhost isolation）。

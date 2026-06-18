@@ -109,7 +109,14 @@
 // typed field-selection AST scan with go/types identity for rabbitmq.Config.URL
 // and brokerSpec.url). Blind spot: local-variable laundering and map-value reads
 // (cells[id]) are not field selections and fall outside the scan; these paths are
-// covered by TestDedupBrokerURL_CredentialNonLeak (behavior test).
+// covered by TestDedupBrokerURL_CredentialNonLeak (behavior test). Second blind
+// spot: resolveRabbitMQ wraps the rabbitmq.NewConnection error with
+// fmt.Errorf("...: %w", err); that err is not a .URL/.url selection, so the scan
+// does not inspect it. Non-leak there rests on an adapter precondition — the dial
+// path pre-sanitizes via sanitizeDialError before the error escapes NewConnection
+// (a Soft caller-side contract in adapters/rabbitmq, not a Medium guard here);
+// tightening it would require NewConnection to return an already-redacted sealed
+// error type.
 //
 // # Per-cell AMQP credential/vhost isolation (#2152 PR-3)
 //
@@ -130,6 +137,12 @@
 // requires:
 //   - ingress fan-out (#2366, subscriber single → N + phase6 N-router);
 //   - per-cell relay fan-out (#2341, per-cell PGProvider → N pools → N relays).
+//
+// Ops note: until #2366/#2341 land, an operator MUST configure an identical
+// GOCELL_<CELLID>_AMQP_URL for every broker cell in an assembly (or rely on the
+// shared GOCELL_AMQP_URL fallback). A distinct value fails closed at Resolve with
+// distinct_url_count in the internal attrs — that is the expected egress-only
+// boundary, not a misconfiguration to "fix" by other means.
 //
 // Credentials are never written to error strings or logs; the sanitize funnel in
 // adapters/rabbitmq (sanitizeURL / sanitizeErrorURL / sanitizeDialError) is the

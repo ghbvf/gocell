@@ -236,7 +236,8 @@ func collectAMQPURLLeakDiagsFile(
 				Message: "AMQP-URL-REDACTION-FUNNEL-01: AMQP URL field selection " +
 					"flows into a slog/fmt/errcode sink without sanitizer protection — " +
 					"AMQP URLs carry user:pass credentials; wrap with sanitizeURL / " +
-					"sanitizeErrorURL / sanitizeDialError before passing to any sink",
+					"sanitizeErrorURL / sanitizeDialError (defined in " +
+					"adapters/rabbitmq/connection.go) before passing to any sink",
 			})
 		}
 	})
@@ -331,4 +332,38 @@ func TestAMQPURLRedaction_ScannerNonVacuous(t *testing.T) {
 			"anywhere in the scanned packages — "+
 			"the go/types resolution path may be silently broken; "+
 			"verify that rabbitmq.Config.URL and brokerSpec.url are correctly matched")
+}
+
+// TestAMQPURLRedaction_SanitizerBoundarySuppresses proves the sanitizer stopAt
+// boundary itself is non-vacuous: it must suppress at least one real
+// URL-into-sink violation in production code. Counting diagnostics with the
+// boundary enabled (FunnelOnly mode) vs disabled (DetectsWithoutFunnel mode), the
+// enabled count must be strictly lower — i.e. ≥1 inline sanitizer(.URL) call in a
+// sink arg is actually being recognized as a boundary. Without this, a renamed or
+// mistyped sanitizer in amqpSanitizerNames could leave the funnel detecting
+// nothing while FunnelOnly still (vacuously) reports zero.
+func TestAMQPURLRedaction_SanitizerBoundarySuppresses(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode")
+	}
+
+	count := func(treatSanitizerSafe bool) int {
+		var diags []Diagnostic
+		pkgs := []string{amqpRabbitmqPkgPath, amqpEventTransportPkgPath}
+		_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, pkgs),
+			func(p *Pass) []Diagnostic {
+				collectAMQPURLLeakDiags(p, &diags, treatSanitizerSafe)
+				return nil
+			})
+		return len(diags)
+	}
+
+	suppressed := count(false) - count(true)
+	assert.GreaterOrEqual(t, suppressed, 1,
+		"AMQP-URL-REDACTION-FUNNEL-01: the sanitizer stopAt boundary suppressed 0 "+
+			"violations (enabled count not lower than disabled count) — "+
+			"a sanitizer name in amqpSanitizerNames may be stale/mistyped, or the "+
+			"production sanitizer-wrapped URL-in-sink callsites were removed; the "+
+			"funnel is no longer proven to redact anything")
 }
