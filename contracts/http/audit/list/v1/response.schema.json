@@ -55,7 +55,14 @@
           "eventId",
           "eventType",
           "actorId",
-          "timestamp"
+          "subjectId",
+          "tenantId",
+          "correlationId",
+          "traceId",
+          "occurredAt",
+          "timestamp",
+          "scope",
+          "payload"
         ]
       }
     },

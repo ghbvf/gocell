@@ -42,16 +42,16 @@ type ResponseDataItem struct {
 	EventID       string `json:"eventId"`
 	EventType     string `json:"eventType"`
 	ActorID       string `json:"actorId"`
-	SubjectID     string `json:"subjectId,omitempty"`
-	TenantID      string `json:"tenantId,omitempty"`
-	CorrelationID string `json:"correlationId,omitempty"`
-	TraceID       string `json:"traceId,omitempty"`
+	SubjectID     string `json:"subjectId"`
+	TenantID      string `json:"tenantId"`
+	CorrelationID string `json:"correlationId"`
+	TraceID       string `json:"traceId"`
 	// format: date-time
 	OccurredAt *string `json:"occurredAt"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
-	Scope     string `json:"scope,omitempty"`
-	Payload   any    `json:"payload,omitempty"`
+	Scope     string `json:"scope"`
+	Payload   any    `json:"payload"`
 }
 
 // ToMap projects ResponseDataItem into the column map the masking funnel

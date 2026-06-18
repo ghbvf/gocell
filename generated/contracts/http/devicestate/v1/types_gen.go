@@ -33,7 +33,7 @@ type ResponseData struct {
 	ObservedAt string `json:"observedAt"`
 	// format: date-time
 	LastSeenAt *string `json:"lastSeenAt"`
-	TenantID   string  `json:"tenantId,omitempty"`
+	TenantID   string  `json:"tenantId"`
 }
 
 // ResponseDataState enumerates the closed value-set of the state field.
