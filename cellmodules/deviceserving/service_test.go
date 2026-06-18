@@ -43,9 +43,47 @@ func denyAuthorizer(reason string) *mockAuthorizer {
 	return &mockAuthorizer{decision: authz.Deny(reason)}
 }
 
+// resourceSpyAuthorizer records the (subject, resource, action) tuple the route
+// gate forwards to the PDP, and returns a fixed Allow. It is the evidence for
+// #2348 F3: the gate must forward the deviceId path param as the ABAC `resource`
+// (not the URL path), so the PDP can decide per-device ownership.
+type resourceSpyAuthorizer struct {
+	gotSubject, gotResource, gotAction string
+	decision                           authz.Decision
+}
+
+func (s *resourceSpyAuthorizer) Authorize(_ context.Context, subject, resource, action string) (authz.Decision, error) {
+	s.gotSubject, s.gotResource, s.gotAction = subject, resource, action
+	return s.decision, nil
+}
+
+// ownerAuthorizer mimics the baseline owner rule `subject.sub == resource.id`:
+// allow iff the caller's subject equals the requested device id, deny otherwise.
+// This is how the path-param gate lets a device read ITS OWN state but blocks
+// device A from reading device B (the per-device isolation F3 makes expressible).
+type ownerAuthorizer struct {
+	allow authz.Decision
+	deny  authz.Decision
+}
+
+func (o *ownerAuthorizer) Authorize(_ context.Context, subject, resource, _ string) (authz.Decision, error) {
+	if subject == resource {
+		return o.allow, nil
+	}
+	return o.deny, nil
+}
+
+func newOwnerAuthorizer(t *testing.T) *ownerAuthorizer {
+	t.Helper()
+	allow, err := authz.Allow(authz.Obligations{})
+	require.NoError(t, err)
+	return &ownerAuthorizer{allow: allow, deny: authz.Deny("not owner")}
+}
+
 // newMux mounts the framework-served devicestate route exactly as bootstrap does
 // (RouteGroup.Register on a bare mux, no prefix), so the test exercises the same
-// device:read RequirePermission gate production uses.
+// auth.RequirePermissionForResource("id", device:read) gate production uses. The
+// authorizer is supplied per-request via auth.WithAuthorizer on the context.
 func newMux(t *testing.T) http.Handler {
 	t.Helper()
 	svc := NewService(clockmock.New(fixedNow))
@@ -56,16 +94,23 @@ func newMux(t *testing.T) http.Handler {
 	return mux
 }
 
-// TestDevicestate_OK: an authenticated admin (allow PDP) gets a 200 whose body
-// reports honest "unknown" presence with observedAt = the determination time.
-func TestDevicestate_OK(t *testing.T) {
+// devicestatePath builds the path-param URL for a device id.
+func devicestatePath(id string) string { return "/api/v1/devicestate/" + id }
+
+func adminCtx(authorizer auth.Authorizer) context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
 	})
-	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	return auth.WithAuthorizer(ctx, authorizer)
+}
+
+// TestDevicestate_OK: an authenticated admin (allow PDP) gets a 200 whose body
+// reports honest "unknown" presence with observedAt = the determination time.
+func TestDevicestate_OK(t *testing.T) {
+	ctx := adminCtx(allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=dev-1", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath("dev-1"), nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
@@ -82,23 +127,57 @@ func TestDevicestate_OK(t *testing.T) {
 	assert.Equal(t, fixedNow.Format(time.RFC3339), env.Data.ObservedAt)
 }
 
-// TestDevicestate_MissingDeviceID: authorized request with no deviceId query
-// param fails the generated handler's validation with 400.
-func TestDevicestate_MissingDeviceID(t *testing.T) {
-	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
-	})
-	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+// TestDevicestate_GateForwardsDeviceIDAsResource is the #2348 F3 evidence: the
+// gate forwards the deviceId path param (not r.URL.Path) to the PDP as resource,
+// and the device:read permission as action.
+func TestDevicestate_GateForwardsDeviceIDAsResource(t *testing.T) {
+	allow, err := authz.Allow(authz.Obligations{})
+	require.NoError(t, err)
+	spy := &resourceSpyAuthorizer{decision: allow}
+	ctx := adminCtx(spy)
+
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath("dev-42"), nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	assert.Equal(t, "dev-42", spy.gotResource, "deviceId path param must be forwarded as PDP resource (F3), not the URL path")
+	assert.Equal(t, authz.PermDeviceRead().String(), spy.gotAction)
+	assert.Equal(t, "admin-1", spy.gotSubject)
 }
 
-// TestDevicestate_Unauthenticated: no principal ⇒ RequirePermission 401.
+// TestDevicestate_PerDeviceOwnership: with an ownership PDP (subject.sub ==
+// resource.id), a device reading its OWN state is allowed (200) but reading
+// another device's state is denied (403) — the per-device isolation that the
+// coarse gate could not express (#2348 F3 / MDM zero-trust boundary).
+func TestDevicestate_PerDeviceOwnership(t *testing.T) {
+	owner := newOwnerAuthorizer(t)
+	const testTenant = "00000000-0000-0000-0000-000000000001"
+	deviceCtx := func(deviceSub string) context.Context {
+		// MustNewTestDevicePrincipal mints a *sealed* device principal — the
+		// sanctioned test path (a bare auth.Principal{Kind: PrincipalDevice} literal
+		// lacks the device seal, per DEVICE-PRINCIPAL-MINT-CALLER-01).
+		ctx := auth.WithPrincipal(context.Background(), auth.MustNewTestDevicePrincipal(deviceSub, testTenant))
+		return auth.WithAuthorizer(ctx, owner)
+	}
+
+	// device dev-A reads its own state → allowed.
+	recOwn := httptest.NewRecorder()
+	reqOwn := httptest.NewRequest(http.MethodGet, devicestatePath("dev-A"), nil).WithContext(deviceCtx("dev-A"))
+	newMux(t).ServeHTTP(recOwn, reqOwn)
+	assert.Equal(t, http.StatusOK, recOwn.Code, "device must read its own state; body=%s", recOwn.Body.String())
+
+	// device dev-A reads dev-B's state → denied (cross-device enumeration blocked).
+	recOther := httptest.NewRecorder()
+	reqOther := httptest.NewRequest(http.MethodGet, devicestatePath("dev-B"), nil).WithContext(deviceCtx("dev-A"))
+	newMux(t).ServeHTTP(recOther, reqOther)
+	assert.Equal(t, http.StatusForbidden, recOther.Code, "device A must not read device B state; body=%s", recOther.Body.String())
+}
+
+// TestDevicestate_Unauthenticated: no principal ⇒ the gate returns 401.
 func TestDevicestate_Unauthenticated(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=dev-1", nil)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath("dev-1"), nil)
 	newMux(t).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code, "body=%s", rec.Body.String())
 }
@@ -110,47 +189,38 @@ func TestDevicestate_Forbidden(t *testing.T) {
 	})
 	ctx = auth.WithAuthorizer(ctx, denyAuthorizer("no device:read"))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=dev-1", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath("dev-1"), nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
 }
 
-// TestDevicestate_EmptyDeviceID: deviceId query param present but empty string
-// → 400. This is distinct from the missing-param case (no key at all): the
-// generated handler treats "" as validation failure regardless of key presence.
-func TestDevicestate_EmptyDeviceID(t *testing.T) {
-	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
-	})
-	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+// TestDevicestate_NoDeviceID_NotFound: the bare /api/v1/devicestate path (no id
+// segment) does not match the path-param route ⇒ 404. With a path-param id the
+// "missing identifier" case is a routing miss, not a 400 validation failure.
+func TestDevicestate_NoDeviceID_NotFound(t *testing.T) {
+	ctx := adminCtx(allowAuthorizer(t))
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId=", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate", nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
+	assert.Equal(t, http.StatusNotFound, rec.Code, "body=%s", rec.Body.String())
 }
 
-// TestDevicestate_DeviceIDMaxLength: deviceId exactly 256 chars (upper bound) → 200.
+// TestDevicestate_DeviceIDMaxLength: id exactly 256 chars (upper bound) → 200.
 func TestDevicestate_DeviceIDMaxLength(t *testing.T) {
-	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
-	})
-	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	ctx := adminCtx(allowAuthorizer(t))
 	rec := httptest.NewRecorder()
 	deviceID := strings.Repeat("a", 256)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId="+deviceID, nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath(deviceID), nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 }
 
-// TestDevicestate_DeviceIDTooLong: deviceId of 257 chars → 400 (len > 256 branch).
+// TestDevicestate_DeviceIDTooLong: id of 257 chars → 400 (len > 256 branch).
 func TestDevicestate_DeviceIDTooLong(t *testing.T) {
-	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
-		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
-	})
-	ctx = auth.WithAuthorizer(ctx, allowAuthorizer(t))
+	ctx := adminCtx(allowAuthorizer(t))
 	rec := httptest.NewRecorder()
 	deviceID := strings.Repeat("a", 257)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devicestate?deviceId="+deviceID, nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, devicestatePath(deviceID), nil).WithContext(ctx)
 	newMux(t).ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 }
@@ -160,7 +230,7 @@ func TestDevicestate_DeviceIDTooLong(t *testing.T) {
 // determination time — never a fabricated online/offline reading.
 func TestService_Devicestate_HonestUnknown(t *testing.T) {
 	svc := NewService(clockmock.New(fixedNow))
-	resp, err := svc.Devicestate(context.Background(), &devicestate.Request{DeviceID: "dev-9"})
+	resp, err := svc.Devicestate(context.Background(), &devicestate.Request{ID: "dev-9"})
 	require.NoError(t, err)
 	_, ok := resp.(devicestate.Devicestate200JSONResponse)
 	assert.True(t, ok, "Service must return a 200 typed response, got %T", resp)

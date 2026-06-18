@@ -22,7 +22,7 @@ import (
 
 // TestFrameworkServing_Smoke_DevicestateReturns401WhenNoToken boots the full
 // corebundle assembly (including framework serving) and asserts that
-// GET /api/v1/devicestate returns 401 Unauthorized without a token.
+// GET /api/v1/devicestate/{id} returns 401 Unauthorized without a token.
 //
 // Key assertion rationale: 401 ≠ 404.
 //   - If WithFrameworkHTTPServing was not called (or the route was never
@@ -77,16 +77,17 @@ func TestFrameworkServing_Smoke_DevicestateReturns401WhenNoToken(t *testing.T) {
 
 	base := "http://" + primaryLn.Addr().String()
 
-	// GET /api/v1/devicestate without a Bearer token.
+	// GET /api/v1/devicestate/{id} without a Bearer token.
 	// Expected: 401 Unauthorized (route is mounted and the JWT auth chain fires).
 	// If framework serving was never mounted: 404 Not Found would be returned
-	// instead, and this assertion would catch the regression.
-	resp, err := http.Get(base + "/api/v1/devicestate?deviceId=dev-1")
+	// instead, and this assertion would catch the regression. The id segment is
+	// required (path param), so it is supplied to reach the mounted route.
+	resp, err := http.Get(base + "/api/v1/devicestate/dev-1")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
-		"GET /api/v1/devicestate without a token must return 401 Unauthorized. "+
+		"GET /api/v1/devicestate/{id} without a token must return 401 Unauthorized. "+
 			"401 ≠ 404: a 404 would indicate the framework RouteGroup was never mounted "+
 			"(WithFrameworkHTTPServing missing or phase5 mount failed). "+
 			"401 proves the route is mounted and the device:read PDP gate fired. "+

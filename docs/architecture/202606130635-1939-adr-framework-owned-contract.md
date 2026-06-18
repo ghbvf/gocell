@@ -172,10 +172,21 @@ fail-fast idiom。故 serving-scan 分两层落地：
 （D4），故 `isActiveServeStylePlatformContract` 结构性排除 `Owner().IsFramework()`（同 REF-03/13/CCE-01 模式）——
 framework 契约的契约级覆盖是 bootstrap/cellmodules 框架层测试，非 cell-slice verify.contract。
 
-**首个 active 锚点**：`http.devicestate.v1`（L0 只读）draft→active；`cellmodules/deviceserving` 提供诚实 baseline
-（无 presence 后端时 `state=unknown` + observedAt=判定时刻，schema 明文「unknown 时 observedAt 仍必填」，绝不臆造
-online/offline）。写路径 + status.v1 留各自 PR 经本 harness active 化。威胁矩阵「active 框架契约静默 dead」行已重评。
+**首个 active 锚点**：`http.devicestate.v1`（L0 只读，`GET /api/v1/devicestate/{id}`）draft→active；`cellmodules/deviceserving`
+提供诚实 baseline（无 presence 后端时 `state=unknown` + observedAt=判定时刻，schema 明文「unknown 时 observedAt 仍必填」，
+绝不臆造 online/offline）。写路径 + status.v1 留各自 PR 经本 harness active 化。威胁矩阵「active 框架契约静默 dead」行已重评。
 威胁矩阵其余行（Hard sealed ContractOwner / Hard D4 结构性 / Medium CONTRACT-OWNER-CELL-FUNNEL-01）在本 amendment 中评级不变，仅「active 框架契约静默 dead」行重评。
+
+**serving 授权形状（#2348 F3）**：active 锚点用 path-param `{id}` + `auth.RequirePermissionForResource("id", PermDeviceRead())`
+门禁——device id 作为 ABAC `resource` 进 PDP（baseline owner 规则 `subject.sub == resource.id`），引擎按 per-device
+ownership 决策，不是 all-or-nothing 的 coarse gate。这是 `PermDeviceRead()` godoc 文档化的形状，与同族 devicecommand
+（`OWNER-SCOPED-GATE-EXACT-SET-01` 冻结集内）一致。平台（accesscore）PDP baseline 暂无 device:read 规则，故 corebundle 上
+该端点对所有人 fail-closed（安全 deny 默认）直到 tenant policy 或 presence-backend PR 供给 device:read 授予。device
+ownership 的数据层（RowScope/tenant 隔离 + 真实 presence 数据）+ accesscore device:read baseline 留 presence-backend PR
+（#2351）。pre-GA wire 破坏窗口内 query→path 原地改 active 版本（§api-versioning 兼容窗口），完成扇出闭环
+（schema→generated→deviceserving service/test→integration→governance fixture→本 ADR）。**`OWNER-SCOPED-GATE-EXACT-SET-01`
+盲区**：该冻结守卫只扫 `corecells/`+`examples/`，不覆盖 `cellmodules/deviceserving` 的 framework-served gate——本 PR 用对了
+governed primitive，但该 gate 暂不受 owner-gate 冻结；是否扩扫描域归 governance 任务（#2351）。
 
 ## 参考
 

@@ -49,7 +49,7 @@ func NewService(clk clock.Clock) *Service {
 // it never fabricates online/offline.
 func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devicestate.DevicestateResponseObject, error) {
 	rd := devicestate.ResponseData{
-		DeviceID: req.DeviceID,
+		DeviceID: req.ID,
 		State:    devicestate.ResponseDataStateUnknown,
 		// TenantID is intentionally left empty: without a device→tenant binding data
 		// source, back-filling the caller's JWT tenant claim would be misleading (that
@@ -68,20 +68,22 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 }
 
 // Route builds the bootstrap.FrameworkServedRoute that mounts http.devicestate.v1
-// on the primary listener, gated by auth.RequirePermission(device:read) — the
-// ABAC PDP decides (baseline grants admin/super-admin). The composition root
+// (GET /api/v1/devicestate/{id}) on the primary listener, gated by
+// auth.RequirePermissionForResource("id", device:read) — the device id path param
+// is forwarded to the PDP as the ABAC `resource`, so the engine decides per-device
+// ownership (baseline owner rule `subject.sub == resource.id`) rather than an
+// all-or-nothing coarse gate. This is the documented PermDeviceRead() shape and
+// matches the sibling devicecommand gate (#2348 F3 / #2351). The composition root
 // passes generatedFrameworkServedContracts() as the must-serve expectation set
 // alongside this route; bootstrap reconciles the two at startup.
 //
-// TODO(#2037-followup, PR-8b): device ownership + tenant scoping before real presence data.
-// This baseline uses a coarse device:read gate (deviceId is a query param, not a path
-// param, so RequirePermissionForResource is not used here). Before real presence data is
-// wired, the device ownership / tenant-scoping access control model must be established
-// (MDM/zero-trust: a device A bearer must not be able to enumerate device B state).
-// Currently the endpoint always returns unknown with no real data, so there is no actual
-// data leakage — but this gate must be tightened before a real presence provider is wired.
+// The platform (corecells/accesscore) PDP baseline grants no device:read rule yet,
+// so on corebundle the endpoint fail-closes to deny until a tenant policy (or the
+// presence-backend PR) supplies a device:read grant — the safe default for an
+// MDM/zero-trust boundary. The device-ownership data-layer (RowScope/tenant
+// isolation against real presence data) is tracked in #2351.
 func (s *Service) Route() bootstrap.FrameworkServedRoute {
-	h := devicestate.NewHandler(s, auth.RequirePermission(authz.PermDeviceRead()))
+	h := devicestate.NewHandler(s, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{
 		ContractID: devicestateContractID,
 		Group: kcell.RouteGroup{
