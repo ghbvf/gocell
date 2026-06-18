@@ -249,8 +249,10 @@ func WithPDPAuthorizer(a auth.Authorizer) AuthOption {
 // single runtime source of the method→permission map, the authorization sibling of
 // the WithPublicMethod single source. A nil resolver is a no-op; the default (no
 // resolver) is fail-closed — every non-public method has no mapping → deny.
-// LAST-WINS (not OR-compose): like password-reset exemption, the permission map has
-// a single source, so a second resolver would be a configuration conflict.
+// LAST-WINS (not OR-compose): the permission map is a single registrar-sourced
+// resolver, NOT a predicate set — unlike the OR-composing public-method (#1675) and
+// password-reset-exempt (#1382) predicate sets, a second permission resolver would be
+// a configuration conflict, not an additive union.
 func WithPermissionResolver(r PermissionResolver) AuthOption {
 	return func(c *authConfig) {
 		if r != nil {
@@ -271,7 +273,8 @@ func WithPermissionResolver(r PermissionResolver) AuthOption {
 // PDP, not denied (so admin/operator who ignore the resource still pass). The SOLE installer
 // is chain.go (GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01). A nil resolver is a no-op;
 // the default (no resolver) is the coarse fallback (fullMethod as resource).
-// LAST-WINS: like password-reset exemption, the resource map has a single source.
+// LAST-WINS: the resource map is a single registrar-sourced resolver (like the
+// permission resolver), NOT an OR-composing predicate set.
 func WithResourceResolver(r ResourceResolver) AuthOption {
 	return func(c *authConfig) {
 		if r != nil {
