@@ -136,7 +136,7 @@ sealed `IsRealBroker()`（«non-nil ≠ real broker» 收口，见 ADR 1423 的 
   了 relay（publisher）侧；subscriber 仍单例（phase6 单 event router）。单 subscriber 下 distinct broker 会孤儿化
   事件（cell A 发到 broker A，唯一 subscriber 只消费 agreed broker），故 resolver 拒绝 distinct 而非静默切断
   publish/subscribe 链。lifting（真 N-broker fan-out）需：① ingress fan-out（subscriber 单→N + phase6 N-router，
-  follow-up）；② relay/pool 源 #2341（per-cell PGProvider → N pools → N relays），与 percellpg 的同构 `>1` DSN
+  #2366）；② relay/pool 源 #2341（per-cell PGProvider → N pools → N relays），与 percellpg 的同构 `>1` DSN
   fail-closed 同步 lift。
 - **评级（AI-robust）**：现有 Hard 边界全保持——`COREBUNDLE-EVENTBUS-FUNNEL-01`（depguard）、
   `EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01`（mint 仍本包，循环 mint N 次不破包级 allowlist）、

@@ -87,7 +87,7 @@
 // resolver refuses distinct broker URLs rather than silently severing the
 // publish/subscribe chain. Lifting it (true N-broker fan-out) requires:
 //
-//   - ingress fan-out: subscriber single → N + a phase6 N-router (follow-up);
+//   - ingress fan-out: subscriber single → N + a phase6 N-router (#2366);
 //   - the relay/pool source: #2341 (per-cell PGProvider → N pools → N relays),
 //     which lifts percellpg's symmetric >1-distinct-DSN fail-closed in lockstep.
 //

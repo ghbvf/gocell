@@ -160,8 +160,8 @@ func dedupBrokerURL(cells map[string]string) (string, error) {
 	if len(seen) > 1 {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"eventtransport: per-cell distinct broker URLs require split-topology ingress "+
-				"fan-out (phase6 N-router) plus per-cell relay fan-out, not yet wired "+
-				"(egress-only, #2152 PR-2 / #2341); colocated assemblies must configure an "+
+				"fan-out (phase6 N-router, #2366) plus per-cell relay fan-out (#2341), not yet "+
+				"wired (egress-only, #2152 PR-2); colocated assemblies must configure an "+
 				"identical GOCELL_<CELLID>_AMQP_URL for every broker cell",
 			errcode.WithInternal(errcode.InternalAttr("distinct_url_count", len(seen))),
 			errcode.WithInternal(errcode.InternalAttr("cell_ids", strings.Join(cellIDs, ","))),
