@@ -157,6 +157,127 @@ func TestBuildGrpcServiceSpecFromCU_MethodPermissions(t *testing.T) {
 	}
 }
 
+// TestBuildGrpcServiceSpecFromCU_PasswordResetExemptMethods verifies the per-method
+// password-reset-exempt overlay (#1382) is composed into
+// GrpcServiceGenSpec.PasswordResetExemptMethods as full method names
+// (/{service}/{name}), only for passwordResetExempt:true entries. Entries without
+// passwordResetExempt:true contribute nothing (fail-closed default).
+func TestBuildGrpcServiceSpecFromCU_PasswordResetExemptMethods(t *testing.T) {
+	t.Parallel()
+
+	cell := &metadata.CellMeta{
+		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml",
+		GoStructName: metadata.MustNewGoIdentifier("Demo"),
+	}
+	contract := &metadata.ContractMeta{
+		ID: "grpc.device.command.v1", Kind: "grpc",
+		Endpoints: metadata.EndpointsMeta{
+			Server: "demo",
+			GRPC: &metadata.GRPCTransportMeta{
+				Service: "device.command.v1.DeviceCommandService",
+				Proto:   "contracts/grpc/device/command/v1/device_command.proto",
+				// Mixed overlay: only the passwordResetExempt:true entry contributes;
+				// the plain permission entry is excluded from PasswordResetExemptMethods.
+				Methods: []metadata.GRPCMethodMeta{
+					{Name: "IssueCommand", Permission: "device:command", PasswordResetExempt: true},
+					{Name: "WatchCommands", Permission: "device:command"},
+				},
+			},
+		},
+	}
+	cu := metadata.ContractUsage{Contract: "grpc.device.command.v1", Role: "serve"}
+	slc := &metadata.SliceMeta{
+		ID: "command", BelongsToCell: "demo", Dir: "command",
+		File:           "cells/demo/slices/command/slice.yaml",
+		ContractUsages: []metadata.ContractUsage{cu},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
+
+	got, err := buildGrpcServiceSpecFromCU(p, "demo", "command", cu, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/device.command.v1.DeviceCommandService/IssueCommand"}
+	if !slices.Equal(got.PasswordResetExemptMethods, want) {
+		t.Errorf("PasswordResetExemptMethods = %v, want %v (non-exempt entry must be excluded)", got.PasswordResetExemptMethods, want)
+	}
+}
+
+// TestRenderCell_GRPC_PasswordResetExempt verifies the template renders the
+// PasswordResetExemptMethods field when present, and omits it when absent — the
+// same guard as the PublicMethods field (empty guard → nothing rendered).
+func TestRenderCell_GRPC_PasswordResetExempt(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	// passwordResetExempt:true overlay with an accompanying permission (required by
+	// schema: exempt methods are non-public and still need ABAC authorization).
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command", PasswordResetExempt: true},
+	}
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
+	}
+
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	if !bytes.Contains(out, []byte("PasswordResetExemptMethods")) {
+		t.Errorf("grpc spec with passwordResetExempt:true must render PasswordResetExemptMethods field, got:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("/device.command.v1.DeviceCommandService/IssueCommand")) {
+		t.Errorf("PasswordResetExemptMethods must contain the full method name, got:\n%s", out)
+	}
+}
+
+// TestRenderCell_GRPC_PasswordResetExempt_Omitted verifies the template omits
+// PasswordResetExemptMethods when no method in the overlay has passwordResetExempt:true.
+func TestRenderCell_GRPC_PasswordResetExempt_Omitted(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCRoot(t)
+
+	// Permission-only overlay — no passwordResetExempt:true entry.
+	pm := buildGRPCProject()
+	pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = []metadata.GRPCMethodMeta{
+		{Name: "IssueCommand", Permission: "device:command"},
+	}
+
+	spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if err := EnrichGrpcServicesWithProtoInfo(spec, root); err != nil {
+		t.Fatalf("EnrichGrpcServicesWithProtoInfo: %v", err)
+	}
+
+	out, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	if bytes.Contains(out, []byte("PasswordResetExemptMethods")) {
+		t.Errorf("permission-only grpc cell must omit PasswordResetExemptMethods field, got:\n%s", out)
+	}
+}
+
 // TestEnrichGrpcServices_BogusOverlayMethodRejected proves the cellgen path
 // (gocell generate cell) fail-closes a public-method overlay entry that names an
 // RPC absent from the proto service — the sibling of contractgen's

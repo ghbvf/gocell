@@ -149,6 +149,13 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registrar) error {
 {{- end }}
 		},
 {{- end }}
+{{- if .PasswordResetExemptMethods }}
+		PasswordResetExemptMethods: []string{
+{{- range .PasswordResetExemptMethods }}
+			{{ printf "%q" . }},
+{{- end }}
+		},
+{{- end }}
 {{- if .MethodPermissions }}
 		MethodPermissions: map[string]string{
 {{- range .MethodPermissions }}

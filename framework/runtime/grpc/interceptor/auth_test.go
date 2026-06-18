@@ -120,6 +120,51 @@ func TestUnaryAuth_WithPublicMethodComposes(t *testing.T) {
 	}
 }
 
+// TestUnaryAuth_WithPasswordResetExemptComposes verifies the OR-compose semantics of
+// WithPasswordResetExempt (#1382): multiple installed predicates union — a method is
+// password-reset-exempt if ANY returns true — rather than last-wins. This is what lets
+// the registrar predicate (chain.go) coexist with a test harness's synthetic exemption
+// without either clobbering the other.
+func TestUnaryAuth_WithPasswordResetExemptComposes(t *testing.T) {
+	// Use a principal with PasswordResetRequired:true so the gate is active.
+	v := stubVerifier{claims: kauth.Claims{Subject: "u", PasswordResetRequired: true}}
+	// Wire a permission + authorizer so the non-public, non-public gate passes after reset.
+	perm := WithPermissionResolver(func(m string) (authz.Permission, bool) {
+		if m == "/pkg.Svc/A" || m == "/pkg.Svc/B" || m == "/pkg.Svc/C" {
+			return authz.PermDeviceCommand(), true
+		}
+		return authz.Permission{}, false
+	})
+	authorizer := WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()})
+	predA := WithPasswordResetExempt(func(m string) bool { return m == "/pkg.Svc/A" })
+	predB := WithPasswordResetExempt(func(m string) bool { return m == "/pkg.Svc/B" })
+
+	cases := []struct {
+		method     string
+		wantExempt bool // true → handler reached even with reset-required principal
+	}{
+		{"/pkg.Svc/A", true},  // matched by predA
+		{"/pkg.Svc/B", true},  // matched by predB — proves predA did not clobber predB
+		{"/pkg.Svc/C", false}, // matched by neither → blocked with PermissionDenied
+	}
+	for _, tc := range cases {
+		t.Run(tc.method, func(t *testing.T) {
+			info := &grpc.UnaryServerInfo{FullMethod: tc.method}
+			called := false
+			_, err := UnaryAuth(v, predA, predB, perm, authorizer)(bearerCtx(), nil, info, okHandler(&called))
+			if tc.wantExempt {
+				if err != nil || !called {
+					t.Fatalf("%s: want exempt bypass (err=nil, handler reached); got err=%v called=%v", tc.method, err, called)
+				}
+				return
+			}
+			if status.Code(err) != codes.PermissionDenied || called {
+				t.Fatalf("%s: want PermissionDenied and handler not reached; got err=%v called=%v", tc.method, err, called)
+			}
+		})
+	}
+}
+
 // TestUnaryAuth_PermissionGate exercises the #2008 per-method PDP gate that runs
 // after authentication on the non-public path. It is the gRPC analog of the HTTP
 // RequirePermission decision table, asserting fail-closed at every step. All cases
