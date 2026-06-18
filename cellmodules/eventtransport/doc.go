@@ -22,15 +22,21 @@
 // entries to an in-process bus — lost across processes / restarts.
 //
 // In postgres topology [resolveBrokerSpec] fail-closes when no broker URL is
-// configured: a missing GOCELL_AMQP_URL is a startup error, never a silent
-// degrade back to in-memory.
+// configured (via [dedupBrokerURL]): an empty cell set, a missing per-cell
+// GOCELL_<CELLID>_AMQP_URL, or distinct per-cell URLs are startup errors, never a
+// silent degrade back to in-memory.
 //
 // # Composition-root usage
 //
-// A composition root resolves the transport once and threads its three outputs
-// into bootstrap:
+// A composition root collects each broker cell's per-cell URL (falling back to
+// GOCELL_AMQP_URL), resolves the transport once, and threads its outputs into
+// bootstrap:
 //
-//	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{AMQPURL: os.Getenv("GOCELL_AMQP_URL")})
+//	cells := map[string]string{ // cellID → its broker URL (cmd/corebundle.LoadBrokerURL
+//	    "configcore": brokerURLFor("CONFIGCORE"), //   reads GOCELL_<CELLID>_AMQP_URL,
+//	    "accesscore": brokerURLFor("ACCESSCORE"), //   falling back to GOCELL_AMQP_URL)
+//	}
+//	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: cells})
 //	// ... handle err ...
 //	opts := []bootstrap.Option{
 //	    bootstrap.WithPublisher(transport.Publisher),
@@ -62,23 +68,34 @@
 // is import-unexpressible in the production roots, so a forged real-broker kind
 // cannot be paired with one there.
 //
-// # Broker connection is intentionally assembly-level (not per-cell)
+// # Per-cell broker URL dedup (egress-only, #2152 PR-2)
 //
-// The broker (RabbitMQ, GOCELL_AMQP_URL) is the cross-cell event bus: its
-// defining semantic is cross-cell sharing, not per-cell isolation. Distinct
-// per-cell broker connections — or distinct broker instances per cell — would
-// sever the publish/subscribe chain between cells (cell A publishes to its own
-// broker, cell B subscribes to its own broker, events never cross). Therefore,
-// a per-cell broker connection seam analogous to the per-cell DB connection
-// seam (cellmodules/percellpg) is intentionally not modeled here.
+// The broker URL is read per cell as GOCELL_<CELLID>_AMQP_URL (falling back to
+// the assembly-wide GOCELL_AMQP_URL), mirroring the per-cell DB DSN seam
+// (cellmodules/percellpg). [dedupBrokerURL] collapses the per-cell URLs:
 //
-// The correct unit of broker ownership is the per-process (assembly-level)
-// connection, i.e. the single GOCELL_AMQP_URL. Per-cell publisher/subscriber
-// fan-out within one broker connection (e.g. per-cell exchange or routing-key
-// namespacing) is a separate concern coupled to per-cell outbox relay fan-out;
-// both are tracked in the per-cell infra fan-out backlog (#2152) and are not
-// implemented here.
+//   - one distinct URL (colocated) → a single broker connection from that URL
+//     (behavior-preserving — the previous single-GOCELL_AMQP_URL wiring is the
+//     case where every cell falls back to the same value);
+//   - distinct URLs → fail-closed.
+//
+// The distinct-URL fail-closed is the egress-only boundary. #2152 PR-1
+// (bootstrap.WithRelay keyed-by-instance) fanned out only the relay (publisher)
+// side; the subscriber stays single (one phase6 event router). With a single
+// subscriber, distinct per-cell brokers would orphan events — cell A publishes to
+// broker A, but the lone subscriber consumes only the agreed broker. So this
+// resolver refuses distinct broker URLs rather than silently severing the
+// publish/subscribe chain. Lifting it (true N-broker fan-out) requires:
+//
+//   - ingress fan-out: subscriber single → N + a phase6 N-router (#2366);
+//   - the relay/pool source: #2341 (per-cell PGProvider → N pools → N relays),
+//     which lifts percellpg's symmetric >1-distinct-DSN fail-closed in lockstep.
+//
+// dedupBrokerURL is therefore the broker-side twin of percellpg.Resolve: a pure
+// per-cell dedup that today admits only the colocated (one-distinct) case and
+// hands the keyed relay seam (#2152 PR-1) its single agreed connection.
 //
 // ref: kernel/outbox.ResolveEmitter — the symmetric durability-gated funnel.
+// ref: cellmodules/percellpg.Resolve — the per-cell DSN dedup twin.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.
 package eventtransport

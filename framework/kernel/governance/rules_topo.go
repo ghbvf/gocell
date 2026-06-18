@@ -799,7 +799,8 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 				),
 				"place publisher and subscriber in the same topology group,"+
 					" or deploy with a real event broker"+
-					" (GOCELL_CELL_ADAPTER_MODE=postgres + GOCELL_ADAPTER_MODE=real + GOCELL_AMQP_URL);"+
+					" (GOCELL_CELL_ADAPTER_MODE=postgres + GOCELL_ADAPTER_MODE=real +"+
+					" a per-cell GOCELL_<CELLID>_AMQP_URL, fallback GOCELL_AMQP_URL);"+
 					" if a broker is already configured but this still fires,"+
 					" the broker-backed split path lands in US7 #1967",
 			))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
@@ -48,47 +49,155 @@ func (fakeAMQPConn) Close() error                                    { return ni
 
 func okDial(string) (rabbitmq.AMQPConnection, error) { return fakeAMQPConn{}, nil }
 
+// fakeDialOpt is the connOpts slice that makes the postgres → RabbitMQ branch
+// constructible without a live broker.
+func fakeDialOpt() []rabbitmq.ConnectionOption {
+	return []rabbitmq.ConnectionOption{rabbitmq.WithDialFunc(okDial)}
+}
+
+// TestDedupBrokerURL exercises the pure per-cell broker-URL dedup gate directly
+// (the broker-side twin of percellpg.Resolve): same URL → agreed (alphabetically
+// first) cell URL; distinct/empty/missing → fail-closed.
+func TestDedupBrokerURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		cells      map[string]string
+		wantURL    string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{
+			name:    "single cell yields its url",
+			cells:   map[string]string{"configcore": "amqp://h:5672/"},
+			wantURL: "amqp://h:5672/",
+		},
+		{
+			name: "three cells identical url dedup to one (agreed = first alpha)",
+			cells: map[string]string{
+				"configcore": "amqp://shared:5672/",
+				"accesscore": "amqp://shared:5672/",
+				"auditcore":  "amqp://shared:5672/",
+			},
+			wantURL: "amqp://shared:5672/",
+		},
+		{
+			name: "whitespace-only difference still dedups to one",
+			cells: map[string]string{
+				"accesscore": "amqp://shared:5672/",
+				"configcore": "  amqp://shared:5672/  ",
+			},
+			wantURL: "amqp://shared:5672/",
+		},
+		{
+			name:       "empty cell set fail-closed",
+			cells:      map[string]string{},
+			wantErr:    true,
+			wantErrSub: "at least one broker cell",
+		},
+		{
+			name:  "missing per-cell url fail-closed names env var",
+			cells: map[string]string{"configcore": ""},
+			// errcode.Error() surfaces the precise internal attrs (the derived
+			// per-cell env var) in place of the const guidance message; the
+			// operator-facing prose lives in e.Message (structured logs).
+			wantErr:    true,
+			wantErrSub: "env_var=GOCELL_CONFIGCORE_AMQP_URL",
+		},
+		{
+			name: "distinct urls fail-closed (egress-only)",
+			cells: map[string]string{
+				"accesscore": "amqp://a:5672/",
+				"configcore": "amqp://b:5672/",
+			},
+			wantErr:    true,
+			wantErrSub: "distinct_url_count=2",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			url, err := dedupBrokerURL(tc.cells)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrSub)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantURL, url)
+		})
+	}
+}
+
 func TestResolveBrokerSpec(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name       string
 		storage    string
-		amqpURL    string
+		cells      map[string]string
 		wantKind   brokerKind
 		wantURL    string
 		wantErr    bool
 		wantErrSub string
 	}{
 		{
-			name:     "demo/memory selects in-memory (url ignored)",
+			name:     "demo/memory selects in-memory (cells ignored)",
 			storage:  "memory",
-			amqpURL:  "amqp://ignored",
+			cells:    map[string]string{"configcore": "amqp://ignored"},
 			wantKind: brokerInMemory,
 		},
 		{
-			name:     "demo/memory selects in-memory (no url)",
+			name:     "demo/memory selects in-memory (no cells)",
 			storage:  "memory",
 			wantKind: brokerInMemory,
 		},
 		{
-			name:     "postgres + url selects rabbitmq",
+			name:     "postgres + single url selects rabbitmq",
 			storage:  "postgres",
-			amqpURL:  "amqp://localhost:5672/",
+			cells:    map[string]string{"configcore": "amqp://localhost:5672/"},
 			wantKind: brokerRabbitMQ,
 			wantURL:  "amqp://localhost:5672/",
 		},
 		{
-			name:       "postgres without url fail-closed",
+			name:    "postgres + colocated identical urls dedup to one",
+			storage: "postgres",
+			cells: map[string]string{
+				"configcore": "amqp://localhost:5672/",
+				"accesscore": "amqp://localhost:5672/",
+			},
+			wantKind: brokerRabbitMQ,
+			wantURL:  "amqp://localhost:5672/",
+		},
+		{
+			name:       "postgres without cells fail-closed",
 			storage:    "postgres",
 			wantErr:    true,
-			wantErrSub: "GOCELL_AMQP_URL",
+			wantErrSub: "at least one broker cell",
+		},
+		{
+			name:       "postgres with empty url fail-closed",
+			storage:    "postgres",
+			cells:      map[string]string{"configcore": ""},
+			wantErr:    true,
+			wantErrSub: "env_var=GOCELL_CONFIGCORE_AMQP_URL",
+		},
+		{
+			name:    "postgres with distinct urls fail-closed",
+			storage: "postgres",
+			cells: map[string]string{
+				"accesscore": "amqp://a:5672/",
+				"configcore": "amqp://b:5672/",
+			},
+			wantErr:    true,
+			wantErrSub: "distinct_url_count=2",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			spec, err := resolveBrokerSpec(mkTopo(t, tc.storage), Config{AMQPURL: tc.amqpURL})
+			spec, err := resolveBrokerSpec(mkTopo(t, tc.storage), Config{Cells: tc.cells})
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErrSub)
@@ -115,13 +224,47 @@ func TestResolve_Demo_InMemorySharedInstance(t *testing.T) {
 		"demo Publisher and Subscriber must be the same in-memory bus instance")
 }
 
-func TestResolve_Postgres_NoBrokerURL_FailClosed(t *testing.T) {
+func TestResolve_Postgres_EmptyCells_FailClosed(t *testing.T) {
 	t.Parallel()
 
 	_, err := Resolve(clock.Real(), mkTopo(t, "postgres"), Config{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_AMQP_URL",
-		"postgres without broker URL must fail-fast, not silently use in-memory")
+	assert.Contains(t, err.Error(), "at least one broker cell",
+		"postgres topology with no broker cells must fail-fast, not silently use in-memory")
+}
+
+func TestResolve_Postgres_MissingURL_FailClosed(t *testing.T) {
+	t.Parallel()
+
+	_, err := Resolve(clock.Real(), mkTopo(t, "postgres"), Config{Cells: map[string]string{"configcore": ""}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "env_var=GOCELL_CONFIGCORE_AMQP_URL",
+		"postgres without a per-cell broker URL must fail-fast naming the missing env var, not silently use in-memory")
+	// The operator-facing guidance prose lives in e.Message (rendered by structured
+	// slog), distinct from the precise internal attrs that Error() surfaces. Lock it
+	// so the actionable guidance cannot silently disappear from a future refactor.
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Contains(t, ec.Message, "GOCELL_<CELLID>_AMQP_URL",
+		"the guidance message must name the per-cell env var pattern for operators")
+}
+
+// TestResolve_Postgres_DistinctURLs_FailClosed is the egress-only boundary: with
+// PR-2 wiring only the relay (publisher) fans out, while the single subscriber can
+// consume just one broker, so distinct per-cell broker URLs would orphan events.
+// They are rejected at resolve time, pointing operators at the colocated
+// requirement (and the ingress fan-out follow-up tracked under #2152 / #2341).
+func TestResolve_Postgres_DistinctURLs_FailClosed(t *testing.T) {
+	t.Parallel()
+
+	_, err := Resolve(clock.Real(), mkTopo(t, "postgres"), Config{
+		Cells: map[string]string{
+			"accesscore": "amqp://a:5672/",
+			"configcore": "amqp://b:5672/",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "distinct_url_count=2")
 }
 
 func TestResolve_Postgres_RabbitMQ_BundlesConnAsResource(t *testing.T) {
@@ -130,7 +273,7 @@ func TestResolve_Postgres_RabbitMQ_BundlesConnAsResource(t *testing.T) {
 	tr, err := Resolve(
 		clock.Real(),
 		mkTopo(t, "postgres"),
-		Config{AMQPURL: "amqp://localhost:5672/", connOpts: []rabbitmq.ConnectionOption{rabbitmq.WithDialFunc(okDial)}},
+		Config{Cells: map[string]string{"configcore": "amqp://localhost:5672/"}, connOpts: fakeDialOpt()},
 	)
 	require.NoError(t, err)
 	require.NotNil(t, tr.Publisher)
@@ -138,6 +281,29 @@ func TestResolve_Postgres_RabbitMQ_BundlesConnAsResource(t *testing.T) {
 	require.Len(t, tr.Resources, 1, "rabbitmq transport returns its connection as one managed resource")
 
 	// The resource is the broker connection; closing it releases the transport.
+	require.NoError(t, tr.Resources[0].Close(context.Background()))
+}
+
+// TestResolve_Postgres_Colocated_BuildsSingleBroker proves the colocated dedup
+// path is behavior-preserving: N cells with an identical URL open exactly one
+// broker connection (the agreed, alphabetically-first cell's URL).
+func TestResolve_Postgres_Colocated_BuildsSingleBroker(t *testing.T) {
+	t.Parallel()
+
+	tr, err := Resolve(
+		clock.Real(),
+		mkTopo(t, "postgres"),
+		Config{
+			Cells: map[string]string{
+				"configcore": "amqp://shared:5672/",
+				"accesscore": "amqp://shared:5672/",
+				"auditcore":  "amqp://shared:5672/",
+			},
+			connOpts: fakeDialOpt(),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, tr.Resources, 1, "colocated cells with identical URL open exactly one broker connection")
 	require.NoError(t, tr.Resources[0].Close(context.Background()))
 }
 
@@ -158,7 +324,7 @@ func TestResolve_TransportKind(t *testing.T) {
 	pg, err := Resolve(
 		clock.Real(),
 		mkTopo(t, "postgres"),
-		Config{AMQPURL: "amqp://localhost:5672/", connOpts: []rabbitmq.ConnectionOption{rabbitmq.WithDialFunc(okDial)}},
+		Config{Cells: map[string]string{"configcore": "amqp://localhost:5672/"}, connOpts: fakeDialOpt()},
 	)
 	require.NoError(t, err)
 	assert.True(t, pg.Kind.IsRealBroker(),
@@ -194,7 +360,7 @@ func TestResolve_Postgres_RabbitMQ_DialFailureFailsFast(t *testing.T) {
 		clock.Real(),
 		mkTopo(t, "postgres"),
 		Config{
-			AMQPURL: "amqp://localhost:5672/",
+			Cells: map[string]string{"configcore": "amqp://localhost:5672/"},
 			connOpts: []rabbitmq.ConnectionOption{rabbitmq.WithDialFunc(
 				func(string) (rabbitmq.AMQPConnection, error) { return nil, dialErr },
 			)},
