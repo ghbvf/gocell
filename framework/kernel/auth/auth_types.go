@@ -26,11 +26,27 @@ const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
 	TokenIntentAccess TokenIntent = "access"
+	// TokenIntentEnrollment marks a short-lived credential a device presents to
+	// authenticate the FIRST EST enrollment (/simpleenroll), before it holds any
+	// certificate. It is a dedicated scheme, NOT reused from the setup bootstrap
+	// token (FR-012): a credential minted for enrollment can never be replayed at
+	// a business endpoint (which require TokenIntentAccess) and vice-versa — the
+	// two-channel token-confusion defense (typ header + token_use claim) makes the
+	// non-reuse a type/crypto fact, not a runtime policy. Subsequent EST re-enroll
+	// uses the device's existing certificate (mTLS), not this credential.
+	//
+	// ref: RFC 7030 §3.2.3 (EST first-enroll bearer credential); RFC 8725 §3.11
+	// (token-confusion isolation). #2303 / epic #2299 G4.
+	TokenIntentEnrollment TokenIntent = "enrollment"
 )
 
 // IsValid reports whether the intent is one of the known enum values.
 func (t TokenIntent) IsValid() bool {
-	return t == TokenIntentAccess
+	switch t {
+	case TokenIntentAccess, TokenIntentEnrollment:
+		return true
+	}
+	return false
 }
 
 // PrincipalKindClaim is the wire value of the "principal_kind" JWT claim — the
