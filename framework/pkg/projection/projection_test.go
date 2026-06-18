@@ -59,6 +59,23 @@ func TestNewProjection(t *testing.T) {
 			want: map[string]any{"id": "u1", "email": "a@b.c"},
 		},
 		{
+			// #1875: a nullable column is carried as a typed-nil pointer, which is
+			// PRESENT in the map (distinct from absent). Masking replaces the nil with
+			// the sentinel — proving a no-value column is still maskable, so presence
+			// never leaks whether it held data.
+			name: "nil-pointer column present is maskable (#1875 nullable)",
+			mask: authz.FieldMask{Fields: []string{"occurredAt"}},
+			data: map[string]any{"id": "u1", "occurredAt": (*string)(nil)},
+			want: map[string]any{"id": "u1", "occurredAt": redaction.Mask},
+		},
+		{
+			// Unmasked, the nil pointer stays nil → marshals to JSON null, key present.
+			name: "nil-pointer column unmasked stays null (key present)",
+			mask: authz.FieldMask{},
+			data: map[string]any{"id": "u1", "occurredAt": (*string)(nil)},
+			want: map[string]any{"id": "u1", "occurredAt": (*string)(nil)},
+		},
+		{
 			name: "nested value under a masked key is replaced wholesale (no sub-field leak)",
 			mask: authz.FieldMask{Fields: []string{"profile"}},
 			data: map[string]any{"id": "u1", "profile": map[string]any{"ssn": "secret"}},

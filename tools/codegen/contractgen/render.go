@@ -3,7 +3,6 @@ package contractgen
 import (
 	"embed"
 	"strconv"
-	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -87,20 +86,6 @@ var templates = func() *template.Template {
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			return spec.Endpoint != nil
 		},
-		// omitEmptyCheck returns the Go boolean expression that evaluates to true
-		// when the field value is non-zero, to be used as the condition in the
-		// generated ToMap conditional entry. The expression uses the receiver
-		// variable name "i". This makes the projection path wire-equivalent to the
-		// struct json.Marshal serialization path (both omit zero-value optional fields).
-		//
-		// Type dispatch:
-		//   string           → i.X != ""
-		//   int64/float64    → i.X != 0
-		//   bool / *bool     → not used for optional fields (optional bool → *bool)
-		//   *T (pointer)     → i.X != nil
-		//   []T (slice)      → len(i.X) > 0
-		//   any              → i.X != nil
-		"omitEmptyCheck": omitEmptyCheck,
 	}
 
 	t := template.Must(codegen.SharedTemplates.Clone())
@@ -151,50 +136,6 @@ func needsMinLengthCheck(p *int) bool {
 // render_test.TestNeedsGuardedMinLengthCheck. Issue #1914.
 func needsGuardedMinLengthCheck(p *int) bool {
 	return p != nil && *p > 1
-}
-
-// omitEmptyCheck returns the Go boolean expression that is true when a DTOField
-// value is non-zero, for use in the generated ToMap conditional guard. The
-// receiver variable is always "i" (the ToMap method receiver).
-//
-// Type dispatch follows json encoding/omitempty semantics:
-//   - string             → i.FieldName != ""
-//   - int64 / float64   → i.FieldName != 0
-//   - bool               → i.FieldName (truthy, mirrors json omitempty: false is omitted)
-//   - []T (slice)        → len(i.FieldName) > 0
-//   - *T (pointer)       → i.FieldName != nil
-//   - any               → i.FieldName != nil
-//
-// Note: optional bool fields in generated DTOs are always *bool (the builder
-// converts them in collectDTOs), so the plain "bool" case does not arise for
-// OmitEmpty fields in practice; pointer dispatch covers it. The bool branch
-// is present as a defensive fallback only.
-func omitEmptyCheck(f DTOField) string {
-	// ZeroValueExpr carries structured underlying-kind information set by the
-	// builder for types where GoType alone is ambiguous — in particular, named
-	// string enum types (GoType = "FooStatus", underlying string, zero "").
-	// Without this check those types would fall through to the default
-	// "!= nil" branch, producing uncompilable code (named string ≠ nil-able).
-	if f.ZeroValueExpr != "" {
-		return `i.` + f.Name + ` != ` + f.ZeroValueExpr
-	}
-	switch {
-	case f.GoType == "string":
-		return `i.` + f.Name + ` != ""`
-	case f.GoType == "int64" || f.GoType == "float64":
-		return `i.` + f.Name + ` != 0`
-	case f.GoType == "bool":
-		// plain bool omitempty: false is omitted, true is included.
-		// In EmitToMap DTOs, optional bools are always *bool (builder converts
-		// them in collectDTOs), so this branch is not reachable in production
-		// generated code; it exists as a defensive fallback.
-		return `i.` + f.Name
-	case strings.HasPrefix(f.GoType, "[]"):
-		return `len(i.` + f.Name + `) > 0`
-	default:
-		// pointer (*T), any, or any other reference type
-		return `i.` + f.Name + ` != nil`
-	}
 }
 
 // Per-template rendering for production goes through Generate /
