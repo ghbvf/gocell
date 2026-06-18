@@ -976,6 +976,29 @@ func TestEnrichGrpcServices_OwnerScopedCrossCheck(t *testing.T) {
 						t.Errorf("PASS case: MethodResources must contain %q→device_id, got %+v",
 							watchFull, gs.MethodResources)
 					}
+					// Render the cell and assert the GENERATED code actually emits the
+					// MethodResources mapping (#2349 F5): the spec-level field above can be
+					// present while a template regression silently drops the rendered block,
+					// breaking the registrar's resolver wiring at runtime. Lock the field
+					// name + the full method name + the proto field value in the output.
+					out, rerr := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+						TemplateName: "cell.tmpl",
+						Templates:    templates,
+						Data:         spec,
+						Filename:     "demo/cell_gen.go",
+					})
+					if rerr != nil {
+						t.Fatalf("Render: %v", rerr)
+					}
+					if !bytes.Contains(out, []byte("MethodResources")) {
+						t.Errorf("owner-scoped grpc cell must render the MethodResources field, got:\n%s", out)
+					}
+					if !bytes.Contains(out, []byte(watchFull)) {
+						t.Errorf("MethodResources must contain the full method name %q, got:\n%s", watchFull, out)
+					}
+					if !bytes.Contains(out, []byte(`"device_id"`)) {
+						t.Errorf("MethodResources must contain the device_id field value, got:\n%s", out)
+					}
 				}
 			} else {
 				if err == nil {

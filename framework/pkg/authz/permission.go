@@ -80,8 +80,10 @@ const (
 	// scopeOwnerScoped marks a permission that requires per-message resource
 	// extraction so the PDP ownership rule (subject.sub == resource.id) can match.
 	// HTTP uses auth.RequirePermissionForResource; gRPC declares
-	// endpoints.grpc.methods[].resource (#2207). Examples: device:consume,
-	// device:read, user:read, user:write, role:read, order:read, order:update.
+	// endpoints.grpc.methods[].resource (#2207). The owner-scoped set is the values
+	// minted with this scope below, frozen (count + membership) by
+	// TestPermissions_OwnerScopedPinnedSet — that test is the single source, not a
+	// hand-maintained prose list.
 	scopeOwnerScoped
 )
 

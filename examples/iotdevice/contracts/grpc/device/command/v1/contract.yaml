@@ -15,12 +15,14 @@ endpoints:
     # (owner-scoped): admin/operator OR the device itself (subject == resource). The
     # `resource: device_id` selector tells the interceptor to extract the per-message
     # device_id field and forward it as the PDP resource (the gRPC analog of HTTP
-    # RequirePermissionForResource), so a device can watch its OWN command queue —
-    # the gRPC/HTTP consume-semantics parity #2207 closes. The interceptor PDP gate
-    # enforces this; the handler no longer hand-authorizes. Strict fail-closed: every
-    # non-public RPC must appear here (completeness pre-pass), else a dead 403; an
-    # owner-scoped permission MUST carry a resource selector (cellgen cross-check) or
-    # the device owner is silently locked out.
+    # RequirePermissionForResource), so a device can watch its OWN command queue.
+    # WatchCommands is the real-time NOTIFICATION arm of the device:consume lifecycle
+    # (the umbrella gate the HTTP dequeue/ack/report path also uses); the device still
+    # claims + executes commands via HTTP Dequeue — the stream is read-only and does
+    # not lease. The interceptor PDP gate enforces this; the handler no longer
+    # hand-authorizes. Strict fail-closed: every non-public RPC must appear here
+    # (completeness pre-pass), else a dead 403; an owner-scoped permission MUST carry a
+    # resource selector (cellgen cross-check) or the device owner is silently locked out.
     methods:
       - name: IssueCommand
         permission: device:command

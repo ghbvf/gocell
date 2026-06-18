@@ -105,6 +105,60 @@ func TestServer_WatchCommands_SnapshotThenTailUntilCancel(t *testing.T) {
 	}
 }
 
+// TestServer_WatchCommands_SnapshotPaginatesAllActive proves the on-connect
+// snapshot is NOT truncated at a single page: with more active commands than
+// watchSnapshotPageSize, every active command is streamed before the tail (#2349
+// F2). Regression guard for the old single-page ScanActive that silently dropped
+// the active backlog beyond the first page.
+func TestServer_WatchCommands_SnapshotPaginatesAllActive(t *testing.T) {
+	t.Parallel()
+	srv := newTestServer(t)
+
+	// Enqueue more active commands than one snapshot page holds.
+	const extra = 50
+	want := watchSnapshotPageSize + extra
+	for i := 0; i < want; i++ {
+		if _, err := srv.IssueCommand(context.Background(), &commandv1.IssueCommandRequest{
+			DeviceId:    seededDeviceID,
+			CommandType: "reboot",
+			Payload:     []byte("{}"),
+		}); err != nil {
+			t.Fatalf("seed command %d: %v", i, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := newWatchStream(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.WatchCommands(&commandv1.WatchCommandsRequest{DeviceId: seededDeviceID}, stream)
+	}()
+
+	// Collect the full snapshot: every active command must arrive (dedup by id, so
+	// a paging overlap can't mask a dropped command — a truncation hangs and fails).
+	seen := make(map[string]struct{}, want)
+	for len(seen) < want {
+		select {
+		case e := <-stream.sentCh:
+			seen[e.GetCommandId()] = struct{}{}
+		case <-time.After(watchTestTimeout):
+			t.Fatalf("snapshot streamed only %d/%d active commands (truncated?)", len(seen), want)
+		}
+	}
+
+	// The snapshot is complete; the handler now tails. Cancel returns it cleanly.
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("WatchCommands must return context.Canceled after cancel, got %v", err)
+		}
+	case <-time.After(watchTestTimeout):
+		t.Fatalf("WatchCommands did not return after context cancel")
+	}
+}
+
 // TestServer_WatchCommands_OverGRPC drives the server-streaming RPC end-to-end
 // over an in-process bufconn: the handler is registered via the buf-generated
 // RegisterDeviceCommandServiceServer (the same call cellgen emits), a real

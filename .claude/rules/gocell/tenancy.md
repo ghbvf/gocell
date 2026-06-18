@@ -108,8 +108,9 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   严格 fail-closed：非 public 方法缺 permission overlay = gate deny，且 codegen completeness 预检在构建期
   拒绝（dead 403 不可静默上线）。
   **owner-scoped per-message resource（#2207）**：coarse permission 的 resource = full method name；
-  owner-scoped permission（`authz.Permission` 的 typed `IsOwnerScoped()` 位，闭值集 = device:consume /
-  device:read / user:read / user:write / role:read / order:read / order:update）的 gRPC 方法须声明
+  owner-scoped permission（`authz.Permission` 的 typed `IsOwnerScoped()` 位——闭值集是机器源，由
+  `framework/pkg/authz/permission_test.go` 的 `TestPermissions_OwnerScopedPinnedSet` 冻结，规则文件不再
+  手写该清单）的 gRPC 方法须声明
   `endpoints.grpc.methods[].resource: <请求消息字段>`，interceptor 用 protoreflect 取该字段、经与 HTTP 同一
   `httputil.ParseCanonicalUUID` 规范化后作 PDP `resource`（HTTP `RequirePermissionForResource` 的 gRPC 对偶，
   让设备 watch 自己的队列）。unary 在入口取 `req`；server-streaming 把整个 permission 门**延后到首个

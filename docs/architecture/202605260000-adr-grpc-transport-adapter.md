@@ -458,11 +458,17 @@ no transport label, no cardinality blowup). A Nop/nil provider leaves the Author
 
 #2008 left `resource = fullMethod` (coarse) and documented per-message resource extraction
 as deferred ("not feasible generically in an interceptor; a stream has no message at open").
-#2207 delivers it, closing the gRPC/HTTP consume-semantics gap: a device can now watch its
-OWN command queue via gRPC `WatchCommands`, the analog of the HTTP dequeue `device:consume`
-ownership gate. The earlier infeasibility boundary is superseded — wrapping the stream so the
-gate runs on the FIRST `RecvMsg` (when the request message IS available) makes it feasible and
-fail-closed.
+#2207 delivers it: a device can now gate gRPC `WatchCommands` on its OWN id via the owner-scoped
+`device:consume` permission, the gRPC analog of HTTP `RequirePermissionForResource`.
+`WatchCommands` is the real-time NOTIFICATION arm of the device:consume lifecycle — a read-only
+doorbell over the device's active-command queue; the device still claims + executes commands via
+the HTTP dequeue/ack path (which leases and returns the payload), so the stream does not itself
+consume. The reusable contribution is the **generic per-message resource-extraction capability**,
+not a stream-side consume protocol. The earlier infeasibility boundary is superseded — wrapping
+the stream so the gate runs on the FIRST `RecvMsg` (when the request message IS available) makes
+it feasible and fail-closed. The threat matrix below is unchanged by this framing: the gate,
+fail-closed behavior, and PII handling are identical whether the stream is called a notification
+or a consume doorbell.
 
 ### Mechanism
 
@@ -473,8 +479,10 @@ fail-closed.
 - **Permission scope (the key AI-robustness primitive)**: `authz.Permission` gains a
   machine-readable `ownerScoped` bit (sealed minter `newPermission(s, scope)`, accessor
   `IsOwnerScoped()`). The pre-existing prose invariant "coarse vs ownership is NEVER folded into
-  one Permission" is now TYPED, not documented. Owner-scoped set = `device:consume / device:read /
-  user:read / user:write / role:read / order:read / order:update`.
+  one Permission" is now TYPED, not documented. The authoritative owner-scoped set is the machine
+  source `authz.Permission.IsOwnerScoped()`, frozen (count + membership) by
+  `permission_test.go::TestPermissions_OwnerScopedPinnedSet` — at this writing `access:decide,
+  device:consume, device:read, user:read, user:write, role:read, order:read, order:update`.
 - **Generate-time cross-check (Hard)**: the cellgen completeness pre-pass
   (`validateGrpcMethodOverlayAgainstProto` → `validateOwnerScopedResourceSymmetry`) fails the
   build if an owner-scoped permission lacks a `resource` selector (else the device owner is

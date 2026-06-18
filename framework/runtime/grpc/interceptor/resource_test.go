@@ -7,6 +7,7 @@ package interceptor
 //  1. extractResourceFieldValue: happy path (proto.Message with string UUID field)
 //  2. extractResourceFieldValue: not a proto.Message → ("", false)
 //  3. extractResourceFieldValue: field not found → ("", false)
+//  3b. extractResourceFieldValue: non-string field kind (enum) → ("", false)
 //  4. extractResourceFieldValue: empty string value → ("", true) forwarded (HTTP parity; PDP rejects for
 //     owner, admin still passes)
 //  5. extractResourceFieldValue: non-canonical UUID value → (value, true) forwarded raw (HTTP parity;
@@ -111,6 +112,18 @@ func TestExtractResourceFieldValue_UppercaseUUID(t *testing.T) {
 	got, ok := extractResourceFieldValue(req, "service")
 	require.True(t, ok, "uppercase UUID must be accepted and normalized")
 	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", got, "must normalize to lowercase")
+}
+
+// TestExtractResourceFieldValue_NonStringField verifies a field whose proto kind is
+// NOT a string (here HealthCheckResponse.status, an enum) is a STRUCTURAL failure →
+// ("", false), exercising the fd.Kind() != protoreflect.StringKind branch. A resource
+// selector pointing at a non-string field is a proto-schema misconfiguration the gate
+// must fail closed on — it can never canonicalize to a comparable subject id.
+func TestExtractResourceFieldValue_NonStringField(t *testing.T) {
+	t.Parallel()
+	resp := &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}
+	_, ok := extractResourceFieldValue(resp, "status")
+	assert.False(t, ok, "non-string (enum) field kind must be a structural failure")
 }
 
 // --- extractResourceForUnary -------------------------------------------------

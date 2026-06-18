@@ -42,8 +42,9 @@ const (
 	msgGRPCAuthnServiceUnavailable   = "authentication service unavailable"
 	msgGRPCAuthzServiceUnavailable   = "authorization service unavailable"
 	// msgGRPCResourceUnresolved is the PDP gate message when the method declares a
-	// resource field selector but extraction fails (field absent, wrong kind, empty
-	// value, or non-proto message) — F3 fail-closed (#2207).
+	// resource field selector but extraction STRUCTURALLY fails (field absent, wrong
+	// kind, or non-proto message) — F3 fail-closed (#2207). An empty / non-UUID value
+	// is NOT a structural failure: it is forwarded to the PDP (HTTP parity).
 	msgGRPCResourceUnresolved = "resource field extraction failed; access denied"
 )
 
@@ -81,9 +82,10 @@ var (
 	reasonPDPUnavailable          = denyReason{"PDP_UNAVAILABLE"}
 	reasonAuthorizationDenied     = denyReason{"AUTHORIZATION_DENIED"}
 	// reasonResourceUnresolved is the F3 fail-closed reason for #2207: the method
-	// declares a resource field selector but extraction failed (field absent, wrong
-	// kind, empty, or req is not a proto.Message). PII-safe: no extracted value
-	// enters ErrorInfo.Metadata.
+	// declares a resource field selector but extraction STRUCTURALLY failed (field
+	// absent, wrong kind, or req is not a proto.Message). An empty / non-UUID value is
+	// forwarded to the PDP, not failed here. PII-safe: no extracted value enters
+	// ErrorInfo.Metadata.
 	reasonResourceUnresolved = denyReason{"RESOURCE_UNRESOLVED"}
 )
 

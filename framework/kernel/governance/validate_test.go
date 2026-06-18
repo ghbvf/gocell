@@ -2533,6 +2533,37 @@ func TestFMT41(t *testing.T) {
 			wantCount: 1,
 			wantIssue: IssueInvalid,
 		},
+		{
+			// resource without permission is ALSO vacuous (no public, no permission),
+			// so both the vacuous guard (switch 1) and the resource-without-permission
+			// guard (switch 2) fire — two Invalid findings. The count=2 (vs the
+			// vacuous-only count=1) is what proves the resource guard added a finding.
+			name:      "resource without permission rejected (#2207) — also vacuous",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Resource: "session_id"}},
+			codegen:   true,
+			wantCount: 2,
+			wantIssue: IssueInvalid,
+		},
+		{
+			name:      "public with resource rejected (#2207) — JWT-exempt has no subject to compare",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Public: true, Resource: "session_id"}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueInvalid,
+		},
+		{
+			name:      "owner-scoped permission missing resource rejected (#2207) — silent owner lock-out",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Permission: "device:consume"}},
+			codegen:   true,
+			wantCount: 1,
+			wantIssue: IssueRequired,
+		},
+		{
+			name:      "owner-scoped permission with resource (#2207) — passes",
+			methods:   []metadata.GRPCMethodMeta{{Name: "Verify", Permission: "device:consume", Resource: "device_id"}},
+			codegen:   true,
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

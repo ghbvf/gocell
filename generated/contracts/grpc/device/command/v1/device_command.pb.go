@@ -190,9 +190,12 @@ func (x *WatchCommandsRequest) GetDeviceId() string {
 	return ""
 }
 
+// WatchCommandsResponse is a notification (doorbell) for one active command — it
+// identifies the command but does NOT carry the executable payload or a lease. The
+// device claims the command and reads its payload/attempt via the HTTP Dequeue path.
 type WatchCommandsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// command_id is the command's id.
+	// command_id is the command's id (the dedup + Dequeue key).
 	CommandId string `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
 	// command_type is the command verb, e.g. "lock" or "reboot".
 	CommandType string `protobuf:"bytes,2,opt,name=command_type,json=commandType,proto3" json:"command_type,omitempty"`

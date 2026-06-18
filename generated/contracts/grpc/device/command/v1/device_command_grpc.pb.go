@@ -38,10 +38,14 @@ const (
 type DeviceCommandServiceClient interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(ctx context.Context, in *IssueCommandRequest, opts ...grpc.CallOption) (*IssueCommandResponse, error)
-	// WatchCommands is a server-streaming RPC (#1795): it streams the device's
+	// WatchCommands is a server-streaming RPC (#1795): a real-time NOTIFICATION
+	// stream (a doorbell), NOT a consume stream. It streams the device's
 	// currently-active commands as an initial snapshot, then tails newly-enqueued
 	// commands in real time via an in-process Notifier hub until the caller
-	// disconnects or the server drains.
+	// disconnects or the server drains. Each response carries only the command's
+	// identity (command_id / command_type / status); the device claims a command and
+	// reads its payload by calling the HTTP Dequeue path (which leases it and returns
+	// the payload/attempt). This stream only signals which commands are waiting.
 	//
 	// Delivery semantics:
 	//   - Subscribe-before-snapshot: the Notifier subscription is established
@@ -49,11 +53,12 @@ type DeviceCommandServiceClient interface {
 	//     snapshot↔tail window are not silently lost. This means a command
 	//     enqueued concurrently may arrive both in the snapshot and the tail
 	//     (at-least-once per watch session) — clients MUST dedup on command_id.
-	//   - Best-effort, drop-on-full: if a subscriber's buffer is full the
-	//     Notifier drops the notification (the slow watcher loses tail events);
+	//   - Full snapshot: the initial snapshot pages through ALL active commands
+	//     (cursor pagination) before tailing — it is NOT truncated, so a device
+	//     with more than one page of active commands receives every one of them.
+	//   - Best-effort tail, drop-on-full: if a subscriber's buffer is full the
+	//     Notifier drops the tail notification (the slow watcher loses tail events);
 	//     reconnect re-syncs via a fresh snapshot.
-	//   - Snapshot cap: the initial snapshot is capped at 100 entries (silent
-	//     truncation). Reconnect is the resync path for a fresh snapshot.
 	//   - In-process only: notifications are delivered via an in-process hub;
 	//     multi-pod deployments need an external pub/sub for cross-pod delivery
 	//     (tracked backlog).
@@ -105,10 +110,14 @@ type DeviceCommandService_WatchCommandsClient = grpc.ServerStreamingClient[Watch
 type DeviceCommandServiceServer interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(context.Context, *IssueCommandRequest) (*IssueCommandResponse, error)
-	// WatchCommands is a server-streaming RPC (#1795): it streams the device's
+	// WatchCommands is a server-streaming RPC (#1795): a real-time NOTIFICATION
+	// stream (a doorbell), NOT a consume stream. It streams the device's
 	// currently-active commands as an initial snapshot, then tails newly-enqueued
 	// commands in real time via an in-process Notifier hub until the caller
-	// disconnects or the server drains.
+	// disconnects or the server drains. Each response carries only the command's
+	// identity (command_id / command_type / status); the device claims a command and
+	// reads its payload by calling the HTTP Dequeue path (which leases it and returns
+	// the payload/attempt). This stream only signals which commands are waiting.
 	//
 	// Delivery semantics:
 	//   - Subscribe-before-snapshot: the Notifier subscription is established
@@ -116,11 +125,12 @@ type DeviceCommandServiceServer interface {
 	//     snapshot↔tail window are not silently lost. This means a command
 	//     enqueued concurrently may arrive both in the snapshot and the tail
 	//     (at-least-once per watch session) — clients MUST dedup on command_id.
-	//   - Best-effort, drop-on-full: if a subscriber's buffer is full the
-	//     Notifier drops the notification (the slow watcher loses tail events);
+	//   - Full snapshot: the initial snapshot pages through ALL active commands
+	//     (cursor pagination) before tailing — it is NOT truncated, so a device
+	//     with more than one page of active commands receives every one of them.
+	//   - Best-effort tail, drop-on-full: if a subscriber's buffer is full the
+	//     Notifier drops the tail notification (the slow watcher loses tail events);
 	//     reconnect re-syncs via a fresh snapshot.
-	//   - Snapshot cap: the initial snapshot is capped at 100 entries (silent
-	//     truncation). Reconnect is the resync path for a fresh snapshot.
 	//   - In-process only: notifications are delivered via an in-process hub;
 	//     multi-pod deployments need an external pub/sub for cross-pod delivery
 	//     (tracked backlog).
