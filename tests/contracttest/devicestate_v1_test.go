@@ -32,16 +32,28 @@ func TestDeviceState_V1(t *testing.T) {
 		"deviceId":"dev-1","state":"online","observedAt":"2026-06-13T00:00:00Z",
 		"lastSeenAt":"2026-06-13T00:00:00Z","tenantId":"t-1"
 	}}`))
-	c.ValidateResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"offline","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":"2026-06-12T00:00:00Z","tenantId":"t-1"}}`))
+	// offline, last seen earlier
+	c.ValidateResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"offline","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":"2026-06-12T00:00:00Z","tenantId":"t-1"}}`))
 	// unknown/never-seen: lastSeenAt is the schema-valid null (key present, no value).
-	c.ValidateResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"unknown","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"unknown","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))
 
 	// parameter errors — each isolates ONE violation (other required cols present).
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"bogus","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`)) // bad enum
-	c.MustRejectResponse(t, []byte(`{"data":{"state":"online","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))                   // missing deviceId
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online","lastSeenAt":null,"tenantId":"t-1"}}`))                                    // missing observedAt
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online","observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1"}}`))                  // missing lastSeenAt (now required)
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null}}`))                 // missing tenantId (now required)
+	// bad enum
+	c.MustRejectResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"bogus","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))
+	// missing deviceId
+	c.MustRejectResponse(t, []byte(`{"data":{`+
+		`"state":"online","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))
+	// missing observedAt
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online","lastSeenAt":null,"tenantId":"t-1"}}`))
+	// missing lastSeenAt (now required)
+	c.MustRejectResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"online","observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1"}}`))
+	// missing tenantId (now required)
+	c.MustRejectResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"online","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null}}`))
 
 	// path param validation (FMT-25 minLength/maxLength). deviceId is the path
 	// param `id` (GET /api/v1/devicestate/{id}); it enters the PDP as the ABAC
