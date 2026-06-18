@@ -1,8 +1,8 @@
 // Package percellpg is the topology-gated single source for the per-cell postgres
-// DSN decision a colocated composition root provisions its pool from. It is the
-// per-cell-DSN sibling of cellmodules/eventtransport.Resolve, replaydeps.Resolve,
-// and sagaprojectiondeps.Resolve — but it is a PURE decision function: it performs
-// NO I/O and constructs NO adapter primitives.
+// DSN decision a composition root provisions its pools from. It is the per-cell-DSN
+// sibling of cellmodules/eventtransport.Resolve, replaydeps.Resolve, and
+// sagaprojectiondeps.Resolve — but it is a PURE decision function: it performs NO
+// I/O and constructs NO adapter primitives.
 //
 // # Why pure (construction stays in cmd/corebundle/cap_wiring.go)
 //
@@ -14,47 +14,55 @@
 //     to take the direct generatedProjectionSourceTopics() accessor, not a threaded variable).
 //
 // Moving construction into cellmodules/percellpg would silently take it out of both
-// guards' cmd/-only scan — so this package only DECIDES the agreed DSN config;
-// cap_wiring.go opens the pool, verifies schema, builds the journaling writer with
-// the direct accessor, and wraps the capability.PGProvider.
+// guards' cmd/-only scan — so this package only DECIDES the per-cell DSN grouping;
+// cap_wiring.go opens the pools, verifies schema for each, builds the journaling
+// writers with the direct accessor, and wraps the capability.PGProvider instances.
 //
 // # Backend selection
 //
 //	memory topology (topo.StorageBackend() != postgres):
-//	  Resolve returns (zero, ok=false, nil) — no pool. Cell modules take their
+//	  Resolve returns (zero, ok=false, nil) — no pools. Cell modules take their
 //	  in-memory storage path.
 //
 //	postgres topology:
-//	  Resolve returns (agreedConfig, ok=true, nil) — the single deduped DSN config
-//	  cap_wiring.go opens the assembly's one shared pool from.
+//	  Resolve returns (Resolution{Instances, CellToInstance}, ok=true, nil).
+//	  cap_wiring.go iterates Resolution.Instances to open one pool per instance
+//	  and builds the per-cell PGProvider map (capability.PGSet) from CellToInstance.
 //
-// # Dedup-by-DSN invariant
+// # Dedup-by-DSN invariant and Resolution shape (#2341)
 //
-// Colocated assemblies share one physical database: all postgres cells must be
-// configured with the SAME DSN (GOCELL_<CELLID>_DATABASE_URL). Resolve deduplicates
-// by strings.TrimSpace(DSN) and yields exactly one agreed config, preserving today's
-// shared-pool behavior while making per-cell DSN injection explicit.
+// Each postgres cell provides GOCELL_<CELLID>_DATABASE_URL. Resolve deduplicates
+// by strings.TrimSpace(DSN) and groups cells by their distinct DSN:
 //
-// # Pool knobs in colocated mode
+//   - Colocated (all cells share the same DSN, 1 distinct after dedup):
+//     Resolution.Instances contains one entry keyed DefaultInstanceKey(). This is the
+//     behavior-preserving colocated path.
+//   - Split (>1 distinct DSNs after dedup):
+//     Resolution.Instances contains one entry per distinct DSN, each keyed
+//     NewInfraInstanceKey(rep) where rep is the alphabetically-first cell ID in that
+//     DSN group. CellToInstance maps every cell to its instance key.
+//     cap_wiring.go opens one pool + one relay per instance (#2341).
 //
-// The agreed config is the alphabetically-first cell's Config (cellIDs[0] after
-// sort.Strings), so its pool knobs (MaxConns / IdleTimeout / MaxLifetime) configure
-// the shared pool. With the current platform cells that is always accesscore
-// (a < au < c). Operators MUST set the pool knobs identically across all postgres
-// cells' DATABASE_* vars — only the first cell's knobs are applied in colocated mode.
-// Per-cell pool-knob isolation is split-topology territory (#2152).
+// # Pool knobs
 //
-// # Fail-closed invariants (the three gates)
+// For each DSN group the agreed pool knobs (MaxConns / IdleTimeout / MaxLifetime)
+// are taken from the alphabetically-first cell in that group. In colocated mode this
+// is always accesscore (a < au < c). In split mode each group uses its own rep
+// cell's knobs — operators MUST set pool knobs identically within each DSN group;
+// per-cell pool-knob isolation across groups is naturally achieved by distinct DSNs.
+//
+// # Fail-closed invariants (the two surviving gates)
 //
 //   - Empty cell set in postgres topology — a misconfiguration, fail-closed (also
 //     guards the cellIDs[0] index from panicking on an empty map).
 //   - A postgres-requiring cell whose DSN is empty (or whitespace-only) — fail-closed;
 //     the diagnostic carries the cell ID and expected env var. Never a silent fallback.
-//   - Per-cell distinct DSNs (>1 distinct after dedup) — fail-closed, pointing to the
-//     split-topology backlog (US4 #1963 / #2152, per-cell outbox relay fan-out).
 //
-// Being pure, all three gates plus the success/memory branches are exhaustively
+// The former ">1 distinct DSN → fail-closed" gate has been lifted by #2341: N
+// distinct DSNs now fan out to N keyed instances rather than rejecting at startup.
+//
+// Being pure, both gates plus the success/memory branches are exhaustively
 // unit-tested (no live database needed). The pool-open + schema-verify I/O that
-// cap_wiring.go runs from the agreed config is covered by the real-PG integration
+// cap_wiring.go runs from each instance config is covered by the real-PG integration
 // test cmd/corebundle/corebundle_pg_env_integration_test.go.
 package percellpg

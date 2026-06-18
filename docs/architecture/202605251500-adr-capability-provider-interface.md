@@ -126,6 +126,77 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 
 落地前草案把上游写成"Hard codegen funnel"——**经评估撤回**：capabilities 是 3 值封闭集，建 codegen funnel（工具链 + 模板 + meta-archtest）的成本不匹配收益，改用项目既有 `DeployTemplateEnum`/`FMT-30` 同构的 governance + test-guard（机制 1，Medium）。同理把下游单格"Hard（sealed + caller allowlist）"拆为机制 3（sealed=Hard）与机制 4（archtest caller-allowlist=Medium）两栏，因为 caller-allowlist archtest 本身不是编译期 Hard。
 
+## Amendment 2026-06-18 — #2341: per-instance PGProvider provisioning via PGSet
+
+#2341 introduces `capability.PGSet` as a per-cell routing layer above
+`capability.PGProvider`. This amendment re-evaluates the original §1 decision
+("per-cell provisioning breaks single-pool + LIFO shutdown") in light of the keyed
+managed-resource mechanism introduced by #2152 PR-1 (`bootstrap.InfraInstanceKey`).
+
+### Re-evaluation of §1 "why provisioning is not per-cell"
+
+The original §1 rationale had two parts:
+
+1. **"per-cell provisioning breaks single pool"** — this concerned each cell
+   independently opening its own `adapterpg.Pool`. That form of per-cell
+   provisioning is still prohibited (CAPABILITY-PROVIDER-FUNNEL-01 unchanged).
+
+2. **"per-cell provisioning breaks LIFO shutdown"** — this assumed multiple pools
+   would not be correctly closed in dependency order. This concern is resolved by
+   `bootstrap.InfraInstanceKey` + keyed managed-resource LIFO teardown (#2152 PR-1):
+   each pool instance is registered as a distinct `lifecycle.ManagedResource` keyed
+   by `InfraInstanceKey`, and bootstrap closes all managed resources in LIFO order
+   regardless of how many there are. N pools as N ManagedResources = correct LIFO
+   teardown. **The LIFO argument against per-instance provisioning no longer holds.**
+
+The original "one outbox/relay" constraint is also addressed: `cap_wiring.go` opens
+one relay per pool instance (keyed by `InfraInstanceKey`), not one global relay.
+Each relay drains its own pool's outbox table. The "one relay" invariant now means
+"one relay per pool instance", not "one relay for the whole assembly".
+
+### What PGSet is (and is not)
+
+`capability.PGProvider` remains unchanged: it is the single-pool leaf that provides
+`TxManager()`, `OutboxWriter()`, and `DB()` for one physical database connection
+pool. It is still sealed (unexported marker method) and constructed only via
+`capability.NewPGProvider` in `cap_wiring.go`.
+
+`capability.PGSet` is a new per-cell **routing layer** above PGProvider:
+
+- `ForCell(cellID string) (PGProvider, error)` — resolves the provider for a given
+  cell. Each of the three cell modules (accesscore / auditcore / configcore) calls
+  `shared.PG.ForCell("<cellid>")` in its `Provide` method.
+- `Sole() (PGProvider, bool)` — returns `(provider, true)` when there is exactly
+  one instance (colocated mode), else `(nil, false)`. It is the sanctioned single
+  accessor for assembly-wide consumers with no "cell" dimension; the projection read
+  path (`projectionRuntimeOptions`) calls it and fails closed when `ok == false`,
+  because split topology has per-pool `projection_events` with incomparable
+  `global_seq`.
+
+`SharedDeps.PG` is retyped from `capability.PGProvider` to `capability.PGSet`.
+The single-pool colocated case is a degenerate PGSet with one entry — no behavioral
+change for existing deployments.
+
+### Enforcement re-evaluation
+
+| # | Constraint | Rating | Change |
+|---|-----------|--------|--------|
+| 1 | per-cell `cell.requires` ∈ closed set | Medium (FMT-36) | Unchanged |
+| 2 | `modules_gen.go` golden (∪cells.requires) | Hard (codegen+golden) | Unchanged |
+| 3 | Cell module cannot forge bypass provider | Hard (sealed PGProvider) | Unchanged — PGProvider sealed construction unchanged; PGSet is also sealed |
+| 4 | CAPABILITY-PROVIDER-FUNNEL-01 | Medium (archtest caller-allowlist) | Unchanged — still bans `adapterpg.NewPool/NewTxManager/NewOutboxWriter` outside `cap_wiring.go` |
+| 5 | **NEW** RELAY-CONSTRUCTION-CELLMODULE-BAN-01 | Medium (archtest caller funnel) | Bans `runtime/outbox.NewRelay` / `bootstrap.WithRelay` outside `cap_wiring.go`. Per-pool relay construction belongs in the single sanctioned provisioning site |
+
+### Conflict resolution with §1 original text
+
+The original §1 sentence "per-cell provisioning (每个 cell 自开 pool) breaks single
+pool + LIFO shutdown" is superseded for the **per-instance** case. The prohibition
+that remains is on **per-cell self-provisioning** (a cell module independently
+calling `adapterpg.NewPool`), which CAPABILITY-PROVIDER-FUNNEL-01 continues to
+enforce. What #2341 adds is per-instance provisioning controlled by a single
+sanctioned site (`cap_wiring.go`), which is the exact pattern §1 originally
+envisioned for the shared-pool case — extended to N pools via `InfraInstanceKey`.
+
 ## Rejected alternatives
 
 - **Shape B：provider 返回 concrete `*adapterpg.Pool`**——不能住 `runtime/capability/`（违反 runtime 不依赖 adapters），且不是 assembly-reusable 的抽象。`DB() any` 的 typed-erasure 是为住 runtime/capability 付的刻意代价。

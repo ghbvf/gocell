@@ -77,23 +77,30 @@
 //   - one distinct URL (colocated) → a single broker connection from that URL
 //     (behavior-preserving — the previous single-GOCELL_AMQP_URL wiring is the
 //     case where every cell falls back to the same value);
-//   - distinct URLs → fail-closed.
+//   - distinct URLs → fail-closed (broker side still egress-only; see below).
 //
-// The distinct-URL fail-closed is the egress-only boundary. #2152 PR-1
-// (bootstrap.WithRelay keyed-by-instance) fanned out only the relay (publisher)
-// side; the subscriber stays single (one phase6 event router). With a single
-// subscriber, distinct per-cell brokers would orphan events — cell A publishes to
-// broker A, but the lone subscriber consumes only the agreed broker. So this
-// resolver refuses distinct broker URLs rather than silently severing the
-// publish/subscribe chain. Lifting it (true N-broker fan-out) requires:
+// The distinct-URL fail-closed is the broker-side egress-only boundary. #2152 PR-1
+// (bootstrap.WithRelay keyed-by-instance) fanned out the relay (publisher) side;
+// the subscriber stays single (one phase6 event router). With a single subscriber,
+// distinct per-cell brokers would orphan events — cell A publishes to broker A, but
+// the lone subscriber consumes only the agreed broker. So this resolver refuses
+// distinct broker URLs rather than silently severing the publish/subscribe chain.
 //
-//   - ingress fan-out: subscriber single → N + a phase6 N-router (#2366);
-//   - the relay/pool source: #2341 (per-cell PGProvider → N pools → N relays),
-//     which lifts percellpg's symmetric >1-distinct-DSN fail-closed in lockstep.
+// Note: the DB-pool/relay fan-out (#2341) and the broker fan-out (#2366) are NOT
+// lifted in lockstep. #2341 has landed and lifted percellpg's >1-distinct-DSN
+// fail-closed independently: DB pools are an egress+ingress symmetric resource
+// (each cell reads its own tables via its own pool), so per-cell DB fan-out is safe
+// without a matching ingress change. The broker is a separate egress sink: N broker
+// connections require N subscribers (ingress N-router, #2366) to avoid orphaning
+// events. dedupBrokerURL's distinct-URL fail-closed therefore remains until #2366
+// lands — not until #2341, which is already done.
+//
+// Lifting broker distinct-URL fail-closed (true N-broker fan-out) requires:
+//   - ingress fan-out: subscriber single → N + a phase6 N-router (#2366).
 //
 // dedupBrokerURL is therefore the broker-side twin of percellpg.Resolve: a pure
-// per-cell dedup that today admits only the colocated (one-distinct) case and
-// hands the keyed relay seam (#2152 PR-1) its single agreed connection.
+// per-cell dedup that today admits only the colocated (one-distinct) case and hands
+// the keyed relay seam (#2152 PR-1) its single agreed connection.
 //
 // ref: kernel/outbox.ResolveEmitter — the symmetric durability-gated funnel.
 // ref: cellmodules/percellpg.Resolve — the per-cell DSN dedup twin.
@@ -127,13 +134,19 @@
 // holds only the credentials it needs and cannot publish to or consume from a
 // broker it has no access to.
 //
-// This is NOT a runtime reality today. Distinct per-cell URLs are fail-closed
-// (see "current boundary" below and dedupBrokerURL), so the only runnable
-// configuration is a shared/identical URL across cells — under which all cells
-// share one AMQP credential. True per-cell runtime isolation is blocked-by
-// #2366/#2341; until they land, the enforced controls are the distinct-URL
-// fail-closed gate plus URL credential non-leak (below), NOT live per-cell
-// credential separation.
+// This is NOT a runtime reality today for the broker side. Distinct per-cell broker
+// URLs are fail-closed (see dedupBrokerURL), so the only runnable configuration is
+// a shared/identical URL across cells — under which all cells share one AMQP
+// credential. True per-cell broker runtime isolation is blocked-by #2366 (ingress
+// N-router); until it lands, the enforced controls are the distinct-URL fail-closed
+// gate plus URL credential non-leak (below), NOT live per-cell credential
+// separation.
+//
+// Note: per-cell DB pool/relay fan-out (#2341) has landed independently. The DB
+// resource (per-cell pool + relay) and the broker resource are NOT symmetric:
+// distinct DB DSNs → N pools (safe, #2341 done); distinct broker URLs → still
+// fail-closed, because N broker connections need N subscribers (#2366) to avoid
+// orphaning events. DB isolation and broker isolation lift independently.
 //
 // This credential/vhost isolation is operator-provisioned via the AMQP DSN
 // itself. Framework does NOT derive per-cell keys (no HKDF / key derivation
@@ -141,13 +154,12 @@
 // broker operator, unlike the #2153 HMAC keyring which has a framework-level
 // master key to derive from.
 //
-// The current boundary is egress-only: distinct per-cell broker URLs are
-// fail-closed (see dedupBrokerURL). Running per-cell isolation end-to-end
+// The current broker boundary is egress-only: distinct per-cell broker URLs are
+// fail-closed (see dedupBrokerURL). Running per-cell broker isolation end-to-end
 // requires:
-//   - ingress fan-out (#2366, subscriber single → N + phase6 N-router);
-//   - per-cell relay fan-out (#2341, per-cell PGProvider → N pools → N relays).
+//   - ingress fan-out (#2366, subscriber single → N + phase6 N-router).
 //
-// Ops note: until #2366/#2341 land, an operator MUST configure an identical
+// Ops note: until #2366 lands, an operator MUST configure an identical
 // GOCELL_<CELLID>_AMQP_URL for every broker cell in an assembly (or rely on the
 // shared GOCELL_AMQP_URL fallback). A distinct value fails closed at Resolve with
 // distinct_url_count in the internal attrs — that is the expected egress-only

@@ -256,7 +256,7 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | ~~service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS**~~ → **#2263 RESOLVED**：非 loopback split 强制 mTLS（TLS 1.3 + SPIFFE-ID cross-bind），fail-closed 双闸移除「private network 补偿」soft 约束，见 §#2263 Amendment | **#2263 CLOSED**（2026-06-17） |
-| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell URL 今 egress-only fail-closed（运行期每 cell 独立连接须 #2366/#2341）。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；运行期隔离待 #2366/#2341 |
+| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell broker URL 今 egress-only fail-closed（运行期每 cell 独立 broker 连接须 #2366 ingress N-router）。注：per-cell DB 池/relay fan-out 已由 #2341 独立落地，不解除此 broker 闸。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；broker 运行期隔离待 #2366 |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -422,10 +422,11 @@ bootstrap guard（Medium）；CLI↔运行时派生一致 = 单测锁定（同�
 **per-cell DB 凭据 / 连接注入 seam**（`cellmodules/percellpg`）已在本 PR 落地：composition root
 可为每个 cell 注入独立的 `GOCELL_<CELLID>_DATABASE_URL`，seam 以 DSN 去重——同一 DSN 的 cell
 共享连接池（monolith 常见形态），不同 DSN 的 cell 持有独立连接池（split / per-cell DB 形态）。
-若某 cellID 缺少对应的 `DATABASE_URL` 配置，启动期 fail-closed（非静默降级回全局 pool）。注意：
-**split 拓扑下 per-cell outbox relay 扇出** 尚未实现（每条 outbox entry 需由所属 cell 的连接池读取并
-relay 到 broker），此部分追踪在 **#2152** 中；在该 issue 落地前，多个 DSN
-（即真正 split 的 per-cell DB）的组合在启动期以「多于 1 个不同 DSN」作为 fail-closed 边界。
+若某 cellID 缺少对应的 `DATABASE_URL` 配置，启动期 fail-closed（非静默降级回全局 pool）。
+
+> **更新 2026-06-18（#2341）**：上段「多于 1 个不同 DSN → fail-closed」已被取代。#2341 落地了
+> per-cell DB 池/relay 完整 fan-out：distinct DSN → N keyed instances（`InfraInstanceKey`）+
+> 每 instance 一个 pool + 一个 relay，端到端可运行。详见 §Amendment 2026-06-18 — #2341。
 
 **broker 连接为 assembly 级（非 per-cell seam）的设计论据**：broker（RabbitMQ，`GOCELL_AMQP_URL`）
 是跨 cell 事件总线的传输介质——其天然语义是「跨 cell 共享」，而非「per-cell 独立」。若为每个 cell
@@ -617,6 +618,79 @@ framework 可控的 master key，故不做 HKDF 派生（对比 #2153 HMAC keyri
 
 **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01 +
 §Per-cell credential/vhost isolation）+ ADR `202606131500-1940` §Amendment 2026-06-18。
+
+### Amendment 2026-06-18 — #2341: per-cell DB pool/relay fan-out landed
+
+#2341 closes the per-cell DB pool/relay fan-out that was previously tracked as a
+blocker. The changes below supersede all "fail-closed / blocked-by #2341" language
+in earlier sections of this ADR.
+
+#### What changed
+
+**`cellmodules/percellpg.Resolve` now returns `Resolution{Instances, CellToInstance}`**
+instead of a single `(adapterpg.Config, bool, error)`:
+
+- **Colocated** (all cells share one distinct DSN after dedup): `Instances` contains
+  one entry keyed `DefaultInstanceKey()`. Behavior-preserving — existing single-pool
+  deployments are unaffected.
+- **Split** (>1 distinct DSNs): `Instances` contains one entry per distinct DSN,
+  each keyed `NewInfraInstanceKey(rep)` where `rep` is the alphabetically-first cell
+  ID in that DSN group. `CellToInstance` maps every cell to its instance key.
+
+**`cmd/corebundle/cap_wiring.go` opens one pool + one relay per `InfraInstanceKey`**,
+registers each relay via `bootstrap.WithRelay(key, relay)`, and builds a
+`capability.PGSet` from `CellToInstance` so each cell module resolves its own pool
+provider via `shared.PG.ForCell(cellID)`.
+
+**`composition.SharedDeps.PG` retype**: from `capability.PGProvider` (single-pool
+leaf) to `capability.PGSet` (per-cell routing layer). `ForCell(cellID)` returns the
+provider for that cell; `Sole()` returns the unique provider in colocated mode and
+fails-closed in split mode (guards projection and other single-pool consumers).
+
+**`RELAY-CONSTRUCTION-CELLMODULE-BAN-01`** (Medium caller funnel) added: prevents
+cellmodules from calling `runtime/outbox.NewRelay` / `bootstrap.WithRelay` directly.
+Relay construction is per-pool infrastructure that belongs in `cap_wiring.go`.
+
+#### Threat matrix re-evaluation (AI-robust chapter requirement)
+
+| Aspect | Before #2341 | After #2341 |
+|--------|--------------|-------------|
+| Split DB pools runnable | Blocked — >1 distinct DSN fail-closed at startup | **LIVE** — N distinct DSNs fan out to N keyed pool instances |
+| Per-pool relay drain | Single relay from single pool | N relays, one per `InfraInstanceKey`; each drains its own pool's outbox table |
+| Relay metric `cell` label | Always `configcore` (sole relay owner) | Rep cell of each DSN group (alphabetically-first cell ID); in colocated mode still `accesscore` — no regression |
+| Projection in split mode | N/A (blocked) | **Fail-closed** via `PGSet.Sole()`: split topology has N independent `projection_events` / `global_seq` tables; cross-pool sequence comparison is undefined. Corebundle today has no active projection (dormant) so this is not a live blocker |
+| Per-cell DB schema | Single shared migration set | Each per-cell DB must contain the full platform schema. `cap_wiring.go` runs the same `verifyPGPreconditions` for each pool. Per-cell schema subsetting (lighter schema per cell) is future work |
+
+**Residual blind spots (explicit backlog, not silent)**:
+
+(a) Each per-cell database must contain the complete platform schema — per-cell
+schema subsetting is future work (not tracked in #2341).
+
+(b) The relay metric `cell` label uses the rep cell (alphabetically-first in the DSN
+group) for all outbox traffic originating from cells in that group. In a partial-split
+where accesscore and auditcore share a pool, auditcore relay traffic is attributed to
+`accesscore`. This is the same behavior as the existing colocated mode — not a
+regression.
+
+(c) Projection in split mode is fail-closed via `PGSet.Sole()`: independent
+`projection_events` / `global_seq` tables per pool make cross-pool ordering
+undefined. Corebundle has no active projection today (dormant), so this is not an
+immediate blocker.
+
+(d) The broker remains a single shared connection: distinct per-cell AMQP URLs are
+still fail-closed, pending #2366 (ingress N-router). Per-cell DB fan-out (#2341) and
+per-cell broker fan-out (#2366) are **independent** lifts — they do NOT unlock each
+other.
+
+#### DB vs broker asymmetry (why the two fail-closeds do not lift together)
+
+DB pools are an egress+ingress symmetric resource: each cell both writes and reads
+its own tables through its own pool. A separate pool per DSN group is safe because
+each group is self-contained — no event routing depends on a single subscriber
+draining all pools. By contrast, the broker is a pure egress sink for the relay: N
+broker connections would require N subscribers (ingress N-router, #2366) to avoid
+orphaning events. This structural difference is why #2341 lifts the DB fail-closed
+while the broker fail-closed remains.
 
 ## Rejected alternatives
 
