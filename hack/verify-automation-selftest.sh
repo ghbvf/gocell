@@ -10,6 +10,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 bash "${REPO_ROOT}/hack/automation/pr-meta.sh" selftest
 bash "${REPO_ROOT}/hack/automation/pr-meta-emit-derive-selftest.sh"
+bash "${REPO_ROOT}/hack/automation/pr-handoff-contract-selftest.sh"
 bash "${REPO_ROOT}/hack/automation/issue-labels.sh" selftest
 bash "${REPO_ROOT}/hack/automation/bucket-coverage-selftest.sh"
 bash "${REPO_ROOT}/hack/automation/docs-reconcile-status-selftest.sh"

@@ -17,7 +17,7 @@ allowed-tools: [Bash, Read, Skill, Agent]
 
 **主要角色**：fix 侧监控（默认）；`--role=review` 时可主动触发 review 侧（见 §4）。
 
-**路由依据**：所有分支判定基于 **PR label**（`gh pr view <N> --json state,labels`），不基于机器块 `next.agent`（block 字段仅供 §3.2 熔断判定参考）。
+**路由依据**：所有自动分支判定基于 **PR label + 最新 fresh canonical 机器块**（`gh pr view <N> --json state,labels` + `bash hack/automation/pr-meta.sh extract <N>`）。label 表示当前状态，机器块证明状态来源与下一跳契约；二者必须一致。
 
 `--mode=auto` 是唯一支持的运行模式；保留该 flag 是为了让 ship/fix 的收尾命令形态稳定。
 
@@ -86,6 +86,11 @@ pr-monitor 只凭**机器可判定**的事实（label + 最新机器块）决定
 |------|---------|
 | `pr-status/needs-fix` ∈ labels | label check |
 | 未熔断 | §3.2 通过 |
+| fresh canonical review 块 | `extract` 成功且 latest block `kind == "pr-review"` |
+| review 结论一致 | block `verdict == "changes-requested"` |
+| 下一跳一致 | block `next.agent == "claude"` 且 `next.command == "/fix"` |
+| 触发 label 一致 | block `next.triggerLabel == "pr-status/needs-fix"` 且该 label 仍在 PR 上 |
+| 同 head 约束 | block `next.requiresSameHeadSha == true`（`extract` 已比对 live headSha，stale 会失败） |
 | **Cx1/Cx2 window** | block `findings.byCx`：cx3 == 0 ∧ cx4 == 0 ∧ (cx1 + cx2) > 0 |
 
 > **为什么 dispatch 门不查 IN_SCOPE / ≤2 文件 / 禁止域**：这些是**文件级**事实，机器块只有 `findings.byCx` 聚合计数（无文件清单），pr-monitor 读不到——把读不到的事实写进门只会是**不可执行的门禁**。它们改由 dispatch 后的执行体自限：Claude `Skill("fix")` 侧靠 fix §3.4 [AUTO-FIX]（`IN_SCOPE + ≤2 文件 + 不改 kernel 接口/migration/bootstrap/并发语义`，越界 surface + 转人工）。**端到端「能否自动改」= 此处 Cx1/Cx2 机器门 ∧ 执行体侧文件级 instruction-level 自限**（后者非机器强制门，越界靠 fix skill 自觉转人工），缺一不放行。
@@ -102,6 +107,8 @@ fix 会贴 pm:fix + 切 `pr-status/needs-check-fix`；pr-monitor 本次单次调
 
 ### §3.4 不自动修的情况（只报告，不 AskUserQuestion）
 
+- **`pr-status/needs-review-again`**：窗口打印 "PR #N 待外部 app 执行首轮 review；如需手动兜底，运行 `/pr-monitor <N> --mode=auto --role=review`"。
+- **`pr-status/needs-check-fix`**：窗口打印 "PR #N 待外部 app 执行 `/pr-review --check`；如需手动兜底，运行 `/pr-monitor <N> --mode=auto --role=review`"。
 - **无 `pr-status/needs-fix`**：窗口打印 "PR #N 暂无待修 label，本次接力结束"。
 - **Cx3+/kernel/migration/并发语义**：窗口打印 "PR #N 含 Cx3+ findings，不自动修（需人工决策，fix §3.1）"。
   **不打印 backlog 草稿**——OOS finding 的建 issue 已由 `/fix` 自动完成（pm:oos 自动建 issue + 回填 #N，见 fix 4.6 step 3）。
@@ -131,10 +138,14 @@ fi
 
 ## §4 alternate review 能力（`--role=review`）
 
-review 角色 in-session 跑 `/pr-review`（Claude review 引擎）：
+review 角色 in-session 按当前 `pr-status` 跑 review/check（Claude review 引擎）：
 
 ```bash
-claude -p "/pr-review $PR"
+if [[ " ${LABELS[*]} " == *" pr-status/needs-check-fix "* ]]; then
+  claude -p "/pr-review $PR --check"
+else
+  claude -p "/pr-review $PR"
+fi
 ```
 
 review 结果由 /pr-review 贴评论 + 切 label；fix 侧接力仍由后续 `/pr-monitor <PR#> --mode=auto` 完成。

@@ -13,7 +13,8 @@
 |------|------|--------|
 | 条目内容 / 状态描述 | GitHub Issue body | 人 / 自动化 |
 | 领域 / 类型 / 优先级 / 复杂度 | Issue label（area / type / pri / cx） | CLI 显式 `--label` |
-| 进度状态 / wave | Project v2 字段（Status / Wave） | Project UI / 自动化 |
+| 进度状态 | Project v2 字段（Status） | Project UI / 自动化 |
+| epic 实施顺序 | 最新 `<!-- pm:epic-wave -->` issue 评论 | `issues` 技能 |
 | 父子关系 | GitHub 原生 sub-issue | 人 / 自动化 |
 
 > 本仓 issue/PR 全程经 `gh` CLI / 技能创建，body 读 `.github/project-template/` 下对应模版（`--body-file`）。
@@ -124,6 +125,16 @@
 ---
 
 ## 5. PR 流程（ship → review → fix → check）
+
+**外部 app handoff contract**：外部 app 是 `needs-review-again` / `needs-check-fix` 的实时消费者；`/pr-monitor` 是 ship/fix 收尾约 10min 后必跑的一次性兜底检查器。消费者只能在同仓、非 draft、可信作者、same-head、无已记录失败、未重复领取的前提下 dispatch，并且必须同时满足 live label 与最新 fresh canonical 机器块：
+
+| live label | latest block | allowed dispatch |
+|------|------|------|
+| `pr-status/needs-review-again` | `kind=ship` + `verdict=needs-review-again` + `next.triggerLabel=pr-status/needs-review-again` | `codex review` |
+| `pr-status/needs-check-fix` | `kind=fix` + `verdict=needs-check-fix` + `next.triggerLabel=pr-status/needs-check-fix` | `/pr-review --check` |
+| `pr-status/needs-fix` | `kind=pr-review` + `verdict=changes-requested` + `next.triggerLabel=pr-status/needs-fix` | `/fix`（仅 `/pr-monitor` 在 Cx1/Cx2 window 内自动接力；Cx3+ 转人工） |
+
+离线契约测试：`bash hack/automation/pr-handoff-contract-selftest.sh`，已由 `hack/verify-automation-selftest.sh` 接入 `make verify`。
 
 ```
 /ship <issue>
