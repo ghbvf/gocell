@@ -24,10 +24,12 @@
 
 ### US2 — 拓扑声明作为一等 wiring（P1）→ #1962（blocked-by #1960）
 
-- [ ] T010 [US2] assembly schema 扩展（`kernel/assembly/assembly.go` 模型 + `tools/codegen/` 派生）：`topology.colocated` 组 + `topology.remote[{cellID,endpoint}]`；colocated/remote 互斥校验；空拓扑 = 现状全 co-located
-- [ ] T011 [US2] `gocell validate` 拓扑校验：cell 归属判定（本地/远程/缺失）静态导出；contractUsages 消费方的提供方 ∉ 本地∪远程 → 报错
-- [ ] T012 [US2] `runtime/bootstrap/topology.go` 扩展：启动期 WriteOnce 拓扑判定 API（`IsColocated(cellID)` / `RemoteEndpoint(cellID)`），phase0 注入（`WithControlPlaneTopology` 先例）
-- [ ] T013 [US2] codegen golden + synthetic red case（非法拓扑 fixture）
+> **重评收口（2026-06-18 PR-3）**：T010-T013 原以单进程 `colocated/remote` authoring 描述，该形态已由 US9 PR-1
+> （T090 #2337）**取代为 `topology.groups`**；下列「✅」指其**能力**已随 groups 模型落地（authoring 形态以 T090-T092 为准）。
+- [x] T010 [US2] （✅ 能力随 PR-1 #2337，authoring 改 `topology.groups`）assembly schema 扩展（`kernel/metadata/assembly_topology.go` 模型 + codegen 派生）：穷尽+互斥分区校验（`ValidateTopologyStructure`）；空拓扑 = 现状全 co-located
+- [x] T011 [US2] （✅ = `validateTOPO11`，PR-1 #2337）`gocell validate` 拓扑校验：cell 归属判定（`CellGroup`/`SameGroup` 静态导出）；contractUsages 消费方的提供方 ∉ 本地∪远程 → 报错（即 T093 引用的 sync 维静态检查）
+- [x] T012 [US2] （✅ = `runtime/bootstrap/deployment_topology.go`，PR-1/PR-2）启动期 WriteOnce 拓扑判定 API（`IsColocated(cellID)` / `RemoteEndpoint(cellID)`），phase0 注入
+- [x] T013 [US2] （✅ PR-1 #2337）codegen golden（`generatedTopologyGroups()`）+ synthetic red case（非法 groups fixture）
 
 ### US4 — CellTransport seam + 进程内短路（P1）→ #1963（blocked-by #1960，可与 US2 并行）
 
@@ -71,20 +73,24 @@
 
 > 拆为 3 个独立 review 的 PR（PR-1/2/3）。
 
-- [ ] T090 [US9·PR-1] `topology.groups` schema（`kernel/metadata/assembly_topology.go` + `schemas/assembly.schema.json`）
+- [x] T090 [US9·PR-1] （✅ PR-1 #2337）`topology.groups` schema（`kernel/metadata/assembly_topology.go` + `schemas/assembly.schema.json`）
   **取代** 单进程 `colocated/remote` authoring：重写 `ValidateTopologyStructure`（穷尽+互斥分区 / role 唯一 /
   endpoint 合法）；删 `ClassifyCell` 单视图分支（生产零使用，pre-GA 原地删，无双 schema）。codegen
   `generatedDeploymentTopology()` → `generatedTopologyGroups()` + golden（Hard）。synthetic red case（非法 groups）。
-- [ ] T091 [US9·PR-2] 启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生 `DeploymentTopologySpec`
+- [x] T091 [US9·PR-2] （✅ PR-2 #2363）启动期 role 选择器 `GOCELL_CELL_ROLE`（WriteOnce）由 groups 派生 `DeploymentTopologySpec`
   （未设+多 group→fail-fast / 未设+单/无 group→全 colocated / role∉声明集→fail-fast）；`composition.NewForRole(topo,
   role, allModules...)` **exported 收口入口**（filter+New+With+封 spec；exported 跨包构造器 → caller-funnel 仅
   **Medium** archtest，**非** Hard 包内 sealed，同 `CELLTRANSPORT-SELECT-FUNNEL-01` 族）；`cmd/corebundle/{run,shared_deps}.go`
   改走之。**真正 fail-closed enforcement = T092 的 `MOUNTED-EQUALS-COLOCATED` phase guard**（不依赖调用方走 funnel）。
-- [ ] T092 [US9·PR-2] **新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`（mounted==colocated ∧ remote∉mounted，
+- [x] T092 [US9·PR-2] （✅ PR-2 #2363）**新增** bootstrap-phase 守卫 `MOUNTED-EQUALS-COLOCATED`（mounted==colocated ∧ remote∉mounted，
   违反 fail-fast，Medium）；M12a（New==With，#1093）代码不动、语义精化为「本进程 host 的 cell」（ADR D4 amendment）。
   双子集 boot 集成测试（accesscore+auditcore host、configcore remote 调通）+ 守卫 red/green fixture + anti-vacuity。
-- [ ] T093 [US9·PR-3] 缺失依赖启动期闸：消费 contract provider ∉ colocated ∪ remote → fail-fast（**补全 US2 T011 未落地
-  的 sync 维静态检查** + 加运行期闸；event 维已由 US3 #1965 覆盖）+ `gocell validate` arm + archtest red/green（Medium）。
+- [x] T093 [US9·PR-3] （✅ 收口 #2278）缺失依赖 sync 维 fail-fast **已由既有双层兑现，不建平行 phase0 闸**（三层自审）：
+  ① 静态 = `validateTOPO11`（PR-1 #2337，provider ∉ colocated∪remote → 报错，**补全 US2 T011 的 sync 维静态检查**）；
+  ② 运行期 = `celltransport.Resolve` eager fail-closed seam（US5 #1966，启动期拨真实 server cell，`CELLTRANSPORT-SELECT-FUNNEL-01`
+  锁为 sync 调用唯一出口，FR-004 满足）；event 维已由 US3 #1965 覆盖。新增 phase0 闸经实测判为冗余平行结构（弱派生 +
+  sanctioned 路径零触发，详见 ADR §#1967 Amendment「PR-3 不新增 phase0 平行闸」）→ **不建闸**。本 PR = ADR/tasks 重评收口 +
+  `celltransport.Resolve` 两类失败诊断命名（`topology under-declared` / `local dependency missing`，in-place，无新机制）。
 
 ### US7 — 双拓扑 journey 验收（P2）→ #1967（blocked-by US9）
 
@@ -127,4 +133,4 @@ US1(ADR) ─┬─ US2 ─┬─ US3 ←─ #1940 │             │
 - 每 story 一个 issue、一个（或一簇）PR，各自走 `/ship`（worktree + TDD + 内置 review）。
 - event broker funnel 不建新单：由 #1940 承载（US3 blocked-by）。
 - 运行时动态 placement / sidecar out of scope（归 #303）；mTLS 对等认证 → **#2263**（与 token 层 per-cell 身份正交，#2153 已落 token 层隔离）。
-- **US9（新）拆 3 个独立 review PR**（PR-1 schema/codegen、PR-2 role 选择器+子集挂载+`MOUNTED-EQUALS-COLOCATED`、PR-3 缺失依赖闸）；US7 #1967 = PR-4 验收，blocked-by US9。PR-0（ADR + 本 tasks + sibling issues）docs-only、先行。各 feature PR 内 TDD RED→GREEN（PR-0 不携 RED stub）。
+- **US9（新）拆 3 个独立 review PR**（PR-1 schema/codegen、PR-2 role 选择器+子集挂载+`MOUNTED-EQUALS-COLOCATED`、PR-3 缺失依赖 sync 维收口：双层已兑现（TOPO-11 静态 + celltransport Resolve 运行期），不建 phase0 平行闸 + Resolve 诊断命名）；US7 #1967 = PR-4 验收，blocked-by US9。PR-0（ADR + 本 tasks + sibling issues）docs-only、先行。各 feature PR 内 TDD RED→GREEN（PR-0 不携 RED stub）。

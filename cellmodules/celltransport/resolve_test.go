@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,24 @@ func assertKindInternal(t *testing.T, err error) {
 	}
 	if ec.Kind != errcode.KindInternal {
 		t.Errorf("Kind = %v, want KindInternal", ec.Kind)
+	}
+}
+
+// assertMessageContains asserts the errcode message names the expected failure
+// class. The diagnostic naming is the #2278 PR-3 contribution: the eager
+// celltransport.Resolve seam IS the sync-dimension missing-dependency runtime
+// fail-fast (ADR 202606131142-1423 §#1967), so its two failure paths must name
+// their class ("topology under-declared" / "local dependency missing") rather
+// than a generic "not classified" string. Asserts on ec.Message (not err.Error,
+// which renders the internal cellID attr when present).
+func assertMessageContains(t *testing.T, err error, want string) {
+	t.Helper()
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if !strings.Contains(ec.Message, want) {
+		t.Errorf("error message %q does not name failure class %q", ec.Message, want)
 	}
 }
 
@@ -144,6 +163,9 @@ func TestResolve_UnclassifiedCellReturnsKindInternal(t *testing.T) {
 		t.Fatal("expected error for unclassified cell, got nil")
 	}
 	assertKindInternal(t, resolveErr)
+	// Failure class: the consumed provider is absent from the topology partition
+	// (neither co-located nor remote) — "topology under-declared".
+	assertMessageContains(t, resolveErr, "topology under-declared")
 }
 
 // TestResolve_ColocatedNilInProcReturnsError verifies that a nil inProc
@@ -163,6 +185,10 @@ func TestResolve_ColocatedNilInProcReturnsError(t *testing.T) {
 		t.Fatal("expected error for nil inProc, got nil")
 	}
 	assertKindInternal(t, resolveErr)
+	// Failure class: the provider is declared co-located but its in-process
+	// transport was not minted — the local provider is not mounted here ("local
+	// dependency missing").
+	assertMessageContains(t, resolveErr, "local dependency missing")
 }
 
 // TestResolve_ZeroTopoIsColocated verifies that a zero topology (all-colocated
@@ -183,6 +209,28 @@ func TestResolve_ZeroTopoIsColocated(t *testing.T) {
 	if got != inProc {
 		t.Errorf("Resolve returned %v, want inProc for zero topo", got)
 	}
+}
+
+// TestResolve_ZeroTopoNilInProcIsLocalDependencyMissing covers the "local
+// dependency missing" failure class via the zero-topology (all-colocated)
+// IsColocated path: a zero topo treats any cellID as co-located, so a nil inProc
+// is the same local-provider-not-mounted failure as the explicit-colocated case
+// (TestResolve_ColocatedNilInProcReturnsError) but reached through the !explicit
+// branch — guards both entry conditions for the renamed diagnostic (#2278 PR-3).
+func TestResolve_ZeroTopoNilInProcIsLocalDependencyMissing(t *testing.T) {
+	t.Parallel()
+
+	topo, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{})
+	if err != nil {
+		t.Fatalf("NewDeploymentTopology: %v", err)
+	}
+
+	_, _, resolveErr := celltransport.Resolve(topo, "configcore", nil, clock.Real(), transport.CrossCellObs{}, tlsutil.ClientIdentity{})
+	if resolveErr == nil {
+		t.Fatal("expected error for nil inProc under zero topo, got nil")
+	}
+	assertKindInternal(t, resolveErr)
+	assertMessageContains(t, resolveErr, "local dependency missing")
 }
 
 // --- #2251 P1.3: tracer propagation through the sealed bundle ---
