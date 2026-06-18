@@ -256,6 +256,7 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | ~~service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS**~~ → **#2263 RESOLVED**：非 loopback split 强制 mTLS（TLS 1.3 + SPIFFE-ID cross-bind），fail-closed 双闸移除「private network 补偿」soft 约束，见 §#2263 Amendment | **#2263 CLOSED**（2026-06-17） |
+| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell URL 今 egress-only fail-closed（运行期每 cell 独立连接须 #2366/#2341）。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；运行期隔离待 #2366/#2341 |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -585,6 +586,37 @@ mTLS 对等认证行此刻 CLOSED，私网不再是 peer-auth 的替代补偿（
   形态类型级不可表达。
 - `INSECURE-SKIP-VERIFY-LITERAL-01`（Medium）：`InsecureSkipVerify:true` 字面量限 tlsutil 包内。
 - 完整评级分层见 ADR `202606171200-2263` §AI-robust 档位表。
+
+### #2152 PR-3 Amendment — per-cell AMQP 凭据/vhost 隔离安全模型（2026-06-18）
+
+本 amendment 补全上表「共享 AMQP broker 凭据」缺口行，对该行做 AI-robust 评级显式分层，并与
+§#2153 HMAC keyring 凭据隔离族对齐。
+
+#### 凭据隔离 seam 性质
+
+AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost。per-cell
+`GOCELL_<CELLID>_AMQP_URL` 是凭据/vhost 隔离的 seam，operator 可为每个 cell 配置独立
+vhost/user。**非 framework 派生**：broker 用户在 RabbitMQ 管理面单独 provision，不存在
+framework 可控的 master key，故不做 HKDF 派生（对比 #2153 HMAC keyring 有 master key 可派生）。
+
+#### AI-robust 评级显式分层
+
+① **per-cell 运行期隔离（每 cell 独立连接不同 broker）**：Hard 今天**不可得**（blocked-by
+#2366 ingress N-router + #2341 per-cell relay fan-out）；声称 Hard 即 overclaim。
+
+② **凭据 non-leak**（URL 不写入 log/error）：Soft（`connection.go` 注释约定）→ **Medium**
+（archtest `AMQP-URL-REDACTION-FUNNEL-01`，typed AST field-selection scan，go/types 身份解析）。
+
+③ **Hard-via-sealed-URL-type**：封装 redacted-Stringer URL 类型需改 adapter 全部调用方，成本高、
+无低成本路径，不立 issue（按章程「无低成本 Hard 路径不立 issue」）。
+
+#### 威胁矩阵重评（对照上表「共享 AMQP broker 凭据」行）
+
+当前补偿：PR-2 per-cell URL seam + sanitize funnel（Medium）；残留：运行期隔离 blocked-by
+#2366/#2341。该行是 broker 侧对 §#1964/§#2153 凭据隔离族的补全。
+
+**权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01 +
+§Per-cell credential/vhost isolation）+ ADR `202606131500-1940` §Amendment 2026-06-18。
 
 ## Rejected alternatives
 

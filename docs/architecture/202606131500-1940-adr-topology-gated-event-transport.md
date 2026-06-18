@@ -151,6 +151,46 @@ sealed `IsRealBroker()`（«non-nil ≠ real broker» 收口，见 ADR 1423 的 
   `GOCELL_<CELLID>_AMQP_URL`）。
 - **权威语义**：`cellmodules/eventtransport/doc.go`（§"Per-cell broker URL dedup (egress-only, #2152 PR-2)"）。
 
+## Amendment 2026-06-18（#2152 PR-3）：per-cell AMQP vhost/credential 隔离安全模型
+
+### 凭据隔离 seam
+
+per-cell AMQP URL（`GOCELL_<CELLID>_AMQP_URL`）本质上是凭据+vhost 隔离的入口点。AMQP DSN 格式
+`amqp://user:pass@host/vhost` 携带 broker 用户名、密码与 vhost，operator 可为每个 cell 配置独立
+的 user 和 vhost，使每个进程只持有访问自身 broker 资源所需凭据。
+
+**为何不做 HKDF/派生层**：AMQP broker 用户是外部对象，由 broker operator 在 RabbitMQ 管理面
+单独 provision，不存在 framework 可控的 master key（对比 #2153 HMAC keyring：token 签名 key 由
+framework 持有并可派生）。per-cell 凭据是 operator 通过 `GOCELL_<CELLID>_AMQP_URL` 外部注入，
+framework 不建新包、不做派生。
+
+### 当前边界与运行期隔离
+
+- distinct per-cell URL = egress-only fail-closed（同 PR-2，`dedupBrokerURL`）。
+- 运行期 per-cell 隔离（每个 cell 连接独立 broker）blocked-by #2366（ingress 订阅者 N-router）
+  + #2341（per-cell relay/pool fan-out），与 PR-2 fail-closed 一起 lift。
+
+### AI-robust 评级显式分层
+
+① **per-cell 运行期隔离**：Hard 今天不可得（运行期 blocked-by #2366/#2341，声称 Hard 即 overclaim）。
+
+② **凭据 non-leak**：Soft（`connection.go` sanitize 函数注释约定）→ **Medium**（archtest
+`AMQP-URL-REDACTION-FUNNEL-01`，typed AST field-selection scan，go/types 解析；blind spot =
+local-var laundering + map-value 读，由 `TestDedupBrokerURL_CredentialNonLeak` 行为测试补）。
+
+③ **Hard-via-sealed-URL-type**：封装 redacted-Stringer URL 类型并改 adapter 全调用方，成本高、
+无低成本路径，不立 issue（章程「无低成本 Hard 路径不立 issue」）。
+
+### 威胁矩阵补全
+
+本 amendment 补全 ADR 1423 §"安全模型与已知缺口"中「共享 AMQP broker 凭据」行（详见 ADR 1423
+的对应 amendment）。PR-2 的 distinct-URL fail-closed 是当前的安全边界守门：它**拒绝** distinct
+per-cell URL，故今天 colocated 模式下所有 cell 共享同一 AMQP 凭据（预期行为）；真正的 split
+运行期隔离（每 cell 独立凭据/连接）须等 distinct-URL 被允许，即 #2366/#2341 lift egress-only 之后。
+
+**权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01
++ §Per-cell credential/vhost isolation）。
+
 ## 参考
 
 - 对称 funnel：`kernel/outbox/mode_resolver.go`（`ResolveEmitter`）、`cellmodules/replaydeps`（#825/#2017）
