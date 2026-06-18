@@ -122,3 +122,5 @@ replace github.com/ghbvf/gocell/generated => ../../generated
 replace github.com/ghbvf/gocell/framework => ../../framework
 
 replace github.com/ghbvf/gocell/tests => ../../tests
+
+replace github.com/ghbvf/gocell/adapters/softca => ../../adapters/softca

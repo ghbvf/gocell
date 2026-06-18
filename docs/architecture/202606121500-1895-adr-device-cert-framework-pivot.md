@@ -97,7 +97,8 @@ lifecycle、EST 前端、生产 device 主体。
 | 吊销与续期竞态（吊销正在续期的证书） | epoch 单调 CAS（fencing）保证终态一致；`certlifecycle` 状态机 revoke 转换串行化 | Hard（复用 fencing）/ Medium（状态机测试） |
 | 多租户证书 reconcile 串租户 | reconcile system identity 清空 tenant（#1821）；scan + 命令 key + 签发请求自带 tenant 维度 | Medium |
 | 跨租户吊销（凭裸 serial 吊销他租户证书） | `Revoke`/`RevocationList`/`Tidy` 带 `CertScope`（tenant+issuer+device）typed 位置参，与签发同源；漏传编译错（`CERT-REVOKE-SCOPED-01`）；跨租户/issuer fail-closed | 上游 Hard（typed scope 漏传编译错）/ 下游 Medium（fail-closed 测试） |
-| EST 注册鉴权绕过 | `EST-ENROLL-AUTH-BOUNDARY-01`（enroll=专用 enrollment-credential/device-token，**不复用** setup `auth.bootstrap:true`；reenroll=现证书 mTLS；EST 挂版本化 cell 路径，缺则 fail-closed） | Medium |
+| EST 注册鉴权绕过（路由声明半） | `EST-ENROLL-AUTH-BOUNDARY-01`（EST `auth.Route` 显式声明 enroll=专用 enrollment-credential、reenroll=现证书 mTLS scheme，**不复用** setup `auth.bootstrap:true`；EST 挂版本化 cell 路径，缺则 fail-closed）——**路由声明半归 G2/PR-8b**（`runtime/http/est`） | Medium |
+| enrollment-credential 旁路 wrapper / 越权签发（凭据层半，#2303 G4） | `ENROLLMENT-CREDENTIAL-MINT-CALLER-01`：`EnrollmentCredentialIssuer.Issue` 是唯一 `(*JWTIssuer).Issue(TokenIntentEnrollment,…)` 出口（强制 device + 短 TTL + jti + 非空 tenant/subject）；`EnrollmentCredentialVerifier` fail-closed（intent 隔离 + device 断言 + 构造器拒空）；sealed `EnrollmentIdentity`（unexported 字段，包外不可伪造可用身份） | 下游 Hard（sealed identity 包外不可构造 + TokenIntent 隔离 = 类型/密码学事实）/ 上游 Medium（archtest 扫单一 enrollment Issue callsite，Go 天花板，同族 `COMMAND-ASYNC-EMIT-CALLER-01`） |
 | 续期惊群 | jitter 续期窗口（k8s 70-90% 寿命模型） | —（工程） |
 | device PII（serial/subject/device_id 入日志/wire） | 复用 `pkg/redaction`（#1695）；审计前 hash/redact | Medium |
 
@@ -129,6 +130,31 @@ lifecycle、EST 前端、生产 device 主体。
 > 排到 Stage 1 / 2027 Q1，本身不自洽）。本 ADR **替换**该 P0 为「框架证书底座（`runtime/certsigning` +
 > `adapters/softca` + EST）」——这是真正属于 core v1.0 的能力；winmdm 的 WSTEP/SCEP 协议前端归 2027
 > Stage 2，不塞进 core v1.0 P0。一并消解 #995「不在框架」与原 P0 callout 的张力。
+
+## Amendment 2026-06-18 — #2303（epic #2299 G4）enrollment-credential scheme
+
+落地 FR-012 的**凭据层**：device 首次 EST enroll 的专用鉴权凭据签发器 + 验证器
+（`framework/runtime/auth`），让示例 PR-2 与 EST 前端（G2/PR-8b）有真正的框架原语可依赖，
+不再用「最简 enrollment token 占位」。
+
+- **机制**：enrollment-credential = 带专用 `TokenIntentEnrollment`（typ `enroll+jwt` +
+  `token_use=enrollment`）的短期（`EnrollmentCredentialTTL`=5min）device-scoped 签名 JWT，
+  复用既有 RS256 `JWTIssuer`/`JWTVerifier`。**FR-012「不复用」是类型/密码学事实**：双通道
+  token-confusion 防御（typ 头 + token_use claim 交叉校验）使 enrollment 凭据不能当 access
+  token 用、反之亦然——无需运行时策略。**不复用** setup `auth.bootstrap:true`（FMT-28 正交，
+  本改动不碰）。
+- **概念澄清（防混淆）**：enrollment-credential 与 device **access** token **都是
+  `principal_kind=device` 的 JWT**，唯一区别是 `token_use`（enrollment vs access）。前者证明
+  「被授权以设备 X 身份注册」（注册期、无证书），后者证明「已注册设备 X」（业务期）。
+  两者经 `token_use` 隔离，互不可用。
+- **sealing**：`EnrollmentIdentity`（验证产物）全 unexported 字段 + 唯一构造器拒空 tenant/subject
+  → 包外不可构造可用身份（下游 Hard）。mint funnel `ENROLLMENT-CREDENTIAL-MINT-CALLER-01`
+  钉单一 `Issue(TokenIntentEnrollment,…)` 出口（上游 Medium，Go 天花板）。见上「威胁矩阵」新增行。
+- **归 G2/PR-8b（本 issue OUT）**：EST 端点（`runtime/http/est`）+ `auth.Route` scheme 声明
+  （`EST-ENROLL-AUTH-BOUNDARY-01` 路由声明半）；`EnrollmentIdentity → certsigning.EnrollmentClaim`
+  适配器（避免 auth↔certsigning 互 import 的分层陷阱）；**一次性/replay**（jti 账本/nonce 消费——
+  本 issue 已把随机 `jti` 写入凭据并经 `EnrollmentIdentity.JTI()` 暴露作前向 hook，消费需 enroll
+  请求上下文，归 EST 前端）。本 issue 无契约扇出（无 contract.yaml/generated/event/command）。
 
 ## 参考
 

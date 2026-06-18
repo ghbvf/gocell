@@ -76,6 +76,10 @@ const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
 	TokenIntentAccess = kauth.TokenIntentAccess
+	// TokenIntentEnrollment marks the dedicated device first-enrollment credential
+	// (EST /simpleenroll); see kauth.TokenIntentEnrollment. Issued by
+	// EnrollmentCredentialIssuer, verified by EnrollmentCredentialVerifier.
+	TokenIntentEnrollment = kauth.TokenIntentEnrollment
 )
 
 // PrincipalKindClaim is a type alias of kauth.PrincipalKindClaim so runtime/auth

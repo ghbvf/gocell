@@ -41,7 +41,7 @@ func newContractQueryHandler(entries ...*ledger.Entry) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {
@@ -392,6 +392,53 @@ func TestHttpAuditGetV1Serve(t *testing.T) {
 	req = req.WithContext(auditTestCtx("usr-1", []string{"admin"}))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestHttpAuditGetV1Serve_AuthBoundary is the contract-level authorization-boundary
+// coverage required for every served contract (cell-patterns.md §Contract test): it
+// drives the real http.audit.get.v1 route through auth.Mount and asserts the
+// audit:read gate — now contract-derived (#2355: the endpoints.http.permission
+// overlay → cellHTTPResolver → RequirePermissionForContract) — fail-closes both a
+// principal-less request (401) and a non-admin principal the PDP denies (403). The
+// gate rejects before the service lookup, so no seeded entry is needed; a dummy id
+// suffices. Unlike the list route, the get gate has no actorId-self exemption (the
+// path param is the opaque entry id, not an actor identity).
+func TestHttpAuditGetV1Serve_AuthBoundary(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	c := contracttest.LoadByID(t, root, "http.audit.get.v1")
+	path := strings.Replace(c.HTTP.Path, "{id}", "ae-get-authz", 1)
+
+	tests := []struct {
+		name       string
+		ctx        func() context.Context
+		wantStatus int
+	}{
+		{
+			// No principal in context → the permission gate fail-closes (401).
+			name:       "no_principal_401",
+			ctx:        context.Background,
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// Non-admin principal the PDP denies audit:read → 403.
+			name: "audit_read_denied_403",
+			ctx: func() context.Context {
+				return withDenyAuthorizer(auditTestCtxNoAuthz("usr-1", []string{"user"}), "no audit:read")
+			},
+			wantStatus: http.StatusForbidden,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newContractQueryHandler()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(c.HTTP.Method, path, nil).WithContext(tc.ctx())
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d\nbody=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
 }
 
 // TestHttpAuditGetV1Serve_ZeroOccurredAt_NullValidates is the GET-side wire-schema
