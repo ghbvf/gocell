@@ -184,29 +184,25 @@ type EnumValue struct {
 type DTOField struct {
 	// Name is the PascalCase Go field name.
 	Name string
-	// JSONTag is the JSON tag value, e.g. "item,omitempty".
+	// JSONTag is the JSON tag value, e.g. "item,omitempty". A Nullable field
+	// (see below) carries NO ",omitempty" suffix — it is always present on the wire
+	// (its nil pointer serializes to JSON null), e.g. "occurredAt".
 	JSONTag string
 	// BareJSONTag is the JSON key without the ",omitempty" suffix, e.g. "item".
-	// Used by the generated toMap() (EmitToMap DTOs) so the projection column map
-	// keys match the wire JSON field names exactly.
+	// Used by the generated ToMap() (EmitToMap DTOs) so the projection column map
+	// keys match the wire JSON field names exactly. The generated ToMap emits EVERY
+	// field unconditionally as `"<BareJSONTag>": i.<Name>` — the full, stable column
+	// set the masking funnel relies on (PROJECTION-TOMAP-FULL-COLUMN-SET-01); there
+	// is no conditional/omitempty omission (that was the #2159 regression, #1875).
 	BareJSONTag string
-	// OmitEmpty is true when the field carries ",omitempty" in its JSON tag (i.e.
-	// the field is not in the schema's required list). The generated ToMap
-	// (EmitToMap DTOs) emits a conditional entry for these fields so the
-	// projection path omits zero-value optional fields, matching the struct JSON
-	// serialization path.
-	OmitEmpty bool
-	// ZeroValueExpr is the Go expression that represents the zero value for this
-	// field's underlying kind, used by omitEmptyCheck to emit a correct "!= zero"
-	// guard in the generated ToMap. It is set by the builder for types whose
-	// underlying kind is not directly readable from GoType — in particular, named
-	// string enum types (GoType = "FooStatus", underlying = string, zero = "").
-	// When non-empty, omitEmptyCheck uses this expression directly instead of
-	// falling back to the GoType-string heuristic (which would wrongly emit
-	// "!= nil" for named string types, producing uncompilable code).
-	// Scalar primitives (string, int64, float64, bool, []T) leave this empty and
-	// are handled by the existing GoType-string branches in omitEmptyCheck.
-	ZeroValueExpr string
+	// Nullable is true when the source schema declared this column as
+	// `type: ["<scalar>", "null"]` (JSON-Schema 2020-12 nullable form, #1875). The
+	// builder renders such a field as a pointer GoType (e.g. *string) and DROPS the
+	// ",omitempty" tag suffix, so its "no value" serializes as schema-valid JSON
+	// `null` (not "" — which would violate a `format` constraint) while the column
+	// stays present in the masked view. This mirrors the existing optional-bool→*bool
+	// convention (distinguish absent from a real zero) for format-constrained columns.
+	Nullable bool
 	// GoType is the Go type expression, e.g. "string", "int64", "*ResponseData".
 	GoType string
 	// ItemDTO is the generated resource item DTO name when this field is an

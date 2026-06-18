@@ -15,6 +15,7 @@ import (
 // PropertyOrder preserves the source order of properties keys for stable diffs.
 type Schema struct {
 	Type                 string             // "string" | "integer" | "number" | "boolean" | "object" | "array"
+	Nullable             bool               // source type was [scalar, "null"]; Type is the scalar, column accepts JSON null (#1875)
 	Format               string             // "uuid" | "date-time" | "int64" | ""
 	Properties           map[string]*Schema // type=object
 	PropertyOrder        []string           // source order of property keys
@@ -236,18 +237,76 @@ func fillScalars(s *Schema, rawNode map[string]any, loc string) error {
 }
 
 // fillType sets s.Type from rawNode["type"], failing on unsupported forms.
+//
+// The ONLY accepted array form is `["<scalar>", "null"]` (order-independent) —
+// the JSON-Schema 2020-12 nullable idiom. It sets s.Type to the scalar and
+// s.Nullable=true; the column then accepts JSON null in addition to the scalar.
+// This is the authoring surface for an optional column whose "no value" must be
+// schema-valid `null` rather than "" (which would violate a `format` constraint)
+// while the column stays present in the masked projection view (#1875). Any
+// other array `type` (two real types, a single element, "null" alone) stays an
+// unsupported-keyword error.
 func fillType(s *Schema, rawNode map[string]any, loc string) error {
 	switch tv := rawNode["type"].(type) {
 	case string:
 		s.Type = tv
 	case []any:
-		return fmt.Errorf("contractgen/jsonschema: unsupported keyword \"type\" as array at %s", loc)
+		scalar, ok := nullableScalarType(tv)
+		if !ok {
+			return fmt.Errorf("contractgen/jsonschema: unsupported \"type\" array %v at %s "+
+				"(only [<scalar>, \"null\"] where scalar ∈ {string, integer, number, boolean} is accepted)", tv, loc)
+		}
+		s.Type = scalar
+		s.Nullable = true
 	case nil:
 		// type may be omitted
 	default:
 		return fmt.Errorf("contractgen/jsonschema: unexpected \"type\" value at %s", loc)
 	}
 	return nil
+}
+
+// nullableScalarTypes is the CLOSED value-set of JSON-Schema types that may carry
+// a `["<type>", "null"]` nullable declaration: only scalars whose Go zero value has
+// a well-defined non-null wire form worth pointer-izing. `object` and `array` are
+// excluded on purpose — their "no value" is `{}` / `[]`, not a nullable pointer, and
+// codegen renders them as nested DTOs / slices, so `*object` / `*[]T` would be
+// nonsense; a nullable object/array (or a typo like "strnig") must fail fast rather
+// than fall through to the `any` GoType fallback (#2340 F1). To allow a new nullable
+// type, add it here AND extend the pointer-derivation in collectDTOs.
+var nullableScalarTypes = map[string]bool{
+	"string":  true,
+	"integer": true,
+	"number":  true,
+	"boolean": true,
+}
+
+// nullableScalarType returns the non-"null" scalar of a 2-element `type` array
+// exactly one of whose members is "null" (e.g. ["string","null"]), reporting ok.
+// The scalar must be in the closed nullableScalarTypes set; any other shape
+// (wrong length, no/extra "null", a non-scalar like "object"/"array", or a typo)
+// returns ok=false so fillType rejects it (fail-fast, no `any` degradation).
+func nullableScalarType(tv []any) (scalar string, ok bool) {
+	if len(tv) != 2 {
+		return "", false
+	}
+	var scalars []string
+	nullCount := 0
+	for _, e := range tv {
+		s, isStr := e.(string)
+		if !isStr {
+			return "", false
+		}
+		if s == "null" {
+			nullCount++
+			continue
+		}
+		scalars = append(scalars, s)
+	}
+	if nullCount != 1 || len(scalars) != 1 || !nullableScalarTypes[scalars[0]] {
+		return "", false
+	}
+	return scalars[0], true
 }
 
 // fillEnum parses the "enum" keyword into s.Enum (#1935). Only string enums are

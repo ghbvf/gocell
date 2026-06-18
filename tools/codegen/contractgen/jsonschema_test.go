@@ -628,12 +628,16 @@ func TestParse_FailAdditionalPropertiesSchemaObject(t *testing.T) {
 	}
 }
 
+// TestParse_FailTypeArray verifies that an array `type` that is NOT the
+// `["<scalar>", "null"]` nullable form (e.g. two real types) stays an
+// unsupported-keyword error. The accepted nullable form is covered by
+// TestParse_NullableType (#1875).
 func TestParse_FailTypeArray(t *testing.T) {
 	dir := t.TempDir()
-	writeSchema(t, dir, "s.json", `{"type": ["string", "null"]}`)
+	writeSchema(t, dir, "s.json", `{"type": ["string", "integer"]}`)
 	_, err := parseFromDir(t, dir, "s.json")
 	if err == nil {
-		t.Fatal("expected error for type as array")
+		t.Fatal("expected error for unsupported array type")
 	}
 	if !strings.Contains(err.Error(), `"type"`) {
 		t.Errorf("error should mention 'type', got: %v", err)

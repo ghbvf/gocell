@@ -1528,9 +1528,13 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 	for _, key := range s.PropertyOrder {
 		prop := s.Properties[key]
 		required := isRequired(key, s.Required)
+		nullable := prop.Nullable
 		fieldName := goPascalCase(key)
 		jsonTag := key
-		if !required {
+		// A nullable column (`type: ["<scalar>", "null"]`) is ALWAYS present on the
+		// wire — its "no value" serializes as JSON null — so it must NOT carry
+		// ",omitempty" (which would omit the nil pointer). Plain optional fields do.
+		if !required && !nullable {
 			jsonTag = key + ",omitempty"
 		}
 
@@ -1545,33 +1549,29 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) error {
 			goType = "*bool"
 		}
 
+		// A nullable scalar column becomes a pointer so its zero value is a distinct
+		// nil that marshals to JSON null — three states (value / null / <REDACTED>)
+		// stay distinguishable in the masked projection view (#1875), extending the
+		// optional-bool→*bool convention to format-constrained columns. The
+		// HasPrefix guard avoids a double pointer when the type is ALREADY a pointer
+		// (e.g. an optional bool that the block above converted to *bool): nil already
+		// expresses "no value", so a nullable optional bool stays *bool, not **bool.
+		if nullable && !strings.HasPrefix(goType, "*") {
+			goType = "*" + goType
+		}
+
 		doc := ""
 		if prop.Format == "uuid" || prop.Format == "date-time" {
 			doc = "format: " + prop.Format
 		}
 
 		field := bodyFieldFromSchema(fieldName, jsonTag, goType, required, doc, prop)
-		// BareJSONTag is the wire key without ",omitempty"; the generated toMap()
+		// BareJSONTag is the wire key without ",omitempty"; the generated ToMap()
 		// (responseProjection item DTOs) uses it so the projected column map keys
-		// equal the wire field names.
+		// equal the wire field names. ToMap emits every field unconditionally
+		// (full, stable column set — PROJECTION-TOMAP-FULL-COLUMN-SET-01).
 		field.BareJSONTag = key
-		// OmitEmpty mirrors the ",omitempty" presence so types.tmpl can emit a
-		// conditional zero-value guard in the generated ToMap, making the projection
-		// path wire-equivalent to the struct json.Marshal path.
-		field.OmitEmpty = !required
-		// ZeroValueExpr provides structured zero-value information for optional
-		// fields whose underlying kind cannot be inferred from GoType alone.
-		// Named string enum types (e.g. "DeviceStatus") have GoType != "string"
-		// but their underlying kind is still string — omitEmptyCheck would
-		// otherwise emit "!= nil" (the default/pointer branch), producing
-		// uncompilable code. We derive ZeroValueExpr from the schema type here,
-		// where schema type information is available.
-		// Only set for optional (OmitEmpty) fields; required fields never hit
-		// omitEmptyCheck so leaving ZeroValueExpr empty is safe.
-		if !required && prop.Type == "string" && len(prop.Enum) > 0 {
-			// Named string enum: underlying kind is string, zero value is "".
-			field.ZeroValueExpr = `""`
-		}
+		field.Nullable = nullable
 		// Structured projection-item metadata (F5): nestedName is the generated
 		// item DTO name when the property is an object or array-of-object (empty
 		// for scalars / arrays-of-scalar). Captured here so applyResponseProjection
