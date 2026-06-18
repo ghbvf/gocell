@@ -99,3 +99,44 @@ func TestRegistrationState_IsTerminal(t *testing.T) {
 		}
 	}
 }
+
+// TestParseState_RoundTrips verifies ParseState is the exact inverse of String()
+// for every producible state — the round-trip a durable store relies on to
+// reconstruct a sealed state from its `state TEXT` column.
+func TestParseState_RoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, want := range allRegistrationStates {
+		got, ok := ParseState(want.String())
+		if !ok {
+			t.Errorf("ParseState(%q) ok=false, want true", want.String())
+			continue
+		}
+		if got != want {
+			t.Errorf("ParseState(%q) = %q, want %q", want.String(), got, want)
+		}
+	}
+}
+
+// TestParseState_EmptyIsZeroSentinel verifies the empty string maps to the zero
+// sentinel (ok=true) — the persisted From of an initial submit event.
+func TestParseState_EmptyIsZeroSentinel(t *testing.T) {
+	t.Parallel()
+	got, ok := ParseState("")
+	if !ok {
+		t.Fatal("ParseState(\"\") ok=false, want true (zero sentinel)")
+	}
+	if !got.IsZero() {
+		t.Errorf("ParseState(\"\") = %q, want zero value", got)
+	}
+}
+
+// TestParseState_UnknownRejected verifies an unrecognized label — including the
+// fail-closed "unknown" render — is rejected, never silently folded to a state.
+func TestParseState_UnknownRejected(t *testing.T) {
+	t.Parallel()
+	for _, s := range []string{RegistrationStateUnknown, "garbage", "Submitted", "SUBMITTED"} {
+		if got, ok := ParseState(s); ok {
+			t.Errorf("ParseState(%q) ok=true (=%q), want false", s, got)
+		}
+	}
+}

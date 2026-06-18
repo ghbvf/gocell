@@ -2,8 +2,8 @@
 
 // tenant_repo_param_funnel_test.go — guards that every tenant-scoped platform
 // repo interface method carries a tenant.TenantID positional parameter.
-// Enrolled repos: accesscore (RoleRepository, UserRepository, PolicyRepository)
-// and configcore (ConfigRepository, FlagRepository).
+// Enrolled repos: accesscore (RoleRepository, UserRepository, PolicyRepository),
+// configcore (ConfigRepository, FlagRepository), and registrycore (Registry).
 //
 //   - INVARIANT: TENANT-REPO-PARAM-FUNNEL-01
 //
@@ -103,8 +103,9 @@ const (
 	tenantPkgPath = PlatformFrameworkModulePath + "/pkg/tenant"
 	// accesscorePortsPkg is also reused by rowscope_repo_param_funnel_test.go
 	// (ROWSCOPE-REPO-PARAM-FUNNEL-01, #1709) — update both files if this path changes.
-	accesscorePortsPkg = PlatformCellsModulePath + "/accesscore/internal/ports"
-	configcorePortsPkg = PlatformCellsModulePath + "/configcore/internal/ports"
+	accesscorePortsPkg   = PlatformCellsModulePath + "/accesscore/internal/ports"
+	configcorePortsPkg   = PlatformCellsModulePath + "/configcore/internal/ports"
+	registrycorePortsPkg = PlatformCellsModulePath + "/registrycore/internal/ports"
 	// tenantRepoParamFixPkg is a relative load path for go/packages — NOT a
 	// platform import path — so it is intentionally not derived from PlatformModulePath.
 	tenantRepoParamFixPkg = "./tools/archtest/internal/tenantrepoparamfixture"
@@ -123,6 +124,10 @@ var tenantScopedRepoIfaces = []string{
 	// configcore ports (configcorePortsPkg)
 	"ConfigRepository",
 	"FlagRepository",
+	// registrycore ports (registrycorePortsPkg) — #2236 303-US5. A registration id
+	// is unique only within a tenant (PK (tenant_id, id)); every method is
+	// tenant-scoped, NO carve-out (no schema-probe method on this interface).
+	"Registry",
 }
 
 // tenantParamCarveOut is the by-PK tenant-deriving read and schema-probe
@@ -232,8 +237,9 @@ func scanTenantRepoParam(
 // returns nil for interfaces not declared in a given package, so the same
 // interface list works across all enrolled packages without filtering.
 var enrolledPortsPkgs = map[string]struct{}{
-	accesscorePortsPkg: {},
-	configcorePortsPkg: {},
+	accesscorePortsPkg:   {},
+	configcorePortsPkg:   {},
+	registrycorePortsPkg: {},
 }
 
 // TestTenantRepoParamFunnel01 asserts every enrolled platform repo interface
@@ -241,7 +247,8 @@ var enrolledPortsPkgs = map[string]struct{}{
 // (after ctx), and that no carve-out entry is stale.
 //
 // Enrolled ports packages: accesscore (RoleRepository, UserRepository,
-// PolicyRepository) and configcore (ConfigRepository, FlagRepository).
+// PolicyRepository), configcore (ConfigRepository, FlagRepository), and
+// registrycore (Registry, #2236).
 func TestTenantRepoParamFunnel01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -273,7 +280,7 @@ func TestTenantRepoParamFunnel01(t *testing.T) {
 	if len(allSeen) == 0 {
 		diags = append(diags, Diagnostic{Message: "TENANT-REPO-PARAM-FUNNEL-01: scanned zero repo interface methods — " +
 			"scanner regressed or enrolled ports package paths changed (expected " +
-			accesscorePortsPkg + " and " + configcorePortsPkg + ")"})
+			accesscorePortsPkg + ", " + configcorePortsPkg + " and " + registrycorePortsPkg + ")"})
 	}
 	if totalWithTenant == 0 {
 		diags = append(diags, Diagnostic{Message: "TENANT-REPO-PARAM-FUNNEL-01: zero methods carry a tenant.TenantID " +
