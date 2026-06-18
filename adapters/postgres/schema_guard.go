@@ -1029,6 +1029,13 @@ var expectedRLSTables = []expectedRLS{
 	{Table: "roles", Policy: "tenant_isolation"},
 	{Table: "role_assignments", Policy: "tenant_isolation"},
 	{Table: "policies", Policy: "tenant_isolation"}, // 059 NEW — ABAC policy store (#1346 PR-8)
+	// contract_registrations + its append-only history (migration 066, #2236
+	// 303-US5): runtime contract-registry store. Both tenant-scoped with the
+	// standard tenant_isolation predicate; the history table additionally has
+	// UPDATE/DELETE revoked from gocell_app (append-only, asserted separately by
+	// TestContractRegistrationEvents_AppendOnly_ServingRoleRevoked).
+	{Table: "contract_registrations", Policy: "tenant_isolation"},       // 066 NEW
+	{Table: "contract_registration_events", Policy: "tenant_isolation"}, // 066 NEW
 	// audit_entries (migration 055, #1618): SystemRowsReadable variant — the
 	// `OR tenant_id = ''` clause keeps tenant-less system/framework rows readable
 	// by every tenant AND insertable by the GUC-unset pre-auth appender.
