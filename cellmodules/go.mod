@@ -46,7 +46,7 @@ require (
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/ghbvf/gocell/framework v0.0.0
-	github.com/ghbvf/gocell/generated v0.0.0 // indirect
+	github.com/ghbvf/gocell/generated v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect

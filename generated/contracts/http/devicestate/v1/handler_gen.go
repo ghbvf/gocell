@@ -20,7 +20,7 @@ var contractSpec = contractspec.ContractSpec{
 	Kind:      cellvocab.ContractHTTP,
 	Transport: "http",
 	Method:    "GET",
-	Path:      "/api/v1/devicestate",
+	Path:      "/api/v1/devicestate/{id}",
 }
 
 // Handler wires HTTP decode/encode + auth.Mount for http.devicestate.v1.
@@ -63,19 +63,21 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
-
-	req.DeviceID = r.URL.Query().Get("deviceId")
-	if req.DeviceID == "" {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: required field missing",
-			errcode.WithDetails(errcode.PublicString("field", "deviceId"))))
-		return
-	}
-	if len(req.DeviceID) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"validation: invalid request parameter",
-			errcode.WithDetails(errcode.PublicString("field", "deviceId"), errcode.PublicString("reason", "invalid"))))
-		return
+	{
+		v := r.PathValue("id")
+		if len(v) < 1 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(errcode.PublicString("field", "id"), errcode.PublicString("reason", "invalid"))))
+			return
+		}
+		if len(v) > 256 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(errcode.PublicString("field", "id"), errcode.PublicString("reason", "invalid"))))
+			return
+		}
+		req.ID = v
 	}
 	resp, err := h.svc.Devicestate(r.Context(), req)
 	if err != nil {

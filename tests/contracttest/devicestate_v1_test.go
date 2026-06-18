@@ -3,7 +3,9 @@ package contracttest_test
 // Contract-level TDD coverage for the framework-owned, provider-neutral
 // devicestate contract (issue #1899, epic #1895 PR-3): a GET presence query
 // (online/offline/last-seen) that lets MDM/ZT consume any device provider.
-// ownerCell:_framework + lifecycle:draft (ADR 202606130635-1939).
+// ownerCell:_framework + lifecycle:active (draft→active in #2037 PR-8a; the
+// deviceId moved query→path `/api/v1/devicestate/{id}` for per-device ABAC
+// ownership in #2348 F3). ADR 202606130635-1939.
 //
 // observedAt is a required freshness anchor (always present, even for unknown);
 // lastSeenAt (last actual contact) stays optional. tenantId is removed as a
@@ -35,9 +37,12 @@ func TestDeviceState_V1(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"state":"online","observedAt":"2026-06-13T00:00:00Z"}}`))                   // missing deviceId
 	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","state":"online"}}`))                                    // missing observedAt
 
-	// query param validation (FMT-25 maxLength)
-	c.ValidateQueryParam(t, "deviceId", "dev-1")
-	c.MustRejectQueryParam(t, "deviceId", strings.Repeat("x", 257))
+	// path param validation (FMT-25 minLength/maxLength). deviceId is the path
+	// param `id` (GET /api/v1/devicestate/{id}); it enters the PDP as the ABAC
+	// resource via RequirePermissionForResource("id", device:read) (#2348 F3).
+	c.ValidatePathParam(t, "id", "dev-1")
+	c.MustRejectPathParam(t, "id", "")                       // minLength 1
+	c.MustRejectPathParam(t, "id", strings.Repeat("x", 257)) // maxLength 256
 
 	// auth-boundary declaration (every declared status conforms)
 	c.ValidateErrorResponse(t, 400, []byte(`{"error":{"code":"ERR_VALIDATION","message":"bad request","details":[]}}`))

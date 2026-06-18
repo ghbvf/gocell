@@ -23,7 +23,7 @@ import (
 //
 // This rule is the EQUIVALENT framework-side governance that makes that
 // structural exclusion a re-route, not a hole: a contract that opts into
-// `ownerCell: _framework` to dodge cell governance lands here instead. Two
+// `ownerCell: _framework` to dodge cell governance lands here instead. Three
 // constraints:
 //
 //  1. Eligible kind: only http and event contracts may be framework-owned —
@@ -33,15 +33,14 @@ import (
 //     New kinds are admitted by extending this allow-set in a later PR (and its
 //     red case), so an un-vetted kind is fail-closed today.
 //
-//  2. Fail-closed lifecycle: a framework-owned contract MUST be lifecycle
-//     draft|deprecated. Active framework SERVING (a framework RouteGroup that
-//     mounts the contract — runtime/internal/contractbuild.NewFrameworkHTTP +
-//     bootstrap) is not yet wired, so an `active` framework contract would be
-//     silently dead with no serving-side coverage to catch it. Until that
-//     serving scan lands, active is rejected. When framework serving is wired,
-//     this rule is extended to scan the serving RouteGroup and permit served
-//     active framework contracts (the DEAD-CONTRACT-01 analog for the framework
-//     side).
+//  2. Serving-scan lifecycle: framework serving is now wired (bootstrap framework
+//     RouteGroup + startup fail-fast). This rule permits active framework http/event
+//     contracts that appear in some assembly.frameworkContracts (serving-scan), and
+//     rejects active framework contracts served by no assembly (the
+//     DEAD-CONTRACT-01 analog for the framework side). draft/deprecated are always
+//     permitted. The complementary check (constraint 2b) validates each
+//     assembly.frameworkContracts entry: it must be an active framework http/event
+//     contract (bidirectional closure).
 //
 //  3. Provider is the framework: a framework-owned contract's provider endpoint
 //     (http server / event publisher) MUST be the FrameworkOwnerSentinel — the
@@ -58,15 +57,24 @@ import (
 // in rules_framework_owned_test.go).
 // See: docs/architecture/202606130635-1939-adr-framework-owned-contract.md §D3.
 func (v *Validator) validateFRAMEWORKOWNEDCONTRACTSCOPED01() []ValidationResult {
+	// Build the served-contract set: union of all assembly.frameworkContracts entries.
+	served := make(map[string]bool)
+	for _, a := range v.project.Assemblies {
+		for _, id := range a.FrameworkContracts {
+			served[id] = true
+		}
+	}
+
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if !c.Owner().IsFramework() {
 			continue
 		}
 		results = append(results, v.checkFrameworkOwnedKind(c)...)
-		results = append(results, v.checkFrameworkOwnedLifecycle(c)...)
+		results = append(results, v.checkFrameworkOwnedLifecycle(c, served)...)
 		results = append(results, v.checkFrameworkOwnedProvider(c)...)
 	}
+	results = append(results, v.checkAssemblyFrameworkContracts()...)
 	return results
 }
 
@@ -90,23 +98,100 @@ func (v *Validator) checkFrameworkOwnedKind(c *metadata.ContractMeta) []Validati
 	}
 }
 
-// checkFrameworkOwnedLifecycle enforces constraint 2 (fail-closed lifecycle).
+// checkFrameworkOwnedLifecycle enforces constraint 2 (serving-scan lifecycle).
+// draft/deprecated are always permitted. active is permitted only when the
+// contract appears in at least one assembly's frameworkContracts list (serving-scan).
+// An active framework contract served by no assembly is the DEAD-CONTRACT-01 analog
+// for the framework side: it would be silently dead with no serving-side coverage.
 // "active" is the literal used by the sibling lifecycle rules (ADV-05,
 // DEAD-CONTRACT-01); reusing it keeps the lifecycle vocabulary consistent.
-func (v *Validator) checkFrameworkOwnedLifecycle(c *metadata.ContractMeta) []ValidationResult {
+func (v *Validator) checkFrameworkOwnedLifecycle(c *metadata.ContractMeta, served map[string]bool) []ValidationResult {
 	if c.Lifecycle != lifecycleActive {
-		return nil
+		return nil // draft / deprecated always permitted
+	}
+	if served[c.ID] {
+		return nil // active and served by some assembly
 	}
 	return []ValidationResult{v.newError(
 		codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueForbidden,
 		contractFile(c), "lifecycle",
 		fmt.Sprintf(
-			"framework-owned contract %q is lifecycle %q but active framework serving is not yet wired; "+
-				"framework contracts must be draft|deprecated (fail-closed)",
-			c.ID, c.Lifecycle,
+			"active framework contract %q is not served by any assembly "+
+				"(not in any assembly.frameworkContracts); framework serving is wired via "+
+				"the bootstrap framework RouteGroup + startup fail-fast",
+			c.ID,
 		),
-		"set lifecycle to draft or deprecated until a framework RouteGroup serves this contract",
+		"add the contract id to the serving assembly's frameworkContracts, "+
+			"or set lifecycle back to draft",
 	)}
+}
+
+// checkAssemblyFrameworkContracts validates each entry in every assembly's
+// frameworkContracts list — bidirectional closure with checkFrameworkOwnedLifecycle:
+// ① active framework contracts must appear in some assembly (serving-scan);
+// ② assembly entries must be active framework http/event contracts (drift guard).
+func (v *Validator) checkAssemblyFrameworkContracts() []ValidationResult {
+	var results []ValidationResult
+	for _, a := range v.project.Assemblies {
+		for _, id := range a.FrameworkContracts {
+			c, exists := v.project.Contracts[id]
+			if !exists {
+				results = append(results, v.newError(
+					codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueRefNotFound,
+					assemblyFile(a), "frameworkContracts",
+					fmt.Sprintf(
+						"assembly %q frameworkContracts references unknown contract %q",
+						a.ID, id,
+					),
+					"add the contract declaration under contracts/ or remove this entry",
+				))
+				continue
+			}
+			if !c.Owner().IsFramework() {
+				results = append(results, v.newError(
+					codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueForbidden,
+					assemblyFile(a), "frameworkContracts",
+					fmt.Sprintf(
+						"assembly %q frameworkContracts references contract %q which is not framework-owned "+
+							"(ownerCell must be %q)",
+						a.ID, id, metadata.FrameworkOwnerSentinel,
+					),
+					"set the contract's ownerCell to _framework, or remove it from frameworkContracts",
+				))
+				continue
+			}
+			switch cellvocab.ContractKind(c.Kind) {
+			case cellvocab.ContractHTTP, cellvocab.ContractEvent:
+				// eligible kind — continue to lifecycle check
+			default:
+				results = append(results, v.newError(
+					codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueForbidden,
+					assemblyFile(a), "frameworkContracts",
+					fmt.Sprintf(
+						"assembly %q frameworkContracts references contract %q with kind %q which is not eligible "+
+							"(only http/event framework contracts may be served)",
+						a.ID, id, c.Kind,
+					),
+					"change the contract kind to http or event, or remove it from frameworkContracts",
+				))
+				continue
+			}
+			if c.Lifecycle != lifecycleActive {
+				results = append(results, v.newError(
+					codeFRAMEWORKOWNEDCONTRACTSCOPED01, IssueForbidden,
+					assemblyFile(a), "frameworkContracts",
+					fmt.Sprintf(
+						"assembly %q frameworkContracts references contract %q with lifecycle %q; "+
+							"only active framework contracts are served",
+						a.ID, id, c.Lifecycle,
+					),
+					"set the contract lifecycle to active, or remove it from frameworkContracts "+
+						"(draft contracts are not yet ready for serving)",
+				))
+			}
+		}
+	}
+	return results
 }
 
 // checkFrameworkOwnedProvider enforces constraint 3 (provider is the framework).

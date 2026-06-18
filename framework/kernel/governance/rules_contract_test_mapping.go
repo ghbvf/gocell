@@ -325,16 +325,33 @@ func isServeRoleKind(kind string) bool {
 }
 
 // isActiveServeStylePlatformContract reports whether a contract is subject to
-// CONTRACT-ENDPOINT-TEST-MAPPING-01 coverage requirements. All three
-// conditions must hold:
+// CONTRACT-ENDPOINT-TEST-MAPPING-01 coverage requirements. All four conditions
+// must hold:
 //   - serve-style kind (http or grpc; see isServeRoleKind)
 //   - lifecycle == "active"
 //   - File does not start with "examples/" (platform-scope only)
+//   - NOT framework-owned (ownerCell: _framework)
+//
+// Framework-owned contracts are structurally excluded: they have no cell (ADR
+// 202606130635-1939 D4), so the "slice in the server cell declares
+// contract.<id>.serve" mapping is inapplicable (no slice belongs to _framework).
+// Their serving is governed instead by FRAMEWORK-OWNED-CONTRACT-SCOPED-01
+// (serving-scan: an active framework contract must appear in some
+// assembly.frameworkContracts) plus the bootstrap startup fail-fast
+// (validateFrameworkServing), and their contract-level coverage is the
+// framework RouteGroup test (runtime/bootstrap) + the composition-root serving
+// test (cellmodules/deviceserving), not a cell-slice verify.contract. This is
+// the same structural exclusion ADR D2 applies to REF-03/REF-13/CCE-01 via
+// Owner().Cell(); CONTRACT-ENDPOINT-TEST-MAPPING-01 was previously auto-skipped
+// for framework contracts only because D3 forced them draft, and now that
+// framework serving is wired (active framework contracts are permitted) the
+// exclusion must be explicit.
 func isActiveServeStylePlatformContract(c *metadata.ContractMeta) bool {
 	return c != nil &&
 		isServeRoleKind(c.Kind) &&
 		c.Lifecycle == lifecycleActive &&
-		!strings.HasPrefix(c.File, examplesPathPrefix)
+		!strings.HasPrefix(c.File, examplesPathPrefix) &&
+		!c.Owner().IsFramework()
 }
 
 // buildCellServeIndex maps each cell ID to the set of contract IDs that any of

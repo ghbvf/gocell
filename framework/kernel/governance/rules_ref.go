@@ -123,10 +123,21 @@ func (v *Validator) validateREF05() []ValidationResult {
 }
 
 // validateREF06 checks that journey.cells[] references existing cells.
+//
+// _framework (metadata.FrameworkOwnerSentinel) is structurally skipped:
+// framework-serving journeys use _framework as the serving anchor (ADR D2
+// "framework owner structural exclusion"); it is not a real cell and must never
+// appear in project.Cells. True non-existent cell IDs are still caught.
 func (v *Validator) validateREF06() []ValidationResult {
 	var results []ValidationResult
 	for _, j := range v.project.Journeys {
 		for i, cellRef := range j.Cells {
+			// _framework is the legitimate serving anchor for framework-owned
+			// contract journeys (not a real cell — structurally excluded from
+			// project.Cells by design).
+			if cellRef == metadata.FrameworkOwnerSentinel {
+				continue
+			}
 			if _, ok := v.project.Cells[cellRef]; !ok {
 				results = append(results, v.newError(
 					codeREF06, IssueRefNotFound,

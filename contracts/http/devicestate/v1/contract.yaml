@@ -2,7 +2,7 @@ id: http.devicestate.v1
 kind: http
 ownerCell: _framework
 consistencyLevel: L0
-lifecycle: draft
+lifecycle: active
 description: |
   Device presence state query — neutral provider-agnostic query for device online/offline state.
   ref: docs/plans/specs/1895-device-identity-cert-framework/spec.md FR-013
@@ -12,14 +12,14 @@ endpoints:
   clients: []
   http:
     method: GET
-    path: /api/v1/devicestate
+    path: /api/v1/devicestate/{id}
     successStatus: 200
     noContent: false
     responseProjection: true
-    queryParams:
-      deviceId:
+    pathParams:
+      id:
         type: string
-        required: true
+        minLength: 1
         maxLength: 256
     responses:
       400:

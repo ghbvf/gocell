@@ -653,6 +653,20 @@ type AssemblyMeta struct {
 	// hand-authored assembly-level `capabilities` field; the single source is
 	// per-cell. kernel/assembly.GenerateModulesGen computes the union when
 	// rendering generatedCapabilities() in modules_gen.go.
+	//
+	// FrameworkContracts is this assembly's per-deployment serving opt-in for
+	// framework-owned contracts (ownerCell: _framework). Unlike cell contracts —
+	// whose serving cell is derivable from slice.yaml contractUsages — a
+	// framework-owned contract has NO cell (ADR 202606130635-1939 D4), so the
+	// boundary-contract derivation (computeBoundaryContracts, keyed on the cell
+	// set) cannot surface it; the assembly that serves a framework contract must
+	// declare it explicitly here. Single source for (1) governance
+	// FRAMEWORK-OWNED-CONTRACT-SCOPED-01 serving-scan (an active framework contract
+	// must appear in some assembly's list) and (2) codegen
+	// generatedFrameworkServedContracts() (the bootstrap must-serve expectation
+	// set, --verify red-flags drift). Empty for assemblies serving no framework
+	// contract (the common case).
+	FrameworkContracts  []string     `yaml:"frameworkContracts,omitempty"`
 	Build               BuildMeta    `yaml:"build,omitempty"`
 	Topology            TopologyMeta `yaml:"topology,omitempty"`
 	MaxConsistencyLevel string       `yaml:"-"` // derived; yaml occurrence rejected by KnownFields

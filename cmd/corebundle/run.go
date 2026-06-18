@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/ghbvf/gocell/cellmodules/deviceserving"
 	"github.com/ghbvf/gocell/cellmodules/grpclistener"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -92,7 +93,8 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 	runtimeOptsFunc := func(cells []cell.Cell) ([]bootstrap.Option, error) {
 		logAssemblyMaturity(cells)
 
-		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(compShared.Topology), compShared.Clock, cells...)
+		asm, buildErr := buildAssembly(locals, assemblyID, durabilityModeForTopology(compShared.Topology),
+			compShared.Clock, generatedFrameworkServedContracts(), cells...)
 		if buildErr != nil {
 			return nil, fmt.Errorf("build assembly: %w", buildErr)
 		}
@@ -148,7 +150,21 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if gsErr != nil {
 			return nil, fmt.Errorf("build grpc server: %w", gsErr)
 		}
-		opts = append(opts, bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr))
+		// Framework-owned HTTP serving (ownerCell: _framework, ADR 202606130635-1939).
+		// corebundle is the platform assembly that serves the neutral device contracts
+		// declared in assemblies/corebundle/assembly.yaml frameworkContracts. The
+		// must-serve expectation rides on the assembly (buildAssembly above received
+		// generatedFrameworkServedContracts()); bootstrap (phase0 validateFrameworkServing)
+		// fail-fasts if a declared framework contract has no wired RouteGroup OR if this
+		// option is omitted entirely — the DEAD-CONTRACT analog for framework serving
+		// (#2348 review F1). http.devicestate.v1 reports honest "unknown" presence until
+		// an MDM presence backend is wired (#2037).
+		opts = append(opts,
+			bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
+			bootstrap.WithFrameworkHTTPServing(
+				[]bootstrap.FrameworkServedRoute{deviceserving.NewService(compShared.Clock).Route()},
+			),
+		)
 		return opts, nil
 	}
 

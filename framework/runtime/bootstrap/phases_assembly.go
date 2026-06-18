@@ -72,6 +72,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateProjectionRebuildEndpoint(); err != nil {
 		return err
 	}
+	if err := b.validateFrameworkServing(); err != nil {
+		return err
+	}
 	if err := b.validateAssemblyClockAlignment(); err != nil {
 		return err
 	}

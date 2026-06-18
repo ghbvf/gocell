@@ -58,6 +58,11 @@
   risk: low
   blocker: ""
   updatedAt: 2026-06-17
+- journeyId: J-deviceidentity
+  state: doing
+  risk: medium
+  blocker: "presence backend (MDM/ZT provider) not yet wired — devicestate reports unknown"
+  updatedAt: 2026-06-18
 - journeyId: J-contractregistry
   state: doing
   risk: low

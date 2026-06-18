@@ -79,6 +79,27 @@ func generatedPostgresCells() []string {
 {{- end}}
 }
 
+// generatedFrameworkServedContracts is the sorted list of framework-owned
+// contract ids (ownerCell: _framework) this assembly serves, single-sourced from
+// assembly.yaml `frameworkContracts`. A framework-owned contract has no cell so
+// it cannot be derived from the cell set; the assembly declares it explicitly.
+// Consumed by the composition root as the bootstrap must-serve expectation set:
+// bootstrap fail-fasts (Init-done/before-serve) if an id here has no mounted
+// framework RouteGroup (the DEAD-CONTRACT analog for framework serving). ALWAYS
+// emitted (nil when empty) so the composition root can call it unconditionally.
+// Derived by `gocell generate assembly`; `--verify` red-flags stale output (#2037).
+func generatedFrameworkServedContracts() []string {
+{{- if .FrameworkServedContracts}}
+	return []string{
+{{- range .FrameworkServedContracts}}
+		{{printf "%q" .}},
+{{- end}}
+	}
+{{- else}}
+	return nil
+{{- end}}
+}
+
 // generatedTopologyGroups returns the assembly's COMPLETE deployment-partition
 // graph (single-sourced from assembly.yaml topology.groups, derived by
 // `gocell generate assembly`). Empty topology => nil => all cells co-located
