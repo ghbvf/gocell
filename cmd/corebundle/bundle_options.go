@@ -71,10 +71,10 @@ func runtimeBaseOptions(
 	// so bootstrap's LIFO teardown closes them LAST — after every consumer
 	// registered later via cell opts (EventRouter goroutines, ConsumerBase workers,
 	// cell tx). Provisioned in provisionCapabilities (cap_wiring.go). #2341: N pools
-	// in split topology, 1 in colocated.
-	for _, mr := range locals.poolMRs {
-		opts = append(opts, bootstrap.WithManagedResource(mr))
-	}
+	// in split topology, 1 in colocated. Pools register via the keyed WithPoolInstance
+	// option (built in provisionPGInstance) so split pools' readiness probes are
+	// namespaced per instance and do not collide on the global probe-name namespace.
+	opts = append(opts, locals.poolOpts...)
 	// Event-transport broker resources (the RabbitMQ connection in postgres mode;
 	// empty in demo mode) register among the FIRST ManagedResources (right after the
 	// pools), so LIFO teardown closes the broker LATE — after the relays and every

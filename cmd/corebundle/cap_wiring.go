@@ -190,11 +190,17 @@ func provisionPGInstance(
 	}
 
 	locals.poolMRs = append(locals.poolMRs, pool)
+	// Register the pool via the keyed option so split pools' readiness probes are
+	// namespaced by the instance id (postgres_ready → postgres_ready_<rep>); without
+	// this N pools collide on the global probe-name namespace and split topology
+	// fails fast in expandManagedResources (#2341). poolMRs (above) keeps the raw
+	// pool for the startup-abort rollback path.
+	locals.poolOpts = append(locals.poolOpts, bootstrap.WithPoolInstance(inst.key, pool))
 	locals.relayOpts = append(locals.relayOpts, bootstrap.WithRelay(inst.key, relay))
 
 	slog.InfoContext(ctx, "corebundle: postgres pool + relay wired",
 		slog.String("instance_rep_cell", inst.repCell),
-		slog.Int("served_cells", len(inst.cells)),
+		slog.Any("served_cells", inst.cells),
 		slog.Int("projection_source_topic_count", len(generatedProjectionSourceTopics())))
 	return provider, nil
 }
@@ -202,10 +208,16 @@ func provisionPGInstance(
 // buildAssemblyRelay constructs the per-pool outbox relay that drains pool's outbox
 // table and publishes via the assembly's shared Publisher. The relay is per-POOL
 // assembly infrastructure (one relay per outbox table), keyed at registration by the
-// pool's InfraInstanceKey. Its metric/probe label is the pool's representative cell
-// (repCell) — a closed-set assembly cell id. Moved here from cellmodules/configcore
-// (#2341): configcore historically built the single shared-table relay, but the relay
-// belongs with the pool it drains, not a cell.
+// pool's InfraInstanceKey. Moved here from cellmodules/configcore (#2341): configcore
+// historically built the single shared-table relay, but the relay belongs with the
+// pool it drains, not a cell.
+//
+// repCell is the relay's metric `cell` label — a CLOSED-SET assembly cell id: it is
+// the alphabetically-first cell served by this pool (orderedPGInstances.repCell),
+// sourced from generatedPostgresCells() (codegen-derived) via percellpg.Resolve's
+// CellToInstance, so it is always a member of the assembly's declared cell set
+// (observability.md closed-set requirement). In a partial-split DSN group the label
+// is the group's rep cell, so it can represent more than one cell's outbox traffic.
 func buildAssemblyRelay(shared *composition.SharedDeps, pool *adapterpg.Pool, repCell string) (*outboxruntime.Relay, error) {
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayMetrics, rmErr := outbox.NewProviderRelayCollector(shared.MetricsProvider, repCell)

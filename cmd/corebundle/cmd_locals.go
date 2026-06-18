@@ -41,6 +41,15 @@ type cmdLocals struct {
 	// failure.
 	poolMRs []kernellifecycle.ManagedResource
 
+	// poolOpts are the per-pool ManagedResource registrations (bootstrap.WithPoolInstance,
+	// keyed by each pool's InfraInstanceKey), built in provisionPGInstance (#2341). The
+	// keyed option namespaces each split pool's readiness probes by the instance id so N
+	// pools do not collide on the global probe-name namespace (colocated DefaultInstanceKey
+	// keeps bare names). runtimeBaseOptions registers them FIRST so LIFO teardown closes the
+	// pools LAST. poolMRs above carries the SAME pools as raw ManagedResources for the
+	// startup-abort rollback path (run.go), which closes them directly before handoff.
+	poolOpts []bootstrap.Option
+
 	// relayOpts are the per-pool outbox relay registrations (bootstrap.WithRelay,
 	// keyed by each pool's InfraInstanceKey), built in provisionPGInstance beside the
 	// pool each relay drains (#2341). runtimeBaseOptions appends them AFTER the pool +

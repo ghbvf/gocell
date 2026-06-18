@@ -605,7 +605,7 @@ get an instance-scoped name:
 
 | Instance | Probe names |
 |----------|-------------|
-| **colocated default** (`DefaultInstanceKey`, the only instance today) | `outbox_relay_poll` / `outbox_relay_reclaim` / `outbox_relay_cleanup` (**unchanged**) |
+| **colocated default** (`DefaultInstanceKey`, the only instance in a colocated deployment) | `outbox_relay_poll` / `outbox_relay_reclaim` / `outbox_relay_cleanup` (**unchanged**) |
 | additional instance with id `<instanceID>` | `outbox_relay_poll_<instanceID>` / `outbox_relay_reclaim_<instanceID>` / `outbox_relay_cleanup_<instanceID>` |
 
 - The suffix `<instanceID>` is the instance id passed to `bootstrap.NewInfraInstanceKey`
@@ -614,10 +614,10 @@ get an instance-scoped name:
   sanctioned `healthz.RelayInstanceProbeName` constructor.
 - **When they appear**: the suffix is keyed on the InfraInstanceKey, not on relay count — a relay
   registered under ANY non-default key (`bootstrap.NewInfraInstanceKey(...)`) always gets the
-  `_<instanceID>` suffix; the colocated `DefaultInstanceKey()` always keeps the bare names. Today
-  every deployment uses only the default key (single colocated relay; see the NB below), so the
-  bare `outbox_relay_*` names are what dashboards/alerts see — but the contract is key-based, not
-  count-based.
+  `_<instanceID>` suffix; the colocated `DefaultInstanceKey()` always keeps the bare names. A
+  colocated deployment uses only the default key (single relay), so the bare `outbox_relay_*`
+  names are what dashboards/alerts see; a split deployment (#2341, distinct per-cell DSNs) fans
+  out to per-instance suffixed names — the contract is key-based, not count-based.
 - **On-call attribution**: an unhealthy `outbox_relay_poll_<id>` identifies which infra
   instance's relay is failing (poll/reclaim/cleanup budget tripped); the bare-named probe is
   the colocated default. Two relays can never collide — bootstrap's `expandManagedResources`
@@ -625,9 +625,41 @@ get an instance-scoped name:
 - This is an **ops contract**: the `<base>_<instanceID>` shape and the default-instance
   bare-name invariant must stay in sync with dashboards and alerts.
 
-> NB: per-instance relays only become reachable once the composition root actually opens N
-> distinct per-cell pools (the `cellmodules/percellpg` feeder, a follow-up to #2152 PR-1).
-> Until then every deployment uses the single colocated default and the bare names only.
+> NB (#2341): the per-cell pool/relay feeder has landed — `cellmodules/percellpg.Resolve`
+> returns N keyed instances and `cmd/corebundle/cap_wiring.go` opens one pool + one relay per
+> distinct DSN. A **colocated** deployment (all postgres cells share one `GOCELL_<CELL>_DATABASE_URL`)
+> still uses the single `DefaultInstanceKey` and the bare relay/pool probe names. A **split**
+> deployment (distinct per-cell DSNs) registers one instance per DSN group keyed by the group's
+> representative cell, so the relay AND pool probes of every non-default instance carry the
+> `_<rep>` suffix (see §Per-instance pool probes below).
+
+## Per-instance pool probes (per-cell pool fan-out, #2341) — `postgres_<probe>_<instanceID>`
+
+A postgres serving pool exposes the readiness probes `postgres_ready`,
+`postgres_indexes_valid_ready`, and `postgres_app_role_restricted_ready` (the last gated on the
+restricted serving-role precondition, #1676). As of #2341, `cap_wiring.go` opens **N serving
+pools** in split topology (one per distinct per-cell DSN) and registers each via
+`bootstrap.WithPoolInstance(key, pool)`. Because `/readyz` requires globally-unique probe names,
+the pools of NON-default instances get an instance-scoped name (symmetric with the relay probes
+above):
+
+| Instance | Pool probe names |
+|----------|------------------|
+| **colocated default** (`DefaultInstanceKey`, single shared pool) | `postgres_ready` / `postgres_indexes_valid_ready` / `postgres_app_role_restricted_ready` (**unchanged**) |
+| split per-cell instance with id `<rep>` | `postgres_ready_<rep>` / `postgres_indexes_valid_ready_<rep>` / `postgres_app_role_restricted_ready_<rep>` |
+
+- `<rep>` is the InfraInstanceKey id = the alphabetically-first cell sharing that pool's DSN
+  (`cellmodules/percellpg`). Naming is composed via the sanctioned `healthz.PoolInstanceProbeName`
+  constructor (closed base set; a pool probe rename fails the composer fast).
+- **On-call attribution**: an unhealthy `postgres_ready_<rep>` identifies which per-cell pool is
+  failing; the bare-named probe is the colocated default. In a **partial-split** group (≥2 cells
+  share a DSN) the `<rep>` names the group, not a single cell — that pool serves every cell in the
+  group. N pools can never collide on probe names — `expandManagedResources` fails startup fast on
+  a duplicate.
+- The cross-tenant **admin** pool (`postgres_audit_admin_restricted_ready`, #1810) is a separate,
+  single pool (auditcore-owned) — it keeps its bare name and is not fanned out.
+- This is an **ops contract**: the `postgres_<probe>_<rep>` split shape and the colocated bare-name
+  invariant must stay in sync with dashboards and alerts.
 
 ## Cross-cell remote-peer readiness probes (split topology) — `<cell>_remote_ready`
 
