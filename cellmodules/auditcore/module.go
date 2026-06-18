@@ -67,7 +67,12 @@ type module struct{}
 func Module() composition.CellModule { return module{} }
 
 // ID returns the stable identifier used in error messages and logs.
-func (module) ID() string { return "auditcore" }
+// auditCellID is auditcore's stable cell id — the module's ID() and the key it
+// resolves its pool provider by (shared.PG.ForCell). The Builder enforces
+// module.ID() == cell.ID(); ForCell(auditCellID) must agree, so it is sourced once.
+const auditCellID = "auditcore"
+
+func (module) ID() string { return auditCellID }
 
 // Provide resolves all auditcore-specific dependencies from the composition
 // shared context and returns the constructed Cell.
@@ -137,42 +142,58 @@ func (m module) Provide(
 		auditcell.WithBootstrapStore(bootstrapWrapped),
 	}
 
-	// ManagedResources the module opens itself (closed LIFO on shutdown by the
-	// Builder via ModuleResult.Resources). Today: the optional admin cross-tenant
-	// pool (#1810). The serving pool is owned by shared.PG, not the module.
-	var resources []kernellifecycle.ManagedResource
-
-	if shared.Topology.StorageBackend() == "postgres" {
-		auditOpts = append(
-			auditOpts,
-			auditcell.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
-			auditcell.WithTxManager(persistence.WrapForCell(shared.PG.TxManager())),
-		)
-		// Cross-tenant admin store (#1810): OPTIONAL, gated on GOCELL_AUDIT_ADMIN_DSN.
-		// Creds absent → skip, super-admin reads stay 501 (graceful fail-closed).
-		// Creds present but pool fails → FAIL-FAST at composition (no silent fallback).
-		crossTenantStore, ctRes, ctErr := buildCrossTenantStore(ctx, shared)
-		if ctErr != nil {
-			return composition.ModuleResult{}, ctErr
-		}
-		if crossTenantStore != nil {
-			auditOpts = append(auditOpts, auditcell.WithCrossTenantQueryStore(crossTenantStore))
-			resources = append(resources, ctRes)
-		}
-	} else {
-		// Demo/memory topology: wire a MemCrossTenantStore so cross-tenant reads
-		// work without a PG admin pool. Both mem stores are guaranteed non-nil here
-		// (buildAuditStoresWithMem populates relayMem and bootstrapMem).
-		ctStore, ctErr := ledger.NewMemCrossTenantStore(relayMem, bootstrapMem)
-		if ctErr != nil {
-			return composition.ModuleResult{}, fmt.Errorf("auditcore: mem cross-tenant store: %w", ctErr)
-		}
-		auditOpts = append(auditOpts, auditcell.WithCrossTenantQueryStore(ctStore))
+	// Storage-mode-specific serving + cross-tenant opts (postgres: per-cell pool +
+	// optional admin pool; memory: mem cross-tenant store) plus any ManagedResources
+	// the module opens itself (the optional admin cross-tenant pool, #1810). The
+	// serving pool is owned by shared.PG, not the module.
+	storageOpts, resources, err := auditStorageOpts(ctx, shared, relayMem, bootstrapMem)
+	if err != nil {
+		return composition.ModuleResult{}, err
 	}
+	auditOpts = append(auditOpts, storageOpts...)
 
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
 	return composition.ModuleResult{Cell: c, Resources: resources}, nil
+}
+
+// auditStorageOpts builds the storage-mode-specific auditcore options + opened
+// ManagedResources. Postgres: resolves THIS cell's pool provider (#2341 ForCell —
+// colocated shares one pool, split gives auditcore its own) for the serving
+// outbox/tx deps, plus the optional admin cross-tenant pool (#1810, gated on
+// GOCELL_AUDIT_ADMIN_DSN; absent → super-admin reads stay 501, present-but-failed →
+// fail-fast). Memory: a MemCrossTenantStore so cross-tenant reads work without an
+// admin pool. Extracted from Provide to keep its cognitive complexity within bounds.
+func auditStorageOpts(
+	ctx context.Context, shared *composition.SharedDeps, relayMem, bootstrapMem *ledger.MemStore,
+) ([]auditcell.Option, []kernellifecycle.ManagedResource, error) {
+	if shared.Topology.StorageBackend() != "postgres" {
+		// Demo/memory topology: both mem stores are guaranteed non-nil here
+		// (buildAuditStoresWithMem populates relayMem and bootstrapMem).
+		ctStore, ctErr := ledger.NewMemCrossTenantStore(relayMem, bootstrapMem)
+		if ctErr != nil {
+			return nil, nil, fmt.Errorf("auditcore: mem cross-tenant store: %w", ctErr)
+		}
+		return []auditcell.Option{auditcell.WithCrossTenantQueryStore(ctStore)}, nil, nil
+	}
+
+	pg, pgErr := shared.PG.ForCell(auditCellID)
+	if pgErr != nil {
+		return nil, nil, fmt.Errorf("auditcore: %w", pgErr)
+	}
+	opts := []auditcell.Option{
+		auditcell.WithOutboxDeps(nil, outbox.WrapWriterForCell(pg.OutboxWriter())),
+		auditcell.WithTxManager(persistence.WrapForCell(pg.TxManager())),
+	}
+	crossTenantStore, ctRes, ctErr := buildCrossTenantStore(ctx, shared)
+	if ctErr != nil {
+		return nil, nil, ctErr
+	}
+	if crossTenantStore == nil {
+		return opts, nil, nil
+	}
+	opts = append(opts, auditcell.WithCrossTenantQueryStore(crossTenantStore))
+	return opts, []kernellifecycle.ManagedResource{ctRes}, nil
 }
 
 // buildCrossTenantStore constructs the admin-pool-backed CrossTenantQueryStore
@@ -322,11 +343,15 @@ func buildAuditStoresWithMem(
 			return nil, nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires the postgres capability provider " +
 				"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 		}
-		db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
+		pg, pgErr := shared.PG.ForCell(auditCellID)
+		if pgErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("auditcore: %w", pgErr)
+		}
+		db, poolErr := cellsecrets.PgxPoolFromProvider(pg)
 		if poolErr != nil {
 			return nil, nil, nil, nil, fmt.Errorf("auditcore: %w", poolErr)
 		}
-		txMgr := shared.PG.TxManager()
+		txMgr := pg.TxManager()
 		relayStore, relayErr := adapterpg.NewLedgerStore(db, txMgr, auditProtocol, shared.Clock)
 		if relayErr != nil {
 			return nil, nil, nil, nil, fmt.Errorf("auditcore LedgerStore: %w", relayErr)

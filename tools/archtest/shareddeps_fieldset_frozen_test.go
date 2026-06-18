@@ -88,7 +88,7 @@ var sharedDepsFrozenExportedFields = map[string]string{
 	"Subscriber":             "outbox.Subscriber",
 	"ConfigEventCollector":   "metrics.ConfigEventCollector",
 	"ConsumerClaimer":        "idempotency.Claimer",
-	"PG":                     "capability.PGProvider",
+	"PG":                     "capability.PGSet",
 	"Redis":                  "capability.RedisProvider",
 	"InternalServiceKeyring": "auth.ServiceKeyring",
 	"NonceStore":             "auth.NonceStore",

@@ -49,7 +49,11 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	outboxRelayed := requireMetric(t, schema, "outbox_relayed_total")
 	assert.Equal(t, []string{"cell", "kind", "outcome"}, outboxRelayed.Labels)
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
-	assert.Equal(t, "cellmodules/configcore/storage.go", outboxRelayed.File)
+	// #2341: the outbox relay moved from cellmodules/configcore/storage.go to the
+	// composition root (cmd/corebundle/cap_wiring.go), where the per-pool relay is
+	// built beside the pool it drains. The scanner derives File from the
+	// NewProviderRelayCollector call site, so all 5 relay metrics now resolve here.
+	assert.Equal(t, "cmd/corebundle/cap_wiring.go", outboxRelayed.File)
 	// #1674: help is single-sourced from the kernel/outbox RelayedHelp const and
 	// statically resolved into the schema — assert the scan bound the exact const so
 	// the golden help cannot drift from the Prometheus-registered help.

@@ -22,11 +22,24 @@ import (
 // end-to-end in real/redis integration tests.
 func TestReleaseUnhandedResources_ClosesPoolWhenNotHanded(t *testing.T) {
 	pool := &fakeManagedResource{}
-	locals := &cmdLocals{poolMR: pool, redisClient: nil}
+	locals := &cmdLocals{poolMRs: []kernellifecycle.ManagedResource{pool}, redisClient: nil}
 
 	releaseUnhandedResources(context.Background(), locals, false)
 
 	assert.True(t, pool.closeCalled, "pool must be closed when startup aborts before handoff")
+}
+
+// TestReleaseUnhandedResources_ClosesAllPoolsSplit verifies the #2341 N-pool path:
+// in split topology every opened pool is closed on a startup abort (not just the
+// first), so no per-cell pool leaks.
+func TestReleaseUnhandedResources_ClosesAllPoolsSplit(t *testing.T) {
+	p1, p2, p3 := &fakeManagedResource{}, &fakeManagedResource{}, &fakeManagedResource{}
+	locals := &cmdLocals{poolMRs: []kernellifecycle.ManagedResource{p1, p2, p3}}
+
+	releaseUnhandedResources(context.Background(), locals, false)
+
+	assert.True(t, p1.closeCalled && p2.closeCalled && p3.closeCalled,
+		"every per-cell pool must be closed when startup aborts before handoff")
 }
 
 // TestReleaseUnhandedResources_ClosesBrokerResources verifies the startup-abort
@@ -51,7 +64,7 @@ func TestReleaseUnhandedResources_ClosesBrokerResources(t *testing.T) {
 // a no-op, otherwise the resource would be double-closed.
 func TestReleaseUnhandedResources_NoCloseWhenHanded(t *testing.T) {
 	pool := &fakeManagedResource{}
-	locals := &cmdLocals{poolMR: pool, redisClient: nil}
+	locals := &cmdLocals{poolMRs: []kernellifecycle.ManagedResource{pool}, redisClient: nil}
 
 	releaseUnhandedResources(context.Background(), locals, true)
 
@@ -62,7 +75,7 @@ func TestReleaseUnhandedResources_NoCloseWhenHanded(t *testing.T) {
 // and a nil redis client (the common memory-mode / pre-provision states) without
 // panicking.
 func TestReleaseUnhandedResources_NilSafe(t *testing.T) {
-	locals := &cmdLocals{poolMR: nil, redisClient: nil}
+	locals := &cmdLocals{poolMRs: nil, redisClient: nil}
 
 	assert.NotPanics(t, func() {
 		releaseUnhandedResources(context.Background(), locals, false)

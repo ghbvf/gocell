@@ -196,8 +196,10 @@ func releaseUnhandedResources(ctx context.Context, locals *cmdLocals, handedToBo
 	if handedToBootstrap {
 		return
 	}
-	if locals.poolMR != nil {
-		_ = locals.poolMR.Close(ctx)
+	// Close in reverse open order (LIFO) to mirror bootstrap's own teardown (#2341:
+	// colocated = 1 pool, split = N).
+	for i := len(locals.poolMRs) - 1; i >= 0; i-- {
+		_ = locals.poolMRs[i].Close(ctx)
 	}
 	closeRedisClientAfterFailedLoad(ctx, locals.redisClient)
 	closeBrokerResourcesAfterFailedLoad(ctx, locals.brokerResources)

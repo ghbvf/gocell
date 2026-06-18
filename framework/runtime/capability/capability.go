@@ -3,6 +3,7 @@ package capability
 import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // Kind names an assembly-level shared infrastructure capability. Cells declare
@@ -44,6 +45,93 @@ type PGProvider interface {
 	// type-assertion lives in the cmd/* consumer; runtime/capability stays adapter-free.
 	DB() any
 	isPGProvider()
+}
+
+// PGSet is the per-cell postgres provider resolver injected on
+// composition.SharedDeps (#2341). It replaces the former single
+// SharedDeps.PG PGProvider so each cell module resolves ITS pool's provider via
+// ForCell(cellID) — colocated assemblies map every cell to one shared provider
+// (one pool); split assemblies map each cell to its own pool's provider (N pools,
+// each driven by its own relay keyed by InfraInstanceKey).
+//
+// It is sealed (unexported marker isPGSet; sole constructor NewPGSet) so the
+// per-instance fan-out cannot be forged outside the composition root, and ForCell
+// fails closed on an unknown cell rather than returning a silent nil. memory
+// topology leaves SharedDeps.PG nil — cell modules take their in-memory path.
+type PGSet interface {
+	// ForCell returns the postgres provider for cellID, or a fail-closed error if
+	// the cell has no provisioned pool (never a silent nil).
+	ForCell(cellID string) (PGProvider, error)
+	// Sole returns (provider, true) iff the assembly is colocated (exactly one
+	// distinct pool serving every cell). In split topology it returns (nil, false).
+	// It is the SANCTIONED single accessor for assembly-wide consumers that have no
+	// "cell" dimension — notably the CQRS projection harness, whose journal
+	// global_seq is per-pool and therefore incomparable across a split fan-out, so
+	// it MUST fail closed when Sole reports false.
+	Sole() (PGProvider, bool)
+	isPGSet()
+}
+
+// PGInstance pairs one pool's provider with the cells it serves. The composition
+// root builds one per distinct-DSN pool (cellmodules/percellpg.Resolve groups the
+// cells); cells across instances must be disjoint.
+type PGInstance struct {
+	Provider PGProvider
+	Cells    []string
+}
+
+type pgSet struct {
+	byCell map[string]PGProvider
+	sole   PGProvider
+	isSole bool
+}
+
+func (s pgSet) ForCell(cellID string) (PGProvider, error) {
+	p, ok := s.byCell[cellID]
+	if !ok {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"capability: no postgres provider provisioned for cell",
+			errcode.WithInternal(errcode.InternalAttr("cell_id", cellID)))
+	}
+	return p, nil
+}
+
+func (s pgSet) Sole() (PGProvider, bool) { return s.sole, s.isSole }
+func (pgSet) isPGSet() {
+	// Sealed-interface marker: no behavior; blocks external PGSet impls.
+}
+
+// NewPGSet builds the sealed per-cell provider resolver from the per-instance
+// providers. It fails closed on a wiring bug — a nil provider, an instance serving
+// no cells, or a cell mapped to two pools — rather than building a half-wired set.
+// Sole() reports true iff there is exactly one instance (colocated). Called only
+// from the assembly wiring site (cmd/<id>/cap_wiring.go).
+func NewPGSet(instances []PGInstance) (PGSet, error) {
+	byCell := make(map[string]PGProvider)
+	for _, inst := range instances {
+		if inst.Provider == nil {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"capability: PGInstance has a nil provider")
+		}
+		if len(inst.Cells) == 0 {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"capability: PGInstance serves no cells")
+		}
+		for _, c := range inst.Cells {
+			if _, dup := byCell[c]; dup {
+				return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"capability: cell mapped to more than one postgres pool",
+					errcode.WithInternal(errcode.InternalAttr("cell_id", c)))
+			}
+			byCell[c] = inst.Provider
+		}
+	}
+	s := pgSet{byCell: byCell}
+	if len(instances) == 1 {
+		s.sole = instances[0].Provider
+		s.isSole = true
+	}
+	return s, nil
 }
 
 // RedisProvider is the sealed handle to the assembly's shared redis client.

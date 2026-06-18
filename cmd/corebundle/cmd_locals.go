@@ -34,16 +34,26 @@ type cmdLocals struct {
 	// composition.SharedDeps.MetricsProvider as the interface value.
 	metricProvider *promadapter.MetricProvider
 
-	// poolMR is the postgres pool as a ManagedResource, registered first by
-	// runtimeBaseOptions for LIFO last-close.
-	poolMR kernellifecycle.ManagedResource
+	// poolMRs are the postgres pools as ManagedResources, registered FIRST by
+	// runtimeBaseOptions for LIFO last-close (#2341: colocated = 1 pool, split = N).
+	// Each is appended by provisionPGInstance as its pool opens, so the startup-abort
+	// defer (releaseUnhandedResources) closes the already-opened pools on a mid-loop
+	// failure.
+	poolMRs []kernellifecycle.ManagedResource
+
+	// relayOpts are the per-pool outbox relay registrations (bootstrap.WithRelay,
+	// keyed by each pool's InfraInstanceKey), built in provisionPGInstance beside the
+	// pool each relay drains (#2341). runtimeBaseOptions appends them AFTER the pool +
+	// broker ManagedResources so LIFO teardown stops the relays FIRST (before the
+	// broker they publish to and the pools they read close).
+	relayOpts []bootstrap.Option
 
 	// brokerResources are the event-transport broker resources (the RabbitMQ
 	// connection in postgres mode; empty in demo mode) resolved by
 	// eventtransport.Resolve. Registered among the FIRST ManagedResources (right
-	// after poolMR) so LIFO teardown closes them LATE — after the relay and every
+	// after the pools) so LIFO teardown closes them LATE — after the relays and every
 	// consumer that publishes/subscribes through the broker drain (registered later
-	// via cell opts → close first), and before the PG pool closes (#1940).
+	// → close first), and before the PG pools close (#1940).
 	brokerResources []kernellifecycle.ManagedResource
 
 	// eventTransportKind is the sealed broker-kind fact resolved by

@@ -380,7 +380,7 @@ metrics:
         - "100"
         - "200"
         - "500"
-      file: cellmodules/configcore/storage.go
+      file: cmd/corebundle/cap_wiring.go
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -389,7 +389,7 @@ metrics:
       labels:
         - cell
         - status
-      file: cellmodules/configcore/storage.go
+      file: cmd/corebundle/cap_wiring.go
     - name: outbox_consumer_rejected_total
       fqName: gocell_outbox_consumer_rejected_total
       namespace: gocell
@@ -437,7 +437,7 @@ metrics:
         - "2.5"
         - "5"
         - "10"
-      file: cellmodules/configcore/storage.go
+      file: cmd/corebundle/cap_wiring.go
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -445,7 +445,7 @@ metrics:
       help: Total number of stale entries reclaimed by the relay.
       labels:
         - cell
-      file: cellmodules/configcore/storage.go
+      file: cmd/corebundle/cap_wiring.go
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -465,7 +465,7 @@ metrics:
             - published
             - retried
             - skipped
-      file: cellmodules/configcore/storage.go
+      file: cmd/corebundle/cap_wiring.go
     - name: projection_event_replay_lag_seconds
       fqName: gocell_projection_event_replay_lag_seconds
       namespace: gocell

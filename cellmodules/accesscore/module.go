@@ -242,11 +242,17 @@ func accessPostgresOptions(
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires the postgres capability provider " +
 			"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 	}
-	db, poolErr := cellsecrets.PgxPoolFromProvider(shared.PG)
+	// Resolve THIS cell's pool provider (#2341): colocated → the shared pool; split →
+	// accesscore's own pool. Fails closed if accesscore has no provisioned pool.
+	pg, pgErr := shared.PG.ForCell("accesscore")
+	if pgErr != nil {
+		return nil, nil, nil, fmt.Errorf("AccessCoreModule: %w", pgErr)
+	}
+	db, poolErr := cellsecrets.PgxPoolFromProvider(pg)
 	if poolErr != nil {
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: %w", poolErr)
 	}
-	txMgr := shared.PG.TxManager()
+	txMgr := pg.TxManager()
 	pgBundle, err := accesspg.NewBundle(db, txMgr, shared.Clock)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGBundle: %w", err)
@@ -263,7 +269,7 @@ func accessPostgresOptions(
 		return nil, nil, nil, fmt.Errorf("AccessCoreModule: PGRefreshStore: %w", err)
 	}
 	accessOpts := []accesscell.Option{
-		accesscell.WithOutboxDeps(nil, outbox.WrapWriterForCell(shared.PG.OutboxWriter())),
+		accesscell.WithOutboxDeps(nil, outbox.WrapWriterForCell(pg.OutboxWriter())),
 		accesscell.WithPGBundle(pgBundle),
 		accesscell.WithRefreshStore(pgRefreshStore),
 	}

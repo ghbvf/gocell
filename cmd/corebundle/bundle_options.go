@@ -69,20 +69,25 @@ func runtimeBaseOptions(
 	}
 	// Register the assembly's shared infrastructure as the FIRST ManagedResources
 	// so bootstrap's LIFO teardown closes them LAST — after every consumer
-	// registered later via cell opts (relay, EventRouter goroutines, ConsumerBase
-	// workers, cell tx). Provisioned in provisionCapabilities (cap_wiring.go).
-	if locals.poolMR != nil {
-		opts = append(opts, bootstrap.WithManagedResource(locals.poolMR))
+	// registered later via cell opts (EventRouter goroutines, ConsumerBase workers,
+	// cell tx). Provisioned in provisionCapabilities (cap_wiring.go). #2341: N pools
+	// in split topology, 1 in colocated.
+	for _, mr := range locals.poolMRs {
+		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
 	// Event-transport broker resources (the RabbitMQ connection in postgres mode;
-	// empty in demo mode) register among the FIRST ManagedResources (right after
-	// poolMR), so LIFO teardown closes the broker LATE — after the relay and every
-	// consumer that publishes/subscribes through it drain (those register later via
-	// cell opts → close first), and before the PG pool (registered first → closes
-	// truly last) (#1940).
+	// empty in demo mode) register among the FIRST ManagedResources (right after the
+	// pools), so LIFO teardown closes the broker LATE — after the relays and every
+	// consumer that publishes/subscribes through it drain (those register later →
+	// close first), and before the PG pools (registered first → close truly last) (#1940).
 	for _, mr := range locals.brokerResources {
 		opts = append(opts, bootstrap.WithManagedResource(mr))
 	}
+	// Per-pool outbox relays (#2341), registered AFTER the broker so LIFO teardown
+	// stops each relay BEFORE the broker it publishes to closes and BEFORE the pool it
+	// drains closes. Each WithRelay is keyed by its pool's InfraInstanceKey (built in
+	// provisionPGInstance). Empty in memory mode (no pools → no relays).
+	opts = append(opts, locals.relayOpts...)
 	if shared.Redis != nil {
 		if mr, ok := shared.Redis.Client().(kernellifecycle.ManagedResource); ok {
 			opts = append(opts, bootstrap.WithManagedResource(mr))
@@ -297,7 +302,19 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 		slog.Bool("wired", true),
 		slog.String("source", "projection_events"),
 		slog.String("production_default_flip", "gh #1771 PR-04 (gated on T-06-2 e2e)"))
-	pool, err := cellsecrets.PgxPoolFromProvider(shared.PG)
+	// The projection journal's global_seq is per-pool. Sole() is the SANCTIONED single
+	// provider accessor for this assembly-wide harness: it returns the lone provider
+	// only in colocated topology. In split topology (#2341, N pools) it returns
+	// ok=false and we FAIL CLOSED — there is no single comparable global_seq across N
+	// independent projection_events journals, so silently picking one pool would
+	// corrupt the read model. Cross-pool projection under split topology is future
+	// work (backlog) — corebundle ships no projection today, so this is dormant.
+	prov, ok := shared.PG.Sole()
+	if !ok {
+		return nil, fmt.Errorf("projection: durable journal requires colocated postgres (single pool); " +
+			"split topology has per-pool projection_events with incomparable global_seq — refusing to wire a single source")
+	}
+	pool, err := cellsecrets.PgxPoolFromProvider(prov)
 	if err != nil {
 		return nil, fmt.Errorf("projection pg pool: %w", err)
 	}
@@ -316,7 +333,7 @@ func projectionRuntimeOptions(shared *composition.SharedDeps) ([]bootstrap.Optio
 	}
 	return []bootstrap.Option{
 		bootstrap.WithProjectionCheckpointStore(checkpointStore),
-		bootstrap.WithProjectionTxRunner(shared.PG.TxManager()),
+		bootstrap.WithProjectionTxRunner(prov.TxManager()),
 		bootstrap.WithProjectionReplaySource(source),
 		bootstrap.WithProjectionCursor(source),
 		// Differentiated repo-readiness probe for the journal (schema/migration drift

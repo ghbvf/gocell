@@ -65,6 +65,6 @@ func TestProvisionPostgres_PoolOpenError(t *testing.T) {
 
 	err := provisionPostgres(context.Background(), shared, locals)
 	require.Error(t, err, "a malformed DSN must fail-closed at pool open")
-	require.Contains(t, err.Error(), "open assembly PG pool")
+	require.Contains(t, err.Error(), "open PG pool for instance")
 	require.Nil(t, shared.PG, "no provider on pool-open failure")
 }
