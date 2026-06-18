@@ -46,11 +46,18 @@
 //
 // # Tool blind spots (charter §"强制盲区自检")
 //
-//   - Arm ① is const-folded over the first argument (EvaluateConstString) and
-//     typed (arg type is kauth.TokenIntent); an intent laundered through a
-//     non-const TokenIntent variable evades the scan — but the resulting credential
-//     still must pass EnrollmentCredentialVerifier (device assert + non-empty
-//     tenant/subject), so the bypass payoff is bounded.
+//   - Arm ① matches the first argument either as a direct compile-time constant
+//     (EvaluateConstString) OR as a same-package identifier whose single assignment
+//     const-folds to the enrollment intent (collectEnrollmentValuedIdents — closes
+//     the variable-relay bypass `intent := TokenIntentEnrollment; iss.Issue(intent, ...)`,
+//     #2382 review F1). RESIDUAL (still uncaught, intentionally — keeps this a
+//     lightweight typed-AST scan, not full value-flow): the intent relayed through a
+//     CROSS-FUNCTION param/return, or a variable REASSIGNED after an enrollment
+//     assignment. The Hard close of these is the SSA value-flow scan OR the larger
+//     "make a bare Issue(TokenIntentEnrollment, ...) unexpressible via a dedicated
+//     typed mint API" refactor (codex's 重构 option) — a deliberate Cx3 deferral,
+//     not adopted here. Either residual still leaves the credential bounded: it must
+//     pass EnrollmentCredentialVerifier (device assert + non-empty tenant/subject/jti).
 //   - Arm ② is composite-literal based; an identity assembled field-by-field after
 //     a zero-value construction would evade it — but only the sealed constructor
 //     produces a non-empty identity any consumer honors.
@@ -147,10 +154,14 @@ func TestEnrollmentCredentialMintCaller01_ScannerCatchesViolation(t *testing.T) 
 		return d
 	})
 
-	const wantFlagged = 1 // the bare enrollment Issue call (the access Issue control is NOT flagged)
+	// Two RED cases: the direct enrollment Issue call + the variable-relay one
+	// (intent := TokenIntentEnrollment; iss.Issue(intent, ...)). The two access
+	// controls (direct + via var) are NOT flagged.
+	const wantFlagged = 2
 	if len(diags) != wantFlagged {
 		t.Fatalf("ENROLLMENT-CREDENTIAL-MINT-CALLER-01 scanner self-check: expected the production detector to "+
-			"flag exactly %d enrollment Issue callsite in the fixture (and NOT the access-intent control), got %d: %+v",
+			"flag exactly %d enrollment Issue callsites in the fixture (direct + variable-relay; and NOT the two "+
+			"access-intent controls), got %d: %+v",
 			wantFlagged, len(diags), diags)
 	}
 	if len(diags) > 0 {
@@ -178,10 +189,14 @@ func checkEnrollmentCredentialMint(p *Pass, allowlist map[string]struct{}) (diag
 	if !p.Typed() {
 		return nil, issueObs, identityObs
 	}
+	// Local def-use: vars/consts whose single assignment const-folds to the
+	// enrollment intent, so a relayed `intent := TokenIntentEnrollment; iss.Issue(intent, ...)`
+	// is caught, not just a direct const argument (#2382 review F1).
+	enrollVars := collectEnrollmentValuedIdents(p)
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-			if !isEnrollmentIssueCall(p, call) {
+			if !isEnrollmentIssueCall(p, call, enrollVars) {
 				return
 			}
 			issueObs[rel] = struct{}{}
@@ -226,8 +241,12 @@ func checkEnrollmentCredentialMint(p *Pass, allowlist map[string]struct{}) (diag
 }
 
 // isEnrollmentIssueCall reports whether call is (*auth.JWTIssuer).Issue(...) whose
-// first argument is the compile-time constant TokenIntentEnrollment.
-func isEnrollmentIssueCall(p *Pass, call *ast.CallExpr) bool {
+// first argument resolves to TokenIntentEnrollment — either as a direct
+// compile-time constant OR as a same-package identifier whose single assignment
+// const-folds to it (local def-use, enrollVars). The latter closes the
+// variable-relay bypass (#2382 review F1); cross-function relay and reassignment
+// remain the documented residual (see file godoc blind spots).
+func isEnrollmentIssueCall(p *Pass, call *ast.CallExpr, enrollVars map[types.Object]struct{}) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel == nil || sel.Sel.Name != "Issue" {
 		return false
@@ -243,8 +262,54 @@ func isEnrollmentIssueCall(p *Pass, call *ast.CallExpr) bool {
 	if len(call.Args) < 1 {
 		return false
 	}
-	val, isConst := EvaluateConstString(p.TypesInfo, call.Args[0])
-	return isConst && val == wantEnrollmentIntent
+	if val, isConst := EvaluateConstString(p.TypesInfo, call.Args[0]); isConst {
+		return val == wantEnrollmentIntent
+	}
+	// Variable relay: the first arg is a non-const identifier — match it against
+	// the set of identifiers whose assignment const-folds to the enrollment intent.
+	if id, isID := call.Args[0].(*ast.Ident); isID {
+		if obj := p.TypesInfo.ObjectOf(id); obj != nil {
+			_, relayed := enrollVars[obj]
+			return relayed
+		}
+	}
+	return false
+}
+
+// collectEnrollmentValuedIdents returns the set of var/const objects in the Pass
+// whose single-value assignment (`x := <const>`, `x = <const>`, `var x = <const>`,
+// `const x = <const>`) const-folds to the enrollment intent. It is the local
+// def-use backing for isEnrollmentIssueCall's variable-relay arm. Multi-assignment
+// and later reassignment are intentionally out of scope (the documented residual):
+// over-approximating to "any ident ever assigned enrollment" only ever flags MORE
+// Issue callsites, which is fail-closed-safe for a mint funnel.
+func collectEnrollmentValuedIdents(p *Pass) map[types.Object]struct{} {
+	out := map[types.Object]struct{}{}
+	add := func(lhs ast.Expr, rhs ast.Expr) {
+		id, isID := lhs.(*ast.Ident)
+		if !isID || id.Name == "_" {
+			return
+		}
+		if val, isConst := EvaluateConstString(p.TypesInfo, rhs); !isConst || val != wantEnrollmentIntent {
+			return
+		}
+		if obj := p.TypesInfo.ObjectOf(id); obj != nil {
+			out[obj] = struct{}{}
+		}
+	}
+	for _, file := range p.Files {
+		EachInSubtree[ast.AssignStmt](file, func(as *ast.AssignStmt) {
+			if len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+				add(as.Lhs[0], as.Rhs[0])
+			}
+		})
+		EachInSubtree[ast.ValueSpec](file, func(vs *ast.ValueSpec) {
+			if len(vs.Names) == 1 && len(vs.Values) == 1 {
+				add(vs.Names[0], vs.Values[0])
+			}
+		})
+	}
+	return out
 }
 
 // isAuthJWTIssuerRecv reports whether fn is a method whose receiver base type is

@@ -223,6 +223,40 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 	return auth.NewJWTIssuer(reg.keyProv, reg.issuer, ttl, reg.Clock(), append(baseOpts, opts...)...)
 }
 
+// NewEnrollmentCredentialIssuerFromRegistry constructs a
+// *auth.EnrollmentCredentialIssuer whose signing key, issuer, audience and clock
+// are all sourced from reg. This is the single authorized production entry point
+// for an enrollment-credential issuer; the raw auth.NewEnrollmentCredentialIssuer
+// is retained only for test helpers. The TTL is fixed at
+// auth.EnrollmentCredentialTTL (not a parameter — enrollment credentials are
+// deliberately short-lived).
+//
+// Unlike the raw constructor, this factory FAILS CLOSED on an empty audience: an
+// enrollment credential with no aud claim is rejected by every audience-requiring
+// verifier (NewJWTVerifierFromRegistry), so an unconfigured audience would mint
+// credentials that silently fail every verification (a runtime 401 footgun).
+// Requiring a non-empty audience at construction turns that into a startup error
+// (mirrors NewJWTVerifierFromRegistry).
+//
+// ref: Hydra internal/driver/config.DefaultProvider — configuration through registry
+func NewEnrollmentCredentialIssuerFromRegistry(reg *Registry, opts ...auth.JWTIssuerOption) (*auth.EnrollmentCredentialIssuer, error) {
+	if reg == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
+	}
+	if validation.IsNilInterface(reg.keyProv) {
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
+	}
+	auds := reg.Audiences()
+	if len(auds) == 0 {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
+			"JWT registry: Audiences must not be empty for enrollment credential issuer construction")
+	}
+	baseOpts := []auth.JWTIssuerOption{
+		auth.WithIssuerAudiencesFromSlice(auds),
+	}
+	return auth.NewEnrollmentCredentialIssuer(reg.keyProv, reg.issuer, reg.Clock(), append(baseOpts, opts...)...)
+}
+
 // NewJWTVerifierFromRegistry constructs a *auth.JWTVerifier whose expected
 // audiences, expected issuer, verification key store, and clock are all
 // sourced from reg.
