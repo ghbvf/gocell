@@ -130,7 +130,7 @@ func TestParseState_EmptyIsZeroSentinel(t *testing.T) {
 	}
 }
 
-// TestParseState_UnknownRejected verifies an unrecognised label — including the
+// TestParseState_UnknownRejected verifies an unrecognized label — including the
 // fail-closed "unknown" render — is rejected, never silently folded to a state.
 func TestParseState_UnknownRejected(t *testing.T) {
 	t.Parallel()

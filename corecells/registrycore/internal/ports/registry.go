@@ -14,7 +14,7 @@ import (
 )
 
 // Registry persists runtime-submitted contract registrations and their
-// append-only migration history, scoped per tenant. It is the durable analogue
+// append-only migration history, scoped per tenant. It is the durable analog
 // of the in-mem kernel registry.ContractRegistrar: the method set mirrors the
 // registrar (Submit→Create, Advance→Transition, Get, AllIDs→List, Events→History)
 // so US6's service swap is mechanical.

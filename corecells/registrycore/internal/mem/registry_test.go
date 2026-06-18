@@ -162,7 +162,7 @@ func TestRegistry_List_OrderedCursorPaginated(t *testing.T) {
 
 func TestRegistry_CrossTenantIsolation(t *testing.T) {
 	r, _ := newRegistry(t)
-	mustCreate(t, r, testTenant, "http.foo.v1", "http", "alice")
+	mustCreate(t, r, testTenant, "http.foo.v1", "event", "carol") // non-http kind + distinct submitter
 
 	// Tenant B cannot see tenant A's row.
 	_, ok, err := r.Get(context.Background(), testTenantB, "http.foo.v1")

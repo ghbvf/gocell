@@ -113,9 +113,10 @@ func (s RegistrationState) IsTerminal() bool {
 // read from its `state TEXT` column without forging one (the unexported field
 // makes a non-zero RegistrationState unconstructable outside this package). The
 // empty string maps to the zero sentinel (ok=true): it is the From of an initial
-// submit event, persisted as '' so folding from '' reproduces the lifecycle. Any
-// other unrecognised label — including [RegistrationStateUnknown] ("unknown"),
-// the fail-closed render that is never a persisted state — returns (zero, false).
+// submit event, persisted as an empty string so folding from empty reproduces the
+// lifecycle. Any other unrecognized label — including [RegistrationStateUnknown]
+// ("unknown"), the fail-closed render that is never a persisted state — returns
+// (zero, false).
 //
 // Added 303-US5 (#2236) for the PostgreSQL ports.Registry implementation.
 func ParseState(s string) (RegistrationState, bool) {
