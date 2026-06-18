@@ -41,20 +41,29 @@ correct choice for most assemblies and requires no configuration change.
 - **Split requires a broker**: when an event's publisher and subscriber land in
   different groups, a real event broker is required (TOPO-13).
 
-## Current status: `topology.groups` authoring, monolith runtime (PR-1)
+## Current status: `topology.groups` authoring + runtime role selection (PR-2)
 
 `topology.groups` is the authoring model (#2278 PR-1, replacing the earlier
 single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/13/14),
 `gocell generate` (emits `generatedTopologyGroups()`), and the catalog export all
-operate on groups. The runtime still runs the all-colocated monolith: the
-composition root calls `bootstrap.SpecForRole(generatedTopologyGroups(), "")`,
-which selects the zero (all-colocated) spec. Startup role selection
-(`GOCELL_CELL_ROLE` → per-process subset mounting) lands in PR-2.
+operate on groups.
 
-> **Warning — do NOT set `GOCELL_CELL_ROLE` on a PR-1 build.** Per-role process
-> selection is not yet supported; `SpecForRole` fail-closes (startup
-> `ERR_VALIDATION_FAILED`) on any non-empty role. Leave `GOCELL_CELL_ROLE` unset
-> to run the all-colocated monolith. Role selection arrives in PR-2.
+Runtime role selection landed in #2278 PR-2: the composition root calls
+`bootstrap.SpecForRole(generatedTopologyGroups(), os.Getenv("GOCELL_CELL_ROLE"))`
+and mounts the result via `composition.NewForRole`:
+
+- **empty `GOCELL_CELL_ROLE` + 0/1 group** → all-colocated monolith (zero spec).
+- **empty role + ≥2 groups** → fail-fast: a multi-group topology is a split
+  deployment, so the process MUST select its role (a silent monolith would mask
+  the misconfiguration).
+- **`GOCELL_CELL_ROLE=<role>`** → this process hosts that group's cells
+  (colocated) and reaches every other group's cells as remote.
+- **unknown role** → fail-fast (the server log lists the declared `availableRoles`).
+
+The bootstrap `MOUNTED-EQUALS-COLOCATED-01` phase guard fail-fasts if a process
+ever mounts a cell declared remote for its role (the upstream backstop for
+`NewForRole`). End-to-end dual-topology acceptance (same image, 2 processes +
+broker + PG) is tracked by #1967 (PR-4).
 
 A split topology requires a real event broker (TOPO-13 enforces this). See the
 §Split topology requirements section below for the full infrastructure checklist.
