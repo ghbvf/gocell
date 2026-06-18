@@ -703,8 +703,10 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 // before being returned to API consumers.
 //
 // Principal/Observability exposure (issue #1229 §4 + #1219): SubjectID,
-// CorrelationID and OccurredAt are surfaced (additive, omitempty — empty/zero
-// for rows predating PR-A2). CorrelationID is an opaque cross-cell correlation
+// CorrelationID and OccurredAt are surfaced. OccurredAt is a nullable column
+// (*string): a zero producer-clock time (rows predating PR-A2) maps to nil → wire
+// JSON null, with the key always present (full column set, #1875). CorrelationID
+// is an opaque cross-cell correlation
 // id (NOT in pkg/redaction's sensitive-key set), so projecting it is safe and
 // lets consumers stitch an audited action back to its originating request.
 //
@@ -734,9 +736,13 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 	// part of the evidence (the HMAC chain pins occurred_at/timestamp at nanosecond
 	// granularity via *UnixNano), so RFC3339 (second-granularity) would silently
 	// truncate the wire projection below the chain's resolution (issue #1229 F6).
-	occurredAt := ""
+	// OccurredAt is a nullable column (*string): a zero producer-clock time (legacy
+	// rows predating #1229) maps to nil → schema-valid JSON null, while the column
+	// stays present in the masked view (#1875). "" would violate format: date-time.
+	var occurredAt *string
 	if !e.OccurredAt.IsZero() {
-		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
+		s := e.OccurredAt.Format(time.RFC3339Nano)
+		occurredAt = &s
 	}
 	item := &auditlist.ResponseDataItem{
 		ID:            e.ID,
@@ -752,10 +758,11 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 		Scope:         rowScope(e.TenantID),
 	}
 	// Only set Payload when redacted bytes are non-empty. An empty []byte stored
-	// as json.RawMessage in the any-typed Payload field is non-nil, so ToMap
-	// includes it and json.Marshal fails with "unexpected end of JSON input"
-	// (#2199). Leaving Payload nil means ToMap omits the key entirely via the
-	// `if i.Payload != nil` guard in generated/contracts/http/audit/list/v1/types_gen.go.
+	// as json.RawMessage in the any-typed Payload field is non-nil, so ToMap would
+	// carry a zero-length RawMessage and json.Marshal fails with "unexpected end of
+	// JSON input" (#2199). Leaving Payload nil means ToMap emits the column as JSON
+	// null (the full-column-set ToMap keeps the key present, #1875), which is the
+	// schema-valid "no payload" representation.
 	if raw := redaction.RedactPayload(e.Payload); len(raw) > 0 {
 		item.Payload = json.RawMessage(raw)
 	}
@@ -771,9 +778,11 @@ func toListResponseDataItem(e *ledger.Entry) *auditlist.ResponseDataItem {
 // for the per-field exposure rationale (SessionID excluded, CorrelationID/TenantID
 // surfaced behind the column-masking funnel, etc.).
 func toGetResponseDataItem(e *ledger.Entry) *auditget.ResponseData {
-	occurredAt := ""
+	// OccurredAt is a nullable column (*string): zero → nil → wire null (#1875).
+	var occurredAt *string
 	if !e.OccurredAt.IsZero() {
-		occurredAt = e.OccurredAt.Format(time.RFC3339Nano)
+		s := e.OccurredAt.Format(time.RFC3339Nano)
+		occurredAt = &s
 	}
 	item := &auditget.ResponseData{
 		ID:            e.ID,

@@ -1930,8 +1930,9 @@ func TestHandleQuery_SuperAdmin_CrossTenant_FiltersPassthrough(t *testing.T) {
 // TestHandleQuery_EmptyPayload_Returns200 is the regression guard for #2199:
 // an audit entry with nil/empty Payload must not cause 5xx when ToMap tries to
 // marshal an empty json.RawMessage. The fix ensures toListResponseDataItem leaves
-// the Payload field nil when the redacted bytes are empty, so ToMap omits the key
-// and json.Marshal never sees an empty RawMessage.
+// the Payload field nil when the redacted bytes are empty, so the full-column-set
+// ToMap renders the column as JSON null (#1875) and json.Marshal never sees an
+// empty RawMessage.
 //
 // Additionally, items WITH a non-empty payload must still render correctly in the
 // same response.
@@ -1979,15 +1980,111 @@ func TestHandleQuery_EmptyPayload_Returns200(t *testing.T) {
 
 	for _, item := range resp.Data {
 		eventID, _ := item["eventId"].(string)
+		payload, hasPayload := item["payload"]
+		// Full-column-set ToMap keeps every column present (#1875): the 'payload'
+		// key is ALWAYS on the wire. The #2199 guarantee is unchanged — an
+		// empty/absent payload renders as JSON null (no 5xx), never a half-written
+		// RawMessage — but it is now `payload: null`, not an omitted key.
+		assert.True(t, hasPayload, "item %s must include 'payload' key (stable column set)", eventID)
 		if eventID == "evt-ep-data-3" {
-			// Non-empty payload must appear as a valid JSON value.
-			_, hasPayload := item["payload"]
-			assert.True(t, hasPayload, "item with non-empty payload must include 'payload' key")
+			assert.NotNil(t, payload, "item with non-empty payload must render the value")
 		} else {
-			// Empty-payload items must NOT include the 'payload' key (omit nil).
-			_, hasPayload := item["payload"]
-			assert.False(t, hasPayload, "item %s with empty payload must NOT include 'payload' key", eventID)
+			assert.Nil(t, payload, "item %s with empty payload must render payload as null", eventID)
 		}
+	}
+}
+
+// --- Issue #1875: nullable occurredAt renders as JSON null, key always present ---
+
+// TestHandleQuery_ZeroOccurredAt_RendersNull is the behavioral guard for #1875:
+// an audit entry with a zero producer-clock time (OccurredAt time.Time{}, e.g. a
+// legacy row predating #1229) must render occurredAt as JSON null — the key STAYS
+// present (stable column set, so presence never leaks whether the column held
+// data) and null is schema-valid for the nullable column (whereas "" would
+// violate format: date-time). A non-zero entry renders the RFC3339Nano string.
+func TestHandleQuery_ZeroOccurredAt_RendersNull(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	base := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// Zero-OccurredAt row (legacy / framework event without a producer clock).
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "oc-zero-1", EventID: "evt-oc-zero-1", EventType: "event.test.v1",
+		ActorID:   "usr-oc",
+		Timestamp: base,
+		// OccurredAt left zero (time.Time{}).
+	}))
+	// Non-zero OccurredAt row.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "oc-set-2", EventID: "evt-oc-set-2", EventType: "event.test.v1",
+		ActorID:    "usr-oc",
+		Timestamp:  base.Add(time.Minute),
+		OccurredAt: base.Add(time.Minute),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-oc", nil)
+	req = req.WithContext(auditTestCtx("usr-oc", nil))
+	mux.ServeHTTP(w, req)
+	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 2)
+
+	for _, item := range resp.Data {
+		// The occurredAt key is ALWAYS present (stable column set).
+		oc, has := item["occurredAt"]
+		assert.Truef(t, has, "occurredAt key must always be present (item %v)", item["eventId"])
+		switch item["eventId"] {
+		case "evt-oc-zero-1":
+			assert.Nilf(t, oc, "zero OccurredAt must render as JSON null, got %v", oc)
+		case "evt-oc-set-2":
+			assert.NotNil(t, oc, "non-zero OccurredAt must render the RFC3339Nano string")
+		}
+	}
+}
+
+// TestHandleQuery_EmptyMaskedColumn_RendersRedactedNotAbsent is the end-to-end
+// side-channel guard for #1875: a masked diagnostic column (correlationId/traceId,
+// masked for non-admin self callers) that is EMPTY on the row must still render as
+// "<REDACTED>" with the key present — NOT omitted. The #2159 omitempty fission
+// would have dropped the empty key, letting "absent vs <REDACTED>" reveal the
+// column was empty. Full column set keeps presence uniform.
+func TestHandleQuery_EmptyMaskedColumn_RendersRedactedNotAbsent(t *testing.T) {
+	store := newHandlerStore(t)
+	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
+	require.NoError(t, err)
+	mux := newHandlerMux(svc)
+
+	// Row owned by the self caller, with EMPTY correlationId/traceId.
+	require.NoError(t, store.Append(context.Background(), &ledger.Entry{
+		ID: "mask-empty-1", EventID: "evt-mask-empty-1", EventType: "event.test.v1",
+		ActorID:   "usr-mask-self",
+		Timestamp: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		// CorrelationID / TraceID left empty.
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?actorId=usr-mask-self", nil)
+	req = req.WithContext(auditTestCtx("usr-mask-self", nil)) // non-admin → self scope masks correlationId/traceId
+	mux.ServeHTTP(w, req)
+	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	row := resp.Data[0]
+	for _, col := range []string{"correlationId", "traceId"} {
+		v, has := row[col]
+		assert.Truef(t, has, "%s key must be present even when empty+masked (no presence side channel)", col)
+		assert.Equalf(t, "<REDACTED>", v, "%s must be value-masked, not omitted", col)
 	}
 }
 

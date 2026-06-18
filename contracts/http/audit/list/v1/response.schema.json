@@ -36,8 +36,9 @@
             "description": "Operator-diagnostic column: opaque distributed trace identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
           },
           "occurredAt": {
-            "type": "string",
-            "format": "date-time"
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Producer-clock event time. null when no producer clock was recorded (legacy rows predating #1229); the key is always present (stable column set, #1875) and this column is never value-masked. Distinct from timestamp (the ledger/HMAC persistence time, required)."
           },
           "timestamp": {
             "type": "string",
@@ -54,7 +55,14 @@
           "eventId",
           "eventType",
           "actorId",
-          "timestamp"
+          "subjectId",
+          "tenantId",
+          "correlationId",
+          "traceId",
+          "occurredAt",
+          "timestamp",
+          "scope",
+          "payload"
         ]
       }
     },
