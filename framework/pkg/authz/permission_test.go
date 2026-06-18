@@ -29,6 +29,33 @@ func TestPermSystemRead_StableIdentity(t *testing.T) {
 	}
 }
 
+// TestRegistrycorePermissions pins the exact action spelling and singleton
+// identity of every registrycore permission minted in 303-US4 (#2235). The action
+// string IS the wire value carried into the PDP and matched against baseline rule
+// Action targets, so a typo here silently breaks the gate↔baseline binding.
+func TestRegistrycorePermissions(t *testing.T) {
+	cases := []struct {
+		name      string
+		got       Permission
+		singleton Permission
+		want      string
+	}{
+		{"PermRegistrySubmit", PermRegistrySubmit(), permRegistrySubmit, "registry:submit"},
+		{"PermRegistryRead", PermRegistryRead(), permRegistryRead, "registry:read"},
+	}
+	for _, tc := range cases {
+		if got := tc.got.String(); got != tc.want {
+			t.Errorf("%s.String() = %q, want %q", tc.name, got, tc.want)
+		}
+		if tc.got != tc.singleton {
+			t.Errorf("%s() must return the package-private singleton (stable on every call)", tc.name)
+		}
+		if tc.got.IsZero() {
+			t.Errorf("minted %s() must report IsZero()==false", tc.name)
+		}
+	}
+}
+
 // TestConfigcorePermissions_String pins the exact action spelling of every
 // configcore permission minted in PR-10b. The action string IS the wire value
 // carried into the PDP (auth.Authorizer.Authorize) and matched against baseline
@@ -208,10 +235,10 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
 	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
 	// (PR-10b) + 7 accesscore (PR-10c + session:verify #1154 + access:decide #1863) +
-	// 4 iotdevice + 4 todoorder (PR-10d #1894).
-	if len(perms) != 22 {
-		t.Fatalf("Permissions() len = %d, want 22 "+
-			"(2 platform + 5 configcore + 7 accesscore + 4 iotdevice + 4 todoorder)", len(perms))
+	// 2 registrycore (303-US4 #2235) + 4 iotdevice + 4 todoorder (PR-10d #1894).
+	if len(perms) != 24 {
+		t.Fatalf("Permissions() len = %d, want 24 "+
+			"(2 platform + 5 configcore + 7 accesscore + 2 registrycore + 4 iotdevice + 4 todoorder)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
@@ -220,6 +247,7 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 		"policy:read": true, "policy:write": true,
 		"user:read": true, "user:write": true, "role:read": true,
 		"access:decide": true, "session:verify": true,
+		"registry:submit": true, "registry:read": true,
 		"device:command": true, "device:consume": true, "device:read": true, "device:list": true,
 		"order:create": true, "order:list": true, "order:read": true, "order:update": true,
 	}

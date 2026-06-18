@@ -59,6 +59,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		SourceFile:                              contract.File,
 		PanicReasonPolicyNil:                    kebab + "-policy-nil",
 		PanicReasonBootstrapAuthNil:             kebab + "-bootstrap-auth-nil",
+		PanicReasonResolverNil:                  kebab + "-resolver-nil",
 		PanicReasonPublicSchemaCompileFailed:    kebab + "-public-schema-compile-failed",
 		PanicReasonBootstrapSchemaCompileFailed: kebab + "-bootstrap-schema-compile-failed",
 		PanicReasonClientsOnlySchemaCompileFailed:  kebab + "-clients-only-schema-compile-failed",
@@ -490,6 +491,7 @@ func buildHTTPEndpointSpec(
 		AuthBootstrap:           http.Auth.Bootstrap,
 		AuthClientsOnly:         http.Auth.ClientsOnly,
 		AuthServiceOwned:        http.Auth.ServiceOwned,
+		Permission:              http.Permission,
 		IdempotencyExempt:       http.Idempotency.Exempt,
 		ResponseProjection:      http.ResponseProjection,
 	}

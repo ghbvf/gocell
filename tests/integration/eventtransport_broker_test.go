@@ -46,7 +46,9 @@ func TestEventTransport_PostgresResolvesLiveRabbitMQ(t *testing.T) {
 	topo, err := bootstrap.NewTopology("real", "postgres", true)
 	require.NoError(t, err, "postgres topology")
 
-	tr, err := eventtransport.Resolve(clock.Real(), topo, eventtransport.Config{AMQPURL: amqpURL})
+	tr, err := eventtransport.Resolve(clock.Real(), topo, eventtransport.Config{
+		Cells: map[string]string{"eventtransport-itest": amqpURL},
+	})
 	require.NoError(t, err, "postgres topology must resolve a real broker transport against a live broker")
 	require.NotNil(t, tr.Publisher, "resolved Publisher must be non-nil")
 	require.NotNil(t, tr.Subscriber, "resolved Subscriber must be non-nil")

@@ -284,23 +284,23 @@ type AssemblySpecBuild struct {
 	DeployTemplate string `json:"deployTemplate,omitempty" yaml:"deployTemplate,omitempty"`
 }
 
-// AssemblySpecTopology mirrors metadata.TopologyMeta on the wire: the deployment
-// placement of the assembly's cells (colocated in-process vs reachable as remote
-// services). Empty => all cells co-located (zero-migration default).
+// AssemblySpecTopology mirrors metadata.TopologyMeta on the wire: the complete
+// deployment-partition graph of the assembly's cells (one group per deployment
+// role). Empty => all cells co-located (zero-migration default).
 //
 // AssemblySpec references it as an OPTIONAL POINTER (nil => omitted): omitempty
 // on a value struct does NOT drop a struct whose fields are all zero (encoding/json
 // only treats false/0/nil-ptr/empty-len as empty), so a value field would emit
 // `"topology":{}` for every topology-less assembly. A nil pointer omits the field.
 type AssemblySpecTopology struct {
-	Colocated []string                     `json:"colocated,omitempty" yaml:"colocated,omitempty"`
-	Remote    []AssemblySpecTopologyRemote `json:"remote,omitempty"    yaml:"remote,omitempty"`
+	Groups []AssemblySpecTopologyGroup `json:"groups,omitempty" yaml:"groups,omitempty"`
 }
 
-// AssemblySpecTopologyRemote mirrors metadata.TopologyRemoteEntry on the wire.
-type AssemblySpecTopologyRemote struct {
-	CellID   string `json:"cellID"   yaml:"cellID"`
-	Endpoint string `json:"endpoint" yaml:"endpoint"`
+// AssemblySpecTopologyGroup mirrors metadata.TopologyGroup on the wire.
+type AssemblySpecTopologyGroup struct {
+	Role     string   `json:"role"               yaml:"role"`
+	Cells    []string `json:"cells"              yaml:"cells"`
+	Endpoint string   `json:"endpoint,omitempty" yaml:"endpoint,omitempty"`
 }
 
 // ActorSpec is Document.Entities[Kind=="Actor"].Spec.

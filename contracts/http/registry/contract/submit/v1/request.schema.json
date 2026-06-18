@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.submit.v1.request",
+  "description": "Submit a runtime contract registration. The submitter identity is taken from the authenticated principal, not the body. Fields mirror the kernel registry SubmitInput (#2233); the (kind,domain,version,owner) uniqueness quadruple is owned by US15/FR-009 and not modeled here.",
+  "type": "object",
+  "required": [
+    "id",
+    "kind"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Registration identifier (the contract id, e.g. http.example.foo.v1); dedup key. A duplicate id yields 409."
+    },
+    "kind": {
+      "type": "string",
+      "maxLength": 16,
+      "enum": [
+        "http",
+        "event",
+        "command",
+        "projection",
+        "saga",
+        "webhook",
+        "grpc"
+      ],
+      "description": "Contract kind."
+    },
+    "payloadSchema": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Opaque payload-schema reference/hash recorded at submit; uninterpreted by the kernel state machine (US5 persists it)."
+    }
+  }
+}

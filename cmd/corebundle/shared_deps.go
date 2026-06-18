@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/cellmodules/celltls"
@@ -64,14 +65,21 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	}()
 
 	// Topology-gated event transport (#1940): demo topology → in-process bus;
-	// postgres topology → real broker (RabbitMQ from GOCELL_AMQP_URL), fail-closed
-	// when the broker URL is missing. The in-memory bus is reachable ONLY through
-	// eventtransport.Resolve's demo branch — cmd/corebundle must not import
-	// runtime/eventbus directly (depguard corebundle-no-direct-eventbus,
-	// COREBUNDLE-EVENTBUS-FUNNEL-01).
-	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
-		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
-	})
+	// postgres topology → real broker (RabbitMQ), fail-closed when the broker URL is
+	// missing. The in-memory bus is reachable ONLY through eventtransport.Resolve's
+	// demo branch — cmd/corebundle must not import runtime/eventbus directly
+	// (depguard corebundle-no-direct-eventbus, COREBUNDLE-EVENTBUS-FUNNEL-01).
+	//
+	// #2152 PR-2: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL, falling
+	// back to GOCELL_AMQP_URL) for the broker-requiring cells (= the postgres cell
+	// set), then deduped by eventtransport. Colocated assemblies share one
+	// GOCELL_AMQP_URL → one connection (behavior-preserving); distinct per-cell URLs
+	// are fail-closed (egress-only — a single subscriber cannot consume N brokers).
+	brokerCells := make(map[string]string, len(generatedPostgresCells()))
+	for _, cellID := range generatedPostgresCells() {
+		brokerCells[cellID] = LoadBrokerURL(strings.ToUpper(cellID))
+	}
+	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: brokerCells})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -126,7 +134,19 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// dialing remote peers + server config for the internal listener). Fails
 	// closed when the deployment topology has a non-loopback remote cell but no
 	// TLS material is provisioned (see cellmodules/celltls).
-	deployTopoSpec := generatedDeploymentTopology()
+	// generatedTopologyGroups() is the assembly's complete deployment-partition
+	// graph. SpecForRole derives THIS process's placement from GOCELL_CELL_ROLE
+	// (#2278): an empty role with 0/1 group selects the all-colocated monolith
+	// (zero spec); a declared role selects its colocated cells + the other groups
+	// as remote; an empty role with ≥2 groups, or an unknown role, is fail-closed
+	// — so a split-deployment misconfiguration is rejected at startup, never
+	// silently run as a monolith (12-factor: env is consumed or it errors). The
+	// spec flows into SharedDeps.DeploymentTopology (consumed by celltransport +
+	// composition.NewForRole's subset mount).
+	deployTopoSpec, err := bootstrap.SpecForRole(generatedTopologyGroups(), os.Getenv("GOCELL_CELL_ROLE"))
+	if err != nil {
+		return nil, nil, err
+	}
 	celltlsDeps, err := resolveTransportTLSMaterial(deployTopoSpec)
 	if err != nil {
 		return nil, nil, err
@@ -176,6 +196,25 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	slog.Info("adapter mode",
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
+
+	// Deployment-role placement: lets an operator confirm, per process, which
+	// cells this process hosts (colocated) vs reaches remotely. The colocated set
+	// IS the selected role's footprint; we log the DERIVED spec (validated by
+	// SpecForRole) rather than the raw GOCELL_CELL_ROLE env to avoid log-injection
+	// taint (gosec G706). `split` keys on a real cross-process boundary (≥1 remote
+	// cell) — a single-group role is colocated-only, NOT a split. remote_cell_endpoints
+	// gives the full cellID→endpoint placement (sorted) so operators can audit who
+	// each remote peer is, not just the count (#2278 review F3/F4).
+	remoteCellEndpoints := make([]string, 0, len(deployTopoSpec.Remote))
+	for _, r := range deployTopoSpec.Remote {
+		remoteCellEndpoints = append(remoteCellEndpoints, r.CellID+"="+r.Endpoint)
+	}
+	sort.Strings(remoteCellEndpoints)
+	slog.Info("corebundle: deployment role",
+		slog.Bool("split", len(deployTopoSpec.Remote) > 0),
+		slog.Any("colocated_cells", deployTopoSpec.Colocated),
+		slog.Int("remote_cells", len(deployTopoSpec.Remote)),
+		slog.Any("remote_cell_endpoints", remoteCellEndpoints))
 
 	loaded = true
 	return compShared, locals, nil

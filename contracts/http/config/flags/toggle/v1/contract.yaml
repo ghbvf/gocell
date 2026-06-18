@@ -10,6 +10,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/flags/{key}/toggle
+    permission: flag:write
     pathParams:
       key:
         type: string

@@ -83,6 +83,12 @@ type ContractGenSpec struct {
 	// Pre-computed from ContractID + "-bootstrap-auth-nil".
 	// Example: "http-sample-bootstrap-v1-bootstrap-auth-nil".
 	PanicReasonBootstrapAuthNil string
+	// PanicReasonResolverNil is the kebab-case reason literal passed to
+	// panicregister.Approved for the "resolver must not be nil" panic site in the
+	// contract-derived NewHandler (endpoints.http.permission set, #2205).
+	// Pre-computed from ContractID + "-resolver-nil".
+	// Example: "http-config-get-v1-resolver-nil".
+	PanicReasonResolverNil string
 	// PanicReasonPublicSchemaCompileFailed is the kebab-case reason literal passed
 	// to panicregister.Approved for the schema compile failed panic in NewPublicHandler.
 	// Pre-computed from ContractID + "-public-schema-compile-failed".
@@ -313,6 +319,15 @@ type httpEndpointSpec struct {
 	// AuthPasswordResetExempt. Mutually exclusive with AuthPublic, AuthBootstrap,
 	// and AuthClientsOnly.
 	AuthServiceOwned bool
+	// Permission is the ABAC action from contract.yaml endpoints.http.permission
+	// (#2205) — non-empty only for contract-derived gated routes. When set, the
+	// generated NewHandler takes a resolver authz.MethodPolicyResolver argument
+	// (instead of policy auth.Policy) and constructs the gate via
+	// auth.RequirePermissionForContract(contractSpec.ID, resolver); when empty, the legacy
+	// hand-wired policy-arg path is generated unchanged. Mutually exclusive with the
+	// no-gate auth modes (AuthPublic/AuthBootstrap/AuthClientsOnly/AuthServiceOwned);
+	// may accompany a standard route or AuthPasswordResetExempt.
+	Permission string
 	// IdempotencyExempt is true when contract.yaml endpoints.http.idempotency.exempt
 	// is set. A first-class endpoint concern (sibling of auth, #1469 review F7), not
 	// an auth flag; emits auth.Route{IdempotencyExempt: true}. The idempotency

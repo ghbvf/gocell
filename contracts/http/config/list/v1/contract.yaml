@@ -10,6 +10,7 @@ endpoints:
   http:
     method: GET
     path: /api/v1/config/
+    permission: config:read
     queryParams:
       cursor:
         type: string

@@ -188,7 +188,7 @@ func (c *ConfigCore) initWriteSlice() error {
 	if err != nil {
 		return fmt.Errorf("configcore: init write slice: %w", err)
 	}
-	c.writeHandler = configwrite.NewHandler(writeSvc)
+	c.writeHandler = configwrite.NewHandler(writeSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configwrite.SliceMetadata()))
 	return nil
 }
@@ -208,7 +208,7 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	if err != nil {
 		return fmt.Errorf("config-read-internal: %w", err)
 	}
-	c.readHandler = configread.NewHandler(publicSvc)
+	c.readHandler = configread.NewHandler(publicSvc, cellHTTPResolver)
 	c.readInternalHandler = configreadinternal.NewHandler(internalSvc)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configread.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configreadinternal.SliceMetadata()))
@@ -224,7 +224,7 @@ func (c *ConfigCore) initPublishSlice() error {
 	if err != nil {
 		return fmt.Errorf("configcore: init publish slice: %w", err)
 	}
-	c.publishHandler = configpublish.NewHandler(publishSvc)
+	c.publishHandler = configpublish.NewHandler(publishSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(configpublish.SliceMetadata()))
 	return nil
 }
@@ -250,7 +250,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 	if err != nil {
 		return fmt.Errorf("feature-flag: %w", err)
 	}
-	c.flagHandler = featureflag.NewHandler(flagSvc)
+	c.flagHandler = featureflag.NewHandler(flagSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(featureflag.SliceMetadata()))
 	return nil
 }
@@ -263,7 +263,7 @@ func (c *ConfigCore) initFlagWriteSlice() error {
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}
-	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
+	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(flagwrite.SliceMetadata()))
 	return nil
 }

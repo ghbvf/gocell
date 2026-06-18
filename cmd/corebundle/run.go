@@ -152,10 +152,15 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return opts, nil
 	}
 
-	// composition.New(assemblyCellIDs...) seals the assembly's cell-id closed set
-	// (M12a #1093): Build fail-fasts if generatedCellModules drifts from the
-	// assembly.yaml cell list (replaces the former hand-written assertModuleIDsMatch).
-	app, err := composition.New(assemblyCellIDs...).With(mods...).Build(ctx, compShared, runtimeOptsFunc)
+	// composition.NewForRole mounts only the cells THIS process hosts for its
+	// deployment role (GOCELL_CELL_ROLE → compShared.DeploymentTopology): the
+	// all-colocated monolith mounts everything (closed set = assemblyCellIDs);
+	// a split role mounts only its colocated subset and reaches the rest as
+	// remote. Build still enforces the M12a closed set (#1093) on whatever is
+	// mounted, and the bootstrap MOUNTED-EQUALS-COLOCATED guard fail-fasts if a
+	// remote cell is ever mounted (#2278).
+	app, err := composition.NewForRole(assemblyCellIDs, compShared.DeploymentTopology, mods...).
+		Build(ctx, compShared, runtimeOptsFunc)
 	if err != nil {
 		return err
 	}
