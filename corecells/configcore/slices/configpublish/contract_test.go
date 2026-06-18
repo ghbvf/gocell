@@ -49,13 +49,19 @@ func seedContractEntry(repo *mem.ConfigRepository, value string) {
 	})
 }
 
+// contractConfigPublishResolver mirrors the cellHTTPResolver for configpublish contract tests.
+var contractConfigPublishResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.publish.v1":  "config:publish",
+	"http.config.rollback.v1": "config:publish",
+})
+
 // newContractMux registers configpublish routes under the canonical API
 // prefix. The TestMux.Route sub-mux structure mirrors production chi so
 // auth.Mount strips the prefix off Contract.Path directly; no alias magic.
 // RegisterRoutes calls auth.Mount so contract tests exercise the same
 // admin policy production uses.
 func newContractMux(svc *Service) http.Handler {
-	h := NewHandler(svc)
+	h := NewHandler(svc, contractConfigPublishResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

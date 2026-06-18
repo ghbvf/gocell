@@ -200,6 +200,96 @@ func TestContractSchemaAllowsAuthPublic(t *testing.T) {
 	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.public:true must pass strict validation")
 }
 
+// TestContractSchemaHTTPPermission byte-locks the endpoints.http.permission authoring
+// surface (#2205) at the JSON Schema layer — the HTTP sibling of the gRPC
+// endpoints.grpc.methods[].permission schema coverage. FMT-42 covers the governance
+// semantics; this pins the schema author surface: a registered permission is accepted
+// on a standard / passwordResetExempt route, but mutually exclusive with the no-gate
+// auth modes (public/bootstrap/clientsOnly/serviceOwned) and non-empty (minLength 1).
+func TestContractSchemaHTTPPermission(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	doc := func(httpInner string) string {
+		return `{
+			"id": "http.config.x.v1",
+			"kind": "http",
+			"consistencyLevel": "L1",
+			"lifecycle": "active",
+			"endpoints": {
+				"server": "configcore",
+				"clients": [],
+				"http": {` + httpInner + `}
+			}
+		}`
+	}
+
+	cases := []struct {
+		name      string
+		httpInner string
+		wantValid bool
+	}{
+		{
+			name: "standard route with permission accepted",
+			httpInner: `"method":"GET","path":"/api/v1/config/x","successStatus":200,` +
+				`"noContent":false,"permission":"config:read"`,
+			wantValid: true,
+		},
+		{
+			name: "permission + passwordResetExempt accepted (still a gated route)",
+			httpInner: `"method":"POST","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:write","auth":{"passwordResetExempt":true}`,
+			wantValid: true,
+		},
+		{
+			name: "permission + public rejected",
+			httpInner: `"method":"GET","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","auth":{"public":true}`,
+			wantValid: false,
+		},
+		{
+			name: "permission + bootstrap rejected",
+			httpInner: `"method":"POST","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:write","auth":{"bootstrap":true}`,
+			wantValid: false,
+		},
+		{
+			name: "permission + clientsOnly rejected",
+			httpInner: `"method":"GET","path":"/internal/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","auth":{"clientsOnly":true}`,
+			wantValid: false,
+		},
+		{
+			// ownership present so the serviceOwned-requires-ownership rule is satisfied
+			// and the SOLE schema violation is the permission/serviceOwned mutex.
+			name: "permission + serviceOwned rejected",
+			httpInner: `"method":"GET","path":"/api/v1/config/x/{id}","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","auth":{"serviceOwned":true},` +
+				`"ownership":{"subjectPath":"ctx.subject","resourcePath":"path.id"},` +
+				`"pathParams":{"id":{"type":"string","format":"uuid"}}`,
+			wantValid: false,
+		},
+		{
+			name: "empty permission rejected (minLength 1)",
+			httpInner: `"method":"GET","path":"/api/v1/config/x","successStatus":200,` +
+				`"noContent":false,"permission":""`,
+			wantValid: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(doc(tc.httpInner)), &contractDoc))
+			err := schema.Validate(contractDoc)
+			if tc.wantValid {
+				assert.NoError(t, err, "expected schema-valid")
+			} else {
+				assert.Error(t, err, "expected schema rejection")
+			}
+		})
+	}
+}
+
 func TestContractSchemaAllowsAuthPasswordResetExempt(t *testing.T) {
 	raw, err := FS.ReadFile("contract.schema.json")
 	require.NoError(t, err)

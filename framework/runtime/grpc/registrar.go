@@ -348,6 +348,16 @@ func (r *ServiceRegistrar) IsPublicMethod(fullMethod string) bool {
 	return ok
 }
 
+// ServiceRegistrar satisfies authz.MethodPolicyResolver (#2205): its
+// PermissionForMethod IS the gRPC transport's implementation of the
+// transport-neutral method→permission seam — the per-method overlay map built by
+// recordMethodOverlays. The HTTP sibling is the cell-level resolver from
+// runtime/auth.NewStaticMethodPolicyResolver. This assertion is the entirety of the
+// gRPC "re-express through the resolver" step: no wiring changes (chain.go still
+// installs reg.PermissionForMethod as WithPermissionResolver), so
+// GRPC-PERMISSION-GATE-WIRING-FUNNEL-01 is unaffected.
+var _ authz.MethodPolicyResolver = (*ServiceRegistrar)(nil)
+
 // PermissionForMethod returns the sealed authz.Permission a non-public RPC
 // requires (#2008), resolved from the cell's endpoints.grpc.methods[].permission
 // overlay at Register time. The second return value is false when fullMethod has

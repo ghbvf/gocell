@@ -117,16 +117,23 @@ func withAdmin(req *http.Request) *http.Request {
 // configPrefix matches cell-level Route("/api/v1/config", ...).
 const configPrefix = "/api/v1/config"
 
+// testConfigWriteResolver is the contract-derived resolver for configwrite handler tests,
+// mirroring the cellHTTPResolver built by cellgen from endpoints.http.permission overlays.
+var testConfigWriteResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.write.v1":  "config:write",
+	"http.config.update.v1": "config:write",
+	"http.config.delete.v1": "config:write",
+})
+
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
-	policy := auth.RequirePermission(authz.PermConfigWrite())
-	writeH := write.NewHandler(WriteAdapter{svc}, policy)
-	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
-	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
+	writeH := write.NewHandler(WriteAdapter{svc}, testConfigWriteResolver)
+	updateH := update.NewHandler(UpdateAdapter{svc}, testConfigWriteResolver)
+	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, testConfigWriteResolver)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
 		if err := writeH.RegisterRoutes(sub); err != nil {
@@ -763,7 +770,7 @@ func TestNewHandler_ProductionWiring(t *testing.T) {
 
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
-		require.NoError(t, NewHandler(svc).RegisterRoutes(sub))
+		require.NoError(t, NewHandler(svc, testConfigWriteResolver).RegisterRoutes(sub))
 	})
 
 	body := `{"key":"prod.wiring","value":"v"}`

@@ -148,13 +148,19 @@ func TestConfigVersionResponse_OmitsNilPublishedAt(t *testing.T) {
 // configPrefix matches cell-level Route("/api/v1/config", ...).
 const configPrefix = "/api/v1/config"
 
+// testConfigPublishResolver mirrors the cellHTTPResolver for configpublish handler tests.
+var testConfigPublishResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.publish.v1":  "config:publish",
+	"http.config.rollback.v1": "config:publish",
+})
+
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, testConfigPublishResolver)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

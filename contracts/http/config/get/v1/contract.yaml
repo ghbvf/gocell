@@ -10,6 +10,7 @@ endpoints:
   http:
     method: GET
     path: /api/v1/config/{key}
+    permission: config:read
     pathParams:
       key:
         type: string
