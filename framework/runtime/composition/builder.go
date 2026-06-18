@@ -267,7 +267,7 @@ func (b *Builder) Build(
 	//      review F1). shared.Topology is sealed (caller cannot forge it).
 	//   2. WithDeploymentTopology: lets phase0 seal+validate the codegen-derived
 	//      deployment placement spec into a runtime DeploymentTopology (#1962).
-	//      shared.DeploymentTopology is produced by generatedDeploymentTopology().
+	//      shared.DeploymentTopology is derived via SpecForRole(generatedTopologyGroups(), role).
 	// Both are appended to cellOpts — applied AFTER runtimeOpts in allOpts below —
 	// so a caller's runtimeOptsFn cannot override them.
 	//   3. WithInProcessTransport: hands bootstrap the SAME holder minted above so

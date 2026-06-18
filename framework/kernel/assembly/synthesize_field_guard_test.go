@@ -28,13 +28,12 @@ var synthesisFieldExemptions = map[string]string{
 	// intended scaffold output.
 	"build.compositionAPI": "scaffold uses legacy modules_gen; composition API form is in-tree corebundle opt-in (#1085), not scaffold input",
 
-	// topology.colocated and topology.remote are the deployment topology fields
-	// (#1962). Newly scaffolded assemblies have no explicit topology (all cells
+	// topology.groups is the deployment-partition graph (#1962, groups model
+	// #2278). Newly scaffolded assemblies have no explicit topology (all cells
 	// are co-located by default — the zero/empty topology is the correct scaffold
-	// output). AssemblyScaffoldSpec has no topology input, so these remain zero-
+	// output). AssemblyScaffoldSpec has no topology input, so this remains zero-
 	// valued by design. The zero value is the intended scaffold output.
-	"topology.colocated": "scaffold emits no explicit topology; empty = all-colocated default (#1962)",
-	"topology.remote":    "scaffold emits no explicit topology; empty = all-colocated default (#1962)",
+	"topology.groups": "scaffold emits no explicit topology; empty = all-colocated default (#1962/#2278)",
 }
 
 // TestAssemblyMetaSynthesisFieldGuard uses reflection to assert that

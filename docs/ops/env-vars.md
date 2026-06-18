@@ -202,9 +202,9 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 ## Split 拓扑 mTLS 传输层安全（#2263，ZT-1）
 
-非 loopback `topology.remote` 跨 cell 调用现强制 mTLS（`celltls.Resolve` 在启动期 fail-fast）。
-以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在 topology 含非 loopback
-remote cell 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
+非 loopback `topology.groups` group endpoint 的 split 跨 cell 调用现强制 mTLS（`celltls.Resolve`
+在启动期 fail-fast）。以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在
+topology 含非 loopback group endpoint 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
 
 每个 cell 进程需要：一张携带 `spiffe://<trustDomain>/cell/<cellID>` URI SAN + 双 EKU
 （ServerAuth + ClientAuth）的 leaf cert、配套私钥，以及签发所有 cell cert 的 trust-root CA bundle。

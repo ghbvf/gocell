@@ -481,8 +481,9 @@ func (v *Validator) validateTOPO10() []ValidationResult {
 				assemblyFile(asm),
 				fieldAnchor,
 				msg,
-				"topology.colocated ∪ remote must mutually-exclusively and exhaustively partition cells;"+
-					" remote endpoints must be bare host:port or http/https URL with host",
+				"topology.groups must mutually-exclusively and exhaustively partition the assembly's cells"+
+					" (every cell in exactly one group); each group needs a unique non-empty role and a valid"+
+					" endpoint (bare host:port or http/https URL with host)",
 			))
 		}
 	}
@@ -490,9 +491,10 @@ func (v *Validator) validateTOPO10() []ValidationResult {
 }
 
 // extractTOPO10Location extracts the field anchor and message from a
-// ValidateTopologyStructure error. When the error is an *errcode.Error with
-// "field" and "cellID" public details, those values are used to produce a
-// precise anchor and message — no duplication with ValidateTopologyStructure.
+// ValidateTopologyStructure error. When the error is an *errcode.Error with a
+// "field" public detail, that value is used as a precise anchor and the
+// violating identifier ("cellID" or, for role/endpoint errors, "role") is
+// appended to the message — no duplication with ValidateTopologyStructure.
 // Falls back to "topology" + err.Error() for non-errcode paths.
 func extractTOPO10Location(err error) (fieldAnchor, msg string) {
 	var ec *errcode.Error
@@ -505,6 +507,9 @@ func extractTOPO10Location(err error) (fieldAnchor, msg string) {
 	}
 	if cellID := stringAttr(ec, "cellID"); cellID != "" {
 		return field, fmt.Sprintf("%s (cellID: %q)", ec.Message, cellID)
+	}
+	if role := stringAttr(ec, "role"); role != "" {
+		return field, fmt.Sprintf("%s (role: %q)", ec.Message, role)
 	}
 	return field, ec.Message
 }
@@ -522,9 +527,11 @@ func stringAttr(ec *errcode.Error, key string) string {
 }
 
 // validateTOPO11 checks that for every contract consumed by a cell in an
-// assembly, the contract's provider cell is reachable (Local or Remote) within
-// that assembly's topology. A provider that is Missing (∉ colocated ∪ remote)
-// is a deployment-time error — the consumer will never be able to reach it.
+// assembly, the contract's provider cell is a member of that assembly. A
+// provider absent from assembly.cells is a deployment-time error — the consumer
+// will never be able to reach it. With topology.groups validated as an
+// exhaustive partition (TOPO-10), assembly membership == placement in some group,
+// so reachability reduces to assembly-cell membership.
 //
 // Skip conditions (delegated to other rules):
 //   - non-consumer roles (provider roles are not the consumer side)
@@ -563,7 +570,7 @@ func (v *Validator) checkTOPO11Assembly(asm *metadata.AssemblyMeta) []Validation
 		if _, inAsm := asmCellSet[s.BelongsToCell]; !inAsm {
 			continue // slice's cell is not in this assembly
 		}
-		results = append(results, v.checkTOPO11Slice(asm, s)...)
+		results = append(results, v.checkTOPO11Slice(asm, asmCellSet, s)...)
 	}
 	return results
 }
@@ -571,13 +578,16 @@ func (v *Validator) checkTOPO11Assembly(asm *metadata.AssemblyMeta) []Validation
 // checkTOPO11Slice checks provider reachability for each consumer contract usage in one slice.
 // F3: uses contractProvider(c) (ProviderEndpoint, actual serving cell) — not c.Owner().Cell()
 // (definitional owner) — per CONTRACT-OWNER-CELL-FUNNEL-01.
+// Reachability == the provider is a member cell of asm (asmCellSet); with the
+// topology.groups exhaustive-partition invariant (TOPO-10) that is equivalent to
+// "placed in some group".
 // Skip conditions:
 //   - non-consumer roles (provider roles are not the consumer side)
 //   - contract not found in project (REF-02 owns missing-contract errors)
 //   - framework-owned contract (provider-agnostic; c.Owner().IsFramework())
 //   - no provider endpoint declared (e.g. draft with no endpoints.server)
 //   - external actor provider (actors are out-of-process; topology only governs cells)
-func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.SliceMeta) []ValidationResult {
+func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, asmCellSet map[string]struct{}, s *metadata.SliceMeta) []ValidationResult {
 	var results []ValidationResult
 	for i, cu := range s.ContractUsages {
 		if !cellvocab.IsConsumerRole(cellvocab.ContractRole(cu.Role)) {
@@ -597,11 +607,10 @@ func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.Sli
 		if _, knownCell := v.project.Cells[provider]; !knownCell {
 			continue // external actor provider — not subject to assembly topology
 		}
-		loc := metadata.ClassifyCell(asm, provider)
-		if loc.IsMissing() {
+		if _, reachable := asmCellSet[provider]; !reachable {
 			msg := fmt.Sprintf(
 				"slice %q (cell %q) consumes contract %q whose provider cell %q"+
-					" is neither co-located nor a declared remote endpoint in assembly %q topology",
+					" is not a member of assembly %q (cannot be reached)",
 				s.ID, s.BelongsToCell, cu.Contract, provider, asm.ID,
 			)
 			results = append(results, v.newError(
@@ -610,8 +619,8 @@ func (v *Validator) checkTOPO11Slice(asm *metadata.AssemblyMeta, s *metadata.Sli
 				fmt.Sprintf(fieldContractUsagesContractFmt, i),
 				msg,
 				// F4: hint mentions assembly.cells requirement before topology placement
-				"add the provider cell to assembly.cells, then place it in topology.colocated"+
-					" or topology.remote (with an endpoint)",
+				"add the provider cell to assembly.cells (and, when topology.groups is"+
+					" declared, place it in a group)",
 			))
 		}
 	}
@@ -675,9 +684,9 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 
 // validateTOPO13 is the broker-mandatory static gate (Epic #1423 US3, Medium,
 // permanent ceiling). For every assembly that declares a split topology
-// (len(topology.remote) > 0), it checks whether any active event contract
-// has a publisher cell and a subscriber cell on opposite sides of the process
-// boundary. The in-memory EventBus cannot deliver events across processes; a
+// (≥2 deployment groups), it checks whether any active event contract has a
+// publisher cell and a subscriber cell in different groups (i.e. different
+// processes). The in-memory EventBus cannot deliver events across processes; a
 // real broker is required.
 //
 // Rating: Medium — permanent ceiling. Hard is unreachable: the EventBus is a
@@ -690,22 +699,20 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 //     split topologies (US7 #1967 reconciliation tracked separately).
 //
 // Cross-process detection is per-assembly and self-contained: a pub/sub pair is
-// cross-process unless both cells share a process within THIS assembly — i.e.
-// both colocated, or both remote at the SAME endpoint (deployed together). Two
-// remote cells at DIFFERENT endpoints are different processes and DO fire (see
-// isCrossProcessEventPair); each assembly fail-closes its own cross-process
-// events rather than relying on another assembly to catch them.
+// cross-process iff the two cells are NOT in the same deployment group within
+// THIS assembly (a group == one process). Each assembly fail-closes its own
+// cross-process events rather than relying on another assembly to catch them.
 //
 // Skip conditions (delegated to other rules or out-of-scope):
-//   - assembly has no topology.remote (all-colocated → no cross-process boundary)
+//   - assembly has < 2 groups (all-colocated single process → no cross-process boundary)
 //   - contract kind != event (HTTP/command/etc. are out of scope for broker rule)
 //   - contract lifecycle != active (draft/deprecated events are not served, so
 //     they carry no live broker requirement — same active-only scope as ADV-05)
 //   - framework-owned contract (provider-agnostic; c.Owner().IsFramework())
 //   - publisher cell not found in project.Cells (external actor — topology governs cells only)
-//   - ClassifyCell(asm, publisher).IsMissing() (not in this assembly — TOPO-11 covers reachability)
+//   - publisher not in any group (not in this assembly — TOPO-11 covers reachability)
 //   - subscriber not found in project.Cells (external actor — same as publisher skip)
-//   - ClassifyCell(asm, subscriber).IsMissing() (not in this assembly)
+//   - subscriber not in any group (not in this assembly)
 func (v *Validator) validateTOPO13() []ValidationResult {
 	var results []ValidationResult
 
@@ -717,8 +724,8 @@ func (v *Validator) validateTOPO13() []ValidationResult {
 
 	for _, asmID := range keys {
 		asm := v.project.Assemblies[asmID]
-		if asm == nil || len(asm.Topology.Remote) == 0 {
-			continue // only split assemblies need a broker
+		if asm == nil || len(asm.Topology.Groups) < 2 {
+			continue // need ≥2 groups for a cross-process boundary
 		}
 		results = append(results, v.checkTOPO13Assembly(asm)...)
 	}
@@ -765,9 +772,8 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 	if _, knownCell := v.project.Cells[pub]; !knownCell {
 		return nil
 	}
-	pubLoc := metadata.ClassifyCell(asm, pub)
-	if pubLoc.IsMissing() {
-		return nil // publisher not in this assembly — TOPO-11 covers reachability
+	if _, pubOK := metadata.CellGroup(asm, pub); !pubOK {
+		return nil // publisher not in any group — TOPO-11 covers reachability
 	}
 
 	var results []ValidationResult
@@ -775,24 +781,23 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 		if _, knownCell := v.project.Cells[sub]; !knownCell {
 			continue // external actor subscriber — not governed by topology
 		}
-		subLoc := metadata.ClassifyCell(asm, sub)
-		if subLoc.IsMissing() {
-			continue // subscriber not in this assembly — TOPO-11 covers reachability
+		if _, subOK := metadata.CellGroup(asm, sub); !subOK {
+			continue // subscriber not in any group — TOPO-11 covers reachability
 		}
-		if isCrossProcessEventPair(pubLoc, subLoc) {
+		if !metadata.SameGroup(asm, pub, sub) {
 			results = append(results, v.newError(
 				codeTOPO13, IssueForbidden,
 				assemblyFile(asm),
 				"topology",
 				fmt.Sprintf(
 					"assembly %q splits event contract %q across processes:"+
-						" publisher cell %q and subscriber cell %q are not co-located"+
-						" in the same process;"+
+						" publisher cell %q and subscriber cell %q are in different"+
+						" deployment groups;"+
 						" the in-memory EventBus cannot deliver events across processes"+
 						" — a real broker is required",
 					asm.ID, c.ID, pub, sub,
 				),
-				"co-locate publisher and subscriber (topology.colocated),"+
+				"place publisher and subscriber in the same topology group,"+
 					" or deploy with a real event broker"+
 					" (GOCELL_CELL_ADAPTER_MODE=postgres + GOCELL_ADAPTER_MODE=real + GOCELL_AMQP_URL);"+
 					" if a broker is already configured but this still fires,"+
@@ -803,35 +808,14 @@ func (v *Validator) checkTOPO13Contract(asm *metadata.AssemblyMeta, c *metadata.
 	return results
 }
 
-// isCrossProcessEventPair reports whether an event published by a cell at pubLoc
-// and consumed by a cell at subLoc crosses a process boundary within the
-// assembly being checked — in which case the in-memory EventBus cannot deliver
-// it and a real broker is required. Two cells share a process iff they are both
-// colocated (this assembly's process) OR both remote at the SAME endpoint
-// (deployed together). Any other combination (one local + one remote, or two
-// remotes at DIFFERENT endpoints) is cross-process.
-//
-// Callers pre-filter Missing locations (TOPO-11 covers reachability), so only
-// Local/Remote pairs reach here. Endpoint comparison is raw string equality:
-// non-normalized but equivalent endpoint forms compare unequal and therefore
-// fail-closed (over-flag rather than under-flag), the safe direction.
-func isCrossProcessEventPair(pubLoc, subLoc metadata.CellLocation) bool {
-	if pubLoc.IsLocal() && subLoc.IsLocal() {
-		return false // both in this assembly's process
-	}
-	if pubLoc.IsRemote() && subLoc.IsRemote() {
-		pubEP, _ := pubLoc.RemoteEndpoint()
-		subEP, _ := subLoc.RemoteEndpoint()
-		return pubEP != subEP // same remote endpoint = same process
-	}
-	return true // one local + one remote → cross-process
-}
-
 // validateTOPO14 enforces the split-topology mTLS endpoint gate (#2263): in every
-// assembly, each NON-loopback remote cell endpoint must use the https scheme.
-// Transport mTLS is mandatory across a real network boundary — there is no
-// private-network plaintext fallback. A loopback endpoint (127.0.0.0/8, ::1,
-// localhost) stays plaintext-eligible for local multi-process dev.
+// assembly with ≥2 deployment groups, each NON-loopback group endpoint must use
+// the https scheme (every group is a remote peer dialed across the network by the
+// other roles). Transport mTLS is mandatory across a real network boundary —
+// there is no private-network plaintext fallback. A loopback endpoint
+// (127.0.0.0/8, ::1, localhost) stays plaintext-eligible for local multi-process
+// dev. A single-group (or no-group) assembly has no cross-process boundary and is
+// skipped.
 //
 // This is the BUILD-TIME half of the #2263 fail-closed double gate. The RUNTIME
 // half (cellmodules/celltls.Resolve + celltransport.Resolve) fails closed when a
@@ -856,12 +840,16 @@ func (v *Validator) validateTOPO14() []ValidationResult {
 	return results
 }
 
-// checkTOPO14Assembly flags every non-loopback remote endpoint in asm that is not
-// https.
+// checkTOPO14Assembly flags every non-loopback group endpoint in a split (≥2
+// groups) assembly that is not https. A single-group / no-group assembly has no
+// cross-process boundary, so its endpoints carry no mTLS requirement.
 func (v *Validator) checkTOPO14Assembly(asm *metadata.AssemblyMeta) []ValidationResult {
+	if len(asm.Topology.Groups) < 2 {
+		return nil // no cross-process boundary
+	}
 	var results []ValidationResult
-	for _, entry := range asm.Topology.Remote {
-		ep := entry.Endpoint
+	for _, g := range asm.Topology.Groups {
+		ep := g.Endpoint
 		// Loopback peers (local multi-process dev) stay plaintext-eligible.
 		if netutil.IsLoopbackEndpoint(ep) {
 			continue
@@ -873,9 +861,9 @@ func (v *Validator) checkTOPO14Assembly(asm *metadata.AssemblyMeta) []Validation
 			codeTOPO14, IssueForbidden,
 			assemblyFile(asm), "topology",
 			fmt.Sprintf(
-				"assembly %q remote cell %q endpoint %q is non-loopback but not https;"+
+				"assembly %q group %q endpoint %q is non-loopback but not https;"+
 					" split-topology cross-cell transport requires mTLS (https) across a network boundary (#2263)",
-				asm.ID, entry.CellID, ep),
+				asm.ID, g.Role, ep),
 			"use an https:// endpoint and provision transport mTLS material"+
 				" (GOCELL_TRANSPORT_TLS_CERT_FILE/KEY_FILE/CA_FILE + GOCELL_SPIFFE_TRUST_DOMAIN),"+
 				" or bind the peer to loopback for local multi-process dev",
