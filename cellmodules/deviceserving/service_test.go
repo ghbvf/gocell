@@ -116,15 +116,21 @@ func TestDevicestate_OK(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
 	var env struct {
 		Data struct {
-			DeviceID   string `json:"deviceId"`
-			State      string `json:"state"`
-			ObservedAt string `json:"observedAt"`
+			DeviceID   string  `json:"deviceId"`
+			State      string  `json:"state"`
+			ObservedAt string  `json:"observedAt"`
+			TenantID   *string `json:"tenantId"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
 	assert.Equal(t, "dev-1", env.Data.DeviceID)
 	assert.Equal(t, "unknown", env.Data.State)
 	assert.Equal(t, fixedNow.Format(time.RFC3339), env.Data.ObservedAt)
+	// tenantId is present (full column set, #2359) but JSON null — the honest
+	// "no device→tenant binding" value, never a misleading empty string (#2394 review F1).
+	assert.True(t, strings.Contains(rec.Body.String(), `"tenantId":null`),
+		"tenantId must serialize as null (honest no-binding), got body=%s", rec.Body.String())
+	assert.Nil(t, env.Data.TenantID, "tenantId must decode as nil (null), not empty string")
 }
 
 // TestDevicestate_GateForwardsDeviceIDAsResource is the #2348 F3 evidence: the

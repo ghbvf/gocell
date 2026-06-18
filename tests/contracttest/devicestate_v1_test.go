@@ -10,9 +10,10 @@ package contracttest_test
 // observedAt is a required freshness anchor (always present, even for unknown).
 // lastSeenAt (last actual contact) and tenantId are now also required (full-column-set
 // schema-truth-source closure, #2359): every projection column key is always present on
-// the wire. lastSeenAt is nullable (`["string","null"]`) — its schema-valid "no value"
-// is JSON null (device never seen); tenantId is a framework-produced (not client-passed)
-// required string for multi-tenant routing.
+// the wire. BOTH are nullable (`["string","null"]`) — their schema-valid "no value" is
+// JSON null: lastSeenAt null = device never seen; tenantId null = no device→tenant
+// binding source yet (the serving producer honestly emits null, not an empty string that
+// would falsely read as a real tenant id — #2394 review F1).
 //
 // ref: docs/plans/specs/1895-device-identity-cert-framework/spec.md FR-013
 
@@ -38,6 +39,10 @@ func TestDeviceState_V1(t *testing.T) {
 	// unknown/never-seen: lastSeenAt is the schema-valid null (key present, no value).
 	c.ValidateResponse(t, []byte(`{"data":{`+
 		`"deviceId":"dev-1","state":"unknown","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":"t-1"}}`))
+	// no device→tenant binding: tenantId is the schema-valid null (this is the live
+	// deviceserving producer's honest output, #2394 review F1).
+	c.ValidateResponse(t, []byte(`{"data":{`+
+		`"deviceId":"dev-1","state":"unknown","observedAt":"2026-06-13T00:00:00Z","lastSeenAt":null,"tenantId":null}}`))
 
 	// parameter errors — each isolates ONE violation (other required cols present).
 	// bad enum
