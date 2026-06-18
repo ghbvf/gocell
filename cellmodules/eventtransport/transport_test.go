@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
@@ -239,6 +240,13 @@ func TestResolve_Postgres_MissingURL_FailClosed(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "env_var=GOCELL_CONFIGCORE_AMQP_URL",
 		"postgres without a per-cell broker URL must fail-fast naming the missing env var, not silently use in-memory")
+	// The operator-facing guidance prose lives in e.Message (rendered by structured
+	// slog), distinct from the precise internal attrs that Error() surfaces. Lock it
+	// so the actionable guidance cannot silently disappear from a future refactor.
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Contains(t, ec.Message, "GOCELL_<CELLID>_AMQP_URL",
+		"the guidance message must name the per-cell env var pattern for operators")
 }
 
 // TestResolve_Postgres_DistinctURLs_FailClosed is the egress-only boundary: with

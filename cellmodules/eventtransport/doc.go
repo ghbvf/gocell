@@ -32,7 +32,10 @@
 // GOCELL_AMQP_URL), resolves the transport once, and threads its outputs into
 // bootstrap:
 //
-//	cells := map[string]string{} // cellID → GOCELL_<CELLID>_AMQP_URL (fallback GOCELL_AMQP_URL)
+//	cells := map[string]string{ // cellID → its broker URL (cmd/corebundle.LoadBrokerURL
+//	    "configcore": brokerURLFor("CONFIGCORE"), //   reads GOCELL_<CELLID>_AMQP_URL,
+//	    "accesscore": brokerURLFor("ACCESSCORE"), //   falling back to GOCELL_AMQP_URL)
+//	}
 //	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: cells})
 //	// ... handle err ...
 //	opts := []bootstrap.Option{
