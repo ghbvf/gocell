@@ -276,7 +276,7 @@ Priority：review finding 用原 `[P0-P3]`；`/fix` 派生默认 `pri-p2`；`pri
 
 按 `issues` B5 ② 等 CI 收敛 + 失败回阶段 1-4 修复循环再推再等（时限 / 3 轮熔断单源在 B5 ②）；CI 收敛后**贴独立 pm:ci 评论**（用 `<!-- pm:ci -->` 模板）：全绿 → `verdict=ci-green`；B5 ② 熔断仍红 → `verdict=ci-failed`（含失败 check 摘要 + run 链接）。**追加机器块**（贴评论前）：`bash hack/automation/pr-meta.sh emit-block --kind=ci --pr=<PR#> --ci='{"failedChecks":[…],"passedChecks":<n>,"totalChecks":<m>}'`，输出追加到 pm:ci body 末尾，再走 `issues` B4 贴。
 
-**步骤 5: 延迟单次启动监控**：所有评论 + label 操作完成后，**延迟约 30 分钟后单次启动** `/pr-monitor <PR#> --mode=auto`（check-side；给 `/pr-review --check` 时间响应后**单次**检查——auto 模式在 needs-fix + 机器可判定 Cx1/Cx2 + 未熔断 时自动 dispatch `/fix`（不再 report+等人确认），Cx3+ 仍转人工；单次跑完即止、之后交人工，非 /loop 循环）。交互会话用一次延迟唤醒实现；headless 一次性会话由 codex-pr-app-dispatcher daemon 接管。
+**步骤 5: 延迟单次启动监控（必做）**：所有评论 + label 操作完成后，**延迟约 10 分钟后必须启动** `/pr-monitor <PR#> --mode=auto`（check-side）。外部 app 已实时监听 `pr-status/needs-check-fix` 并执行 `/pr-review --check`；`pr-monitor` 负责检查 check 产生的 label + 机器块，并在 `needs-fix` + 机器可判定 Cx1/Cx2 + 未熔断时自动 dispatch `/fix`。Cx3+ 仍转人工边界；单次跑完即止。
 
 完成后 **TaskUpdate → completed**。
 

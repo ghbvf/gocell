@@ -114,7 +114,7 @@
 | 字段 | 类型 | 取值 | 写入方 |
 |------|------|------|--------|
 | **Status** | single-select | Backlog / Ready / In progress / In review / Done | 人（Project 内置 workflow + 手动） |
-| **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 自动化（epic OPEN 子任务**滚动**排序：已完成不动、未完成重排 Wave 1-4、超窗 >W4 不入字段。算法见 `issues` Part A） |
+| **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 保留字段；epic 排序结果只写 issue 评论（算法见 `issues` Part A），不再由技能写字段 |
 | **Parent issue** | built-in | 自动派生（原生 sub-issue） | GitHub |
 | **Sub-issues progress** | built-in | 自动派生（子 issue close 比例） | GitHub |
 
@@ -129,7 +129,8 @@
 /ship <issue>
   实施 → PR 创建 → 贴 pr-status/in-progress
   → ship：内置 6 维 reviewer + /fix Cx1/Cx2 → 贴 pm:ship → 冲突预检 + CI 绿
-  → 切 pr-status/needs-review-again（首审唯一使用点）→ 延迟 ~30min 单次启动 pr-monitor --mode=auto 监听交接（needs-fix 自动 /fix；单次跑完即止）
+  → 切 pr-status/needs-review-again（首审唯一使用点）→ 外部 app 实时监听并执行 review
+  → 延迟 ~10min 必须启动 pr-monitor --mode=auto 监听交接（needs-fix 自动 /fix；单次跑完即止）
 
 [review 轮] codex review 或 /pr-review <PR#>
   → 贴 findings 评论（codex / pm:pr-review）
@@ -140,6 +141,8 @@
   → gh pr view --json reviews,comments + gh api pulls/N/comments 探 inline（>0 才读）→ 过滤最新一轮
   → triage + 修复 → 贴 pm:fix → 冲突预检 + CI 绿
   → 切 pr-status/needs-check-fix + 移除 pr-status/needs-fix（待验证）
+  → 外部 app 实时监听并执行 /pr-review --check
+  → 延迟 ~10min 必须启动 pr-monitor --mode=auto 监听 check 交接
 
 /pr-review <PR#> --check（验证上一轮 findings 是否修复 + 抓回归）
   → 逐条核对当前代码：✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分 → 贴 pm:pr-review（--check）
