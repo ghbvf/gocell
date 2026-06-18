@@ -97,6 +97,40 @@ broker gate for split topologies: it fires when a split topology uses an
 in-memory EventBus for a cross-process (different-group) event contract.
 Correctness is proven by synthetic RED/GREEN unit tests.
 
+### Missing-dependency fail-fast (sync dimension)
+
+A consumed `http` (sync) contract whose provider cell is not reachable in the
+deployment topology is rejected at **two** layers, so a missing sync dependency
+never surfaces only at request time:
+
+- **Static** (`gocell validate` **TOPO-11**, above): the provider must be a member
+  of the assembly — with TOPO-10's exhaustive partition that means it is placed in
+  some group (co-located here, or remote elsewhere).
+- **Runtime** (`celltransport.Resolve`, eager at module-wiring / startup): the
+  composition root resolves each consumed sync client's transport against the
+  sealed topology. A provider that is neither co-located nor remote fails closed
+  with `KindInternal`; the error bubbles up and the process does not start
+  (FR-004). `CELLTRANSPORT-SELECT-FUNNEL-01` makes this seam the sole construction
+  site for cross-cell sync transports, so no sync call can bypass it. The diagnostic
+  names two failure classes: `topology under-declared` (the provider has no place in
+  the topology) and `local dependency missing` (the provider is co-located but not
+  mounted in this process).
+
+The offending `cellID` is on the `KindInternal` error in the **server log**
+(`InternalAttr`, never on the wire). Operator action by class:
+
+- `topology under-declared` → the provider is not in any group: add it to the right
+  `topology.groups` group (co-located here, or another group whose endpoint this
+  process reaches as remote).
+- `local dependency missing` → the provider is declared co-located for this role but
+  its module was not wired: confirm the composition root mounts that cell (e.g. it is
+  in the role's group and `composition.NewForRole` selected it).
+
+The event dimension is covered separately by the broker gate (TOPO-13 + bootstrap
+phase0, US3 #1965). There is **no** separate phase0 missing-dependency gate — the
+eager `celltransport.Resolve` seam already provides the runtime fail-fast (see ADR
+`202606131142-1423` §#1967 Amendment).
+
 ## Example YAML
 
 ```yaml

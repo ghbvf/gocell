@@ -6,15 +6,26 @@ composition root 的 `outbox.Publisher`/`outbox.Subscriber` 经
 `cellmodules/eventtransport.Resolve(clk, topo, cfg)` 按 `Topology` 单源选型：
 
 - demo / memory 拓扑 → 进程内 `runtime/eventbus`（Publisher == Subscriber 同实例）。
-- postgres 拓扑 → 真实 broker（RabbitMQ，从 `GOCELL_AMQP_URL`）；缺 broker URL 启动期
-  fail-closed，**不静默降级回 in-memory**（relay 必须把已持久化的 outbox entry 发到 broker，
-  而非进程内 bus，否则跨进程/重启丢事件）。
+- postgres 拓扑 → 真实 broker（RabbitMQ，从 `GOCELL_<CELLID>_AMQP_URL`，缺省回退
+  `GOCELL_AMQP_URL`）；缺 broker URL 启动期 fail-closed，**不静默降级回 in-memory**（relay
+  必须把已持久化的 outbox entry 发到 broker，而非进程内 bus，否则跨进程/重启丢事件）。
 
 in-memory bus **仅** demo 拓扑可达：**composition root**（`cmd/corebundle` + `examples/ssobff`）
 生产代码禁止直接 import `runtime/eventbus`，由 depguard `corebundle-no-direct-eventbus` /
 `ssobff-no-direct-eventbus` 守卫（`COREBUNDLE-EVENTBUS-FUNNEL-01`，路径级 import ban）。扩展新
 broker（mqtt）在 `eventtransport` 的 `brokerKind` switch 加分支 + 暴露选择 env，不在本约束外另开旁路。
 权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
+
+## per-cell AMQP vhost/credential 隔离（#2152 PR-3）
+
+per-cell URL 携带 per-cell 凭据（user:pass）和 vhost。split 拓扑下 operator 为每个 cell
+provision 独立的 vhost 和 AMQP user，使每个进程只持有访问自身 broker 资源所需凭据——
+cell 进程无法跨 cell 发布或消费事件。凭据由 broker operator 外部配置（非 framework 派生，
+无 HKDF/派生层，原因：AMQP broker 用户是外部对象，不存在 framework 可控的 master key）。
+
+distinct per-cell URL 今 egress-only fail-closed（运行期隔离须 #2366/#2341 完成）；凭据
+non-leak 由 `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST funnel）守，权威语义见
+`cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
 
 ## 复用层选型（claimer / nonce，topology-gated）
 

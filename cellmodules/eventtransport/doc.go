@@ -98,4 +98,44 @@
 // ref: kernel/outbox.ResolveEmitter — the symmetric durability-gated funnel.
 // ref: cellmodules/percellpg.Resolve — the per-cell DSN dedup twin.
 // ref: github.com/ThreeDotsLabs/watermill message/router.go — disabledPublisher pattern.
+//
+// # INVARIANT: AMQP-URL-REDACTION-FUNNEL-01
+//
+// AMQP connection URLs carry embedded credentials in the DSN form
+// amqp://user:pass@host/vhost. The adapter layer (adapters/rabbitmq) provides a
+// sanitize funnel — sanitizeURL / sanitizeErrorURL / sanitizeDialError — that
+// redacts user:pass before any URL string reaches a slog / fmt / errcode sink.
+// This invariant is enforced by archtest AMQP-URL-REDACTION-FUNNEL-01 (Medium:
+// typed field-selection AST scan with go/types identity for rabbitmq.Config.URL
+// and brokerSpec.url). Blind spot: local-variable laundering and map-value reads
+// (cells[id]) are not field selections and fall outside the scan; these paths are
+// covered by TestDedupBrokerURL_CredentialNonLeak (behavior test).
+//
+// # Per-cell AMQP credential/vhost isolation (#2152 PR-3)
+//
+// Each cell's AMQP URL (GOCELL_<CELLID>_AMQP_URL, falling back to
+// GOCELL_AMQP_URL) carries per-cell credentials and a vhost. In a split
+// topology the operator provisions a distinct user and vhost per cell so each
+// process holds only the credentials it needs — a cell cannot publish to or
+// consume from a broker it has no access to.
+//
+// This credential/vhost isolation is operator-provisioned via the AMQP DSN
+// itself. Framework does NOT derive per-cell keys (no HKDF / key derivation
+// layer): AMQP broker users are external to the framework and are managed by the
+// broker operator, unlike the #2153 HMAC keyring which has a framework-level
+// master key to derive from.
+//
+// The current boundary is egress-only: distinct per-cell broker URLs are
+// fail-closed (see dedupBrokerURL). Running per-cell isolation end-to-end
+// requires:
+//   - ingress fan-out (#2366, subscriber single → N + phase6 N-router);
+//   - per-cell relay fan-out (#2341, per-cell PGProvider → N pools → N relays).
+//
+// Credentials are never written to error strings or logs; the sanitize funnel in
+// adapters/rabbitmq (sanitizeURL / sanitizeErrorURL / sanitizeDialError) is the
+// canonical redaction path. Archtest AMQP-URL-REDACTION-FUNNEL-01 (above) guards
+// non-leak.
+//
+// ref: adapters/rabbitmq/connection.go — sanitizeURL / sanitizeErrorURL.
+// ref: ADR docs/architecture/202606131500-1940-adr-topology-gated-event-transport.md.
 package eventtransport

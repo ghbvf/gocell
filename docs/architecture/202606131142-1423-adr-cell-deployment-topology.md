@@ -256,6 +256,7 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | ~~service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS**~~ → **#2263 RESOLVED**：非 loopback split 强制 mTLS（TLS 1.3 + SPIFFE-ID cross-bind），fail-closed 双闸移除「private network 补偿」soft 约束，见 §#2263 Amendment | **#2263 CLOSED**（2026-06-17） |
+| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell URL 今 egress-only fail-closed（运行期每 cell 独立连接须 #2366/#2341）。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；运行期隔离待 #2366/#2341 |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -495,17 +496,33 @@ kubernetes `cmd/kube-controller-manager` ControllerDescriptor；spring-projects/
   入口的直挂——upstream backstop）。`MOUNTED-EQUALS-COLOCATED` **AI-robust 评级 Medium**（运行期 bijection 守卫；
   cellID 运行期字符串，Hard 不可达——同 M12a / broker-mandatory闸 诚实天花板）+ red/green fixture + anti-vacuity。
 
-**缺失依赖启动期闸（SC-002 sync 维补全）**：消费 contract 的 provider cell ∉ colocated ∪ remote map → fail-fast
-（区分「本地依赖缺失」vs「拓扑漏声明」）+ `gocell validate` 静态 arm。**注**：该静态检查原属 US2 T011（计划但未落地）
-+ US3 T030（event 维，已由 #1965 broker 闸覆盖）；本 amendment 把 sync 维补全并加运行期闸。对标 Spring Modulith
-`ApplicationModules.verify()` 的 allowed-dependencies。sync 维（本闸）+ event 维（#1965）合起来 = 无静默死路由。
+**缺失依赖 fail-fast（SC-002 sync 维）—— 已由既有双层兑现，PR-3 不建平行闸（2026-06-18 PR-3 收口）**：
+消费 contract 的 provider cell ∉ colocated ∪ remote → fail-fast，sync 维由**两层**覆盖：
+① **静态** `gocell validate` arm = `validateTOPO11`（**PR-1 #2337 已落地**，遍历 contractUsages 消费方，provider
+∉ `assembly.cells` → 报错；配 TOPO-10 穷尽分区 ⟹ provider ∉ colocated∪remote）——该检查原属 US2 T011（本 amendment
+原记「计划但未落地」，实由 PR-1 over-deliver 兑现）；② **运行期** fail-fast = `celltransport.Resolve` 的 **eager**
+（module-wiring / 启动期）fail-closed（US5 #1966）：sync client wiring 拨真实 server cell，provider 既非 colocated 也非
+remote → `KindInternal` fail-fast、错误冒泡 → 进程起不来（FR-004「bootstrap MUST fail-fast」满足），该 seam 由
+`CELLTRANSPORT-SELECT-FUNNEL-01` 锁为 sync 跨 cell 调用唯一出口。event 维由 US3 #1965 broker 闸覆盖。
+对标 Spring Modulith `ApplicationModules.verify()` 的 allowed-dependencies；sync 维（双层）+ event 维（#1965）= 无静默死路由。
+
+**PR-3 不新增 phase0 平行闸（三层自审结论）**：本 amendment 原写「补全 sync 维并**加运行期闸**」，前提是「静态 arm 空缺
++ 无运行期兜底」。PR-1 over-deliver TOPO-11 + US5 已有 eager fail-closed seam 使该前提消失。新增一个 bootstrap phase0 闸
+经实测判为**冗余平行结构**：它须以运行期 `ConsumedContracts().OwnerCell()` 重派生可达性，弱于 TOPO-11 的权威
+`ProviderEndpoint()`、引入 owner≠server 盲区（两条 truth）；`MOUNTED-EQUALS-COLOCATED` 先保证 colocated==mounted 后其
+「本地依赖缺失」分支为死代码；funnel 已禁绕过 seam 的裸 http 兄弟调用 → 闸在 sanctioned 路径零触发。按「抽象前提消失第一
+选择是删除」，PR-3 收敛为本收口注（载体重评）+ `celltransport.Resolve` 两类失败诊断命名（`topology under-declared` /
+`local dependency missing`，单源于该 seam）。**本收口是部署配置正确性（deployment config correctness）控制的载体重评，
+不改变任何安全边界、不触及上文 §威胁矩阵的安全模型**（MAC 完整性 / per-cell 身份 #2153 / mTLS #2263 不变）。
 
 **威胁矩阵重评（AI-robust 章程：amendment 必须同步重评）**：本 amendment 使 split **真实端到端可发生**（此前
 seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring」缺口经 **#2153（per-cell HKDF 子密钥 + master 缺席）
-在 split 下 CLOSED**（见 §#2153 Amendment）；「无 mTLS」defer **#2263**（与 token 层身份正交）；remote 操作约束
-（私网部署 + 共享 `GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist）见 §#1966 review Amendment，groups 多
-进程部署沿用之。本 amendment **不新增**安全缺口——它把既已可达的 remote 路径从「单进程内不触发」变为「双拓扑验收
-触发」，威胁画像不变（MAC 完整性 Hard + per-cell 身份 #2153 + 私网/mTLS-#2263）。
+在 split 下 CLOSED**（见 §#2153 Amendment）；「无 mTLS」缺口经 **#2263 CLOSED**（非 loopback split 强制 mTLS：
+TLS 1.3 + SPIFFE-ID cross-bind，2026-06-17，见 §#2263 Amendment——该 amendment 已取代本段早先「defer #2263 / 私网
+补偿」措辞）；remote 操作约束（共享 `GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist + 私网部署作纵深防御，
+非技术闸替代）见 §#1966 review Amendment + §#2263 Amendment，groups 多进程部署沿用之。本 amendment **不新增**安全缺口
+——它把既已可达的 remote 路径从「单进程内不触发」变为「双拓扑验收触发」，威胁画像不变（MAC 完整性 Hard + per-cell
+身份 #2153 CLOSED + mTLS #2263 CLOSED）。
 
 **PR 分解（mini-epic 收口，逐个独立 review，TDD RED→GREEN 在各 feature PR 内；能力 = US9 #2278，验收 = US7 #1967）**：
 - **PR-0（本 PR）**：本 amendment + `specs/069 tasks.md` US7 细化 + sibling issues。**docs-only、全绿**（不携 RED stub——
@@ -516,12 +533,16 @@ seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring�
   `generatedTopologyGroups()` + 字节 golden（Hard golden + Medium validate）。运行期最小桥 `bootstrap.SpecForRole(groups, "")`
   = 全 colocated monolith（role 选择留 PR-2）。
 - **PR-2**：role 选择器 + `NewForRole` 子集挂载 + `MOUNTED-EQUALS-COLOCATED` 守卫（Medium）。
-- **PR-3**：缺失依赖启动期闸 + `gocell validate` 静态 arm + archtest red/green（Medium）。
+- **PR-3（✅ 收口 #2278）**：缺失依赖 sync 维**已由 PR-1 TOPO-11（静态）+ US5 #1966 `celltransport.Resolve` eager
+  fail-closed seam（运行期，`CELLTRANSPORT-SELECT-FUNNEL-01` 锁）双层兑现**；三层自审判新增 phase0 闸为冗余平行结构 →
+  **不建闸**。PR-3 = ADR/tasks 重评收口 + `celltransport.Resolve` 两类失败诊断命名（in-place，无新机制）。
 - **PR-4（= #1967 验收）**：`corebundle` assembly.yaml `topology.groups`（accesstier/configtier）+ `tests/e2e/` split
   compose（同 image 2 进程 + broker + PG）+ 双拓扑参数化 journey 一致性断言 + CI 接入（对标 weavertest Local/Multi）。
 
 AI-robust 新机制评级：groups codegen golden = **Hard**；groups 校验 / role fail-fast / `MOUNTED-EQUALS-COLOCATED`
-/ 缺失依赖闸 = **Medium**（拓扑/role/cellID 均运行期数据，Hard 不可达，诚实天花板，无 Soft）。
+= **Medium**（拓扑/role/cellID 均运行期数据，Hard 不可达，诚实天花板，无 Soft）。**缺失依赖 sync 维不新增机制**——
+覆盖 = `validateTOPO11`（Medium governance rule）+ sealed `DeploymentTopology`（Hard）+ `CELLTRANSPORT-SELECT-FUNNEL-01`
+（Medium caller funnel，下游 `Resolve` fail-closed Hard）。
 
 **范围切割（显式 backlog，不静默）**：外部 cell（ssobff 等）双拓扑覆盖（epic 验收第二条）→ 新 backlog issue；
 per-cell relay 扇出 → 已 #2152；mTLS → 已 #2263（见下 §#2263 Amendment，已 CLOSED，非 defer）。
@@ -565,6 +586,37 @@ mTLS 对等认证行此刻 CLOSED，私网不再是 peer-auth 的替代补偿（
   形态类型级不可表达。
 - `INSECURE-SKIP-VERIFY-LITERAL-01`（Medium）：`InsecureSkipVerify:true` 字面量限 tlsutil 包内。
 - 完整评级分层见 ADR `202606171200-2263` §AI-robust 档位表。
+
+### #2152 PR-3 Amendment — per-cell AMQP 凭据/vhost 隔离安全模型（2026-06-18）
+
+本 amendment 补全上表「共享 AMQP broker 凭据」缺口行，对该行做 AI-robust 评级显式分层，并与
+§#2153 HMAC keyring 凭据隔离族对齐。
+
+#### 凭据隔离 seam 性质
+
+AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost。per-cell
+`GOCELL_<CELLID>_AMQP_URL` 是凭据/vhost 隔离的 seam，operator 可为每个 cell 配置独立
+vhost/user。**非 framework 派生**：broker 用户在 RabbitMQ 管理面单独 provision，不存在
+framework 可控的 master key，故不做 HKDF 派生（对比 #2153 HMAC keyring 有 master key 可派生）。
+
+#### AI-robust 评级显式分层
+
+① **per-cell 运行期隔离（每 cell 独立连接不同 broker）**：Hard 今天**不可得**（blocked-by
+#2366 ingress N-router + #2341 per-cell relay fan-out）；声称 Hard 即 overclaim。
+
+② **凭据 non-leak**（URL 不写入 log/error）：Soft（`connection.go` 注释约定）→ **Medium**
+（archtest `AMQP-URL-REDACTION-FUNNEL-01`，typed AST field-selection scan，go/types 身份解析）。
+
+③ **Hard-via-sealed-URL-type**：封装 redacted-Stringer URL 类型需改 adapter 全部调用方，成本高、
+无低成本路径，不立 issue（按章程「无低成本 Hard 路径不立 issue」）。
+
+#### 威胁矩阵重评（对照上表「共享 AMQP broker 凭据」行）
+
+当前补偿：PR-2 per-cell URL seam + sanitize funnel（Medium）；残留：运行期隔离 blocked-by
+#2366/#2341。该行是 broker 侧对 §#1964/§#2153 凭据隔离族的补全。
+
+**权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01 +
+§Per-cell credential/vhost isolation）+ ADR `202606131500-1940` §Amendment 2026-06-18。
 
 ## Rejected alternatives
 
