@@ -10,22 +10,41 @@ import (
 	"time"
 )
 
+// startupPollTimeout / shutdownTimeout are deliberately generous: a demo cold start
+// generates an RSA key pair, and CI runs under CPU contention, so a tight 5s budget
+// risks false flakes. The app shuts down far faster in practice.
+const (
+	startupPollTimeout = 20 * time.Second
+	shutdownTimeout    = 15 * time.Second
+)
+
 // TestRun_HealthReadyzGreen is the demo-topology startup smoke test (the
-// verify.smoke.enrollcell.startup target): it builds the full composition,
-// boots it on OS-assigned loopback ports, and asserts /healthz + /readyz are
-// green. A successful boot also proves composition.Build succeeded, so a
-// separate wiring-only test would be redundant.
+// verify.smoke.enrollcell.startup target): it builds the full composition, boots it
+// on pre-bound loopback listeners, and asserts /healthz + /readyz are green. A
+// successful boot also proves composition.Build succeeded, so a separate wiring-only
+// test would be redundant.
 func TestRun_HealthReadyzGreen(t *testing.T) {
+	// Pre-bind the listeners and hand them to bootstrap via WithListenerNet (no
+	// listen→close→rebind window). bootstrap owns + closes them on shutdown, so the
+	// test must not close them itself.
+	primaryLn := mustLoopbackListener(t)
+	internalLn := mustLoopbackListener(t)
+	healthLn := mustLoopbackListener(t)
+
 	addrs := listenerAddrs{
-		primary:  freeLoopbackAddr(t),
-		internal: freeLoopbackAddr(t),
-		health:   freeLoopbackAddr(t),
+		primary:  primaryLn.Addr().String(),
+		internal: internalLn.Addr().String(),
+		health:   healthLn.Addr().String(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	app, err := buildApp(ctx, addrs)
+	app, err := buildApp(ctx, addrs, prebuiltListeners{
+		primary:  primaryLn,
+		internal: internalLn,
+		health:   healthLn,
+	})
 	if err != nil {
 		t.Fatalf("buildApp: %v", err)
 	}
@@ -33,7 +52,7 @@ func TestRun_HealthReadyzGreen(t *testing.T) {
 	runErr := make(chan error, 1)
 	go func() { runErr <- app.Run(ctx) }()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(startupPollTimeout)
 	for _, path := range []string{"/healthz", "/readyz"} {
 		url := "http://" + addrs.health + path
 		if !pollGreen(url, deadline) {
@@ -47,24 +66,20 @@ func TestRun_HealthReadyzGreen(t *testing.T) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Fatalf("app.Run returned unexpected error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("app did not shut down within 5s of context cancel")
+	case <-time.After(shutdownTimeout):
+		t.Fatalf("app did not shut down within %s of context cancel", shutdownTimeout)
 	}
 }
 
-// freeLoopbackAddr grabs an OS-assigned free loopback port and releases it so the
-// app can bind it — deterministic vs a hard-coded port that may collide in CI.
-func freeLoopbackAddr(t *testing.T) string {
+// mustLoopbackListener binds an OS-assigned free loopback port and keeps the
+// listener open for bootstrap to adopt (WithListenerNet) — zero rebind race.
+func mustLoopbackListener(t *testing.T) net.Listener {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("reserve free loopback port: %v", err)
+		t.Fatalf("bind loopback listener: %v", err)
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatalf("release reserved port: %v", err)
-	}
-	return addr
+	return ln
 }
 
 // pollGreen GETs url until it returns 200 or the deadline passes.

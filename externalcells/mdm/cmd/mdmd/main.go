@@ -5,8 +5,12 @@
 // infrastructure, serving green /healthz + /readyz.
 //
 // This module is NOT in the gocell root go.work; it consumes gocell via go.mod
-// replace directives, so all commands run with GOWORK=off (the in-repo cost of
-// living outside the root workspace; gone once #1722 splits it into its own repo).
+// `replace` directives plus a one-line `use .` go.work that roots it as its own
+// workspace. Because that local go.work shadows the gocell root go.work, `go
+// build`/`go test` run from this directory need NO GOWORK=off. (A bare repo-root
+// `go test ./...` still excludes this module — it is absent from the root go.work.)
+// #1722 splits this into its own repo and drops both the go.work and the replaces
+// in favor of `go get github.com/ghbvf/gocell/framework@vX.Y.Z`.
 //
 // AUTH-PLAN-04: auth-plan construction (NewAuthJWT / NewAuthServiceToken) lives HERE
 // in the composition root, never inside runtime/composition or a cell.
@@ -16,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"time"
 
@@ -36,8 +41,9 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/shutdown"
 )
 
-// devServiceSecret backs the internal listener's service-token HMAC ring.
-// Development / demo use only; production is env-driven.
+// devServiceSecret backs the internal listener's service-token HMAC ring in the
+// demo topology. Development / demo use only — the startup banner Warn flags it,
+// and MDM-PR15 (postgres topology) replaces it with an env-sourced per-cell secret.
 //
 // #nosec G101 -- demo fixture in externalcells/mdm; not a production credential.
 const devServiceSecret = "mdm-dev-service-secret-32-bytes!!"
@@ -56,6 +62,18 @@ type listenerAddrs struct {
 	primary  string
 	internal string
 	health   string
+}
+
+// prebuiltListeners optionally carries pre-bound net.Listeners for each listener.
+// Production leaves all nil (bootstrap binds the addr itself). The startup smoke
+// test injects already-bound loopback listeners so bootstrap adopts them via
+// WithListenerNet — eliminating the listen→close→rebind TOCTOU window that a
+// "reserve a free port then hand back the string" helper would leave open. Once
+// passed to Build, bootstrap owns each listener and closes it on shutdown.
+type prebuiltListeners struct {
+	primary  net.Listener
+	internal net.Listener
+	health   net.Listener
 }
 
 // defaultAddrs are the production demo bind addresses (non-default ports to avoid
@@ -84,7 +102,7 @@ func main() {
 
 func run(ctx context.Context) error {
 	addrs := defaultAddrs()
-	app, err := buildApp(ctx, addrs)
+	app, err := buildApp(ctx, addrs, prebuiltListeners{})
 	if err != nil {
 		return fmt.Errorf("mdmd: build app: %w", err)
 	}
@@ -98,14 +116,14 @@ func run(ctx context.Context) error {
 
 // buildApp assembles the demo-topology app: memory SharedDeps + the empty enrollcell
 // via the public composition API. Extracted from run so the startup smoke test can
-// drive it with injected loopback ports.
-func buildApp(ctx context.Context, addrs listenerAddrs) (*composition.App, error) {
+// drive it with injected loopback addrs + pre-bound listeners.
+func buildApp(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) (*composition.App, error) {
 	shared, err := buildMemSharedDeps(addrs)
 	if err != nil {
 		return nil, fmt.Errorf("build shared deps: %w", err)
 	}
 	m := enrollcell.Module()
-	app, err := composition.New(m.ID()).With(m).Build(ctx, shared, runtimeOptions(shared))
+	app, err := composition.New(m.ID()).With(m).Build(ctx, shared, runtimeOptions(shared, lns))
 	if err != nil {
 		return nil, fmt.Errorf("composition build: %w", err)
 	}
@@ -115,6 +133,16 @@ func buildApp(ctx context.Context, addrs listenerAddrs) (*composition.App, error
 // buildMemSharedDeps constructs a fully-populated SharedDeps in dev/memory mode: no
 // postgres, no redis, ephemeral in-process JWT keys. Every field SharedDeps.validate
 // requires in demo mode is populated even though the empty cell uses little of it.
+//
+// TOPOLOGY INVARIANT (MDM-PR15 hardening): every dependency below is the demo /
+// in-memory / single-pod variant. When this module moves to the postgres topology,
+// the Publisher/Subscriber, ConsumerClaimer, and NonceStore MUST be re-resolved via
+// the topology-gated resolvers (cellmodules/eventtransport.Resolve +
+// replaydeps.Resolve) and devServiceSecret via env — NOT left as the literals here,
+// or multi-pod replay defense / cross-process eventing silently break. archtest's
+// in-mem/eventbus funnels (REPLAYDEPS-INMEM-FUNNEL-01 / COREBUNDLE-EVENTBUS-FUNNEL-01)
+// do not yet scan externalcells/* (tracked in backlog), so this is currently a
+// documented guard, not a machine-enforced one.
 func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 	clk := clock.Real()
 
@@ -123,9 +151,19 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		return nil, fmt.Errorf("topology: %w", err)
 	}
 
+	// One structured banner for every demo-only / not-production-safe choice, so the
+	// degraded posture is greppable in startup logs (mirrors the prod rule that noop
+	// providers must be visible). MDM-PR15 replaces these with real adapters.
+	slog.Warn("mdmd: demo/in-memory topology — NOT production-safe",
+		slog.String("jwt", "ephemeral RSA keys; tokens invalid on restart"),
+		slog.String("jwt_issuer", devJWTIssuer),
+		slog.String("jwt_audience", devJWTAudience),
+		slog.String("service_secret", "hardcoded demo secret; production must source per-cell secret from env"),
+		slog.String("metrics", "NopProvider (metrics disabled)"),
+	)
+
 	eb := eventbus.New(clk)
 
-	slog.Warn("mdmd: generating ephemeral JWT keys — tokens invalid on restart")
 	jwtIssuer, jwtVerifier, err := buildDevJWT(clk)
 	if err != nil {
 		return nil, fmt.Errorf("JWT deps: %w", err)
@@ -155,9 +193,12 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		PrimaryHTTPAddr:        addrs.primary,
 		InternalHTTPAddr:       addrs.internal,
 		HealthHTTPAddr:         addrs.health,
-		VerboseDisabled:        true,
-		// PG / Redis nil → in-memory paths. Demo mode skips the real-adapter control
-		// plane guards (MetricsToken / nonce-kind / health-reachability).
+		// VerboseDisabled waives /readyz?verbose. In demo mode SharedDeps.validate
+		// only requires "token-gated OR disabled"; in the postgres topology
+		// (RequireProductionControlPlane) VerboseDisabled is REJECTED — MDM-PR15 must
+		// then set VerboseToken instead of deleting this field.
+		VerboseDisabled: true,
+		// PG / Redis nil → in-memory paths (see TOPOLOGY INVARIANT above).
 	})
 	if err != nil {
 		return nil, fmt.Errorf("composition.NewSharedDeps: %w", err)
@@ -190,10 +231,19 @@ func buildDevJWT(clk clock.Clock) (*auth.JWTIssuer, *auth.JWTVerifier, error) {
 	return issuer, verifier, nil
 }
 
+// netListenerOpt returns a WithListenerNet option for a pre-bound listener, or no
+// options when ln is nil (production: bootstrap binds the addr itself).
+func netListenerOpt(ln net.Listener) []bootstrap.ListenerOption {
+	if ln == nil {
+		return nil
+	}
+	return []bootstrap.ListenerOption{bootstrap.WithListenerNet(ln)}
+}
+
 // runtimeOptions builds the bootstrap options: assembly + three listeners. An empty
 // cell needs no gRPC listener (no gRPC service), no PrimaryAuthorizer (no endpoints /
 // PDP), and no ConsumerBase (no subscribers) — only what makes health/readyz serve.
-func runtimeOptions(shared *composition.SharedDeps) composition.RuntimeOptionsFunc {
+func runtimeOptions(shared *composition.SharedDeps, lns prebuiltListeners) composition.RuntimeOptionsFunc {
 	return func(cells []cell.Cell) ([]bootstrap.Option, error) {
 		asm := assembly.New(shared.Clock, assembly.Config{
 			ID:             "mdm",
@@ -224,11 +274,11 @@ func runtimeOptions(shared *composition.SharedDeps) composition.RuntimeOptionsFu
 			bootstrap.WithPublisher(shared.Publisher),
 			bootstrap.WithSubscriber(shared.Subscriber),
 			bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
-				[]kauth.ListenerAuth{primaryAuth}),
+				[]kauth.ListenerAuth{primaryAuth}, netListenerOpt(lns.primary)...),
 			bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr,
-				[]kauth.ListenerAuth{svcTokenAuth}),
+				[]kauth.ListenerAuth{svcTokenAuth}, netListenerOpt(lns.internal)...),
 			bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
-				[]kauth.ListenerAuth{kauth.AuthNone{}}),
+				[]kauth.ListenerAuth{kauth.AuthNone{}}, netListenerOpt(lns.health)...),
 			bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled()),
 		}, nil
 	}
