@@ -17,13 +17,27 @@
 // disabling the sanitizer-stopAt boundary and confirming at least one sink-arg
 // traversal crosses a .URL/.url selector on the way down.
 //
-// AI-robust grading: Medium. The funnel is a typed-field callsite scan resolved
-// with go/types (*types.Named identity for Config / brokerSpec), not a bare string
-// anchor. It is not Hard because the URL field is a plain string: a local variable
+// AI-robust grading: Medium. BOTH ends of the funnel are go/types-resolved, not
+// string anchors: the field source by *types.Named identity (rabbitmq.Config.URL
+// / eventtransport.brokerSpec.url) AND the sanitizer boundary by package identity
+// (ResolvePackageRef, callee must resolve to an adapters/rabbitmq sanitize* func)
+// — so a same-named impostor sanitizer in another package cannot exempt a raw URL.
+// It is not Hard because the URL field is a plain string: a local variable
 // (url := c.config.URL; slog.Info("...", slog.String("u", url))) would launder
 // the field access into a non-SelectorExpr reference that this scan cannot see.
 // The callee-resolved + type-identity field check is the Go-reachable ceiling for
 // this shape.
+//
+// No synthetic red fixture (and why): the scanner is type-identity-bound to the
+// two production types — isAMQPURLFieldSel only fires on rabbitmq.Config.URL /
+// eventtransport.brokerSpec.url by their *types.Named identity. A fixture package
+// declares its own types with different identity, so it cannot trigger the field
+// detection at all; a generic red fixture would be vacuous. Anti-vacuity is
+// therefore proven against real code: DetectsWithoutFunnel (raw URL into a sink IS
+// detected when the boundary is disabled) + SanitizerBoundarySuppresses (the
+// boundary recognizes the canonical adapters/rabbitmq sanitizers and suppresses
+// ≥1 real violation). The impostor-rejection is closed structurally by the
+// package-identity check above, not by a fixture.
 //
 // Blind spots: local-variable laundering (url := cells[id]; slog.Info(..., url))
 // and map-value reads (cells[id]) are not field selections and are therefore
@@ -130,23 +144,22 @@ func amqpNamedTypeIs(p *Pass, expr ast.Expr, pkgPath, typeName string) bool {
 	return obj.Pkg() != nil && obj.Pkg().Path() == pkgPath && obj.Name() == typeName
 }
 
-// amqpIsSanitizerCall reports whether call is a sanitizer boundary. Matches
-// calls whose callee name (final segment) is in amqpSanitizerNames.
-func amqpIsSanitizerCall(call *ast.CallExpr) bool {
-	name := amqpCallName(call)
-	_, ok := amqpSanitizerNames[name]
-	return ok
-}
-
-// amqpCallName extracts the base function/method name from a call expression.
-func amqpCallName(call *ast.CallExpr) string {
-	switch fn := call.Fun.(type) {
-	case *ast.Ident:
-		return fn.Name
-	case *ast.SelectorExpr:
-		return fn.Sel.Name
+// amqpIsSanitizerCall reports whether call is a sanitizer boundary — a call to
+// one of the canonical adapters/rabbitmq sanitize* funcs. The callee is resolved
+// by go/types package identity (ResolvePackageRef, same as amqpIsSinkCall), NOT
+// by bare function name, so a same-named impostor defined in another package
+// (e.g. a no-op sanitizeURL in eventtransport) cannot masquerade as the boundary
+// and wrongly exempt a raw URL flowing into a sink.
+func amqpIsSanitizerCall(p *Pass, call *ast.CallExpr) bool {
+	if p.TypesInfo == nil {
+		return false
 	}
-	return ""
+	pkgPath, name, ok := ResolvePackageRef(p.TypesInfo, call.Fun)
+	if !ok || pkgPath != amqpRabbitmqPkgPath {
+		return false
+	}
+	_, isSanitizer := amqpSanitizerNames[name]
+	return isSanitizer
 }
 
 // amqpIsSinkCall reports whether call is a sink call (slog / fmt / errcode
@@ -186,7 +199,7 @@ func collectAMQPURLLeakDiags(p *Pass, diags *[]Diagnostic, treatSanitizerSafe bo
 			return false
 		}
 		call, ok := n.(*ast.CallExpr)
-		return ok && amqpIsSanitizerCall(call)
+		return ok && amqpIsSanitizerCall(p, call)
 	}
 	predicate := func(sel *ast.SelectorExpr) bool {
 		return isAMQPURLFieldSel(p, sel)

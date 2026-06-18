@@ -18,17 +18,16 @@ broker（mqtt）在 `eventtransport` 的 `brokerKind` switch 加分支 + 暴露�
 
 ## per-cell AMQP vhost/credential 隔离
 
-per-cell URL 携带 per-cell 凭据（user:pass）和 vhost。split 拓扑下 operator 为每个 cell
-provision 独立的 vhost 和 AMQP user，使每个进程只持有访问自身 broker 资源所需凭据——
-cell 进程无法跨 cell 发布或消费事件。凭据由 broker operator 外部配置（非 framework 派生，
-无 HKDF/派生层，原因：AMQP broker 用户是外部对象，不存在 framework 可控的 master key）。
+per-cell URL（`GOCELL_<CELLID>_AMQP_URL`，CELLID 大写，缺省回退 `GOCELL_AMQP_URL`）携带 per-cell
+凭据（user:pass）和 vhost，是 per-cell 凭据/vhost 隔离的 **seam**。**目标安全模型**（split 拓扑）：operator
+为每个 cell provision 独立 vhost/AMQP user，使每个进程只持有访问自身 broker 资源所需凭据、无法跨 cell
+发布或消费事件。凭据由 broker operator 外部配置（非 framework 派生，无 HKDF/派生层，原因：AMQP broker
+用户是外部对象，不存在 framework 可控的 master key）。
 
-composition root 按 cell 读 `GOCELL_<CELLID>_AMQP_URL`（CELLID 大写），缺省回退
-`GOCELL_AMQP_URL`；完整接线示例见 `cellmodules/eventtransport/doc.go` §Composition-root usage。
-
-distinct per-cell URL 今 egress-only fail-closed（运行期隔离须 #2366/#2341 完成）；凭据
-non-leak 由 `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST funnel）守，权威语义见
-`cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
+**当前可运行边界（非目标态）**：distinct per-cell URL 尚不可启用——egress-only fail-closed（运行期 per-cell
+隔离 blocked-by #2366/#2341），故当前唯一可运行配置是所有 cell 用同一 URL（共享同一 AMQP 凭据）。当前**已生效**
+的控制 = distinct-URL fail-closed + 凭据 non-leak（由 `AMQP-URL-REDACTION-FUNNEL-01` Medium typed AST funnel 守），
+**非** live per-cell 凭据隔离。权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
 
 ## 复用层选型（claimer / nonce，topology-gated）
 

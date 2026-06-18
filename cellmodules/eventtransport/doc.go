@@ -121,10 +121,19 @@
 // # Per-cell AMQP credential/vhost isolation (#2152 PR-3)
 //
 // Each cell's AMQP URL (GOCELL_<CELLID>_AMQP_URL, falling back to
-// GOCELL_AMQP_URL) carries per-cell credentials and a vhost. In a split
-// topology the operator provisions a distinct user and vhost per cell so each
-// process holds only the credentials it needs — a cell cannot publish to or
-// consume from a broker it has no access to.
+// GOCELL_AMQP_URL) is the SEAM for per-cell credential/vhost isolation: the URL
+// carries per-cell credentials and a vhost. The TARGET model (split topology) is
+// for the operator to provision a distinct user + vhost per cell so each process
+// holds only the credentials it needs and cannot publish to or consume from a
+// broker it has no access to.
+//
+// This is NOT a runtime reality today. Distinct per-cell URLs are fail-closed
+// (see "current boundary" below and dedupBrokerURL), so the only runnable
+// configuration is a shared/identical URL across cells — under which all cells
+// share one AMQP credential. True per-cell runtime isolation is blocked-by
+// #2366/#2341; until they land, the enforced controls are the distinct-URL
+// fail-closed gate plus URL credential non-leak (below), NOT live per-cell
+// credential separation.
 //
 // This credential/vhost isolation is operator-provisioned via the AMQP DSN
 // itself. Framework does NOT derive per-cell keys (no HKDF / key derivation
