@@ -13,7 +13,8 @@
 |------|------|--------|
 | 条目内容 / 状态描述 | GitHub Issue body | 人 / 自动化 |
 | 领域 / 类型 / 优先级 / 复杂度 | Issue label（area / type / pri / cx） | CLI 显式 `--label` |
-| 进度状态 / wave | Project v2 字段（Status / Wave） | Project UI / 自动化 |
+| 进度状态 | Project v2 字段（Status） | Project UI / 自动化 |
+| epic 实施顺序 | 最新 `<!-- pm:epic-wave -->` issue 评论 | `issues` 技能 |
 | 父子关系 | GitHub 原生 sub-issue | 人 / 自动化 |
 
 > 本仓 issue/PR 全程经 `gh` CLI / 技能创建，body 读 `.github/project-template/` 下对应模版（`--body-file`）。
@@ -114,7 +115,7 @@
 | 字段 | 类型 | 取值 | 写入方 |
 |------|------|------|--------|
 | **Status** | single-select | Backlog / Ready / In progress / In review / Done | 人（Project 内置 workflow + 手动） |
-| **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 自动化（epic OPEN 子任务**滚动**排序：已完成不动、未完成重排 Wave 1-4、超窗 >W4 不入字段。算法见 `issues` Part A） |
+| **Wave** | single-select | Wave 1 / 2 / 3 / 4（**仅 4 档**） | 保留字段；epic 排序结果只写 issue 评论（算法见 `issues` Part A），不再由技能写字段 |
 | **Parent issue** | built-in | 自动派生（原生 sub-issue） | GitHub |
 | **Sub-issues progress** | built-in | 自动派生（子 issue close 比例） | GitHub |
 
@@ -125,11 +126,22 @@
 
 ## 5. PR 流程（ship → review → fix → check）
 
+**外部 app handoff contract**：外部 app 是 `needs-review-again` / `needs-check-fix` 的实时消费者；`/pr-monitor` 是 ship/fix 收尾约 10min 后必跑的一次性兜底检查器。消费者只能在同仓、非 draft、可信作者、same-head、无已记录失败、未重复领取的前提下 dispatch，并且必须同时满足 live label 与最新 fresh canonical 机器块：
+
+| live label | latest block | allowed dispatch |
+|------|------|------|
+| `pr-status/needs-review-again` | `kind=ship` + `verdict=needs-review-again` + `next.triggerLabel=pr-status/needs-review-again` | `codex review` |
+| `pr-status/needs-check-fix` | `kind=fix` + `verdict=needs-check-fix` + `next.triggerLabel=pr-status/needs-check-fix` | `/pr-review --check` |
+| `pr-status/needs-fix` | `kind=pr-review` + `verdict=changes-requested` + `next.triggerLabel=pr-status/needs-fix` | `/fix`（仅 `/pr-monitor` 在 Cx1/Cx2 window 内自动接力；Cx3+ 转人工） |
+
+离线契约测试：`bash hack/automation/pr-handoff-contract-selftest.sh`，已由 `hack/verify-automation-selftest.sh` 接入 `make verify`。
+
 ```
 /ship <issue>
   实施 → PR 创建 → 贴 pr-status/in-progress
   → ship：内置 6 维 reviewer + /fix Cx1/Cx2 → 贴 pm:ship → 冲突预检 + CI 绿
-  → 切 pr-status/needs-review-again（首审唯一使用点）→ 延迟 ~30min 单次启动 pr-monitor --mode=auto 监听交接（needs-fix 自动 /fix；单次跑完即止）
+  → 切 pr-status/needs-review-again（首审唯一使用点）→ 外部 app 实时监听并执行 review
+  → 延迟 ~10min 必须启动 pr-monitor --mode=auto 监听交接（needs-fix 自动 /fix；单次跑完即止）
 
 [review 轮] codex review 或 /pr-review <PR#>
   → 贴 findings 评论（codex / pm:pr-review）
@@ -140,6 +152,8 @@
   → gh pr view --json reviews,comments + gh api pulls/N/comments 探 inline（>0 才读）→ 过滤最新一轮
   → triage + 修复 → 贴 pm:fix → 冲突预检 + CI 绿
   → 切 pr-status/needs-check-fix + 移除 pr-status/needs-fix（待验证）
+  → 外部 app 实时监听并执行 /pr-review --check
+  → 延迟 ~10min 必须启动 pr-monitor --mode=auto 监听 check 交接
 
 /pr-review <PR#> --check（验证上一轮 findings 是否修复 + 抓回归）
   → 逐条核对当前代码：✅已修复 / ❌未修复 / ⚠️回归 / 🔧部分 → 贴 pm:pr-review（--check）
