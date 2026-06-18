@@ -109,6 +109,19 @@ func renderProjection(spec *ContractGenSpec) ([]byte, error) {
 	return b, nil
 }
 
+func renderClient(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "http" {
+		return nil, fmt.Errorf("contractgen render client: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "client.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render client: %w", err)
+	}
+	return b, nil
+}
+
 // update flag: run with -update to regenerate golden files.
 var updateGolden = flag.Bool("update", false, "update golden files")
 
@@ -1560,6 +1573,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderSubscription(spec)
 	case "projection_gen.go":
 		content, err = renderProjection(spec)
+	case "client_gen.go":
+		content, err = renderClient(spec)
 	case "saga_gen.go":
 		content, err = renderSaga(spec)
 	case "types.ts":
@@ -2608,4 +2623,70 @@ func TestOmitEmptyCheck(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestShouldEmitClient pins the gate that decides whether a contract gets a
+// generated contract client (#2093). The gate is internal-path + non-empty
+// endpoints.clients: builder.go only populates Endpoint.Clients for
+// metadata.IsInternalHTTPPath, so "non-empty Clients" already implies an internal
+// sibling-callable contract. Only http contracts with a declared caller allowlist
+// emit a client; public/no-clients http and non-http kinds do not.
+func TestShouldEmitClient(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec *ContractGenSpec
+		want bool
+	}{
+		{"http with clients", &ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{Clients: []string{"accesscore"}}}, true},
+		{"http empty clients", &ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{}}, false},
+		{"http nil endpoint", &ContractGenSpec{Kind: "http"}, false},
+		{"event kind with clients", &ContractGenSpec{Kind: "event", Endpoint: &httpEndpointSpec{Clients: []string{"x"}}}, false},
+		{"command kind", &ContractGenSpec{Kind: "command"}, false},
+		{"nil spec", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldEmitClient(tc.spec); got != tc.want {
+				t.Errorf("shouldEmitClient(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRender_Golden_Client byte-locks the generated contract client (client.tmpl,
+// #2093) for the clientsonly synth fixture (GET /internal/v1/sample/clientsonly,
+// clients:[testcell], flat non-projection {ok} response). It pins: the sealed
+// constructor NewClient(transport.CellTransport, ServiceKeyring, callerCell, Clock),
+// the signing+DoContract dispatch, and decode-into-Response (the non-projection
+// path). The projection decode path (data envelope) and POST-body path are
+// byte-locked by the committed generated/contracts/http/** client files via
+// `gocell verify generated`.
+func TestRender_Golden_Client(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	const contractID = "http.sample.clientsonly.v1"
+	if p.Contracts[contractID] == nil {
+		t.Fatalf("%s not found in synth fixture", contractID)
+	}
+	spec, err := buildContractSpec(absTestDir, p, contractID)
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "client_gen.go")
+	goldenFile := goldenFilePath("synth_http_auth_modes_clientsonly", "client_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
 }
