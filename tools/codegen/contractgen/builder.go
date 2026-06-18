@@ -438,11 +438,15 @@ func applyResponseProjection(spec *ContractGenSpec) error {
 // #1875), never by absence from `required`. This is the Hard (build-fail) leg of the
 // closure; its CI mirror is archtest PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01.
 //
-// Residual (NOT covered, by design — see ADR 202606112000-1350 §Amendment #2359): a
-// required non-nullable array (`[]T` nil → JSON null) / object (`*T` nil → null), or a
-// required non-nullable `format` column whose producer emits "", can still produce a
-// schema-invalid wire value — that is outside schema reach (declare empty-able columns
-// nullable; array/object nil→`[]`/`{}` normalization is a tracked follow-up).
+// Scope: this checks the TOP-LEVEL item columns only (the keys ToMap emits). A nested
+// object/array column's OWN optional sub-fields are NOT recursed — a nested value
+// serializes via its struct (not ToMap), so its sub-field presence is a normal schema
+// concern, not the full-column-set invariant. Residual (NOT covered, by design — see
+// ADR 202606112000-1350 §Amendment #2359): a required non-nullable array (`[]T` nil →
+// JSON null) / object (`*T` nil → null), or a required non-nullable `format` column
+// whose producer emits "", can still produce a schema-invalid wire value — outside
+// schema reach (declare empty-able columns nullable; array/object nil→`[]`/`{}`
+// normalization is a tracked follow-up).
 func requireProjectionItemFullColumnSet(contractID string, item DTOSpec) error {
 	var optional []string
 	for _, f := range item.Fields {
@@ -453,7 +457,8 @@ func requireProjectionItemFullColumnSet(contractID string, item DTOSpec) error {
 	if len(optional) > 0 {
 		return fmt.Errorf("contractgen build: %q responseProjection item %q has optional (not-in-`required`) "+
 			"column(s) %v — full-column-set ToMap emits every key, so the item schema `required` MUST list every "+
-			"property; declare nullable [\"scalar\",\"null\"] for empty-able values (#2359)",
+			"property; add the column(s) to the item `required` (declare nullable [\"scalar\",\"null\"] for "+
+			"empty-able values), then re-run `gocell generate contract` (#2359)",
 			contractID, item.Name, optional)
 	}
 	return nil

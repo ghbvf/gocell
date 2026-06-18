@@ -44,6 +44,11 @@
 //
 // # Tool blind spots (charter §强制盲区自检)
 //
+//   - Top-level item columns only. The check covers the projection item's DIRECT
+//     properties (the keys ToMap emits); a nested object/array column's OWN optional
+//     sub-fields are NOT recursed. A nested value serializes via its struct (not
+//     ToMap), so its sub-field presence is a normal schema concern, not the
+//     full-column-set invariant this rule guards.
 //   - It guarantees "no optional column", NOT that a required column's PRODUCER always
 //     populates it. Residual: a required non-nullable `array` (`[]T` nil) / `object`
 //     (`*T` nil) still marshals nil to JSON `null` and violates `type` if the producer
@@ -77,10 +82,14 @@ import (
 )
 
 // minExpectedProjectionItemScans is the anti-vacuity floor for the responseProjection
-// item scan. 16 responseProjection platform contracts are marked today; this stable
-// lower bound (14) catches a navigation/enumeration regression that silently drops
-// contracts from the scan (which would let the production check pass vacuously).
-// Update when platform responseProjection reads are added or removed in bulk.
+// item scan. 16 responseProjection platform contracts are marked today and all 16
+// resolve to an item object, so the live scan count is 16. This floor is a deliberate
+// LOWER BOUND (not the exact count): its job is to catch a navigation/enumeration
+// regression that collapses the scan toward zero (which would let the production check
+// pass vacuously), NOT to track the exact contract count — pinning the exact count
+// would make CI flap on every legitimate add/remove. The −2 slack tolerates that churn.
+// Maintenance: raise this only when a BULK addition makes 14 itself look vacuous; a
+// single add/remove needs no change (the lower bound still holds).
 const minExpectedProjectionItemScans = 14
 
 // TestProjectionOptionalColumnZeroSchemaValid01 asserts every responseProjection
@@ -203,7 +212,10 @@ func TestProjectionOptionalColumnZeroSchemaValid01_ScannerCatchesViolation(t *te
 	archDir := findArchTestDir(t)
 	relBase := filepath.Join("testdata", "projection_optional_column_zero_schema_valid_fixtures")
 
-	reds := []string{"red_optional_format", "red_optional_array"}
+	// red_optional_array_ref exercises the data.items=$ref path (resolved by
+	// contractgen.Parse) that production policy.list.v1 uses — proving the navigation
+	// detects an optional column behind a $ref, not only inline item objects.
+	reds := []string{"red_optional_format", "red_optional_array", "red_optional_array_ref"}
 	for _, name := range reds {
 		refPath := filepath.Join(relBase, name, "response.schema.json")
 		optional, itemFound, err := projectionItemOptionalColumns(archDir, refPath)

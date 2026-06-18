@@ -313,6 +313,12 @@ func TestIndexOfDTO(t *testing.T) {
 func TestToMap_FullColumnSet(t *testing.T) {
 	t.Parallel()
 
+	// This spec is rendered directly via renderTypes — it does NOT pass through
+	// applyResponseProjection, so the optional (Required:false) columns below are
+	// intentional ToMap-rendering inputs and do not trip requireProjectionItemFullColumnSet
+	// (#2359). The point here is that ToMap emits EVERY column unconditionally regardless
+	// of omitempty; full-column-set required-completeness is covered separately by
+	// TestApplyResponseProjection_RejectsOptionalColumn.
 	spec := &ContractGenSpec{
 		PackageName: "testpkg",
 		ContractID:  "http.test.x.v1",

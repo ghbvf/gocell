@@ -212,6 +212,12 @@ re-evaluates the threat model per the AI-robust charter.
    a coherent "the Policy object always carries description" closure. The create/update
    **request** schemas are separate and unchanged (description stays optional on input).
    Pre-GA wire window (api-versioning.md): in-place tightening, no version dir.
+   - **Consumer note**: an empty description now serializes as `"description": ""`
+     (present) rather than being omitted; likewise an empty audit `payload` serializes
+     as `null` (the `{}` true-schema accepts it). Consumers must treat empty-value as
+     equivalent to the former absent-key (in-repo `edge-bff` updates atomically; pre-GA,
+     no external consumers). This uniform "present, possibly-empty" shape is the same
+     security-positive stable column set Decision 2 / #1875 establish.
 
 ### Enforcement (AI-robust) — two legs, one invariant
 
