@@ -65,6 +65,8 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PanicReasonClientsOnlySchemaCompileFailed:  kebab + "-clients-only-schema-compile-failed",
 		PanicReasonServiceOwnedSchemaCompileFailed: kebab + "-service-owned-schema-compile-failed",
 		PanicReasonStandardSchemaCompileFailed:     kebab + "-standard-schema-compile-failed",
+		PanicReasonClientTransportNil:              kebab + "-client-transport-nil",
+		PanicReasonClientRingNil:                   kebab + "-client-ring-nil",
 	}
 
 	// Fail closed on empty transports before any kind-specific template can
@@ -203,6 +205,12 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	if err := applyResponseProjection(spec); err != nil {
 		return err
 	}
+
+	// Derive the generated cross-cell client's decode target (#2093). Runs after
+	// applyResponseProjection because it reads the (rewritten) Response `data`
+	// field's resource-item DTO for projection contracts. No-op for
+	// non-projection contracts (the client decodes into Response directly).
+	deriveClientDecode(spec)
 
 	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
 	// Only populated when the endpoint actually has a body (POST/PUT/PATCH with a
@@ -423,6 +431,34 @@ func applyResponseProjection(spec *ContractGenSpec) error {
 	}
 	spec.DTOs[itemIdx].EmitToMap = true
 	return nil
+}
+
+// deriveClientDecode sets Endpoint.ClientDecodeDTO/List for the generated
+// cross-cell contract client (#2093). For responseProjection contracts the
+// server-side Response.Data is the SEALED projection.ResourceProjection carrier
+// (no UnmarshalJSON), so a client cannot decode the wire body into Response; it
+// decodes the success {data: ...} envelope into the resource-item DTO instead.
+// The item DTO name + list-ness come from the Response `data` field (the same
+// field applyResponseProjection rewrote — ItemDTO/IsList are preserved). For
+// non-projection contracts this is a no-op: ClientDecodeDTO stays empty and the
+// client decodes straight into the directly-unmarshalable Response. Must run
+// after applyResponseProjection.
+func deriveClientDecode(spec *ContractGenSpec) {
+	if spec.Endpoint == nil || !spec.Endpoint.ResponseProjection {
+		return
+	}
+	respIdx := indexOfDTO(spec.DTOs, "Response")
+	if respIdx < 0 {
+		return
+	}
+	for i := range spec.DTOs[respIdx].Fields {
+		f := &spec.DTOs[respIdx].Fields[i]
+		if f.Name == "Data" && f.ItemDTO != "" {
+			spec.Endpoint.ClientDecodeDTO = f.ItemDTO
+			spec.Endpoint.ClientDecodeList = f.IsList
+			return
+		}
+	}
 }
 
 // indexOfDTO returns the index of the DTO named name, or -1.

@@ -2655,6 +2655,65 @@ func TestShouldEmitClient(t *testing.T) {
 	}
 }
 
+// TestClientPathExpr pins the path-building expression the generated client uses
+// (#2093): a quoted literal for a static path, url.PathEscape concatenation for
+// {param} placeholders mapped to the Go field name (ParamSpec.GoName), with
+// literals between/around params preserved.
+func TestClientPathExpr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ep   *httpEndpointSpec
+		want string
+	}{
+		{"nil endpoint", nil, `""`},
+		{"static path", &httpEndpointSpec{Path: "/internal/v1/access/roles/assign"}, `"/internal/v1/access/roles/assign"`},
+		{
+			"single trailing param",
+			&httpEndpointSpec{Path: "/internal/v1/config/{key}", PathParams: []ParamSpec{{Name: "key", GoName: "Key"}}},
+			`"/internal/v1/config/" + url.PathEscape(req.Key)`,
+		},
+		{
+			"param then literal",
+			&httpEndpointSpec{Path: "/x/{a}/y", PathParams: []ParamSpec{{Name: "a", GoName: "A"}}},
+			`"/x/" + url.PathEscape(req.A) + "/y"`,
+		},
+		{
+			"two params",
+			&httpEndpointSpec{Path: "/x/{a}/y/{b}", PathParams: []ParamSpec{{Name: "a", GoName: "A"}, {Name: "b", GoName: "B"}}},
+			`"/x/" + url.PathEscape(req.A) + "/y/" + url.PathEscape(req.B)`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := clientPathExpr(tc.ep); got != tc.want {
+				t.Errorf("clientPathExpr(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHTTPMethodConst pins the HTTP-method → net/http.Method* mapping used by the
+// generated client (#2093).
+func TestHTTPMethodConst(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"GET":    "http.MethodGet",
+		"POST":   "http.MethodPost",
+		"PUT":    "http.MethodPut",
+		"PATCH":  "http.MethodPatch",
+		"DELETE": "http.MethodDelete",
+		"HEAD":   "http.MethodHead",
+		"WEIRD":  `"WEIRD"`, // defensive fallback: quoted literal
+	}
+	for method, want := range cases {
+		if got := httpMethodConst(method); got != want {
+			t.Errorf("httpMethodConst(%q) = %q, want %q", method, got, want)
+		}
+	}
+}
+
 // TestRender_Golden_Client byte-locks the generated contract client (client.tmpl,
 // #2093) for the clientsonly synth fixture (GET /internal/v1/sample/clientsonly,
 // clients:[testcell], flat non-projection {ok} response). It pins: the sealed

@@ -1,0 +1,110 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/transport"
+)
+
+// ClientContractID is the logical contract id this client dispatches through the
+// sealed transport.CellTransport seam (in-process short-circuit or remote — the
+// composition root chooses by deployment topology, US5 #1966).
+const ClientContractID = "{{.ContractID}}"
+
+// Client is the sole sealed sibling-cell call type for {{.ContractID}} (ADR D2
+// downstream Hard, #2093). It accepts ONLY a sealed transport.CellTransport as the
+// dispatch path — a bare *http.Client is not type-expressible here — and signs
+// every outbound request itself (auth.SignInternalRequest), so it is fully
+// self-contained. Domain error mapping is the caller's responsibility: the method
+// returns the decoded success DTO, the HTTP status, and a transport/build/decode
+// error; on a non-success status it returns (nil, status, nil) for the caller to
+// classify.
+type Client struct {
+	transport  transport.CellTransport
+	ring       kauth.ServiceKeyring
+	callerCell string
+	clock      clock.Clock
+}
+
+// NewClient constructs the generated client. t is the topology-injected sealed
+// transport (in-process or remote); ring signs the outbound service token;
+// callerCell is the calling cell's identity (one of contract.yaml
+// endpoints.clients). A nil/typed-nil transport or nil ring is a wiring error and
+// fails fast at construction, not at the first request.
+func NewClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell string, clk clock.Clock) *Client {
+	clock.MustHaveClock(clk, "generated client {{.ContractID}}")
+	if validation.IsNilInterface(t) {
+		panic(panicregister.Approved("{{.PanicReasonClientTransportNil}}", errcode.Assertion("generated client {{.ContractID}}: CellTransport must not be nil (the composition root must inject the in-process or remote transport)")))
+	}
+	if validation.IsNilInterface(ring) {
+		panic(panicregister.Approved("{{.PanicReasonClientRingNil}}", errcode.Assertion("generated client {{.ContractID}}: ServiceKeyring must not be nil (the composition root must supply the internal service keyring)")))
+	}
+	return &Client{transport: t, ring: ring, callerCell: callerCell, clock: clk}
+}
+
+// {{.Endpoint.HandlerMethod}} dispatches {{.Endpoint.Method}} {{.Endpoint.Path}} through the sealed transport.
+// It builds and signs the request, dispatches via DoContract, and on the declared
+// success status decodes the response body. tn is folded into the service-token
+// MAC and the X-Tenant-ID header by auth.SignInternalRequest.
+func (c *Client) {{.Endpoint.HandlerMethod}}(ctx context.Context, tn tenant.TenantID, req *Request) ({{if .Endpoint.ClientDecodeDTO}}{{if .Endpoint.ClientDecodeList}}[]{{else}}*{{end}}{{.Endpoint.ClientDecodeDTO}}{{else}}*Response{{end}}, int, error) {
+	path := {{clientPathExpr .Endpoint}}
+{{- if .Endpoint.HasBody}}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, {{httpMethodConst .Endpoint.Method}}, path, bytes.NewReader(body))
+{{- else}}
+	httpReq, err := http.NewRequestWithContext(ctx, {{httpMethodConst .Endpoint.Method}}, path, http.NoBody)
+{{- end}}
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: build request: %w", err)
+	}
+	// Sign with a service token so the InternalListener middleware accepts the
+	// request; tn travels as X-Tenant-ID (set by SignInternalRequest) so the
+	// server scopes the lookup to the caller's tenant.
+	if err := auth.SignInternalRequest(ctx, c.ring, c.callerCell, httpReq, tn, c.clock); err != nil {
+		return nil, 0, err
+	}
+	resp, err := c.transport.DoContract(ctx, ClientContractID, httpReq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != {{.Endpoint.SuccessCode}} {
+		// Non-success status: return it for the caller to map to a domain error.
+		return nil, resp.StatusCode, nil
+	}
+{{- if .Endpoint.ClientDecodeDTO}}
+	// responseProjection contract: Response.Data is the sealed
+	// projection.ResourceProjection carrier (no UnmarshalJSON), so decode the
+	// {data: ...} envelope into the resource-item DTO instead.
+	var env struct {
+		Data {{if .Endpoint.ClientDecodeList}}[]{{end}}{{.Endpoint.ClientDecodeDTO}} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("{{.ContractID}} client: decode response: %w", err)
+	}
+	return {{if .Endpoint.ClientDecodeList}}env.Data{{else}}&env.Data{{end}}, resp.StatusCode, nil
+{{- else}}
+	var out Response
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("{{.ContractID}} client: decode response: %w", err)
+	}
+	return &out, resp.StatusCode, nil
+{{- end}}
+}

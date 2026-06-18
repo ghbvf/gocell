@@ -29,7 +29,7 @@ func TestArtifactsForKind(t *testing.T) {
 		kind  string
 		files []string
 	}{
-		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go", "client_gen.go"}}, // client_gen.go gated per-contract by shouldEmitClient (#2093)
 		{"event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
 		{"command", []string{"types_gen.go", "command_gen.go"}}, // no iface_gen.go by design
 		{"projection", []string{"types_gen.go", "iface_gen.go"}},
