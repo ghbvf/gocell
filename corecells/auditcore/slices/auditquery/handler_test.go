@@ -35,10 +35,21 @@ const bootstrapAuditEntryOffset = 2 * time.Hour
 // (TEST-TIME-LITERAL-01: durations live in package-level consts, not literals).
 const seedThirdEntryOffset = 2 * time.Hour
 
+// testAuditQueryResolver is the contract-derived resolver for auditquery handler
+// tests, mirroring the cellHTTPResolver cellgen builds from the served HTTP
+// contracts' endpoints.http.permission overlays (#2355). Only the get endpoint is
+// migrated to contract-derived authz this wave; the list keeps the hand-written
+// auditQueryPolicy (its actorId-self exemption needs the not-yet-built HTTP
+// owner-scoped query-param resolver — ref #2355). archtest D1 scans production
+// only, so a *_test.go call to NewStaticMethodPolicyResolver is sanctioned.
+var testAuditQueryResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.audit.get.v1": "audit:read",
+})
+
 // newHandlerMux registers auditquery routes under the canonical API prefix,
 // mirroring production wiring so all auth.Mount guards are exercised.
 func newHandlerMux(svc *Service) http.Handler {
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {
@@ -589,7 +600,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 
 	// Seed one entry for usr-1 and one for usr-2.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -711,7 +722,7 @@ func TestHandler_RegisterRoutes_TenantScoped(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 
 	const (
 		tenantA = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
@@ -773,7 +784,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	store := newHandlerStore(t)
 	svc, err := NewService(store, testCodec(), slog.Default(), outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 
 	// securedMux registers the handler via RegisterRoutes, mirroring production
 	// wiring so trust boundary tests exercise the same auth.Mount guard.

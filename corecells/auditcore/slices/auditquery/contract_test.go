@@ -41,7 +41,7 @@ func newContractQueryHandler(entries ...*ledger.Entry) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, testAuditQueryResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

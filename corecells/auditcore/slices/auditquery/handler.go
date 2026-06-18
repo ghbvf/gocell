@@ -63,6 +63,13 @@ const msgAuthRequired = "authentication required"
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
+//
+// Not yet contract-derived (#2355): unlike the get route (migrated to a
+// permission overlay this wave), this gate cannot move to endpoints.http.permission
+// until an HTTP owner-scoped gate with a query-param resource source exists — the
+// gate must extract actorId as the PDP resource so the baseline owner rule
+// subject.sub == resource.id reproduces this self-read exemption. That foundation
+// is the "owner-scoped 迁移需扩 resolver" sub-work tracked by #2355.
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
@@ -660,12 +667,26 @@ type Handler struct {
 }
 
 // NewHandler creates an auditquery Handler with the generated list and get
-// handlers. The get route uses a flat audit:read gate (see GetAdapter): unlike the
-// list's auditQueryPolicy there is no actorId-self exemption.
-func NewHandler(svc *Service) *Handler {
+// handlers.
+//
+// The get route is contract-derived (#2355): its audit:read gate comes from the
+// http.audit.get.v1 endpoints.http.permission overlay via the cell-level
+// MethodPolicyResolver (resolver param), not a hand-wired
+// auth.RequirePermission(authz.PermAuditRead()). Behavior is unchanged — a flat
+// audit:read gate with no actorId-self exemption (the path param is the entry id,
+// not an actor identity).
+//
+// The list route deliberately keeps the hand-written auditQueryPolicy: its
+// actorId-self exemption is a query-param ownership check that contract-derived
+// authz cannot yet express — it needs an HTTP owner-scoped gate with a query-param
+// resource source (extract actorId → PDP resource, baseline owner rule
+// subject.sub == resource.id), a foundation that does not exist yet and is tracked
+// by #2355 (the "owner-scoped 迁移需扩 resolver" sub-work). Migrating the list to a
+// flat overlay would drop the exemption and regress non-admin self-reads to 403.
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
 		listH: auditlist.NewHandler(ListAdapter{svc}, auditQueryPolicy),
-		getH:  auditget.NewHandler(GetAdapter{svc}, auth.RequirePermission(authz.PermAuditRead())),
+		getH:  auditget.NewHandler(GetAdapter{svc}, resolver),
 	}
 }
 
