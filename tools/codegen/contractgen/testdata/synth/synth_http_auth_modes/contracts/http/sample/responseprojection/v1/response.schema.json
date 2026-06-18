@@ -9,7 +9,8 @@
         "id": { "type": "string" },
         "label": { "type": "string" },
         "score": { "type": "integer" },
-        "tags": { "type": "array", "items": { "type": "string" } }
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "lastSeenAt": { "type": ["string", "null"], "format": "date-time" }
       },
       "required": ["id"]
     }

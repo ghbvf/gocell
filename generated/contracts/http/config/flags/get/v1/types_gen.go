@@ -46,11 +46,18 @@ type ResponseData struct {
 // feed the map to the funnel — the only way to populate the projection-typed
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
-// Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set. Optional fields (omitempty) are only included when non-zero,
-// matching the struct json.Marshal serialization path.
+//
+// It emits the FULL, STABLE column set: every field is an unconditional entry,
+// always present, keyed by its wire JSON name. The masking funnel can only redact
+// a key it can see (applyMask is a no-op for an absent key), so a uniform
+// always-present column set is what closes the presence-based side channel — field
+// presence never reveals whether a masked column held data (ADR 202606112000-1350
+// Decision 2; PROJECTION-TOMAP-FULL-COLUMN-SET-01). There is NO conditional /
+// omitempty omission (that #2159 regression re-opened the side channel, #1875). A
+// nullable column is a pointer (*T): its nil marshals to JSON null — schema-valid
+// "no value" with the key still present and maskable.
 func (i ResponseData) ToMap() map[string]any {
-	m := map[string]any{
+	return map[string]any{
 		"id":                i.ID,
 		"key":               i.Key,
 		"type":              i.Type,
@@ -61,7 +68,6 @@ func (i ResponseData) ToMap() map[string]any {
 		"createdAt":         i.CreatedAt,
 		"updatedAt":         i.UpdatedAt,
 	}
-	return m
 }
 
 // GetResponseObject is the typed response envelope for
