@@ -61,6 +61,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
@@ -72,7 +73,8 @@ const EnrollmentCredentialTTL = 5 * time.Minute
 
 const (
 	msgEnrollmentSubjectMissing = "enrollment credential subject missing"
-	msgEnrollmentTenantMissing  = "enrollment credential tenant missing"
+	msgEnrollmentTenantInvalid  = "enrollment credential tenant must be a canonical tenant id"
+	msgEnrollmentJTIMissing     = "enrollment credential jti missing"
 	msgEnrollmentKindForbidden  = "enrollment credential is not device-scoped"
 	msgEnrollmentVerifierNil    = "enrollment credential verifier requires a token verifier"
 	msgEnrollmentJTIFailed      = "enrollment credential id generation failed"
@@ -85,34 +87,50 @@ const (
 // identity proves it came through EnrollmentCredentialVerifier.Verify. The EST
 // front-end (G2/PR-8b) maps it into a certsigning.EnrollmentClaim.
 type EnrollmentIdentity struct {
-	tenant  string
+	tenant  tenant.TenantID
 	subject string
 	jti     string
 }
 
-// Tenant returns the tenant isolation boundary the credential was minted for.
-func (e EnrollmentIdentity) Tenant() string { return e.tenant }
+// Tenant returns the typed tenant isolation boundary the credential was minted
+// for. It is a canonical tenant.TenantID (validated at construction), so the EST
+// front-end (G2/PR-8b) can pass it straight into certsigning without re-parsing a
+// naked string (tenancy.md: service APIs use typed tenant params, not raw string).
+func (e EnrollmentIdentity) Tenant() tenant.TenantID { return e.tenant }
 
 // Subject returns the device subject (device id) the credential was minted for.
 func (e EnrollmentIdentity) Subject() string { return e.subject }
 
-// JTI returns the credential's JWT ID — the forward hook for the EST front-end's
-// one-time / replay ledger (G2/PR-8b). Empty if the credential carried no jti.
+// JTI returns the credential's JWT ID — never empty for a verified identity (the
+// constructor fails closed on a missing jti). It is the forward hook for the EST
+// front-end's one-time / replay ledger: the consumer (G2/PR-8b) MUST consume this
+// jti at /simpleenroll to reject replay within the TTL window; G4 only guarantees
+// the jti is present, not consumed. Tracked: enrollment one-time/replay backlog
+// (see ADR 202606121500-1895 Amendment 2026-06-18).
 func (e EnrollmentIdentity) JTI() string { return e.jti }
 
-// newEnrollmentIdentity is the SOLE constructor of a usable EnrollmentIdentity.
-// It fails closed on empty tenant or subject so a verified enrollment identity is
-// always tenant-scoped and device-identified (mirrors certsigning.NewEnrollmentClaim
-// and mintDevicePrincipal). It exists only in this file; the archtest funnel
-// ENROLLMENT-CREDENTIAL-MINT-CALLER-01 rejects any other in-package construction.
-func newEnrollmentIdentity(tenant, subject, jti string) (EnrollmentIdentity, error) {
-	if tenant == "" {
-		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantMissing)
+// newEnrollmentIdentity is the SOLE constructor of a usable EnrollmentIdentity. It
+// fails closed on a non-canonical/empty tenant (via tenant.ParseTenantID), an
+// empty subject, or an empty jti, so a verified enrollment identity is always
+// tenant-scoped (typed + canonical), device-identified, and replay-keyable
+// (mirrors certsigning.NewEnrollmentClaim and mintDevicePrincipal). It exists only
+// in this file; the archtest funnel ENROLLMENT-CREDENTIAL-MINT-CALLER-01 rejects
+// any other in-package construction. rawTenant is the verified token's tenant
+// claim (already canonical from VerifyIntent); it is re-parsed here as
+// defense-in-depth and to produce the typed value.
+func newEnrollmentIdentity(rawTenant, subject, jti string) (EnrollmentIdentity, error) {
+	canonicalTenant, err := tenant.ParseTenantID(rawTenant)
+	if err != nil {
+		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantInvalid,
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
 	}
 	if subject == "" {
 		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentSubjectMissing)
 	}
-	return EnrollmentIdentity{tenant: tenant, subject: subject, jti: jti}, nil
+	if jti == "" {
+		return EnrollmentIdentity{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentJTIMissing)
+	}
+	return EnrollmentIdentity{tenant: canonicalTenant, subject: subject, jti: jti}, nil
 }
 
 // EnrollmentCredentialIssuer mints device first-enrollment credentials. It is the
@@ -130,6 +148,13 @@ type EnrollmentCredentialIssuer struct {
 // keys / issuer string / clock with the rest of auth; the composition root
 // (G2/PR-8b) decides the concrete wiring.
 //
+// opts are forwarded to the inner JWTIssuer and only influence audience/issuer
+// declaration (e.g. WithIssuerAudiencesFromSlice); they do NOT override the TTL,
+// which is fixed at EnrollmentCredentialTTL. Pass WithIssuerAudiencesFromSlice
+// with the EST audience: a JWTVerifier requires an expected audience
+// (NewJWTVerifier errors without one), so an issuer left without an audience mints
+// credentials the verifier rejects on every call (a silent 401, hard to diagnose).
+//
 // clk is required; pass clock.Real() at the composition root or clockmock.New(...)
 // in tests. Panics on nil or typed-nil clock.
 func NewEnrollmentCredentialIssuer(
@@ -144,15 +169,21 @@ func NewEnrollmentCredentialIssuer(
 }
 
 // Issue mints a device first-enrollment credential for the given tenant and
-// device subject. It fails closed on empty tenant or subject. The returned token
-// is a short-lived RS256 JWT with token_use=enrollment, principal_kind=device,
-// and a random jti.
+// device subject. It fails closed on an empty subject or a non-canonical/empty
+// tenant id (validated here at mint time so the issuer never produces a token the
+// verifier is bound to reject). The returned token is a short-lived RS256 JWT with
+// token_use=enrollment, principal_kind=device, and a random jti.
 func (i *EnrollmentCredentialIssuer) Issue(tenantID, deviceSubject string) (string, error) {
 	if deviceSubject == "" {
 		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentSubjectMissing)
 	}
-	if tenantID == "" {
-		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantMissing)
+	// Validate + canonicalize at mint time (defense-in-depth with VerifyIntent's
+	// own tenant validation): a device credential is always tenant-scoped, and a
+	// non-canonical tenant would only fail later at the verifier.
+	canonicalTenant, err := tenant.ParseTenantID(tenantID)
+	if err != nil {
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgEnrollmentTenantInvalid,
+			errcode.WithInternal(errcode.InternalAttr("_", err.Error())))
 	}
 	jti, err := newEnrollmentJTI()
 	if err != nil {
@@ -162,7 +193,7 @@ func (i *EnrollmentCredentialIssuer) Issue(tenantID, deviceSubject string) (stri
 	// (ENROLLMENT-CREDENTIAL-MINT-CALLER-01): device-scoped, short-TTL, jti-bound.
 	return i.jwt.Issue(TokenIntentEnrollment, deviceSubject, IssueOptions{
 		PrincipalKind: PrincipalKindClaimDevice,
-		TenantID:      tenantID,
+		TenantID:      canonicalTenant.String(),
 		JTI:           jti,
 	})
 }

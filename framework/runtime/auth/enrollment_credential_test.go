@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
 const (
@@ -91,6 +92,8 @@ func TestEnrollmentCredentialIssuer_Issue_FailsClosed(t *testing.T) {
 	}{
 		{"empty subject", testEnrollTenant, ""},
 		{"empty tenant", "", testEnrollDevice},
+		{"non-canonical tenant", "not-a-uuid", testEnrollDevice},
+		{"nil-uuid tenant", "00000000-0000-0000-0000-000000000000", testEnrollDevice},
 		{"both empty", "", ""},
 	}
 	for _, tc := range tests {
@@ -103,14 +106,14 @@ func TestEnrollmentCredentialIssuer_Issue_FailsClosed(t *testing.T) {
 }
 
 func TestEnrollmentCredentialVerifier_Verify_ReturnsSealedIdentity(t *testing.T) {
-	iss, ver := newTestEnrollmentScheme(t, clock.Real())
+	iss, ver := newTestEnrollmentScheme(t, clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)))
 
 	tok, err := iss.Issue(testEnrollTenant, testEnrollDevice)
 	require.NoError(t, err)
 
 	id, err := ver.Verify(context.Background(), tok)
 	require.NoError(t, err)
-	assert.Equal(t, testEnrollTenant, id.Tenant())
+	assert.Equal(t, tenant.TenantID(testEnrollTenant), id.Tenant(), "tenant must be typed + canonical")
 	assert.Equal(t, testEnrollDevice, id.Subject())
 	assert.NotEmpty(t, id.JTI(), "verified identity must surface the jti for the one-time hook")
 }
@@ -120,7 +123,7 @@ func TestEnrollmentCredentialVerifier_Verify_ReturnsSealedIdentity(t *testing.T)
 // credential cannot be used at a business access endpoint.
 func TestEnrollmentCredentialVerifier_Verify_NonReuseBothDirections(t *testing.T) {
 	ks := mustTestKeySet(t)
-	clk := clock.Real()
+	clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	enrollIss, err := NewEnrollmentCredentialIssuer(ks, "gocell", clk, WithIssuerAudiencesFromSlice([]string{testEnrollAud}))
 	require.NoError(t, err)
@@ -168,6 +171,25 @@ func TestEnrollmentCredentialVerifier_Verify_RejectsNonDevice(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
 
+// TestEnrollmentCredentialVerifier_Verify_RejectsMissingJTI forges a well-formed,
+// device-scoped enrollment token that carries NO jti. The verifier must fail
+// closed (S3): a credential without a jti cannot be keyed in the EST front-end's
+// replay ledger, so accepting it would open a replay hole.
+func TestEnrollmentCredentialVerifier_Verify_RejectsMissingJTI(t *testing.T) {
+	ks := mustTestKeySet(t)
+	clk := clock.Real()
+	jwtVer, err := NewJWTVerifier(ks, clk, WithExpectedAudiences(testEnrollAud))
+	require.NoError(t, err)
+	ver, err := NewEnrollmentCredentialVerifier(jwtVer)
+	require.NoError(t, err)
+
+	// device-scoped + canonical tenant, but signRawEnrollmentJWT writes no jti claim.
+	noJTITok := signRawEnrollmentJWT(t, ks, clk, string(PrincipalKindClaimDevice), testEnrollTenant)
+	_, err = ver.Verify(context.Background(), noJTITok)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
 func TestEnrollmentCredentialVerifier_Verify_RejectsExpired(t *testing.T) {
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	fc := clockmock.New(fixedNow)
@@ -182,31 +204,35 @@ func TestEnrollmentCredentialVerifier_Verify_RejectsExpired(t *testing.T) {
 }
 
 // TestNewEnrollmentIdentity_FailsClosed exercises the sealed constructor directly:
-// empty tenant or subject is rejected, independent of the verification path.
+// a non-canonical/empty tenant, empty subject, or empty jti is rejected,
+// independent of the verification path.
 func TestNewEnrollmentIdentity_FailsClosed(t *testing.T) {
 	tests := []struct {
 		name    string
 		tenant  string
 		subject string
+		jti     string
 		wantErr bool
 	}{
-		{"valid", testEnrollTenant, testEnrollDevice, false},
-		{"empty tenant", "", testEnrollDevice, true},
-		{"empty subject", testEnrollTenant, "", true},
-		{"both empty", "", "", true},
+		{"valid", testEnrollTenant, testEnrollDevice, "jti-1", false},
+		{"empty tenant", "", testEnrollDevice, "jti-1", true},
+		{"non-canonical tenant", "not-a-uuid", testEnrollDevice, "jti-1", true},
+		{"empty subject", testEnrollTenant, "", "jti-1", true},
+		{"empty jti", testEnrollTenant, testEnrollDevice, "", true},
+		{"all empty", "", "", "", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id, err := newEnrollmentIdentity(tc.tenant, tc.subject, "jti-1")
+			id, err := newEnrollmentIdentity(tc.tenant, tc.subject, tc.jti)
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.tenant, id.Tenant())
+			assert.Equal(t, tenant.TenantID(tc.tenant), id.Tenant())
 			assert.Equal(t, tc.subject, id.Subject())
-			assert.Equal(t, "jti-1", id.JTI())
+			assert.Equal(t, tc.jti, id.JTI())
 		})
 	}
 }
