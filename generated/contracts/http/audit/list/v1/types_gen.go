@@ -42,16 +42,16 @@ type ResponseDataItem struct {
 	EventID       string `json:"eventId"`
 	EventType     string `json:"eventType"`
 	ActorID       string `json:"actorId"`
-	SubjectID     string `json:"subjectId,omitempty"`
-	TenantID      string `json:"tenantId,omitempty"`
-	CorrelationID string `json:"correlationId,omitempty"`
-	TraceID       string `json:"traceId,omitempty"`
+	SubjectID     string `json:"subjectId"`
+	TenantID      string `json:"tenantId"`
+	CorrelationID string `json:"correlationId"`
+	TraceID       string `json:"traceId"`
 	// format: date-time
-	OccurredAt string `json:"occurredAt,omitempty"`
+	OccurredAt *string `json:"occurredAt"`
 	// format: date-time
 	Timestamp string `json:"timestamp"`
-	Scope     string `json:"scope,omitempty"`
-	Payload   any    `json:"payload,omitempty"`
+	Scope     string `json:"scope"`
+	Payload   any    `json:"payload"`
 }
 
 // ToMap projects ResponseDataItem into the column map the masking funnel
@@ -60,39 +60,31 @@ type ResponseDataItem struct {
 // feed the map to the funnel — the only way to populate the projection-typed
 // Response.Data. ToMap itself returns a plain map and grants no bypass: a
 // []projection.ResourceProjection is obtainable solely via the sealed constructors.
-// Keys mirror the wire JSON field names so the masked view's field set equals this
-// DTO's field set. Optional fields (omitempty) are only included when non-zero,
-// matching the struct json.Marshal serialization path.
+//
+// It emits the FULL, STABLE column set: every field is an unconditional entry,
+// always present, keyed by its wire JSON name. The masking funnel can only redact
+// a key it can see (applyMask is a no-op for an absent key), so a uniform
+// always-present column set is what closes the presence-based side channel — field
+// presence never reveals whether a masked column held data (ADR 202606112000-1350
+// Decision 2; PROJECTION-TOMAP-FULL-COLUMN-SET-01). There is NO conditional /
+// omitempty omission (that #2159 regression re-opened the side channel, #1875). A
+// nullable column is a pointer (*T): its nil marshals to JSON null — schema-valid
+// "no value" with the key still present and maskable.
 func (i ResponseDataItem) ToMap() map[string]any {
-	m := map[string]any{
-		"id":        i.ID,
-		"eventId":   i.EventID,
-		"eventType": i.EventType,
-		"actorId":   i.ActorID,
-		"timestamp": i.Timestamp,
+	return map[string]any{
+		"id":            i.ID,
+		"eventId":       i.EventID,
+		"eventType":     i.EventType,
+		"actorId":       i.ActorID,
+		"subjectId":     i.SubjectID,
+		"tenantId":      i.TenantID,
+		"correlationId": i.CorrelationID,
+		"traceId":       i.TraceID,
+		"occurredAt":    i.OccurredAt,
+		"timestamp":     i.Timestamp,
+		"scope":         i.Scope,
+		"payload":       i.Payload,
 	}
-	if i.SubjectID != "" {
-		m["subjectId"] = i.SubjectID
-	}
-	if i.TenantID != "" {
-		m["tenantId"] = i.TenantID
-	}
-	if i.CorrelationID != "" {
-		m["correlationId"] = i.CorrelationID
-	}
-	if i.TraceID != "" {
-		m["traceId"] = i.TraceID
-	}
-	if i.OccurredAt != "" {
-		m["occurredAt"] = i.OccurredAt
-	}
-	if i.Scope != "" {
-		m["scope"] = i.Scope
-	}
-	if i.Payload != nil {
-		m["payload"] = i.Payload
-	}
-	return m
 }
 
 // ListResponseObject is the typed response envelope for

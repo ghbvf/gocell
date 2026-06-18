@@ -33,9 +33,10 @@
           "description": "Time this presence reading was determined (freshness anchor); always present even when state is unknown."
         },
         "lastSeenAt": {
-          "type": "string",
+          "type": ["string", "null"],
           "format": "date-time",
-          "maxLength": 64
+          "maxLength": 64,
+          "description": "Last actual device contact time. null when the device has never been seen; the key is always present (stable column set, #1875)."
         },
         "tenantId": {
           "type": "string",
