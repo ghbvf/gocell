@@ -46,7 +46,12 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 	writer := adapterpg.NewOutboxWriter(shared.Clock)
-	shared.PG = capability.NewPGProvider(txMgr, writer, pool.DB())
+	// #2341: shared.PG is a per-cell PGSet; wrap the one pool as the colocated
+	// provider serving every postgres cell.
+	prov := capability.NewPGProvider(txMgr, writer, pool.DB())
+	pgSet, err := capability.NewPGSet([]capability.PGInstance{{Provider: prov, Cells: generatedPostgresCells()}})
+	require.NoError(t, err, "build colocated PGSet")
+	shared.PG = pgSet
 
 	mods := generatedCellModules()
 	_ = locals // locals used only for shared deps construction, not module wiring

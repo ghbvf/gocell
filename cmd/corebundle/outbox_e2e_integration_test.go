@@ -103,7 +103,11 @@ func buildE2EConfigCoreShared(
 	// the caller set. The key provider is self-built by configcore.Module.Provide.
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	shared.Topology = mkTopo("real", "postgres", true)
-	shared.PG = pgProvider
+	// #2341: shared.PG is a per-cell PGSet; wrap the e2e pool as the colocated
+	// provider serving every postgres cell.
+	pgSet, err := capability.NewPGSet([]capability.PGInstance{{Provider: pgProvider, Cells: generatedPostgresCells()}})
+	require.NoError(t, err, "build colocated PGSet for e2e")
+	shared.PG = pgSet
 	shared.Publisher = eb
 	shared.Subscriber = eb
 	return shared
@@ -175,10 +179,16 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// Build configcore cell via the new platform module path.
 	cfgShared := buildE2EConfigCoreShared(t, eb, e2ePGProvider)
 	cfgResult := buildConfigCoreCellFromShared(t, ctx, cfgShared)
-	relayBootstrapOpts := cfgResult.BootstrapOpts
-	// Relay is registered via independent bootstrap opts, not via a PoolResource.
+	// #2341: the relay moved from configcore to the composition root (cap_wiring), so
+	// configcore no longer contributes relay bootstrap opts. The e2e test injects its
+	// own pool, so it builds the per-pool relay the same way cap_wiring does
+	// (buildAssemblyRelay) and registers it via WithRelay — this is what drains the
+	// outbox into the in-memory bus below.
+	relay, relayErr := buildAssemblyRelay(cfgShared, e2ePool, "configcore")
+	require.NoError(t, relayErr, "build per-pool relay must succeed")
+	relayBootstrapOpts := []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relay)}
 	require.NotEmpty(t, relayBootstrapOpts,
-		"A11 regression guard: bootstrapOpts MUST carry relay ManagedResource in PG mode")
+		"A11 regression guard: the per-pool relay MUST be registered in PG mode (#2341: from cap_wiring, not configcore)")
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
@@ -506,8 +516,11 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// Build configcore cell via the new platform module path.
 	cfgShared := buildE2EConfigCoreShared(t, eb, e2ePGProvider)
 	cfgResult := buildConfigCoreCellFromShared(t, ctx, cfgShared)
-	relayBootstrapOpts := cfgResult.BootstrapOpts
-	require.NotEmpty(t, relayBootstrapOpts, "relay bootstrap opts must be non-empty in postgres mode")
+	// #2341: relay moved to cap_wiring; build it the same way and register via WithRelay.
+	relay, relayErr := buildAssemblyRelay(cfgShared, e2ePool, "configcore")
+	require.NoError(t, relayErr, "build per-pool relay must succeed")
+	relayBootstrapOpts := []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relay)}
+	require.NotEmpty(t, relayBootstrapOpts, "per-pool relay must be registered in postgres mode (#2341)")
 
 	// --- Step 4: Stub internal server —
 	// Simulates GET /internal/v1/config/{key} — the endpoint that
