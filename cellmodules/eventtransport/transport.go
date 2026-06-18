@@ -2,6 +2,8 @@ package eventtransport
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -54,10 +56,14 @@ type Transport struct {
 // this package stays pure with respect to os.Getenv and is exhaustively
 // unit-testable.
 type Config struct {
-	// AMQPURL is the RabbitMQ connection URL. Required (non-empty) in postgres
-	// topology; ignored in demo topology. cmd/corebundle convention:
-	// GOCELL_AMQP_URL.
-	AMQPURL string
+	// Cells maps each broker-requiring cell ID to its resolved per-cell AMQP URL.
+	// The composition root reads each cell's GOCELL_<CELLID>_AMQP_URL (falling back
+	// to the assembly-wide GOCELL_AMQP_URL) and passes the resolved URLs here. It is
+	// the broker-side twin of percellpg.Config.Cells (per-cell DSN): dedupBrokerURL
+	// collapses an identical set to one connection (colocated, behavior-preserving)
+	// and fail-closes on distinct URLs (egress-only — see dedupBrokerURL). Required
+	// (non-empty, every URL non-empty) in postgres topology; ignored in demo.
+	Cells map[string]string
 
 	// connOpts are optional rabbitmq.ConnectionOption values. Production passes
 	// none; the package's own tests inject rabbitmq.WithDialFunc(fakeDial) so the
@@ -87,20 +93,82 @@ type brokerSpec struct {
 }
 
 // resolveBrokerSpec is the pure topology gate. demo/memory topology selects the
-// in-memory bus; postgres topology selects RabbitMQ and REQUIRES a non-empty
-// broker URL — a missing URL is a fail-closed startup error, never a silent
-// in-memory fallback (#1940's core invariant).
+// in-memory bus (Cells ignored); postgres topology dedups the per-cell broker
+// URLs and selects RabbitMQ — a missing/empty/distinct set is a fail-closed
+// startup error, never a silent in-memory fallback (#1940's core invariant).
 func resolveBrokerSpec(topo bootstrap.Topology, cfg Config) (brokerSpec, error) {
 	if topo.StorageBackend() != bootstrap.StorageBackendPostgres {
 		return brokerSpec{kind: brokerInMemory}, nil
 	}
-	if cfg.AMQPURL == "" {
-		return brokerSpec{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"postgres topology requires a real event broker; set GOCELL_AMQP_URL "+
-				"(no silent in-memory fallback — the relay must publish durable outbox "+
-				"entries to a broker, not an in-process bus)")
+	url, err := dedupBrokerURL(cfg.Cells)
+	if err != nil {
+		return brokerSpec{}, err
 	}
-	return brokerSpec{kind: brokerRabbitMQ, url: cfg.AMQPURL}, nil
+	return brokerSpec{kind: brokerRabbitMQ, url: url}, nil
+}
+
+// dedupBrokerURL is the PURE per-cell broker-URL gate + dedup. It decides which
+// single broker URL the assembly connection is opened from; it performs NO I/O.
+// It is the broker-side twin of cellmodules/percellpg.Resolve (per-cell DSN dedup):
+// both feed the keyed relay fan-out seam (#2152 PR-1, bootstrap.WithRelay) and
+// must lift their ">1 distinct" fail-closed together once N consumers are wired
+// (#2341 for the relay/pool source, plus the ingress phase6 N-router follow-up).
+//
+// Returns the alphabetically-first cell's URL when there is exactly one distinct
+// URL (colocated). Fail-closed for:
+//   - empty Cells (postgres topology with no broker cells),
+//   - any empty per-cell URL (names the missing GOCELL_<CELLID>_AMQP_URL),
+//   - >1 distinct URL. This is the egress-only boundary (#2152 PR-2): with only
+//     the relay (publisher) fanned out and a single subscriber, distinct per-cell
+//     brokers would orphan events (cell A publishes to broker A; the lone
+//     subscriber consumes only the agreed broker). Colocated assemblies must set
+//     an identical GOCELL_<CELLID>_AMQP_URL for every broker cell.
+func dedupBrokerURL(cells map[string]string) (string, error) {
+	// Sort cell IDs for deterministic error messages + a stable agreed-URL pick.
+	cellIDs := make([]string, 0, len(cells))
+	for id := range cells {
+		cellIDs = append(cellIDs, id)
+	}
+	sort.Strings(cellIDs)
+
+	// Empty-cell-set gate: postgres topology with no broker cells is a fail-closed
+	// misconfiguration, not a silent no-op (also guards the cellIDs[0] index below).
+	if len(cellIDs) == 0 {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"eventtransport: postgres topology requires at least one broker cell "+
+				"with a broker URL; refusing to start with an empty cell set")
+	}
+
+	// Dedup URLs; fail-closed on empty URL.
+	seen := make(map[string]struct{}, len(cellIDs))
+	for _, id := range cellIDs {
+		url := strings.TrimSpace(cells[id])
+		if url == "" {
+			envVar := "GOCELL_" + strings.ToUpper(id) + "_AMQP_URL"
+			return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"eventtransport: postgres topology requires a per-cell broker URL for "+
+					"every broker cell; set GOCELL_<CELLID>_AMQP_URL (no silent in-memory "+
+					"fallback — the relay must publish durable outbox entries to a broker, "+
+					"not an in-process bus)",
+				errcode.WithInternal(errcode.InternalAttr("cell_id", id)),
+				errcode.WithInternal(errcode.InternalAttr("env_var", envVar)),
+			)
+		}
+		seen[url] = struct{}{}
+	}
+
+	if len(seen) > 1 {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"eventtransport: per-cell distinct broker URLs require split-topology ingress "+
+				"fan-out (phase6 N-router) plus per-cell relay fan-out, not yet wired "+
+				"(egress-only, #2152 PR-2 / #2341); colocated assemblies must configure an "+
+				"identical GOCELL_<CELLID>_AMQP_URL for every broker cell",
+			errcode.WithInternal(errcode.InternalAttr("distinct_url_count", len(seen))),
+			errcode.WithInternal(errcode.InternalAttr("cell_ids", strings.Join(cellIDs, ","))),
+		)
+	}
+
+	return strings.TrimSpace(cells[cellIDs[0]]), nil
 }
 
 // Resolve selects the event transport for topo. clk is the mandatory positional

@@ -64,14 +64,21 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	}()
 
 	// Topology-gated event transport (#1940): demo topology → in-process bus;
-	// postgres topology → real broker (RabbitMQ from GOCELL_AMQP_URL), fail-closed
-	// when the broker URL is missing. The in-memory bus is reachable ONLY through
-	// eventtransport.Resolve's demo branch — cmd/corebundle must not import
-	// runtime/eventbus directly (depguard corebundle-no-direct-eventbus,
-	// COREBUNDLE-EVENTBUS-FUNNEL-01).
-	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{
-		AMQPURL: os.Getenv("GOCELL_AMQP_URL"),
-	})
+	// postgres topology → real broker (RabbitMQ), fail-closed when the broker URL is
+	// missing. The in-memory bus is reachable ONLY through eventtransport.Resolve's
+	// demo branch — cmd/corebundle must not import runtime/eventbus directly
+	// (depguard corebundle-no-direct-eventbus, COREBUNDLE-EVENTBUS-FUNNEL-01).
+	//
+	// #2152 PR-2: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL, falling
+	// back to GOCELL_AMQP_URL) for the broker-requiring cells (= the postgres cell
+	// set), then deduped by eventtransport. Colocated assemblies share one
+	// GOCELL_AMQP_URL → one connection (behavior-preserving); distinct per-cell URLs
+	// are fail-closed (egress-only — a single subscriber cannot consume N brokers).
+	brokerCells := make(map[string]string, len(generatedPostgresCells()))
+	for _, cellID := range generatedPostgresCells() {
+		brokerCells[cellID] = LoadBrokerURL(strings.ToUpper(cellID))
+	}
+	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: brokerCells})
 	if err != nil {
 		return nil, nil, err
 	}
