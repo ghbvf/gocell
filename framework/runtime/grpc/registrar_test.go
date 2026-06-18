@@ -604,6 +604,116 @@ func TestServiceRegistrar_Register_UnknownPublicMethodKey_Panics(t *testing.T) {
 	_ = reg.Register(spec)
 }
 
+// --- IsPasswordResetExemptMethod (#1382): per-method password-reset-exempt overlay ------
+
+// TestServiceRegistrar_IsPasswordResetExemptMethod verifies that
+// GRPCServiceSpec.PasswordResetExemptMethods (#1382) are aggregated into the
+// registrar's password-reset-exempt set after Register, and that undeclared /
+// unknown methods report false (fail-closed default).
+func TestServiceRegistrar_IsPasswordResetExemptMethod(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	// Also requires MethodPermissions: exempt methods are non-public and still need a permission.
+	spec.PasswordResetExemptMethods = []string{"/grpc.health.v1.Health/Check"}
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Check": authz.PermDeviceCommand().String(),
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	require.NoError(t, reg.Register(spec))
+
+	assert.True(t, reg.IsPasswordResetExemptMethod("/grpc.health.v1.Health/Check"),
+		"a method declared in spec.PasswordResetExemptMethods must be exempt")
+	assert.False(t, reg.IsPasswordResetExemptMethod("/grpc.health.v1.Health/Watch"),
+		"a registered-but-undeclared method must not be exempt (fail-closed)")
+	assert.False(t, reg.IsPasswordResetExemptMethod("/nonexistent.Svc/Method"),
+		"an unknown method must not be exempt (fail-closed)")
+}
+
+// TestServiceRegistrar_IsPasswordResetExemptMethod_EmptyDefault verifies a
+// registrar whose specs declare no PasswordResetExemptMethods treats every method
+// as blocked on reset (fail-closed).
+func TestServiceRegistrar_IsPasswordResetExemptMethod_EmptyDefault(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+	spec := synthSpec("grpc.health.v1", "test-cell", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	require.NoError(t, reg.Register(spec))
+
+	assert.False(t, reg.IsPasswordResetExemptMethod("/grpc.health.v1.Health/Check"),
+		"no PasswordResetExemptMethods declared → every method blocked on reset (fail-closed)")
+}
+
+// TestServiceRegistrar_IsPasswordResetExemptMethod_MultiSpecAggregation verifies
+// PasswordResetExemptMethods are aggregated ACROSS multiple registered specs (each
+// cell contributes its own exempt set to the one shared registrar the auth interceptor
+// consults).
+func TestServiceRegistrar_IsPasswordResetExemptMethod_MultiSpecAggregation(t *testing.T) {
+	t.Parallel()
+
+	reg, _ := newRegistrar()
+
+	specA := synthSpec("grpc.health.a.v1", "cell-a", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	specA.PasswordResetExemptMethods = []string{"/grpc.health.v1.Health/Check"}
+	specA.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Check": authz.PermDeviceCommand().String(),
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	require.NoError(t, reg.Register(specA))
+
+	// A second spec registering a DIFFERENT service contributes its own exempt set.
+	specB := cell.GRPCServiceSpec{
+		ContractID:                "grpc.spy.b.v1",
+		CellID:                    "cell-b",
+		Listener:                  cell.PrimaryListener,
+		PasswordResetExemptMethods: []string{"/spy.v1.Spy/Ping"},
+		MethodPermissions: map[string]string{
+			"/spy.v1.Spy/Ping": authz.PermDeviceCommand().String(),
+		},
+		Register: func(r grpc.ServiceRegistrar) {
+			r.RegisterService(&grpc.ServiceDesc{
+				ServiceName: "spy.v1.Spy",
+				HandlerType: (*any)(nil),
+				Methods:     []grpc.MethodDesc{{MethodName: "Ping"}},
+			}, struct{}{})
+		},
+	}
+	require.NoError(t, reg.Register(specB))
+
+	assert.True(t, reg.IsPasswordResetExemptMethod("/grpc.health.v1.Health/Check"), "specA's exempt method must aggregate")
+	assert.True(t, reg.IsPasswordResetExemptMethod("/spy.v1.Spy/Ping"), "specB's exempt method must aggregate")
+	assert.False(t, reg.IsPasswordResetExemptMethod("/spy.v1.Spy/Other"), "an undeclared method stays blocked (fail-closed)")
+}
+
+// TestServiceRegistrar_Register_UnknownPasswordResetExemptMethodKey_Panics verifies
+// the same referential check for the PasswordResetExemptMethods overlay.
+func TestServiceRegistrar_Register_UnknownPasswordResetExemptMethodKey_Panics(t *testing.T) {
+	t.Parallel()
+	reg := boundRegistrar(t, true)
+	spec := synthSpec("grpc.health.staleexempt.v1", "cell-staleexempt", func(r grpc.ServiceRegistrar) {
+		grpc_health_v1.RegisterHealthServer(r, health.NewServer())
+	})
+	spec.PasswordResetExemptMethods = []string{"/grpc.health.v1.Health/Nonexistent"}
+	spec.MethodPermissions = map[string]string{
+		"/grpc.health.v1.Health/Check": authz.PermDeviceCommand().String(),
+		"/grpc.health.v1.Health/Watch": authz.PermDeviceCommand().String(),
+	}
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "unknown PasswordResetExemptMethods key must panic")
+		msg := fmt.Sprint(rec)
+		assert.Contains(t, msg, "does not name a method registered")
+	}()
+	_ = reg.Register(spec)
+}
+
 // --- ResourceFieldForMethod (#2207): per-message resource extraction ----------
 
 // TestServiceRegistrar_ResourceFieldForMethod verifies that a method declared in
