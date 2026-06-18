@@ -721,6 +721,29 @@ var expectedColumns = []expectedColumn{
 	{Table: "webhook_sources", Column: "value_nonce", Type: "bytea", NotNull: false},
 	{Table: "webhook_sources", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "webhook_sources", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	// contract_registrations + contract_registration_events (066, #2236 303-US5).
+	// The runtime contract-registry store: registering the full load-bearing column
+	// shape (the colsProjection set the repo SELECTs/INSERTs by name) so a future
+	// migration that drops/retypes a column the repo depends on surfaces at readyz,
+	// not as a runtime scan error. payload_schema is an opaque ref/hash (TEXT, not
+	// JSONB); state/kind are sealed/opaque strings.
+	{Table: "contract_registrations", Column: "tenant_id", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "id", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "kind", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "payload_schema", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "submitter", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "approver", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "state", Type: "text", NotNull: true},
+	{Table: "contract_registrations", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "contract_registrations", Column: "updated_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "contract_registration_events", Column: "tenant_id", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "registration_id", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "seq", Type: "integer", NotNull: true},
+	{Table: "contract_registration_events", Column: "from_state", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "to_state", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "actor", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "reason", Type: "text", NotNull: true},
+	{Table: "contract_registration_events", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true},
 }
 
 // frozenColumnTables lists tables for which the schema guard enforces an
@@ -781,6 +804,12 @@ var expectedPKs = []expectedPK{
 	// webhook_sources (063_create_webhook_sources.sql): PK on source_id (global,
 	// no tenant — one source identity per deployment).
 	{Table: "webhook_sources", Columns: []string{"source_id"}},
+	// contract_registrations / _events (066, #2236): composite per-tenant PKs — a
+	// registration id is unique only within a tenant, and a history event is keyed
+	// (tenant_id, registration_id, seq). The repo relies on these PKs (Create
+	// dedups via ON CONFLICT (tenant_id, id); the event seq is per-registration).
+	{Table: "contract_registrations", Columns: []string{"tenant_id", "id"}},
+	{Table: "contract_registration_events", Columns: []string{"tenant_id", "registration_id", "seq"}},
 }
 
 // expectedDefaults is the load-bearing column-default registry. Only defaults a
@@ -806,6 +835,12 @@ var expectedDefaults = []expectedDefault{
 	// to fail NOT NULL.
 	{Table: "devices", Column: "cert_epoch", Default: "1"},
 	// devices.renewal_requested_epoch was dropped by 062 (#1820).
+	// contract_registrations.approver (066, #2236) — Create OMITS the approver
+	// column and relies on DEFAULT '' (a submission has no approver until the
+	// pending-approval → approved transition records one). A dropped default would
+	// fail every Create at write time. payload_schema/from_state/reason also default
+	// to '' but the write path supplies them explicitly, so only approver is load-bearing.
+	{Table: "contract_registrations", Column: "approver", Default: "''::text"},
 }
 
 // expectedIndexes covers both unique and non-unique indexes across S3F tables.

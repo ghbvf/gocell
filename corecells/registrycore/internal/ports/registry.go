@@ -35,6 +35,20 @@ import (
 // back, no half state). Transition's legality is the kernel's single source of
 // truth — implementations validate via registry.Transition(from, to) and MUST NOT
 // re-encode the state machine.
+//
+// # Read scoping under RLS (caller obligation; #2236 review F1)
+//
+// The PG tables carry FORCE ROW LEVEL SECURITY (migration 066). Under the restricted
+// serving role (NOBYPASSRLS) the tenant_isolation policy fail-closes any access whose
+// app.tenant_id GUC is unset — an UNSCOPED read returns 0 rows and an unscoped write
+// is rejected (proven by TestContractRegistrations_RLS_TenantIsolation_ServingRole).
+// The GUC is injected (SET LOCAL) only inside TxManager.RunInTx. Writes already require
+// an ambient tx; the read methods (Get/List/History) therefore impose the same caller
+// obligation: run them within a tenant-scoped tx (tenant.WithScope(ctx, t) + RunInTx),
+// the way the bound service wires reads through a scopedread funnel à la
+// configcore/internal/scopedread. The typed tenant param is the primary isolation;
+// RLS is the DB-Hard backstop the caller must keep effective by scoping reads. That
+// service-side funnel is wired in US6 (#2245) — tracked separately.
 type Registry interface {
 	// Create records a new submission in the submitted state plus its initial
 	// migration event (From = zero sentinel, To = submitted), atomically, scoped to

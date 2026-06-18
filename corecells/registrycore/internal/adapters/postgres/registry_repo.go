@@ -43,6 +43,13 @@ func NewRegistry(pool *pgxpool.Pool, clk clock.Clock) *Registry {
 }
 
 // resolveRead returns the DBTX for read paths (ambient tx if present, else pool).
+//
+// RLS caller obligation (#2236 review F1): under FORCE ROW LEVEL SECURITY + the
+// restricted serving role, a pool read with no app.tenant_id GUC fail-closes to 0
+// rows. The GUC is set only inside TxManager.RunInTx, so the bound service MUST run
+// tenant-scoped reads within a tenant.WithScope + RunInTx (scopedread funnel, US6) —
+// the pool fallback here is for superuser/test paths and bootstrap reads only. See
+// the ports.Registry godoc "Read scoping under RLS".
 func (r *Registry) resolveRead(ctx context.Context) DBTX {
 	if r.session != nil {
 		return r.session.resolve(ctx)
