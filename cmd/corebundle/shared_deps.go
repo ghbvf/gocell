@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/cellmodules/celltls"
@@ -193,11 +194,20 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// cells this process hosts (colocated) vs reaches remotely. The colocated set
 	// IS the selected role's footprint; we log the DERIVED spec (validated by
 	// SpecForRole) rather than the raw GOCELL_CELL_ROLE env to avoid log-injection
-	// taint (gosec G706). split=false ∧ empty colocated = the all-colocated monolith.
+	// taint (gosec G706). `split` keys on a real cross-process boundary (≥1 remote
+	// cell) — a single-group role is colocated-only, NOT a split. remote_cell_endpoints
+	// gives the full cellID→endpoint placement (sorted) so operators can audit who
+	// each remote peer is, not just the count (#2278 review F3/F4).
+	remoteCellEndpoints := make([]string, 0, len(deployTopoSpec.Remote))
+	for _, r := range deployTopoSpec.Remote {
+		remoteCellEndpoints = append(remoteCellEndpoints, r.CellID+"="+r.Endpoint)
+	}
+	sort.Strings(remoteCellEndpoints)
 	slog.Info("corebundle: deployment role",
-		slog.Bool("split", len(deployTopoSpec.Colocated) > 0 || len(deployTopoSpec.Remote) > 0),
+		slog.Bool("split", len(deployTopoSpec.Remote) > 0),
 		slog.Any("colocated_cells", deployTopoSpec.Colocated),
-		slog.Int("remote_cells", len(deployTopoSpec.Remote)))
+		slog.Int("remote_cells", len(deployTopoSpec.Remote)),
+		slog.Any("remote_cell_endpoints", remoteCellEndpoints))
 
 	loaded = true
 	return compShared, locals, nil

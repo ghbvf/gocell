@@ -119,6 +119,45 @@ func TestNewForRole_SplitStrangerModuleRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "closed set")
 }
 
+// TestNewForRole_SplitNilModuleFails verifies that a nil module in the split
+// branch is NOT silently dropped: NewForRole passes it through to Build, whose
+// nil-guard fail-fasts (#2278 review F1) — preserving the same non-nil contract
+// plain New() relies on.
+func TestNewForRole_SplitNilModuleFails(t *testing.T) {
+	ctx := context.Background()
+	spec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"mod1"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "mod2", Endpoint: "mod2.svc:9090"}},
+	}
+	shared := minimalSharedDeps(t)
+	shared.DeploymentTopology = spec
+	m1 := &fakeCellModule{id: "mod1", cell: stubCell("mod1")}
+
+	_, err := NewForRole([]string{"mod1", "mod2"}, spec, m1, nil).Build(ctx, shared, noopRuntimeOpts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "module list contains nil")
+}
+
+// TestNewForRole_SpecMismatchSharedFails verifies the single deployment-topology
+// source guard (#2278 review F2): if the spec NewForRole filtered with differs
+// from SharedDeps.DeploymentTopology that Build seals, Build fail-fasts — the
+// mounted subset and the sealed runtime topology must not diverge.
+func TestNewForRole_SpecMismatchSharedFails(t *testing.T) {
+	ctx := context.Background()
+	roleSpec := bootstrap.DeploymentTopologySpec{
+		Colocated: []string{"mod1"},
+		Remote:    []bootstrap.RemoteCellEndpoint{{CellID: "mod2", Endpoint: "mod2.svc:9090"}},
+	}
+	shared := minimalSharedDeps(t)
+	// shared carries a DIFFERENT topology than the spec NewForRole filtered with.
+	shared.DeploymentTopology = bootstrap.DeploymentTopologySpec{Colocated: []string{"mod1", "mod2"}}
+	m1 := &fakeCellModule{id: "mod1", cell: stubCell("mod1")}
+
+	_, err := NewForRole([]string{"mod1", "mod2"}, roleSpec, m1).Build(ctx, shared, noopRuntimeOpts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DeploymentTopology")
+}
+
 // TestNewForRole_MonolithDoesNotFilter_M12aDriftDetected is the regression guard
 // for the M12a trap: the monolith branch must pass ALL modules to Build
 // unfiltered, so an out-of-assembly module is caught by the closed-set guard

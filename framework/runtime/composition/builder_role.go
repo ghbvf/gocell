@@ -26,10 +26,15 @@ import (
 //     is in neither colocated nor remote — is passed to Build, whose closed-set
 //     guard (closed set = spec.Colocated) mounts the colocated bijection and
 //     rejects a stranger ("not in the assembly closed set"). A nil module is
-//     skipped. Dropping only the known-remote set (rather than keeping only the
-//     colocated set) is deliberate: it routes stranger drift — generatedCellModules
-//     out of sync with the topology groups — into Build's fail-fast instead of a
-//     silent drop (#2278 review).
+//     passed through unchanged so Build's nil-guard fail-fasts on it (never
+//     silently dropped). Dropping only the known-remote set (rather than keeping
+//     only the colocated set) is deliberate: it routes stranger drift —
+//     generatedCellModules out of sync with the topology groups — into Build's
+//     fail-fast instead of a silent drop (#2278 review).
+//
+// The spec is recorded on the Builder (roleSpec); Build asserts it equals
+// SharedDeps.DeploymentTopology so the subset-mount source and the sealed runtime
+// topology cannot diverge (single deployment-topology source).
 //
 // A dropped (remote) module's Provide is never called, so a module MUST open its
 // infrastructure in Provide, not in its constructor — a constructor that opened a
@@ -53,7 +58,9 @@ import (
 func NewForRole(assemblyCellIDs []string, spec bootstrap.DeploymentTopologySpec, allModules ...CellModule) *Builder {
 	// Zero spec → monolith: full assembly closed set, all modules unfiltered.
 	if len(spec.Colocated) == 0 && len(spec.Remote) == 0 {
-		return New(assemblyCellIDs...).With(allModules...)
+		b := New(assemblyCellIDs...).With(allModules...)
+		b.roleSpec = &spec
+		return b
 	}
 	// Explicit spec → split: closed set = colocated subset. Drop ONLY the
 	// known-remote modules; pass colocated + any stranger to Build so its
@@ -65,12 +72,19 @@ func NewForRole(assemblyCellIDs []string, spec bootstrap.DeploymentTopologySpec,
 	mounted := make([]CellModule, 0, len(allModules))
 	for _, m := range allModules {
 		if m == nil {
-			continue // nil module → its colocated cell surfaces as missing in Build
+			// Pass nil through to Build, whose resolveModuleResult fail-fasts on a
+			// nil module ("module list contains nil"). NewForRole must not silently
+			// drop a wiring bug — keep the same non-nil contract the monolith branch
+			// (and plain New) rely on (#2278 review F1).
+			mounted = append(mounted, m)
+			continue
 		}
 		if _, isRemote := remote[m.ID()]; isRemote {
 			continue // remote cell: hosted by another role, reached via transport
 		}
 		mounted = append(mounted, m)
 	}
-	return New(spec.Colocated...).With(mounted...)
+	b := New(spec.Colocated...).With(mounted...)
+	b.roleSpec = &spec
+	return b
 }
