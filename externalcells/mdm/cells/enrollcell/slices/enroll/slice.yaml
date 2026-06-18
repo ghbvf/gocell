@@ -1,0 +1,11 @@
+id: enroll
+belongsToCell: enrollcell
+consistencyLevel: L2
+lifecycle: experimental
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+  waivers: []
+allowedFiles:
+  - "cells/enrollcell/slices/enroll/**"

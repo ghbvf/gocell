@@ -1,0 +1,21 @@
+# GoCell external-cell manifest (Operator-SDK mode). Presence of this file makes
+# the Locator auto-switch to manifest mode. Explicit includes (not excludes-only
+# defaults) so the root-level assembly.yaml is governed and discovery is
+# deterministic — mirrors how examples/<id> declare a root assembly.yaml.
+#
+# contracts/journeys are intentionally NOT listed: PR-0 has none, and an explicit
+# include matching zero files fails closed. Add a `contracts:` entry when the first
+# contract lands (MDM-PR1+).
+version: v1
+modules:
+  - path: .
+    includes:
+      cells:
+        - "cells/*/cell.yaml"
+      slices:
+        - "cells/*/slices/*/slice.yaml"
+      assemblies:
+        - "assembly.yaml"
+    excludes:
+      - "generated/**"
+      - "vendor/**"
