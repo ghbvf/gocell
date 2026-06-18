@@ -60,7 +60,8 @@ func TestDeviceCompliance_V1(t *testing.T) {
 		`"diskEncryption":"unknown","antivirus":"unknown","patch":"bogus","firewall":"unknown"`,
 		`"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"bogus"`,
 	} {
-		c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",`+posture+`}}`))
+		c.MustRejectResponse(t, []byte(`{"data":{`+
+			`"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",`+posture+`}}`))
 	}
 	// regression (codex F1): empty string is NOT a valid enum — required posture closes the
 	// optional-enum + ToMap-ignores-omitempty schema-invalid-wire gap.
