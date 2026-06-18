@@ -45,6 +45,7 @@ require (
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
+	github.com/ghbvf/gocell/adapters/softca v0.0.0
 	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
@@ -82,6 +83,8 @@ replace github.com/ghbvf/gocell/adapters/rabbitmq => ../adapters/rabbitmq
 replace github.com/ghbvf/gocell/adapters/ratelimit => ../adapters/ratelimit
 
 replace github.com/ghbvf/gocell/adapters/redis => ../adapters/redis
+
+replace github.com/ghbvf/gocell/adapters/softca => ../adapters/softca
 
 replace github.com/ghbvf/gocell/adapters/vault => ../adapters/vault
 
