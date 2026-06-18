@@ -24,8 +24,8 @@
 # The bash wrapper auto-fetches refs (gh pr view) + roundBase (`round`) + env
 # session/worktree unless overridden. The 3-round circuit breaker is enforced
 # here — when a changes-requested round is exhausted (round >= maxRounds),
-# `next.agent` is forced to `human` so the #935/#1657 daemons stop dispatching
-# and escalate.
+# `next.agent` is forced to `human` so the external app and /pr-monitor stop
+# dispatching and escalate.
 #
 # Subcommands:
 #   emit-block --kind=K --pr=N [flags]  derive facts -> stdout block line     (online)

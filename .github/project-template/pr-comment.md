@@ -11,7 +11,7 @@
 
 ## 机器块（`gocell-pr-meta:v1`，隐藏，自动化执行器消费）
 
-> 五种评论 footer **之后**各带一行**隐藏机器块**，供 #935/#1657 本机执行器（Codex review daemon / Claude fix monitor）dispatch：
+> 五种评论 footer **之后**各带一行**隐藏机器块**，供外部 app 实时监听与 `/pr-monitor` 单次兜底检查消费：
 > `<!-- gocell-pr-meta:v1 <标准 base64(JSON)> -->`（CommonMark 隐藏，肉眼不可见）。
 >
 > - **产**（贴评论的技能/工具）：调 `bash hack/automation/pr-meta.sh emit-block --kind=<kind> --pr=<N> [flags]` 得该行，**追加到填好的 body 末尾**再贴。producer 只供不可推导的事实：`--findings='<json>'`（ship/fix/pr-review 计数）/ `--ci='<json>'`（ci）/ `--oos='<json>'`（oos）；pr-review 另需 `--phase=review|check` + `--verdict=<结论>`。**phase/verdict/cycle.round、refs(repo/baseRef/headRef/headSha)、session/worktree 全部由 emit-block 派生**（refs 经 `gh pr view`、roundBase 经 `round <PR>`、session/worktree 经 env；可经 `--head-sha`/`--base-ref`/`--head-ref`/`--round-base`/`--session`/`--worktree` override）。无 `jq` 拼 facts JSON、无手写 phase/verdict/round——`schema`/`cycle.exhausted`/`next`/`idempotencyKey` 亦 emit-block 派生，手填无意义。
@@ -21,7 +21,7 @@
 > - **标准 base64（非 url）**：CommonMark 禁 HTML 注释正文含 `--`；标准 base64 字母表 `A-Za-z0-9+/=` 无 `-`，结构上不可能产 `--`/`-->`（base64url 含 `-`，会破块）。
 > - schema 单源 = `hack/automation/schema/pr-meta.v1.json`；helper = `hack/automation/pr-meta.sh`（`emit-block`/`decode`/`extract`/`round`/`selftest`）。消费侧只接受 canonical 块（派生字段必须 = emit-block 由块自身 facts 重算结果，防伪造）+ 仅信 OWNER/MEMBER/COLLABORATOR 作者评论。**人读 footer 不动其格式**——footer 人读、机器块 dispatch，二者并存。
 > - **kind 列表**：`ship`（pm:ship）/ `fix`（pm:fix）/ `pr-review`（pm:pr-review）/ `ci`（pm:ci）/ `oos`（pm:oos）。phase/verdict/round 派生见上方 `derive_facts` 单源条。
-> - **protocol 健全性测试**：`bash hack/automation/pr-meta.sh selftest`（离线，无网络，make verify 自动触发）。
+> - **protocol 健全性测试**：`bash hack/automation/pr-meta.sh selftest` + `bash hack/automation/pr-handoff-contract-selftest.sh`（离线，无网络，make verify 自动触发）。
 
 ## ship 评论（`<!-- pm:ship -->`）
 

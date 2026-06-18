@@ -27,7 +27,12 @@ const msgTokenIntentFailed = "token intent validation failed"
 // JOSE typ header values written per TokenIntent. RFC 9068 §2.1 mandates
 // "at+jwt" for access tokens.
 const (
-	jwtTypAccess    = "at+jwt"
+	jwtTypAccess = "at+jwt"
+	// jwtTypEnroll is the JOSE typ header for a device first-enrollment credential
+	// (TokenIntentEnrollment). A distinct typ keeps the typ↔token_use agreement
+	// check (VerifyIntent) able to reject an enrollment credential replayed as an
+	// access token on the JOSE-header channel as well as the claim channel.
+	jwtTypEnroll    = "enroll+jwt"
 	msgInvalidToken = "invalid token"
 	// tokenUseClaim is the JWT payload key carrying the TokenIntent value.
 	// Named after AWS Cognito's convention, which is the most widely-adopted
@@ -52,6 +57,8 @@ func TypHeaderForIntent(intent TokenIntent) string {
 	switch intent {
 	case TokenIntentAccess:
 		return jwtTypAccess
+	case TokenIntentEnrollment:
+		return jwtTypEnroll
 	default:
 		return ""
 	}
@@ -63,6 +70,8 @@ func intentForJWTTyp(typ string) (TokenIntent, bool) {
 	switch typ {
 	case jwtTypAccess:
 		return TokenIntentAccess, true
+	case jwtTypEnroll:
+		return TokenIntentEnrollment, true
 	default:
 		return "", false
 	}

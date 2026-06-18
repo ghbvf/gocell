@@ -136,6 +136,15 @@ type GrpcServiceGenSpec struct {
 	// generated GRPCServiceSpec literal as a map[string]string. Empty → no owner-scoped
 	// per-message resource extraction; all methods use fullMethod as PDP resource (coarse).
 	MethodResources []MethodResource
+	// PasswordResetExemptMethods lists the FULL method names (/{Service}/{Method})
+	// marked exempt from the password-reset gate by the contract's
+	// endpoints.grpc.methods[] overlay (the passwordResetExempt:true entries, #1382).
+	// Composed in buildGrpcServiceSpecFromCU from the overlay + Service FQN;
+	// rendered into the generated GRPCServiceSpec literal so the runtime registrar
+	// aggregates them into the auth interceptor's exempt set.
+	// Empty → no exempt methods (the fail-closed default). Referential integrity
+	// (each name ∈ proto method set) is enforced by the contractgen pre-pass.
+	PasswordResetExemptMethods []string
 }
 
 // MethodPermission pairs a full gRPC method name with its required ABAC action

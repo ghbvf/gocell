@@ -1055,6 +1055,10 @@ func (v *Validator) validateFMT41ForContract(c *metadata.ContractMeta) []Validat
 		// guards above and must run even when one of them fires, so it lives in its own
 		// helper (which also keeps this function under the cognitive-complexity limit).
 		results = append(results, v.validateFMT41Resource(c, file, m)...)
+		// Password-reset-exempt validation (#1382) is the fourth-dimension sibling of
+		// the resource helper — same independence rationale, same cognitive-complexity
+		// reason for living in its own helper.
+		results = append(results, v.validateFMT41PasswordResetExempt(c, file, m)...)
 	}
 	return results
 }
@@ -1099,6 +1103,39 @@ func (v *Validator) validateFMT41Resource(c *metadata.ContractMeta, file string,
 					"whose value identifies the owned resource — see RequirePermissionForResource for the HTTP analog",
 			)}
 		}
+	}
+	return nil
+}
+
+// validateFMT41PasswordResetExempt checks the #1382 password-reset-exempt constraints
+// for a single grpc method overlay entry — the fourth contract-derived auth dimension
+// sibling of validateFMT41Resource. Like that helper it is independent of the
+// name/dup/public guards in validateFMT41ForContract and runs even when one of those
+// fires. At most one finding per entry; two constraints:
+//
+//  1. passwordResetExempt on a public RPC → JWT-exempt, so the password-reset gate
+//     (which runs after authn) never executes and exempting it is contradictory.
+//  2. passwordResetExempt without permission → an exempt method is still non-public
+//     and still requires an ABAC gate; omitting permission makes it a dead 403 (the
+//     exemption is orthogonal to ABAC authorization, not a replacement for it).
+func (v *Validator) validateFMT41PasswordResetExempt(c *metadata.ContractMeta, file string, m metadata.GRPCMethodMeta) []ValidationResult {
+	switch {
+	case m.PasswordResetExempt && m.Public:
+		return []ValidationResult{v.newError(
+			codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+			fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q sets BOTH public and "+
+				"passwordResetExempt; a JWT-exempt RPC has no authenticated subject, so the password-reset "+
+				"gate never runs and exempting it is contradictory (#1382)", c.ID, m.Name),
+			"keep public:true (no auth, no reset gate) or permission+passwordResetExempt (ABAC-gated, reset-exempt), not both",
+		)}
+	case m.PasswordResetExempt && m.Permission == "":
+		return []ValidationResult{v.newError(
+			codeFMT41, IssueInvalid, file, fieldEndpointsGRPCMethods,
+			fmt.Sprintf("grpc contract %q endpoints.grpc.methods entry %q sets passwordResetExempt without a "+
+				"permission; an exempt method is still non-public and still requires an ABAC gate, so omitting "+
+				"permission makes it a dead 403 (#1382)", c.ID, m.Name),
+			"add a permission entry for this method — the reset exemption is orthogonal to ABAC authorization",
+		)}
 	}
 	return nil
 }

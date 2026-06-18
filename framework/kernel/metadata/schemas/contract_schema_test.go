@@ -910,6 +910,38 @@ func TestContractSchemaGRPCKind(t *testing.T) {
 			grpcBlock:   `{"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto", "methods": [{"name": "Check", "permission": ""}]}`,
 			expectValid: false,
 		},
+		{
+			name: "method entry passwordResetExempt + permission accepted (#1382)",
+			// passwordResetExempt:true is mutually exclusive with public:true but
+			// orthogonal to permission — an exempt method still requires ABAC gate.
+			grpcBlock: `{
+				"service": "device.command.v1.DeviceCommandService",
+				"proto": "contracts/grpc/device/command/v1/device_command.proto",
+				"methods": [{"name": "IssueCommand", "passwordResetExempt": true, "permission": "device:command"}]
+			}`,
+			expectValid: true,
+		},
+		{
+			name: "method entry passwordResetExempt + public rejected (#1382 mutex)",
+			// passwordResetExempt ⊕ public: a JWT-exempt RPC has no authenticated
+			// subject, so the reset-exempt gate (which runs after authn) is
+			// contradictory.
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "passwordResetExempt": true, "public": true}]
+			}`,
+			expectValid: false,
+		},
+		{
+			name: "method entry passwordResetExempt without permission rejected (#1382 required)",
+			// passwordResetExempt without permission: the method has no permission
+			// overlay and is therefore a dead 403 (no mapping → deny) — rejected.
+			grpcBlock: `{
+				"service": "x.v1.S", "proto": "contracts/grpc/x/v1/x.proto",
+				"methods": [{"name": "Check", "passwordResetExempt": true}]
+			}`,
+			expectValid: false,
+		},
 	}
 
 	for _, tc := range tests {
