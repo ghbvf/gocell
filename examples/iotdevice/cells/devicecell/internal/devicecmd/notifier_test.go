@@ -18,6 +18,11 @@ const notifierTestTimeout = 2 * time.Second
 // must be caught well within this window.
 const notifierNonBlockingTimeout = 200 * time.Millisecond
 
+// notifierNoDeliveryWindow bounds the wait that asserts NO notification arrives
+// (wrong-device / post-unsubscribe negative cases): long enough to catch an
+// erroneous delivery, short enough to keep the test fast.
+const notifierNoDeliveryWindow = 50 * time.Millisecond
+
 // makeEntry builds a minimal command.Entry for the given deviceID.
 func makeEntry(deviceID string) command.Entry {
 	return command.Entry{
@@ -61,7 +66,7 @@ func TestNotifier_Subscribe_DoesNotReceiveOtherDeviceID(t *testing.T) {
 	select {
 	case e := <-ch:
 		t.Errorf("subscriber received unexpected entry %+v for different deviceID", e)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(notifierNoDeliveryWindow):
 		// Expected: no notification delivered.
 	}
 }
@@ -138,7 +143,7 @@ func TestNotifier_Cancel_UnsubscribesFromFutureNotifications(t *testing.T) {
 	select {
 	case e := <-ch:
 		t.Errorf("received entry %+v after cancel — subscriber was not removed", e)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(notifierNoDeliveryWindow):
 		// Expected: no notification.
 	}
 }

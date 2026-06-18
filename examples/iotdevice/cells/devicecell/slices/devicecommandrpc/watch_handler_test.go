@@ -21,6 +21,11 @@ import (
 // watchTestTimeout bounds the WatchCommands snapshot/tail waits (TEST-TIME-LITERAL-01).
 const watchTestTimeout = 2 * time.Second
 
+// watchShortDeadline is the deadline-bound context budget for the no-command
+// timeout test: short enough to elapse quickly, long enough to let the handler
+// establish its watch before the deadline fires.
+const watchShortDeadline = 100 * time.Millisecond
+
 // fakeWatchStream is a minimal commandv1.DeviceCommandService_WatchCommandsServer
 // (grpc.ServerStreamingServer[WatchCommandsResponse]). Embedding the nil
 // grpc.ServerStream satisfies the rest of the method set; the handler only uses
@@ -305,7 +310,7 @@ func TestServer_WatchCommands_TimeoutNoCommand(t *testing.T) {
 	notifier := devicecmd.NewNotifier()
 	srv := newTestServerWithNotifier(t, notifier)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), watchShortDeadline)
 	defer cancel()
 	stream := newWatchStream(ctx)
 	done := make(chan error, 1)
