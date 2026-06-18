@@ -107,3 +107,25 @@ func (s RegistrationState) IsTerminal() bool {
 		return false
 	}
 }
+
+// ParseState resolves a wire/label string back to its sealed RegistrationState —
+// the inverse of String() and the sole way a durable store reconstructs a state
+// read from its `state TEXT` column without forging one (the unexported field
+// makes a non-zero RegistrationState unconstructable outside this package). The
+// empty string maps to the zero sentinel (ok=true): it is the From of an initial
+// submit event, persisted as '' so folding from '' reproduces the lifecycle. Any
+// other unrecognised label — including [RegistrationStateUnknown] ("unknown"),
+// the fail-closed render that is never a persisted state — returns (zero, false).
+//
+// Added 303-US5 (#2236) for the PostgreSQL ports.Registry implementation.
+func ParseState(s string) (RegistrationState, bool) {
+	if s == "" {
+		return RegistrationState{}, true // zero sentinel — initial-event From
+	}
+	for _, st := range allRegistrationStates {
+		if st.v == s {
+			return st, true
+		}
+	}
+	return RegistrationState{}, false
+}
