@@ -507,11 +507,14 @@ func (a ListAdapter) executeQuery(
 // entry by its opaque path-param id, reusing the SAME tenant/RLS + row-visibility
 // + column-masking + payload-redaction machinery as the list read.
 //
-// Authorization model (flat audit:read, #1852): the route gate is
-// auth.RequirePermission(authz.PermAuditRead()) — there is NO actorId-self
-// exemption like the list's auditQueryPolicy, because the path param is the ENTRY
-// id, not an actor identity, so "is the caller asking only for its own actor rows?"
-// cannot be answered at the gate. A non-admin's own-entry detail is served by the
+// Authorization model (flat audit:read, #1852; contract-derived since #2355): the
+// route gate is derived from endpoints.http.permission: audit:read on
+// http.audit.get.v1 — resolved via the cell-level MethodPolicyResolver
+// (cellHTTPResolver) through auth.RequirePermissionForContract in the generated
+// handler, NOT a hand-wired auth.RequirePermission. It is a flat audit:read check
+// with NO actorId-self exemption like the list's auditQueryPolicy, because the path
+// param is the ENTRY id, not an actor identity, so "is the caller asking only for
+// its own actor rows?" cannot be answered at the gate. A non-admin's own-entry detail is served by the
 // list (?actorId=<self>, which returns the matching rows with the SAME field set as
 // this endpoint — the field sets are maintained separately per contract, see
 // toGetResponseDataItem vs toListResponseDataItem, so equality is a current design
