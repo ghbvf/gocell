@@ -190,10 +190,13 @@ func (h *HTTPTransportMeta) IdempotencyFrameworkStatuses() []int {
 // Permission field (GRPCMethodMeta.Permission) — the action a non-public RPC
 // requires, consumed by the runtime interceptor's PDP gate. Both Public and
 // Permission are now live exported fields (mutually exclusive per RPC). The PDP
-// resource is the full method name (coarse, applied at the gate, not authored
-// here); per-message owner-scoped resource extraction and an internalOnly flag
-// remain unmodeled (no live consumer — adding them would be dead config, the
-// anti-pattern #1672 deleted when it removed the vestigial service-level auth.public).
+// resource for coarse permissions is the full method name (applied at the gate).
+// For owner-scoped permissions, #2207 added GRPCMethodMeta.Resource — a field
+// name on the proto request message that the interceptor extracts per-message
+// and forwards as the PDP resource, enabling the ownership rule
+// (subject.sub == resource.id) to fire for owner-scoped streaming methods
+// (e.g. WatchCommands declares resource: device_id so a device can watch its
+// own queue). See GRPCMethodMeta.Resource.
 //
 // ref: grpc/grpc-go ServiceDesc; go-kratos/kratos protoc-gen-go-grpc service
 // descriptor — the proto service name is the wire identity.
@@ -249,6 +252,23 @@ type GRPCMethodMeta struct {
 	// authz.IsKnownPermissionString, so a typo fails at `gocell validate` rather than
 	// silently denying at runtime. Mutually exclusive with Public (see above).
 	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
+	// Resource is the REQUEST MESSAGE field name (proto field, snake_case, e.g.
+	// "device_id") whose string value becomes the PDP resource for owner-scoped
+	// per-message authz (#2207). The interceptor extracts it via protoreflect on
+	// the first received message, canonicalizes it (same ParseCanonicalUUID path as
+	// HTTP RequirePermissionForResource), and forwards it as the PDP resource so
+	// the ownership rule (subject.sub == resource.id) can fire.
+	//
+	// Constraints (enforced by cellgen cross-check and metadata parser):
+	//   - Mutually exclusive with Public (a JWT-exempt RPC has no subject to compare).
+	//   - Only valid when Permission is also set (resource extraction without an ABAC
+	//     decision is meaningless; the gate always runs).
+	//   - Must be set when Permission refers to an owner-scoped authz.Permission
+	//     (authz.Permission.IsOwnerScoped()==true); omitting it silently locks out
+	//     the owner because fullMethod never equals device-id.
+	//
+	// Mirrors HTTP auth.RequirePermissionForResource's path-param role for gRPC.
+	Resource string `yaml:"resource,omitempty" json:"resource,omitempty"`
 }
 
 // HTTPOwnershipMeta declares object-level authorization subject/resource paths.

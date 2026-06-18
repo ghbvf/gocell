@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/webhook"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/contractpath"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/codegen/contractgen"
@@ -998,6 +999,7 @@ func buildGrpcServiceSpecFromCU(
 		Service:           g.Service,
 		PublicMethods:     grpcPublicMethods(g),
 		MethodPermissions: grpcMethodPermissions(g),
+		MethodResources:   grpcMethodResources(g),
 	}, nil
 }
 
@@ -1032,6 +1034,25 @@ func grpcMethodPermissions(g *metadata.GRPCTransportMeta) []MethodPermission {
 			out = append(out, MethodPermission{
 				FullMethod: "/" + g.Service + "/" + m.Name,
 				Permission: m.Permission,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FullMethod < out[j].FullMethod })
+	return out
+}
+
+// grpcMethodResources composes the per-method resource overlay (#2207) into
+// (FULL method name → request field name) pairs for the resource entries, keyed
+// identically to MethodPermissions. Sorted by full method name for deterministic
+// golden output. Returns nil when no method carries a resource selector, so the
+// template omits the MethodResources field for coarse-permission-only services.
+func grpcMethodResources(g *metadata.GRPCTransportMeta) []MethodResource {
+	var out []MethodResource
+	for _, m := range g.Methods {
+		if m.Resource != "" {
+			out = append(out, MethodResource{
+				FullMethod: "/" + g.Service + "/" + m.Name,
+				Field:      m.Resource,
 			})
 		}
 	}
@@ -1159,19 +1180,23 @@ func grpcMethodSimpleName(full string) string {
 	return full[strings.LastIndex(full, "/")+1:]
 }
 
-// validateGrpcMethodOverlayAgainstProto fails closed on three proto-referential
-// conditions for a GrpcServiceGenSpec (the cellgen-path sibling of
-// contractgen.validateGRPCMethodOverlay):
+// validateGrpcMethodOverlayAgainstProto fails closed on five conditions for a
+// GrpcServiceGenSpec (the cellgen-path sibling of contractgen.validateGRPCMethodOverlay):
 //
 //   - referential (#1675/#2008): every public-method AND every permission-method
-//     overlay entry must name an RPC that exists in the proto service. A stale
-//     entry would be silently inert at runtime.
+//     AND every resource-method overlay entry must name an RPC that exists in
+//     the proto service. A stale entry would be silently inert at runtime.
 //   - completeness (#2008 strict fail-closed): every proto RPC must be covered by
 //     the overlay — either public:true (JWT-exempt) or carrying a permission. A
 //     non-public RPC with no permission would be DENIED at the interceptor gate
 //     (no mapping → deny), i.e. a silently-dead 403 method. Rejecting it at codegen
 //     turns "forgot the overlay" into a build failure rather than a runtime
 //     surprise — this is the build-time enforcement of decision B.
+//   - owner-scoped cross-check (#2207, Hard): an owner-scoped permission on a
+//     gRPC method MUST declare a resource selector (MethodResources entry for the
+//     same FullMethod), or the device owner is silently locked out (fullMethod never
+//     equals device-id, so the PDP ownership rule never fires). Conversely, a coarse
+//     permission must NOT declare a resource selector (it is ignored, a misconfiguration).
 func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
 	protoMethods := make(map[string]struct{}, len(info.Methods))
 	for _, pm := range info.Methods {
@@ -1206,6 +1231,24 @@ func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contract
 		covered[name] = struct{}{}
 	}
 
+	// Referential check for resource entries (each must name a real proto RPC).
+	// NOTE: ProtoServiceInfo exposes method names but NOT message fields; field-existence
+	// validation is not attempted here — the interceptor fail-closes on a missing field
+	// at runtime (F3 fail-closed, A4).
+	resourceByFullMethod := make(map[string]string, len(gs.MethodResources))
+	for _, mr := range gs.MethodResources {
+		name := grpcMethodSimpleName(mr.FullMethod)
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods resource entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
+		resourceByFullMethod[mr.FullMethod] = mr.Field
+	}
+
 	// Completeness (#2008): every proto RPC must be public or permissioned.
 	for _, pm := range info.Methods {
 		if _, ok := covered[pm.Name]; !ok {
@@ -1217,6 +1260,48 @@ func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contract
 					errcode.PublicString("contract", gs.ContractID),
 					errcode.PublicString("service", gs.Service),
 					errcode.PublicString("method", pm.Name)))
+		}
+	}
+
+	return validateOwnerScopedResourceSymmetry(gs, resourceByFullMethod)
+}
+
+// validateOwnerScopedResourceSymmetry enforces the #2207 Hard generate-time gate:
+// for every permission-method entry, an owner-scoped permission MUST carry a resource
+// selector and a coarse permission MUST NOT. The owner-scoped→resource direction
+// prevents the silent owner lock-out (coarse resource = fullMethod ≠ device-id, so
+// subject==resource never fires); the coarse→no-resource direction rejects a
+// misleading inert selector. Extracted from validateGrpcMethodOverlayAgainstProto to
+// keep that function within the cognitive-complexity budget.
+func validateOwnerScopedResourceSymmetry(gs *GrpcServiceGenSpec, resourceByFullMethod map[string]string) error {
+	for _, mp := range gs.MethodPermissions {
+		perm, ok := authz.PermissionByName(mp.Permission)
+		if !ok {
+			// Unknown permission: not a cross-check concern (FMT-41 already rejects this
+			// at validate time; the cellgen completeness gate also runs on the pre-pass).
+			continue
+		}
+		_, hasResource := resourceByFullMethod[mp.FullMethod]
+		if perm.IsOwnerScoped() && !hasResource {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: owner-scoped permission requires a resource selector; "+
+					"declare endpoints.grpc.methods[].resource — else the owner is silently locked out "+
+					"(gate uses fullMethod, subject==resource never matches the device id) (#2207)",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", grpcMethodSimpleName(mp.FullMethod)),
+					errcode.PublicString("permission", mp.Permission)))
+		}
+		if !perm.IsOwnerScoped() && hasResource {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: resource selector on a coarse permission is ignored — "+
+					"remove it or use an owner-scoped permission (#2207)",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", grpcMethodSimpleName(mp.FullMethod)),
+					errcode.PublicString("permission", mp.Permission)))
 		}
 	}
 	return nil

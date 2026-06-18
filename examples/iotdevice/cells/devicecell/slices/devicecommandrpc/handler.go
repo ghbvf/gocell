@@ -22,37 +22,55 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
 
-// watchSnapshotLimit bounds the initial active-command snapshot WatchCommands
-// streams before it tails for drain/disconnect. The snapshot is silently capped
-// at this many entries — a production watch should paginate (check page.HasMore
-// and stream subsequent pages) rather than truncate.
-const watchSnapshotLimit = 100
+// watchSnapshotPageSize is the per-page size WatchCommands uses to page through
+// the device's full active-command snapshot before it tails for new commands. The
+// snapshot is NOT truncated: streamSnapshot loops over every page (cursor
+// pagination) until the backend reports no more, so a device with more than one
+// page of active commands still receives all of them at watch-open time.
+const watchSnapshotPageSize = 100
 
 // Server implements commandv1.DeviceCommandServiceServer.
 type Server struct {
 	commandv1.UnimplementedDeviceCommandServiceServer
-	clk    clock.Clock
-	cmdSvc *devicecmd.Service
+	clk      clock.Clock
+	cmdSvc   *devicecmd.Service
+	notifier *devicecmd.Notifier
+	// subscribeHook, if non-nil, is called in WatchCommands immediately after
+	// Subscribe returns. Test-only seam for synchronizing Subscribe-before-enqueue
+	// ordering in latent-delivery tests; always nil in production.
+	subscribeHook func(deviceID string)
 }
 
 // NewServer constructs the gRPC command server. clock is a mandatory positional
 // dependency (CLOCK-POSITIONAL-INJECTION-01); the acknowledgement timestamp is
 // stamped from it so it stays consistent with the cell's business clock. cmdSvc
 // is the shared device-command domain service — the gRPC handler enqueues
-// through the same Enqueue path the HTTP devicecommand slice uses.
+// through the same Enqueue path the HTTP devicecommand slice uses. notifier is
+// the shared in-process watcher hub (#1795): WatchCommands subscribes through it
+// so devices receive newly-enqueued commands in real time; it must be the same
+// instance injected into all enqueue-capable Service instances via WithOnEnqueue.
 //
 // Authorization is NOT a handler concern: the runtime gRPC auth interceptor runs
 // the ABAC PDP gate for device:command before the handler is invoked (#2008,
 // declared in endpoints.grpc.methods[].permission). The handler therefore holds no
 // Authorizer — the per-method permission gate is enforced transport-side, mirroring
 // the HTTP RequirePermission route gate.
-func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service) *Server {
+func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, notifier *devicecmd.Notifier) *Server {
 	clock.MustHaveClock(clk, "devicecommandrpc.NewServer")
-	return &Server{clk: clk, cmdSvc: cmdSvc}
+	if cmdSvc == nil {
+		panic(panicregister.Approved("devicecommandrpc-server-cmdsvc-required",
+			errcode.Assertion("devicecommandrpc.NewServer: cmdSvc must not be nil")))
+	}
+	if notifier == nil {
+		panic(panicregister.Approved("devicecommandrpc-server-notifier-required",
+			errcode.Assertion("devicecommandrpc.NewServer: notifier must not be nil")))
+	}
+	return &Server{clk: clk, cmdSvc: cmdSvc, notifier: notifier}
 }
 
 // IssueCommand validates the request, enqueues the command into the L4 device
@@ -93,24 +111,48 @@ func (s *Server) IssueCommand(
 	}, nil
 }
 
-// WatchCommands validates the request, streams the device's currently active
-// commands as a snapshot (reusing the same ScanActive domain read the HTTP list
-// path uses), then keeps the watch open until the caller disconnects or the server
-// drains. It is the example's first server-streaming RPC (PR-10 #1153).
+// toWatchResponse converts a command.Entry to a WatchCommandsResponse wire
+// message. Used for both the on-connect snapshot and the real-time tail so the
+// field mapping is defined once. The response carries only the command's
+// notification identity (id / type / status) — it is a real-time DOORBELL, not a
+// consume payload: the device claims the command and reads its payload/attempt by
+// calling the HTTP Dequeue path (which leases it), so this stream stays read-only.
+func toWatchResponse(e command.Entry) *commandv1.WatchCommandsResponse {
+	return &commandv1.WatchCommandsResponse{
+		CommandId:   e.ID,
+		CommandType: e.CommandType,
+		Status:      e.Status.String(),
+	}
+}
+
+// WatchCommands is a real-time NOTIFICATION stream (a doorbell), not a consume
+// stream: it pages through the device's currently-active commands as an initial
+// snapshot (reusing the same ScanActive domain read the HTTP list path uses), then
+// tails newly-enqueued commands in real time until the caller disconnects or the
+// server drains (#1795). The device claims + executes each command via the HTTP
+// Dequeue path (which leases it and returns the payload/attempt); this stream only
+// signals which commands are waiting.
 //
-// Authorization (device:command) is enforced by the runtime gRPC auth interceptor
-// at stream-open, BEFORE this handler runs (#2008) — the same gate as IssueCommand,
-// declared once in endpoints.grpc.methods[].permission. WatchCommands and
-// IssueCommand intentionally share device:command (admin/operator coarse gate).
-// Granting devices the ability to watch their own command queue via gRPC
-// (device:consume semantic) is a distinct enhancement, out of scope here.
+// Subscribe-before-snapshot ordering: the notifier subscription is established
+// BEFORE the ScanActive snapshot so that commands enqueued in the window between the
+// snapshot read and the tail-start are not silently lost. The snapshot is
+// authoritative for "active at open time"; the tail delivers everything enqueued
+// after that point. Best-effort delivery: if a subscriber's buffer is full the
+// Notifier drops — the device must reconnect to resync.
+//
+// Authorization (device:consume, owner-scoped) is enforced by the runtime gRPC auth
+// interceptor BEFORE this handler runs (#2008/#2207). The contract declares
+// resource: device_id, so the interceptor extracts the per-message device_id and
+// forwards it to the PDP: admin/operator pass coarsely, and the device itself passes
+// when subject == device_id, letting a device watch its OWN queue. device:consume is
+// the consume-lifecycle umbrella (the same gate the HTTP dequeue/ack/report path
+// uses); this stream is its real-time notification arm. The handler does not
+// hand-authorize.
 //
 // Drain discipline: the snapshot loop checks stream.Context().Err() between
-// sends and the tail blocks on stream.Context().Done(), so the framework drain
-// signal (StreamDrain cancels the stream context at GracefulStop) terminates an
-// in-flight watch promptly instead of holding the graceful-stop budget. A
-// production watch would push newly-enqueued commands during the tail; the
-// example demonstrates the long-lived server-stream shape and the framework drain.
+// sends and the tail select includes ctx.Done(), so the framework drain signal
+// (StreamDrain cancels the stream context at GracefulStop) terminates an
+// in-flight watch promptly instead of holding the graceful-stop budget.
 func (s *Server) WatchCommands(
 	req *commandv1.WatchCommandsRequest,
 	stream commandv1.DeviceCommandService_WatchCommandsServer,
@@ -121,27 +163,84 @@ func (s *Server) WatchCommands(
 			"device_id is required",
 			errcode.WithDetails(errcode.PublicString("field", "device_id")))
 	}
-	page, err := s.cmdSvc.ScanActive(ctx,
-		command.ScanFilter{DeviceID: req.GetDeviceId()},
-		query.PageParams{Limit: watchSnapshotLimit})
-	if err != nil {
+
+	// Subscribe BEFORE the snapshot to avoid the snapshot↔tail gap (#1795).
+	ch, cancel := s.notifier.Subscribe(req.GetDeviceId())
+	defer cancel()
+	if s.subscribeHook != nil {
+		s.subscribeHook(req.GetDeviceId())
+	}
+
+	// Snapshot: page through ALL currently-active commands (no silent truncation)
+	// before tailing — a device with more than one page still gets its full backlog.
+	if err := streamSnapshot(ctx, s.cmdSvc, req.GetDeviceId(), stream); err != nil {
 		return err
 	}
-	for i := range page.Items {
+
+	// Tail: deliver newly-enqueued commands until the caller disconnects or the
+	// server drains (StreamDrain cancels ctx on GracefulStop).
+	return tailWatchStream(ctx, ch, stream)
+}
+
+// streamSnapshot pages through the device's entire active-command set via cursor
+// pagination and sends each as a snapshot notification. It loops until the backend
+// reports no further pages, so the snapshot is never silently truncated (the device
+// receives every active command at watch-open time, not just the first page). The
+// per-item ctx.Err() check preserves drain discipline mid-snapshot.
+func streamSnapshot(
+	ctx context.Context,
+	cmdSvc *devicecmd.Service,
+	deviceID string,
+	stream commandv1.DeviceCommandService_WatchCommandsServer,
+) error {
+	cursor := ""
+	for {
 		if err := ctx.Err(); err != nil {
 			return err // drain discipline: stop the moment the stream ctx is canceled
 		}
-		e := page.Items[i]
-		if err := stream.Send(&commandv1.WatchCommandsResponse{
-			CommandId:   e.ID,
-			CommandType: e.CommandType,
-			Status:      e.Status.String(),
-		}); err != nil {
+		page, err := cmdSvc.ScanActive(ctx,
+			command.ScanFilter{DeviceID: deviceID},
+			query.PageParams{Limit: watchSnapshotPageSize, Cursor: cursor})
+		if err != nil {
 			return err
 		}
+		for i := range page.Items {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := stream.Send(toWatchResponse(page.Items[i])); err != nil {
+				return err
+			}
+		}
+		if !page.HasMore {
+			return nil
+		}
+		cursor = page.NextCursor
 	}
-	// Tail until the caller disconnects or the server drains (StreamDrain cancels
-	// ctx on GracefulStop).
-	<-ctx.Done()
-	return ctx.Err()
+}
+
+// tailWatchStream drives the real-time tail of WatchCommands: it blocks on ch
+// (the Notifier subscription) and ctx.Done(), forwarding each new entry to the
+// stream. Extracted to keep WatchCommands under the cognitive-complexity limit.
+func tailWatchStream(
+	ctx context.Context,
+	ch <-chan command.Entry,
+	stream commandv1.DeviceCommandService_WatchCommandsServer,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case e, ok := <-ch:
+			if !ok {
+				// Safety net: the Notifier never closes the channel (see notifier.go
+				// "channel is never closed by the Notifier" doc) — this branch is
+				// unreachable in practice but guards against future refactoring.
+				return ctx.Err()
+			}
+			if err := stream.Send(toWatchResponse(e)); err != nil {
+				return err
+			}
+		}
+	}
 }

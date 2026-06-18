@@ -42,7 +42,16 @@ const seededDeviceID = "device-1"
 // newTestServer builds a Server backed by in-memory persistence with one
 // pre-seeded device ("device-1") so the enqueue path succeeds. The handler holds
 // no Authorizer (#2008) — authorization is enforced by the interceptor.
+// A real Notifier is injected for the real-time push path (#1795).
 func newTestServer(t *testing.T) *Server {
+	t.Helper()
+	return newTestServerWithNotifier(t, devicecmd.NewNotifier())
+}
+
+// newTestServerWithNotifier builds a Server with the given Notifier, useful in
+// tests that need to drive latent delivery by also wiring the notifier into
+// the Service's WithOnEnqueue hook.
+func newTestServerWithNotifier(t *testing.T, notifier *devicecmd.Notifier) *Server {
 	t.Helper()
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
@@ -53,6 +62,7 @@ func newTestServer(t *testing.T) *Server {
 	svc, err := devicecmd.NewService(
 		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd,
 		devicecmd.WithSliceName("devicecommandrpc"),
+		devicecmd.WithOnEnqueue(notifier.Notify),
 	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -60,7 +70,7 @@ func newTestServer(t *testing.T) *Server {
 	if err := devRepo.Create(context.Background(), &domain.Device{ID: seededDeviceID, Name: "sensor-a", Status: "online"}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	return NewServer(clockmock.New(fixedTime), svc)
+	return NewServer(clockmock.New(fixedTime), svc, notifier)
 }
 
 // TestServer_IssueCommand_Direct exercises the handler in-process (no transport):

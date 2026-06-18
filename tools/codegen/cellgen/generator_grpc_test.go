@@ -872,3 +872,141 @@ func TestEnrichGrpcServices_UnknownPermission_PassesCellgenGate(t *testing.T) {
 			"(that is FMT-41's job); got unexpected error: %v", err)
 	}
 }
+
+// TestEnrichGrpcServices_OwnerScopedCrossCheck exercises the #2207 Hard
+// generate-time cross-check for owner-scoped permission ↔ resource selector
+// consistency. This is an additional invariant on top of the existing completeness
+// gate: an owner-scoped permission WITHOUT a resource selector, or a coarse
+// permission WITH one, must be rejected at cellgen time.
+//
+// Cases:
+//  1. Owner-scoped permission (device:consume) WITH resource → PASS.
+//  2. Owner-scoped permission WITHOUT resource → FAIL (silent owner lock-out).
+//  3. Coarse permission (device:command) WITH resource → FAIL (ignored, misconfiguration).
+//  4. Coarse permission WITHOUT resource → PASS (existing behavior, unchanged).
+func TestEnrichGrpcServices_OwnerScopedCrossCheck(t *testing.T) {
+	t.Parallel()
+	root := synthGRPCMultiRoot(t)
+
+	cases := []struct {
+		name    string
+		methods []metadata.GRPCMethodMeta
+		wantErr string // empty → expect success
+	}{
+		{
+			name: "owner-scoped permission with resource → PASS",
+			// device:consume is owner-scoped; it has a resource selector. The other
+			// two RPCs use a coarse permission without a resource — both allowed.
+			methods: []metadata.GRPCMethodMeta{
+				// WatchCommands: owner-scoped, has resource.
+				{Name: "WatchCommands", Permission: "device:consume", Resource: "device_id"},
+				// IssueCommand: coarse, no resource.
+				{Name: "IssueCommand", Permission: "device:command"},
+				// CancelCommand: public (no permission gate).
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "",
+		},
+		{
+			name: "owner-scoped permission without resource → FAIL (owner lock-out)",
+			// device:consume without resource: the PDP gate would use fullMethod as
+			// resource; subject.sub == fullMethod never fires → owner silently locked out.
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "WatchCommands", Permission: "device:consume"}, // no resource
+				{Name: "IssueCommand", Permission: "device:command"},
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "owner-scoped permission requires a resource selector",
+		},
+		{
+			name: "coarse permission with resource → FAIL (ignored misconfiguration)",
+			// device:command is coarse; a resource selector on it is ignored by the
+			// interceptor — declaring it is a misconfiguration that cellgen must reject.
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "IssueCommand", Permission: "device:command", Resource: "device_id"},
+				{Name: "WatchCommands", Permission: "device:command"},
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "resource selector on a coarse permission is ignored",
+		},
+		{
+			name: "coarse permission without resource → PASS (unchanged behavior)",
+			methods: []metadata.GRPCMethodMeta{
+				{Name: "IssueCommand", Permission: "device:command"},
+				{Name: "WatchCommands", Permission: "device:command"},
+				{Name: "CancelCommand", Public: true},
+			},
+			wantErr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pm := buildGRPCProjectMulti()
+			pm.Contracts["grpc.device.command.v1"].Endpoints.GRPC.Methods = tc.methods
+
+			spec, err := BuildCellSpec(pm, "demo", markergen.WireBundle{}, idxOf(map[string]string{"command": "commandServer"}))
+			if err != nil {
+				t.Fatalf("BuildCellSpec: %v", err)
+			}
+			err = EnrichGrpcServicesWithProtoInfo(spec, root)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+					return
+				}
+				// PASS case (owner-scoped + resource): assert MethodResources contains
+				// the WatchCommands→device_id mapping (#2207 cross-check).
+				if tc.name == "owner-scoped permission with resource → PASS" {
+					if len(spec.GrpcServices) == 0 {
+						t.Fatal("PASS case must produce at least one GrpcService")
+					}
+					gs := spec.GrpcServices[0]
+					watchFull := "/device.command.v1.DeviceCommandService/WatchCommands"
+					var found bool
+					for _, mr := range gs.MethodResources {
+						if mr.FullMethod == watchFull && mr.Field == "device_id" {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("PASS case: MethodResources must contain %q→device_id, got %+v",
+							watchFull, gs.MethodResources)
+					}
+					// Render the cell and assert the GENERATED code actually emits the
+					// MethodResources mapping (#2349 F5): the spec-level field above can be
+					// present while a template regression silently drops the rendered block,
+					// breaking the registrar's resolver wiring at runtime. Lock the field
+					// name + the full method name + the proto field value in the output.
+					out, rerr := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+						TemplateName: "cell.tmpl",
+						Templates:    templates,
+						Data:         spec,
+						Filename:     "demo/cell_gen.go",
+					})
+					if rerr != nil {
+						t.Fatalf("Render: %v", rerr)
+					}
+					if !bytes.Contains(out, []byte("MethodResources")) {
+						t.Errorf("owner-scoped grpc cell must render the MethodResources field, got:\n%s", out)
+					}
+					if !bytes.Contains(out, []byte(watchFull)) {
+						t.Errorf("MethodResources must contain the full method name %q, got:\n%s", watchFull, out)
+					}
+					if !bytes.Contains(out, []byte(`"device_id"`)) {
+						t.Errorf("MethodResources must contain the device_id field value, got:\n%s", out)
+					}
+				}
+			} else {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tc.wantErr)
+				} else if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q must contain %q", err.Error(), tc.wantErr)
+				}
+			}
+		})
+	}
+}

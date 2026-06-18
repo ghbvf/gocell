@@ -69,6 +69,13 @@ type ServiceRegistrar struct {
 	// PDP gate — the authorization sibling of publicMethods (authentication bypass).
 	// An absent method has no mapping → the gate DENIES (strict fail-closed).
 	methodPermissions map[string]authz.Permission
+	// methodResources maps each owner-scoped FULL method name to the request
+	// message field name (proto field, snake_case) whose value is extracted and
+	// forwarded as the PDP resource for per-message ownership authz (#2207).
+	// Derived from GRPCServiceSpec.MethodResources at Register time; the
+	// interceptor consults it via ResourceFieldForMethod. Methods absent from this
+	// map use fullMethod as the resource (coarse, current behavior).
+	methodResources map[string]string
 	// names maps a registered gRPC ServiceName → its owning spec, used both for
 	// cross-spec dedup and to report first/current owner on a collision (shared
 	// with cellScopedRegistrar).
@@ -121,6 +128,7 @@ func NewServiceRegistrar(opts ...RegistrarOption) *ServiceRegistrar {
 		methods:           make(map[string]string),
 		publicMethods:     make(map[string]struct{}),
 		methodPermissions: make(map[string]authz.Permission),
+		methodResources:   make(map[string]string),
 		names:             make(map[string]serviceOwner),
 	}
 	for _, o := range opts {
@@ -322,6 +330,25 @@ func (r *ServiceRegistrar) recordMethodOverlays(spec cell.GRPCServiceSpec, scope
 		}
 		r.methodPermissions[method] = perm
 	}
+
+	// ResourceFieldForMethod source (#2207): each resource entry must name a method
+	// this spec registered (a stale key would reference a non-existent RPC). The
+	// field name value is not validated here against the proto descriptor — the
+	// interceptor fails closed on a missing or wrong-type field at extraction time
+	// (F3 fail-closed in the interceptor — see resource.go). The cellgen cross-check
+	// (owner-scoped permission without resource → build error) and governance FMT-41
+	// guard the authoring side.
+	for method, field := range spec.MethodResources {
+		if _, ok := scoped.localMethods[method]; !ok {
+			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
+				errcode.Assertion(
+					"grpc: GRPCServiceSpec.MethodResources[%q] does not name a method registered by "+
+						"this spec (contractID=%q, cellID=%q); the resource overlay must reference a real "+
+						"RPC — declare it via endpoints.grpc.methods[].resource",
+					method, spec.ContractID, spec.CellID)))
+		}
+		r.methodResources[method] = field
+	}
 }
 
 // CellIDForMethod returns the cellID attributed to fullMethod (e.g.
@@ -372,6 +399,20 @@ func (r *ServiceRegistrar) PermissionForMethod(fullMethod string) (authz.Permiss
 	defer r.mu.RUnlock()
 	p, ok := r.methodPermissions[fullMethod]
 	return p, ok
+}
+
+// ResourceFieldForMethod returns the request message field name (proto field,
+// snake_case) that the auth interceptor should extract and forward as the PDP
+// resource for per-message ownership authz (#2207). The second return value is
+// false when fullMethod has no resource mapping — the interceptor must then use
+// fullMethod as the resource (coarse, existing behavior). Safe for concurrent use.
+// The auth interceptor installs this as its WithResourceResolver, making the
+// registrar the single runtime source of the method→resource-field map.
+func (r *ServiceRegistrar) ResourceFieldForMethod(fullMethod string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	field, ok := r.methodResources[fullMethod]
+	return field, ok
 }
 
 // ---------------------------------------------------------------------------

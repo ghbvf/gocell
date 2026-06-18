@@ -38,14 +38,30 @@ const (
 type DeviceCommandServiceClient interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(ctx context.Context, in *IssueCommandRequest, opts ...grpc.CallOption) (*IssueCommandResponse, error)
-	// WatchCommands is a DEMO server-streaming RPC (PR-10 #1153): it streams a
-	// bounded one-shot snapshot of the device's currently-active commands, then
-	// holds the stream open until the caller disconnects or the server drains. It
-	// does NOT push newly-enqueued commands during the hold and the snapshot is
-	// capped (see watchSnapshotLimit) — it exists to exercise the server-stream
-	// interceptor chain + framework drain, not as a production watch. A real watch
-	// would paginate the full snapshot and tail a command-change notification
-	// source.
+	// WatchCommands is a server-streaming RPC (#1795): a real-time NOTIFICATION
+	// stream (a doorbell), NOT a consume stream. It streams the device's
+	// currently-active commands as an initial snapshot, then tails newly-enqueued
+	// commands in real time via an in-process Notifier hub until the caller
+	// disconnects or the server drains. Each response carries only the command's
+	// identity (command_id / command_type / status); the device claims a command and
+	// reads its payload by calling the HTTP Dequeue path (which leases it and returns
+	// the payload/attempt). This stream only signals which commands are waiting.
+	//
+	// Delivery semantics:
+	//   - Subscribe-before-snapshot: the Notifier subscription is established
+	//     BEFORE the ScanActive snapshot call, so commands enqueued in the
+	//     snapshot↔tail window are not silently lost. This means a command
+	//     enqueued concurrently may arrive both in the snapshot and the tail
+	//     (at-least-once per watch session) — clients MUST dedup on command_id.
+	//   - Full snapshot: the initial snapshot pages through ALL active commands
+	//     (cursor pagination) before tailing — it is NOT truncated, so a device
+	//     with more than one page of active commands receives every one of them.
+	//   - Best-effort tail, drop-on-full: if a subscriber's buffer is full the
+	//     Notifier drops the tail notification (the slow watcher loses tail events);
+	//     reconnect re-syncs via a fresh snapshot.
+	//   - In-process only: notifications are delivered via an in-process hub;
+	//     multi-pod deployments need an external pub/sub for cross-pod delivery
+	//     (tracked backlog).
 	WatchCommands(ctx context.Context, in *WatchCommandsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchCommandsResponse], error)
 }
 
@@ -94,14 +110,30 @@ type DeviceCommandService_WatchCommandsClient = grpc.ServerStreamingClient[Watch
 type DeviceCommandServiceServer interface {
 	// IssueCommand pushes a command to a device and returns an acknowledgement.
 	IssueCommand(context.Context, *IssueCommandRequest) (*IssueCommandResponse, error)
-	// WatchCommands is a DEMO server-streaming RPC (PR-10 #1153): it streams a
-	// bounded one-shot snapshot of the device's currently-active commands, then
-	// holds the stream open until the caller disconnects or the server drains. It
-	// does NOT push newly-enqueued commands during the hold and the snapshot is
-	// capped (see watchSnapshotLimit) — it exists to exercise the server-stream
-	// interceptor chain + framework drain, not as a production watch. A real watch
-	// would paginate the full snapshot and tail a command-change notification
-	// source.
+	// WatchCommands is a server-streaming RPC (#1795): a real-time NOTIFICATION
+	// stream (a doorbell), NOT a consume stream. It streams the device's
+	// currently-active commands as an initial snapshot, then tails newly-enqueued
+	// commands in real time via an in-process Notifier hub until the caller
+	// disconnects or the server drains. Each response carries only the command's
+	// identity (command_id / command_type / status); the device claims a command and
+	// reads its payload by calling the HTTP Dequeue path (which leases it and returns
+	// the payload/attempt). This stream only signals which commands are waiting.
+	//
+	// Delivery semantics:
+	//   - Subscribe-before-snapshot: the Notifier subscription is established
+	//     BEFORE the ScanActive snapshot call, so commands enqueued in the
+	//     snapshot↔tail window are not silently lost. This means a command
+	//     enqueued concurrently may arrive both in the snapshot and the tail
+	//     (at-least-once per watch session) — clients MUST dedup on command_id.
+	//   - Full snapshot: the initial snapshot pages through ALL active commands
+	//     (cursor pagination) before tailing — it is NOT truncated, so a device
+	//     with more than one page of active commands receives every one of them.
+	//   - Best-effort tail, drop-on-full: if a subscriber's buffer is full the
+	//     Notifier drops the tail notification (the slow watcher loses tail events);
+	//     reconnect re-syncs via a fresh snapshot.
+	//   - In-process only: notifications are delivered via an in-process hub;
+	//     multi-pod deployments need an external pub/sub for cross-pod delivery
+	//     (tracked backlog).
 	WatchCommands(*WatchCommandsRequest, grpc.ServerStreamingServer[WatchCommandsResponse]) error
 	mustEmbedUnimplementedDeviceCommandServiceServer()
 }
