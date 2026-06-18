@@ -9,7 +9,6 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/types"
 )
 
 // ruleCellTransportDoContractCaller is the archtest rule identifier.
@@ -59,14 +58,12 @@ func scanCellDoContractCall(p *Pass, file *ast.File, rel string) []Diagnostic {
 		if !ok || fn == nil || fn.Pkg() == nil {
 			return
 		}
+		// fn.Pkg() is the package that DECLARES the method, so the path check pins
+		// the resolved func to runtime/transport's DoContract — an unrelated
+		// package's same-named method (different declaring pkg) does not match.
 		if !forbiddenDoContractRef(fn.Pkg().Path(), fn.Name()) {
 			return
 		}
-		// Guard against an unrelated package declaring a DoContract method: confirm
-		// the resolved func is the one declared by runtime/transport (fn.Pkg() is the
-		// declaring package, so the path check above already pins it; this var keeps
-		// the types import live and documents the receiver expectation).
-		var _ *types.Func = fn
 		line := p.Fset.Position(sel.Pos()).Line
 		diags = append(diags, Diagnostic{
 			Rel:  rel,

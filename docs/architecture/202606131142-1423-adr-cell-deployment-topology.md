@@ -618,6 +618,52 @@ framework 可控的 master key，故不做 HKDF 派生（对比 #2153 HMAC keyri
 **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01 +
 §Per-cell credential/vhost isolation）+ ADR `202606131500-1940` §Amendment 2026-06-18。
 
+### #2093 Amendment — 下游 Hard 层落地：codegen 生成式 contract client（2026-06-18）
+
+D2 §enforcement 当初把「下游 Hard：generated contract client 作唯一可表达兄弟-cell 调用类型」
+defer 为 #2093（触发条件 = US5 #1966 落地 或 第二个跨 cell 同步调用方）。US5 #1966 已落地
+（`cd5d3b877`），本 amendment 记录该下游 Hard 层落地 + 威胁矩阵重评。
+
+#### 落地形态
+
+- **生成式 client（client.tmpl）**：contractgen 新增 `client.tmpl`，为声明了 `endpoints.clients`
+  的 internal-path http 契约生成 sealed `Client`。构造器 `NewClient(transport.CellTransport, …)`
+  **只收 sealed `CellTransport`**——裸 `*http.Client` 在类型层不可表达为兄弟-cell 调用路径；client
+  自签名（`auth.SignInternalRequest`）+ `DoContract` 分发 + 解码。
+- **gate = internal-path + 非空 `endpoints.clients`**（`shouldEmitClient`；`buildHTTPEndpointSpec`
+  只为 `metadata.IsInternalHTTPPath` 填 `Endpoint.Clients`，故非空 ⇒ 作者已声明的兄弟-callable 契约）。
+  实际命中 **4 个**契约：`http.config.internal.get.v1`（projection GET，accesscore→configcore，
+  本 PR 迁移）、`http.auth.role.assign.v1` / `http.auth.role.revoke.v1`（POST，已生成、暂未接线）、
+  `http.internal.devicecommands.list.v1`（examples/iotdevice，GET，已生成、暂未接线）。
+- **单调用方迁移**：accesscore `HTTPConfigGetter`（仓内唯一手写跨 cell 同步调用方）改为持有生成
+  `get.Client`，只保留 configcore-specific 的 status→域 errcode + DTO→`ports.ConfigEntry` 映射。
+
+#### 威胁矩阵重评（D2 §enforcement「sync 直拨 funnel → 目标 Hard」行）
+
+原文设目标「上游 Hard + 下游 Hard + Medium backstop」。**落地后实测评级**（按 AI-robust 章程
+「funnel 须分别说明上游和下游强度，只锁 callsite 不是闭环」）：
+
+- **上游 = Hard**：`InProcessTransport` / `RemoteHTTPTransport` sealed（unexported 字段 + 单一
+  sanctioned constructor，`INPROCESS-TRANSPORT-SEALED-01` / `REMOTE-TRANSPORT-SEALED-01`）。
+- **下游 Hard 层 = 生成式 client**：codegen + 字节 golden 锁存在性/形态；构造器只收 sealed
+  `CellTransport`（裸 `*http.Client` 类型不可表达）。
+- **下游两个 Medium backstop（皆永久天花板，非待升级 TODO，不开 fake Hard-upgrade issue）**：
+  - **A — `CELL-SYNC-TRANSPORT-FUNNEL-01`**：禁 cell 持/造裸 `net/http` client。stdlib 导出 API
+    不可封、不可使 import 成编译错误 → typed AST 符号扫描是该载体类的可达天花板。
+  - **B — `CELL-TRANSPORT-DOCONTRACT-CALLER-01`（本 PR 新增）**：禁 cell 直调
+    `transport.CellTransport.DoContract`（sanctioned caller = `generated/contracts/**` 生成 client）。
+    `DoContract` 是导出接口方法 → 调用方 typed scan 是可达天花板（同 `COMMAND-ASYNC-EMIT-CALLER-01`
+    族）。**没有 B，cell 持注入的 `CellTransport` 直调 `DoContract` 即绕过生成 client 且不触 A**——
+    故 B 是「唯一可表达路径」闭环的关键。
+- **闭环论证**：A + B ⇒ cell 触达兄弟 sync 的唯一可表达出口 = Hard-sealed 生成 client。
+- **funnel 本身不升 Hard**：D2 原文「目标 Hard（上下游双侧）」中的「下游 callsite scan」永久停留
+  Medium（honest ceiling），Hard 性由生成 client 这一新载体承载，而非把 scan 本身变编译错误。
+
+**权威语义**：`tools/codegen/contractgen/doc.go` §client_gen.go + `framework/runtime/transport/doc.go`
+§Governance + archtest `CELL-SYNC-TRANSPORT-FUNNEL-01`（backstop A，godoc 已重评）+
+`CELL-TRANSPORT-DOCONTRACT-CALLER-01`（backstop B）+ 生成 golden（4 个 `client_gen.go` +
+`synth_http_auth_modes_clientsonly_client_gen_go.golden`）。
+
 ## Rejected alternatives
 
 | 方案 | 拒因 |

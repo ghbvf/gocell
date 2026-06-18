@@ -23,36 +23,48 @@
 // (http.Handler, http.ResponseWriter, http.Request, http.Method*, http.Status*)
 // are legitimate and NOT flagged — only the CLIENT/dispatch surface is forbidden.
 //
-// ## AI-robust rating: Medium — closed funnel (upstream Hard + downstream Medium)
+// ## AI-robust rating: Medium — backstop A of the closed sync-transport funnel
 //
-// This is the DOWNSTREAM half of the sync-transport funnel; the UPSTREAM half is
-// Hard (InProcessTransport is a sealed type — unexported fields + sole
-// constructor, INPROCESS-TRANSPORT-SEALED-01 — so a transport cannot be forged).
-// Together: you cannot forge a transport (Hard upstream) AND you cannot bypass it
-// with a raw http client in a cell (this Medium escape-hatch scan) = a closed
-// funnel, NOT the charter's forbidden "callsite-only" shape (which lacks an
-// upstream seal).
+// The sync-transport funnel is now a closed funnel with one upstream Hard layer,
+// one downstream Hard layer, and TWO downstream Medium backstops:
+//   - Upstream Hard: InProcessTransport / RemoteHTTPTransport are sealed types
+//     (unexported fields + sole constructors, INPROCESS-TRANSPORT-SEALED-01 /
+//     REMOTE-TRANSPORT-SEALED-01) — a transport cannot be forged.
+//   - Downstream Hard (#2093): the codegen-generated contract client is the SOLE
+//     sealed sibling-call type — its constructor takes ONLY a sealed
+//     transport.CellTransport, so a bare *http.Client is not type-expressible as
+//     the sibling-call path (codegen + byte golden = Hard, per ADR D2).
+//   - Downstream Medium backstop A (THIS rule): a cell may not hold/construct a
+//     raw net/http client.
+//   - Downstream Medium backstop B (CELL-TRANSPORT-DOCONTRACT-CALLER-01): a cell
+//     may not call transport.CellTransport.DoContract directly, so the generated
+//     client is the only expressible dispatch path.
 //
-// Why Medium is the ceiling here (per ai-robust.md): the forbidden symbols are a
+// A + B together ⇒ the only expressible cell→sibling sync path is the Hard-sealed
+// generated client.
+//
+// Why this scan stays Medium (per ai-robust.md): the forbidden symbols are a
 // third-party (stdlib) package's exported API; we cannot seal their construction
 // nor make "referencing them" a compile error. depguard is symbol-blind (cells
 // legitimately import net/http for handlers/requests), so it cannot separate the
 // client surface from the handler surface. A typed callsite/symbol scan via
 // ResolvePackageRef is the reachable ceiling for the "who may reference a
-// third-party exported symbol" carrier class. The downstream HARD path — a
-// codegen-generated contract client as the SOLE sealed sibling-call type — is
-// deferred with the contract-client codegen (tracked in #2093); when it lands
-// this Medium becomes its backstop.
+// third-party exported symbol" carrier class — a deliberately accepted permanent
+// ceiling, not a deferred TODO; no fake Hard-upgrade issue is opened. (Before
+// #2093 this paragraph said the downstream Hard path was "deferred with the
+// contract-client codegen"; that codegen has now LANDED as the generated client,
+// and this scan is its permanent backstop.)
 //
 // ## Blind spots and reverse self-checks
 //
-//   - Vacuity: after the configclient migration (US4 #1963) zero production cell
-//     holds a raw http client today — the only former caller now dispatches via
-//     transport.CellTransport. The production scan (TestCellSyncTransportFunnel01)
-//     is therefore vacuously green — exactly like GRPC-CELL-NO-CLIENT-DIAL-01.
-//     Anti-vacuity is provided by the synthetic fixture
-//     (TestCellSyncTransportFunnel01_FixtureScanRED) which MUST fire, and by the
-//     pure-detector table (TestCellSyncTransportFunnel01_SyntheticDetector).
+//   - Vacuity: after the #2093 configclient migration zero production cell holds a
+//     raw http client today — the only former caller now dispatches via the
+//     generated get.Client (which holds the sealed transport.CellTransport). The
+//     production scan (TestCellSyncTransportFunnel01) is therefore vacuously green
+//     — exactly like GRPC-CELL-NO-CLIENT-DIAL-01. Anti-vacuity is provided by the
+//     synthetic fixture (TestCellSyncTransportFunnel01_FixtureScanRED) which MUST
+//     fire, and by the pure-detector table
+//     (TestCellSyncTransportFunnel01_SyntheticDetector).
 //   - Method-call on a held client (`c.Do(req)`): not matched directly (Do is a
 //     method on a value, not a package selector), but holding/constructing the
 //     *http.Client to call it on IS matched (the client-type reference), so the

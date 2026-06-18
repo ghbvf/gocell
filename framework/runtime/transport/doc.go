@@ -43,14 +43,23 @@
 //
 // # Governance
 //
-//   - Upstream Hard: [InProcessTransport] is a sealed type (unexported fields +
-//     single sanctioned constructor) — no package outside can forge a transport.
-//     Field set frozen by INPROCESS-TRANSPORT-SEALED-01.
-//   - Downstream Medium: CELL-SYNC-TRANSPORT-FUNNEL-01 (tools/archtest) bans a
-//     cell from holding/constructing a raw net/http client to dial a sibling,
-//     so the injected CellTransport is the sanctioned path. (Hard downstream — a
-//     codegen-generated client as the sole sealed path — is deferred with the
-//     contract-client codegen, tracked in #2093.)
+//   - Upstream Hard: [InProcessTransport] / [RemoteHTTPTransport] are sealed types
+//     (unexported fields + single sanctioned constructors) — no package outside
+//     can forge a transport. Field sets frozen by INPROCESS-TRANSPORT-SEALED-01 /
+//     REMOTE-TRANSPORT-SEALED-01.
+//   - Downstream Hard (#2093): the codegen-generated contract client is the SOLE
+//     sealed sibling-call type — its constructor takes ONLY a sealed CellTransport,
+//     so a bare *http.Client is not type-expressible as the sibling-call path
+//     (codegen + byte golden, per ADR D2). Emitted for every internal contract
+//     that declares endpoints.clients (contractgen shouldEmitClient).
+//   - Downstream Medium backstops (two, both permanent ceilings — a cell reaching
+//     a sibling sync path any other way is caught, not compile-prevented, since
+//     net/http is a stdlib API and DoContract is an exported method):
+//     CELL-SYNC-TRANSPORT-FUNNEL-01 bans a cell from holding/constructing a raw
+//     net/http client; CELL-TRANSPORT-DOCONTRACT-CALLER-01 bans a cell from calling
+//     CellTransport.DoContract directly (only generated clients may). Together with
+//     the Hard generated client, the only expressible cell→sibling sync path is a
+//     generated client.
 //
 // ref: ServiceWeaver/weaver internal/weaver/remoteweavelet.go (local/remote
 // dispatch); go-micro selector/default.go (minimal Resolver+transport shape).
