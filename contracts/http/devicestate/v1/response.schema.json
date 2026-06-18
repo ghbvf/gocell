@@ -11,7 +11,9 @@
       "required": [
         "deviceId",
         "state",
-        "observedAt"
+        "observedAt",
+        "lastSeenAt",
+        "tenantId"
       ],
       "properties": {
         "deviceId": {

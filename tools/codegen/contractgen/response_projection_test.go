@@ -304,9 +304,12 @@ func TestIndexOfDTO(t *testing.T) {
 // each column's ZERO VALUE is schema-valid on the wire is proven at the contract
 // level — TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates validates a full
 // zero-value row against the real response schema (string→"", date-time→null). The
-// systematic guard that no optional projection column can have a schema-invalid zero
-// (e.g. an optional array/object whose nil marshals to JSON null) is tracked as a
-// follow-up; no production responseProjection contract has such a column today.
+// systematic guard that no optional projection column can carry a schema-invalid zero
+// is now closed (#2359): requireProjectionItemFullColumnSet (codegen build-fail) +
+// archtest PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01 forbid any optional
+// (not-in-`required`) projection column, so value-optionality is expressible only as a
+// schema-valid nullable. The residual (a required array/object whose producer emits
+// nil→null) is documented in ADR 202606112000-1350 §Amendment #2359.
 func TestToMap_FullColumnSet(t *testing.T) {
 	t.Parallel()
 

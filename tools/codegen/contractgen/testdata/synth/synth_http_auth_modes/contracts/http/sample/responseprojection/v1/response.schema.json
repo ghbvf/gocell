@@ -12,7 +12,7 @@
         "tags": { "type": "array", "items": { "type": "string" } },
         "lastSeenAt": { "type": ["string", "null"], "format": "date-time" }
       },
-      "required": ["id"]
+      "required": ["id", "label", "score", "tags", "lastSeenAt"]
     }
   },
   "required": ["data"]

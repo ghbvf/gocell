@@ -13,7 +13,7 @@
         },
         "label": { "type": "string" }
       },
-      "required": ["id"]
+      "required": ["id", "status", "label"]
     }
   },
   "required": ["data"]

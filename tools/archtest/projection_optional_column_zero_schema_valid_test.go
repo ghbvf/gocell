@@ -70,7 +70,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
@@ -240,5 +239,3 @@ func TestProjectionOptionalColumnZeroSchemaValid01_ScannerCatchesViolation(t *te
 var _ = func(s contractgen.Schema) (string, []string, []string, map[string]*contractgen.Schema, *contractgen.Schema) {
 	return s.Type, s.Required, s.PropertyOrder, s.Properties, s.Items
 }
-
-var _ = strings.TrimSpace

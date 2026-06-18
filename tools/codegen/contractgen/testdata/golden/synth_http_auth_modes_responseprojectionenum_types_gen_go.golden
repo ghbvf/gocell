@@ -26,8 +26,8 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.sample.responseprojectionenum.v1.
 type ResponseData struct {
 	ID     string             `json:"id"`
-	Status ResponseDataStatus `json:"status,omitempty"`
-	Label  string             `json:"label,omitempty"`
+	Status ResponseDataStatus `json:"status"`
+	Label  string             `json:"label"`
 }
 
 // ResponseDataStatus enumerates the closed value-set of the status field.
