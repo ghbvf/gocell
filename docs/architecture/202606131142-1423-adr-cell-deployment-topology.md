@@ -516,10 +516,12 @@ remote → `KindInternal` fail-fast、错误冒泡 → 进程起不来（FR-004�
 
 **威胁矩阵重评（AI-robust 章程：amendment 必须同步重评）**：本 amendment 使 split **真实端到端可发生**（此前
 seam 齐全但无接线）。关键前置已落地——「共享 HMAC keyring」缺口经 **#2153（per-cell HKDF 子密钥 + master 缺席）
-在 split 下 CLOSED**（见 §#2153 Amendment）；「无 mTLS」defer **#2263**（与 token 层身份正交）；remote 操作约束
-（私网部署 + 共享 `GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist）见 §#1966 review Amendment，groups 多
-进程部署沿用之。本 amendment **不新增**安全缺口——它把既已可达的 remote 路径从「单进程内不触发」变为「双拓扑验收
-触发」，威胁画像不变（MAC 完整性 Hard + per-cell 身份 #2153 + 私网/mTLS-#2263）。
+在 split 下 CLOSED**（见 §#2153 Amendment）；「无 mTLS」缺口经 **#2263 CLOSED**（非 loopback split 强制 mTLS：
+TLS 1.3 + SPIFFE-ID cross-bind，2026-06-17，见 §#2263 Amendment——该 amendment 已取代本段早先「defer #2263 / 私网
+补偿」措辞）；remote 操作约束（共享 `GOCELL_SERVICE_SECRET` + `RequireCallerCell` allowlist + 私网部署作纵深防御，
+非技术闸替代）见 §#1966 review Amendment + §#2263 Amendment，groups 多进程部署沿用之。本 amendment **不新增**安全缺口
+——它把既已可达的 remote 路径从「单进程内不触发」变为「双拓扑验收触发」，威胁画像不变（MAC 完整性 Hard + per-cell
+身份 #2153 CLOSED + mTLS #2263 CLOSED）。
 
 **PR 分解（mini-epic 收口，逐个独立 review，TDD RED→GREEN 在各 feature PR 内；能力 = US9 #2278，验收 = US7 #1967）**：
 - **PR-0（本 PR）**：本 amendment + `specs/069 tasks.md` US7 细化 + sibling issues。**docs-only、全绿**（不携 RED stub——

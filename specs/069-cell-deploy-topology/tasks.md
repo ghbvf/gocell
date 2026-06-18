@@ -133,4 +133,4 @@ US1(ADR) ─┬─ US2 ─┬─ US3 ←─ #1940 │             │
 - 每 story 一个 issue、一个（或一簇）PR，各自走 `/ship`（worktree + TDD + 内置 review）。
 - event broker funnel 不建新单：由 #1940 承载（US3 blocked-by）。
 - 运行时动态 placement / sidecar out of scope（归 #303）；mTLS 对等认证 → **#2263**（与 token 层 per-cell 身份正交，#2153 已落 token 层隔离）。
-- **US9（新）拆 3 个独立 review PR**（PR-1 schema/codegen、PR-2 role 选择器+子集挂载+`MOUNTED-EQUALS-COLOCATED`、PR-3 缺失依赖闸）；US7 #1967 = PR-4 验收，blocked-by US9。PR-0（ADR + 本 tasks + sibling issues）docs-only、先行。各 feature PR 内 TDD RED→GREEN（PR-0 不携 RED stub）。
+- **US9（新）拆 3 个独立 review PR**（PR-1 schema/codegen、PR-2 role 选择器+子集挂载+`MOUNTED-EQUALS-COLOCATED`、PR-3 缺失依赖 sync 维收口：双层已兑现（TOPO-11 静态 + celltransport Resolve 运行期），不建 phase0 平行闸 + Resolve 诊断命名）；US7 #1967 = PR-4 验收，blocked-by US9。PR-0（ADR + 本 tasks + sibling issues）docs-only、先行。各 feature PR 内 TDD RED→GREEN（PR-0 不携 RED stub）。
