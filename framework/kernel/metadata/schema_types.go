@@ -40,6 +40,31 @@ type HTTPTransportMeta struct {
 	// When set, the generated handler emits the corresponding auth.Route flags
 	// instead of the default Policy-only wiring. Omit for standard authenticated routes.
 	Auth HTTPAuthMeta `yaml:"auth,omitempty" json:"auth,omitempty"`
+	// Permission is the ABAC action (e.g. "config:read") this route's PDP gate
+	// requires (#2205) — the HTTP sibling of GRPCMethodMeta.Permission. It is the
+	// contract-derived origin of the route's auth.RequirePermission gate: cellgen
+	// derives a cell-level contractID→permission map from this overlay and the
+	// generated handler resolves it through authz.MethodPolicyResolver
+	// (runtime/auth.RequirePermissionForContract), replacing the slice hand-wiring of
+	// auth.RequirePermission(authz.PermX()). It is a first-class sibling of Auth, NOT
+	// folded into HTTPAuthMeta's 5-bool mutex matrix: Permission is a string, and
+	// keeping it out preserves the 2^5 auth-combo space (same rationale as
+	// Idempotency, #1469 review F7).
+	//
+	// Empty for routes with no RequirePermission gate: it is MUTUALLY EXCLUSIVE with
+	// auth.public / auth.bootstrap / auth.clientsOnly / auth.serviceOwned (those modes
+	// replace or delegate the route gate). It MAY accompany a standard route (no auth
+	// flag) or a passwordResetExempt route (which still carries a Policy). When present
+	// it MUST be a member of the closed authz registry — governance (the FMT
+	// HTTP-permission rule, the sibling of the gRPC FMT-41 overlay check) validates
+	// membership via authz.IsKnownPermissionString at `gocell validate`, so a typo
+	// fails there rather than at the runtime gate.
+	//
+	// During the #2205 migration the overlay is OPTIONAL (sparse, exactly like
+	// endpoints.grpc.methods[].permission): a standard route without it keeps the
+	// legacy hand-wired gate; only contracts that opt in regenerate with the
+	// resolver-based gate. PR-13 makes it mandatory for standard routes.
+	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
 	// Ownership declares object-level authorization subject/resource paths.
 	// Required when auth.serviceOwned=true (governance FMT-32 enforces presence).
 	Ownership *HTTPOwnershipMeta `yaml:"ownership,omitempty" json:"ownership,omitempty"`

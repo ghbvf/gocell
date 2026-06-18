@@ -10,6 +10,7 @@ endpoints:
   http:
     method: GET
     path: /api/v1/flags/{key}
+    permission: flag:read
     pathParams:
       key:
         type: string

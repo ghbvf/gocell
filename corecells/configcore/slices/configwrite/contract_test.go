@@ -67,13 +67,19 @@ func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	return svc, writer
 }
 
+// contractConfigWriteResolver mirrors the cellHTTPResolver for configwrite contract tests.
+var contractConfigWriteResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.config.write.v1":  "config:write",
+	"http.config.update.v1": "config:write",
+	"http.config.delete.v1": "config:write",
+})
+
 // newContractMux registers all configwrite routes under the canonical API prefix
-// using auth.RequirePermission(authz.PermConfigWrite()) to mirror production.
+// using the contract-derived resolver to mirror production (#2205).
 func newContractMux(svc *Service) http.Handler {
-	policy := auth.RequirePermission(authz.PermConfigWrite())
-	writeH := write.NewHandler(WriteAdapter{svc}, policy)
-	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
-	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
+	writeH := write.NewHandler(WriteAdapter{svc}, contractConfigWriteResolver)
+	updateH := update.NewHandler(UpdateAdapter{svc}, contractConfigWriteResolver)
+	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, contractConfigWriteResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
 		if err := writeH.RegisterRoutes(sub); err != nil {

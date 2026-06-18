@@ -130,6 +130,11 @@ func goldenRuleIDs() []string {
 		// (dead-overlay gate), and vacuous-entry (public:false) rejection. Referential
 		// integrity (name ∈ proto method set) is the contractgen pre-pass (kernel⊥tools).
 		"FMT-41",
+		// FMT-42: http per-route permission overlay (endpoints.http.permission, #2205)
+		// metadata-pure guards — present-only registry membership (authz.IsKnownPermissionString)
+		// + no-gate mutex (permission ⊥ public/bootstrap/clientsOnly/serviceOwned). The HTTP
+		// sibling of FMT-41; sparse/optional during the migration (absent permission is legal).
+		"FMT-42",
 		"FMT-A1", "FMT-C1",
 
 		// JOURNEY — journey lifecycle & cross-file consistency

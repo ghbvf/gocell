@@ -3,7 +3,7 @@
 - 状态：Accepted
 - 日期：2026-06-17
 - Issue：#2263（ZT-1），Closes #2263
-- 范围：**实施决策**。本 ADR 裁定 split 拓扑（`topology.remote`）跨 cell 同步调用的传输层安全
+- 范围：**实施决策**。本 ADR 裁定 split 拓扑（`topology.groups`）跨 cell 同步调用的传输层安全
   策略，落地强制 mTLS + SPIFFE-ID 对等认证，消除 ADR `202606131142-1423` 威胁矩阵中登记的
   「无 mTLS 对等认证」残留缺口。**不覆盖**：证书自动颁发/轮换（follow-up）、SPIFFE Workload
   API / SPIRE agent dial（ZT-4，独立 roadmap）。
@@ -140,7 +140,7 @@ peer cert SPIFFE cell ID  ==  service token callerCell claim
 
 **闸 1：静态（`gocell validate`，构建时）**
 
-新增 governance rule：`assembly.yaml` 中 `topology.remote` 条目若 endpoint **非 loopback
+新增 governance rule：`assembly.yaml` 中 `topology.groups` 的 group endpoint 若 **非 loopback
 （localhost/127.x.x.x/::1）**，scheme 必须为 `https`（含裸 `host:port` 写法的升级：裸
 `host:port` 不被视为 https，非 loopback 时 validate 拒绝）。
 

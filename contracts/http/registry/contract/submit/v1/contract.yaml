@@ -1,0 +1,36 @@
+id: http.registry.contract.submit.v1
+kind: http
+ownerCell: registrycore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: registrycore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/registry/contracts
+    successStatus: 201
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body, oversized payload, or invalid field (id/kind)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the registry:submit permission required to submit a contract registration."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — a registration with the same id already exists (ErrRegistrationDuplicate)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

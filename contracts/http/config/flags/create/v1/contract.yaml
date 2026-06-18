@@ -10,6 +10,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/flags/
+    permission: flag:write
     successStatus: 201
     auth:
       responses:

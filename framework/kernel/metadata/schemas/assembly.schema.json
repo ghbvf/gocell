@@ -96,35 +96,36 @@
     },
     "topology": {
       "type": "object",
-      "description": "OPTIONAL deployment topology for this assembly. Omit entirely for single-process (all-colocated default — zero-migration path). Declare when cells split across multiple processes; add every cell to exactly one of colocated[] or remote[] (exhaustive partition — mutual exclusion enforced). `gocell validate` enforces TOPO-10 (structural) and TOPO-11 (provider reachability). Endpoint format: bare host:port or http/https URL. Validated at governance time by ValidateTopologyStructure.",
+      "description": "OPTIONAL deployment topology for this assembly: the COMPLETE deployment-partition graph. Omit entirely for single-process (all-colocated default — zero-migration path). Declare when cells split across multiple processes; list one group per deployment role and assign every cell to exactly one group (exhaustive, mutually-exclusive partition). Each group is reachable at its endpoint as a remote peer from any other role's perspective. PR-1 (#2278) supports groups authoring, `gocell generate`, and catalog export; per-role process selection at startup (GOCELL_CELL_ROLE → hosting one group's cells in-process) lands in PR-2 — a non-empty GOCELL_CELL_ROLE currently fail-closes. `gocell validate` enforces TOPO-10 (structural), TOPO-11 (provider reachability), TOPO-13 (cross-process broker), TOPO-14 (mTLS endpoint). Validated at governance time by ValidateTopologyStructure.",
       "additionalProperties": false,
       "properties": {
-        "colocated": {
+        "groups": {
           "type": "array",
-          "description": "Cell IDs that are deployed in the same process as this assembly. Must be a subset of the assembly's cells[] IDs and must not overlap with remote[].cellID.",
-          "items": {
-            "type": "string",
-            "description": "Cell ID of a co-located cell. Must match the canonical CellIDPattern (lowercase letters and digits, starts with letter, 2-32 chars).",
-            "pattern": "^[a-z][a-z0-9]{1,31}$"
-          }
-        },
-        "remote": {
-          "type": "array",
-          "description": "Cells deployed as separate remote services reachable via a network endpoint. Must not overlap with colocated[].",
+          "description": "Deployment groups: each is one role hosting a set of cells, reachable by peers at endpoint. The groups must exhaustively and mutually-exclusively partition the assembly's cells[]; roles must be unique.",
           "items": {
             "type": "object",
-            "description": "A remote cell deployment entry.",
+            "description": "A deployment group (one role).",
             "additionalProperties": false,
-            "required": ["cellID", "endpoint"],
+            "required": ["role", "cells", "endpoint"],
             "properties": {
-              "cellID": {
+              "role": {
                 "type": "string",
-                "description": "Cell ID of the remote cell. Must match the canonical CellIDPattern and must be declared in the assembly's cells[].",
-                "pattern": "^[a-z][a-z0-9]{1,31}$"
+                "description": "Unique deployment role name. Per-role process selection at startup via GOCELL_CELL_ROLE lands in PR-2 (#2278); a non-empty role currently fail-closes.",
+                "minLength": 1
+              },
+              "cells": {
+                "type": "array",
+                "minItems": 1,
+                "description": "Cell IDs hosted by this group. Must be declared in the assembly's cells[] and must not appear in any other group.",
+                "items": {
+                  "type": "string",
+                  "description": "Cell ID. Must match the canonical CellIDPattern (lowercase letters and digits, starts with letter, 2-32 chars).",
+                  "pattern": "^[a-z][a-z0-9]{1,31}$"
+                }
               },
               "endpoint": {
                 "type": "string",
-                "description": "Network address of the remote cell service (e.g. host:port or https://host/). Must be a syntactically valid host:port or URL with a non-empty host. Validated by ValidateTopologyStructure at governance time.",
+                "description": "Network address at which this group is reachable as a remote peer (e.g. host:port or https://host/). Must be a syntactically valid host:port or URL with a non-empty host. Validated by ValidateTopologyStructure at governance time.",
                 "minLength": 1
               }
             }

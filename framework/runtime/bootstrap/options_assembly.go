@@ -45,7 +45,7 @@ func WithAssemblyID(id string) Option {
 // WithDeploymentTopology supplies the codegen-derived deployment placement spec
 // so phase0 seals+validates it into the runtime DeploymentTopology queried by
 // transport routing. composition.Builder.Build injects this from the assembly's
-// generatedDeploymentTopology(). Omitting it leaves the zero DeploymentTopology
+// SpecForRole(generatedTopologyGroups(), role). Omitting it leaves the zero DeploymentTopology
 // (all cells co-located) — identical to single-process behavior. This is
 // DEPLOYMENT topology; distinct from WithControlPlaneTopology (adapter topology).
 func WithDeploymentTopology(spec DeploymentTopologySpec) Option {

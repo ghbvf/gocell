@@ -356,19 +356,19 @@ func buildAssemblyEntity(a *metadata.AssemblyMeta, inc IncludeOptions) Entity {
 
 // mapAssemblyTopology copies metadata.TopologyMeta onto the wire DTO field-by-field,
 // mirroring the AssemblyMeta.Build → AssemblySpecBuild mapping above. A zero TopologyMeta
-// (no colocated and no remote cells) yields nil so the optional topology field is omitted
-// from the wire entirely (see AssemblySpecTopology godoc on why a value struct + omitempty
-// would still emit `{}`).
+// (no groups) yields nil so the optional topology field is omitted from the wire entirely
+// (see AssemblySpecTopology godoc on why a value struct + omitempty would still emit `{}`).
 func mapAssemblyTopology(t metadata.TopologyMeta) *AssemblySpecTopology {
-	if len(t.Colocated) == 0 && len(t.Remote) == 0 {
+	if len(t.Groups) == 0 {
 		return nil
 	}
-	out := &AssemblySpecTopology{}
-	if len(t.Colocated) > 0 {
-		out.Colocated = append([]string(nil), t.Colocated...)
-	}
-	for _, r := range t.Remote {
-		out.Remote = append(out.Remote, AssemblySpecTopologyRemote{CellID: r.CellID, Endpoint: r.Endpoint})
+	out := &AssemblySpecTopology{Groups: make([]AssemblySpecTopologyGroup, 0, len(t.Groups))}
+	for _, g := range t.Groups {
+		out.Groups = append(out.Groups, AssemblySpecTopologyGroup{
+			Role:     g.Role,
+			Cells:    append([]string(nil), g.Cells...),
+			Endpoint: g.Endpoint,
+		})
 	}
 	return out
 }

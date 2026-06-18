@@ -60,7 +60,8 @@ In postgres (durable) topology the outbox event transport is a **real message br
 
 | Variable | Purpose | Default | Required? | Notes |
 |----------|---------|---------|-----------|-------|
-| `GOCELL_AMQP_URL` | RabbitMQ (AMQP 0-9-1) connection URL the relay publishes to and consumers subscribe from | — | **postgres topology** (`GOCELL_CELL_ADAPTER_MODE=postgres`) | Startup **fails fast** when unset in postgres topology — there is **no silent in-memory fallback** (a process-local bus would lose durable outbox entries across processes / restarts). The connection dials eagerly, so an unreachable broker also fails fast at startup. Use a TLS URL (`amqps://…`) for remote brokers; `amqp://guest:guest@localhost:5672/` is dev/CI only. **Ignored** in demo / memory topology. |
+| `GOCELL_<CELLID>_AMQP_URL` | Per-cell RabbitMQ connection URL for a broker cell (#2152 PR-2). Read for each broker-requiring cell (= the postgres cell set: `CONFIGCORE` / `AUDITCORE` / `ACCESSCORE`) and deduped by `eventtransport.dedupBrokerURL` | falls back to `GOCELL_AMQP_URL` when unset | optional | **Colocated** assemblies share one broker — leave these unset and set only `GOCELL_AMQP_URL` (every cell falls back to it → one connection, behavior-preserving). **Distinct** per-cell URLs are currently **fail-closed** (egress-only: only the relay/publisher fans out today; a single subscriber cannot consume N brokers). True N-broker fan-out is gated on the ingress phase6 N-router follow-up + #2341. **Ignored** in demo / memory topology. |
+| `GOCELL_AMQP_URL` | RabbitMQ (AMQP 0-9-1) connection URL the relay publishes to and consumers subscribe from; assembly-wide fallback for the per-cell `GOCELL_<CELLID>_AMQP_URL` above | — | **postgres topology** (`GOCELL_CELL_ADAPTER_MODE=postgres`), unless every broker cell sets its own `GOCELL_<CELLID>_AMQP_URL` | Startup **fails fast** when a broker cell has neither its per-cell URL nor this fallback in postgres topology — there is **no silent in-memory fallback** (a process-local bus would lose durable outbox entries across processes / restarts). The connection dials eagerly, so an unreachable broker also fails fast at startup. Use a TLS URL (`amqps://…`) for remote brokers; `amqp://guest:guest@localhost:5672/` is dev/CI only. **Ignored** in demo / memory topology. |
 
 **Dead-letter exchange (broker topology contract):** the RabbitMQ subscriber declares a single dead-letter exchange **`gocell.events.dlx`** at subscription setup. Messages rejected past the retry budget (`outbox.Reject`) are routed there instead of being silently dropped, retaining their original routing key (topic) so a DLX consumer can route by source topic. This name is a stable operations contract — renaming it requires migrating in-flight dead letters. Operators configuring vhost ACLs or dead-letter monitoring should account for `gocell.events.dlx`.
 
@@ -202,9 +203,9 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 ## Split 拓扑 mTLS 传输层安全（#2263，ZT-1）
 
-非 loopback `topology.remote` 跨 cell 调用现强制 mTLS（`celltls.Resolve` 在启动期 fail-fast）。
-以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在 topology 含非 loopback
-remote cell 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
+非 loopback `topology.groups` group endpoint 的 split 跨 cell 调用现强制 mTLS（`celltls.Resolve`
+在启动期 fail-fast）。以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在
+topology 含非 loopback group endpoint 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
 
 每个 cell 进程需要：一张携带 `spiffe://<trustDomain>/cell/<cellID>` URI SAN + 双 EKU
 （ServerAuth + ClientAuth）的 leaf cert、配套私钥，以及签发所有 cell cert 的 trust-root CA bundle。

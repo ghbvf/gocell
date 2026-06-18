@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
@@ -76,6 +78,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateAssemblyClockAlignment(); err != nil {
 		return err
 	}
+	// MOUNTED-EQUALS-COLOCATED: runs after the assembly is known (mounted cell
+	// set) and the deployment topology is sealed — the upstream backstop for
+	// role-based subset mounting.
+	if err := b.validateMountedEqualsColocated(); err != nil {
+		return err
+	}
 	// Advisory check (non-blocking): warn when the declared K8s grace period
 	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
 	b.warnTerminationGracePeriodInsufficient()
@@ -126,6 +134,88 @@ func (b *Bootstrap) validateDeploymentTopology() error {
 	}
 	b.deploymentTopology = dt
 	return nil
+}
+
+// MOUNTED-EQUALS-COLOCATED error message constants — MESSAGE-CONST-LITERAL-01.
+const (
+	errMsgMountedCellRemote = "deployment topology: a cell mounted in this process is declared remote for this role; " +
+		"a remote cell must not be hosted locally (mount the colocated subset via composition.NewForRole)"
+	errMsgMountedCellNotColocated = "deployment topology: a cell mounted in this process is not in this role's colocated set"
+	errMsgColocatedCellNotMounted = "deployment topology: a cell in this role's colocated set is not mounted in this process"
+)
+
+// validateMountedEqualsColocated enforces MOUNTED-EQUALS-COLOCATED-01: in an
+// explicit split topology, the set of cells this process mounts (b.assemblyCore)
+// MUST equal the topology's colocated set, and no mounted cell may be declared
+// remote. This is the upstream backstop for composition.NewForRole — even a root
+// that bypasses NewForRole and mounts the full cell set directly
+// (New(allCells).With(allMods)) fails fast here instead of silently
+// double-mounting a remote cell.
+//
+// A zero (all-colocated) topology trivially satisfies the invariant. A nil
+// assemblyCore is also skipped: phase0 supports an assembly-less validation mode
+// (the sibling validateAssemblyClockAlignment skips the same way), and the
+// production composition flow always wires WithAssembly via
+// composition.Builder.Build, so a split topology always has its mounted set here.
+//
+// AI-robust grade: Medium (runtime bijection over runtime cellID strings — the
+// same honest ceiling as M12a / the broker-mandatory gate; cellID is not a
+// compile-time fact). Blind spot: the mounted/colocated sets are runtime-derived,
+// so this cannot be Hard; static reachability of consumed providers is the
+// separate gocell-validate TOPO gate. Called at phase0 after the topology is
+// sealed and the assembly is wired.
+func (b *Bootstrap) validateMountedEqualsColocated() error {
+	dt := b.deploymentTopology
+	if !dt.explicit {
+		return nil // monolith / no explicit topology: all colocated, no remotes
+	}
+	if b.assemblyCore == nil {
+		return nil // no mounted cells to validate (assembly presence handled elsewhere)
+	}
+	mounted := b.assemblyCore.CellIDs()
+	// Diagnostic context shared by every failure path: the full mounted +
+	// colocated sets let an operator see the whole bijection mismatch, not just
+	// the first offending cell.
+	ctxAttrs := []errcode.InternalDetail{
+		errcode.InternalAttr("mounted", strings.Join(mounted, ",")),
+		errcode.InternalAttr("colocated", deployTopoSortedKeys(dt.colocated)),
+	}
+	mountedSet := make(map[string]struct{}, len(mounted))
+	for _, id := range mounted {
+		mountedSet[id] = struct{}{}
+		if _, isRemote := dt.remote[id]; isRemote {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgMountedCellRemote,
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+		if _, isColoc := dt.colocated[id]; !isColoc {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgMountedCellNotColocated,
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+	}
+	for id := range dt.colocated {
+		if _, ok := mountedSet[id]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				errMsgColocatedCellNotMounted,
+				errcode.WithInternal(append(ctxAttrs, errcode.InternalAttr("cellID", id))...),
+				errcode.WithDetails(errcode.PublicString("cellID", id)))
+		}
+	}
+	return nil
+}
+
+// deployTopoSortedKeys returns the map keys joined by "," in sorted order — a
+// deterministic rendering of a cell-ID set for diagnostic InternalAttrs.
+func deployTopoSortedKeys(m map[string]struct{}) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 // validateSplitTopologyBroker rejects the illegal combination of a split
@@ -254,11 +344,12 @@ const terminationGraceSafetyMargin = 10 * time.Second
 // errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
 const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
 	"the in-memory EventBus cannot deliver events across process boundaries — " +
-	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and GOCELL_AMQP_URL so " +
+	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and a per-cell " +
+	"GOCELL_<CELLID>_AMQP_URL (fallback GOCELL_AMQP_URL; see docs/ops/env-vars.md) so " +
 	"eventtransport.Resolve selects a real broker, and thread its Transport.Kind via " +
 	"WithEventTransportKind plus a non-nil publisher/subscriber via WithPublisher/WithSubscriber" +
-	" — or drop the remote cells from the deployment topology (assembly topology.remote / " +
-	"DeploymentTopologySpec.Remote) to keep all cells co-located (no broker needed)"
+	" — or co-locate all cells in a single deployment group (assembly topology.groups; omit topology " +
+	"entirely for the all-colocated default) to keep them in one process (no broker needed)"
 
 // phase10ShutdownBudgetBuckets is the number of independent timeout buckets
 // allocated by phase10OrchestrateShutdown — drainCtx (stage 1+2) and tearCtx

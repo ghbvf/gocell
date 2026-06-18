@@ -37,13 +37,24 @@ const remoteReadinessDialTimeout = 3 * time.Second
 
 // Error messages — MESSAGE-CONST-LITERAL-01.
 const (
-	msgNilInProc = "celltransport.Resolve: InProcessTransport must be set" +
-		" for a co-located cell (composition.Builder.Build mints it)"
-	// msgUnclassifiedCell is the error message for a cellID that is neither
-	// co-located nor remote in an explicit topology (TOPO-11 normally prevents
-	// this at static-analysis time; this is defense-in-depth).
-	msgUnclassifiedCell = "celltransport.Resolve: cellID not classified in deployment topology" +
-		" (neither co-located nor remote); gocell validate TOPO-11 prevents this at build time"
+	// msgNilInProc names the failure class "local dependency missing": the
+	// consumed provider is declared co-located (runs in this process) but its
+	// in-process transport was never minted, i.e. the local provider cell is not
+	// actually mounted/wired here. Distinct from msgUnclassifiedCell, where the
+	// provider has no place in the topology at all.
+	msgNilInProc = "celltransport.Resolve: local dependency missing —" +
+		" the co-located provider's in-process transport was not minted" +
+		" (composition.Builder.Build mints it for a mounted co-located cell)"
+	// msgUnclassifiedCell names the failure class "topology under-declared": the
+	// consumed provider cellID is neither co-located nor remote in this explicit
+	// deployment topology, so it has no route. gocell validate TOPO-11 rejects
+	// this statically; this eager seam (called at module-wiring/startup time) is
+	// the sync-dimension missing-dependency runtime fail-fast — there is no
+	// separate phase0 gate (ADR 202606131142-1423 §#1967).
+	msgUnclassifiedCell = "celltransport.Resolve: topology under-declared —" +
+		" cellID is neither co-located nor remote in this deployment topology" +
+		" (the consumed provider has no route); declare it in an assembly topology.groups group." +
+		" gocell validate TOPO-11 prevents this at build time"
 	// msgPlaintextNonLoopback rejects a non-loopback peer reached over plaintext
 	// (#2263): mTLS is mandatory across a real network boundary. The gocell
 	// validate TOPO gate also rejects this at build time; this is the runtime

@@ -79,12 +79,13 @@ func generatedFrameworkServedContracts() []string {
 	}
 }
 
-// generatedDeploymentTopology returns the assembly's codegen-derived deployment
-// placement spec (single-sourced from assembly.yaml topology, derived by
-// `gocell generate assembly`). Empty topology => all cells co-located (zero-
-// migration default). Composition root injects it via
-// bootstrap.WithDeploymentTopology; phase0 seals and validates it. ALWAYS
-// emitted so the composition root can call it unconditionally.
-func generatedDeploymentTopology() bootstrap.DeploymentTopologySpec {
-	return bootstrap.DeploymentTopologySpec{}
+// generatedTopologyGroups returns the assembly's COMPLETE deployment-partition
+// graph (single-sourced from assembly.yaml topology.groups, derived by
+// `gocell generate assembly`). Empty topology => nil => all cells co-located
+// (zero-migration default). The composition root picks a deployment role and
+// derives its per-process bootstrap.DeploymentTopologySpec via
+// bootstrap.SpecForRole; phase0 seals and validates that. ALWAYS emitted so the
+// composition root can call it unconditionally.
+func generatedTopologyGroups() []bootstrap.TopologyGroup {
+	return nil
 }

@@ -77,8 +77,8 @@ type SharedDeps struct {
 	Topology bootstrap.Topology
 
 	// DeploymentTopology is the codegen-derived deployment placement spec for
-	// this assembly (single-sourced from assembly.yaml topology, produced by
-	// generatedDeploymentTopology()). It is a bootstrap.DeploymentTopologySpec
+	// this assembly (single-sourced from assembly.yaml topology, derived via
+	// SpecForRole(generatedTopologyGroups(), role)). It is a bootstrap.DeploymentTopologySpec
 	// (plain codegen input, no methods); phase0 seals it into a
 	// bootstrap.DeploymentTopology (with IsColocated/RemoteEndpoint); US4
 	// consumers query the SEALED value (via Bootstrap.DeploymentTopology()), not

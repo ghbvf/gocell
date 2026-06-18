@@ -140,13 +140,15 @@ type modulesCompositionContext struct {
 	// emits generatedProjectionSourceTopics() (even when empty) so the decorator
 	// wiring can call it unconditionally.
 	ProjectionSourceTopics []string
-	// DeploymentTopology is the assembly's deployment placement spec, single-sourced
-	// from assembly.yaml topology. The template ALWAYS emits
-	// generatedDeploymentTopology() (empty spec when no topology declared) so the
-	// composition root can call it unconditionally. Validated by
-	// metadata.ValidateTopologyStructure before codegen proceeds — illegal topology
-	// (mutual exclusion, non-exhaustive, bad endpoint) fails generation closed.
-	DeploymentTopology deploymentTopologyTemplateData
+	// TopologyGroups is the assembly's COMPLETE deployment-partition graph,
+	// single-sourced from assembly.yaml topology.groups. The template ALWAYS emits
+	// generatedTopologyGroups() (nil when no topology declared) so the composition
+	// root can call it unconditionally; the root picks a role and derives its
+	// per-process bootstrap.DeploymentTopologySpec via bootstrap.SpecForRole.
+	// Validated by metadata.ValidateTopologyStructure before codegen proceeds —
+	// illegal topology (mutual exclusion, non-exhaustive, bad endpoint) fails
+	// generation closed.
+	TopologyGroups topologyGroupsTemplateData
 	// PostgresCells is the sorted list of cell IDs whose cell.yaml declares
 	// `requires: [postgres]`. Single-sourced from cell.yaml metadata; consumed by
 	// the composition root's per-cell PG resolution (cellmodules/percellpg.Resolve).
@@ -167,19 +169,18 @@ type modulesCompositionContext struct {
 	FrameworkServedContracts []string
 }
 
-// deploymentTopologyTemplateData is the flattened template-serialisable form of
-// an assembly's topology.Colocated/Remote. It is distinct from
-// metadata.TopologyMeta because template rendering requires plain exported-field
-// types (no methods); the translation is done once in
-// buildDeploymentTopologyData.
-type deploymentTopologyTemplateData struct {
-	Colocated []string
-	Remote    []remoteEntryTemplateData
+// topologyGroupsTemplateData is the flattened template-serialisable form of an
+// assembly's topology.Groups. It is distinct from metadata.TopologyMeta because
+// template rendering requires plain exported-field types (no methods); the
+// translation is done once in buildTopologyGroupsData.
+type topologyGroupsTemplateData struct {
+	Groups []topologyGroupTemplateData
 }
 
-// remoteEntryTemplateData is the per-remote-cell entry used in the template.
-type remoteEntryTemplateData struct {
-	CellID   string
+// topologyGroupTemplateData is the per-deployment-group entry used in the template.
+type topologyGroupTemplateData struct {
+	Role     string
+	Cells    []string
 	Endpoint string
 }
 
@@ -559,7 +560,7 @@ func (g *Generator) generateModulesGenComposition(
 			"assembly topology validation failed before codegen", err,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
-	topoData := buildDeploymentTopologyData(asm.Topology)
+	topoData := buildTopologyGroupsData(asm.Topology)
 	postgresCells := g.collectPostgresCells(asm.Cells)
 	frameworkServed := append([]string(nil), asm.FrameworkContracts...)
 	sort.Strings(frameworkServed)
@@ -570,7 +571,7 @@ func (g *Generator) generateModulesGenComposition(
 		ModuleImports:            importLines,
 		Capabilities:             capConsts,
 		ProjectionSourceTopics:   projTopics,
-		DeploymentTopology:       topoData,
+		TopologyGroups:           topoData,
 		PostgresCells:            postgresCells,
 		FrameworkServedContracts: frameworkServed,
 	}
@@ -600,19 +601,22 @@ func (g *Generator) collectPostgresCells(cellRefs []metadata.AssemblyCellRef) []
 	return cells
 }
 
-// buildDeploymentTopologyData translates the metadata.TopologyMeta into the
-// flattened template-serialisable form. Empty topology (no colocated, no remote)
-// returns a zero-value deploymentTopologyTemplateData so the template emits
-// bootstrap.DeploymentTopologySpec{} — the all-colocated default.
-func buildDeploymentTopologyData(topo metadata.TopologyMeta) deploymentTopologyTemplateData {
-	var d deploymentTopologyTemplateData
-	if len(topo.Colocated) == 0 && len(topo.Remote) == 0 {
+// buildTopologyGroupsData translates the metadata.TopologyMeta into the flattened
+// template-serialisable form. Empty topology (no groups) returns a zero-value
+// topologyGroupsTemplateData so the template emits a nil-returning
+// generatedTopologyGroups() — the all-colocated default (no role split).
+func buildTopologyGroupsData(topo metadata.TopologyMeta) topologyGroupsTemplateData {
+	var d topologyGroupsTemplateData
+	if len(topo.Groups) == 0 {
 		return d
 	}
-	d.Colocated = append([]string(nil), topo.Colocated...)
-	d.Remote = make([]remoteEntryTemplateData, 0, len(topo.Remote))
-	for _, r := range topo.Remote {
-		d.Remote = append(d.Remote, remoteEntryTemplateData{CellID: r.CellID, Endpoint: r.Endpoint})
+	d.Groups = make([]topologyGroupTemplateData, 0, len(topo.Groups))
+	for _, g := range topo.Groups {
+		d.Groups = append(d.Groups, topologyGroupTemplateData{
+			Role:     g.Role,
+			Cells:    append([]string(nil), g.Cells...),
+			Endpoint: g.Endpoint,
+		})
 	}
 	return d
 }

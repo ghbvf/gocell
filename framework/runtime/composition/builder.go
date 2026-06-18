@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -42,6 +43,11 @@ type Builder struct {
 	modules         []CellModule
 	expectedCellIDs []string
 	migrations      []MigrationRegistration
+	// roleSpec is the deployment-topology spec NewForRole filtered modules with,
+	// or nil for a plain New() builder. Build asserts it equals
+	// SharedDeps.DeploymentTopology so the subset-mount source and the sealed
+	// runtime topology share one source (validateRoleSpecMatchesShared, #2278).
+	roleSpec *bootstrap.DeploymentTopologySpec
 }
 
 // New returns a new Builder whose composed cells must form exactly the
@@ -144,6 +150,30 @@ func validateBuildInputs(shared *SharedDeps, runtimeOptsFn RuntimeOptionsFunc) e
 	return nil
 }
 
+// validateRoleSpecMatchesShared enforces a single deployment-topology source: a
+// Builder produced by [NewForRole] filtered its modules with a spec, and Build
+// seals SharedDeps.DeploymentTopology into the runtime topology. If those two
+// diverged, this process could mount one partition's cells while routing
+// cross-cell transport per another — a silent split-topology corruption. They
+// MUST be the same SpecForRole(generatedTopologyGroups(), role) result; Build
+// fail-fasts on any mismatch. A plain New() builder has no role spec (roleSpec
+// nil) and skips the check.
+//
+// ref: kubernetes cmd/kube-controller-manager options.Validate — validate the
+// aggregate config once before startup; uber-go/fx app.go — surface wiring
+// errors before the graph starts.
+func (b *Builder) validateRoleSpecMatchesShared(shared *SharedDeps) error {
+	if b.roleSpec == nil {
+		return nil
+	}
+	if !reflect.DeepEqual(*b.roleSpec, shared.DeploymentTopology) {
+		return fmt.Errorf("composition.Builder.Build: NewForRole was given a deployment-topology spec that " +
+			"differs from SharedDeps.DeploymentTopology; both must be the single SpecForRole(...) result so the " +
+			"mounted subset and the sealed runtime topology cannot diverge")
+	}
+	return nil
+}
+
 // validateClosedSet enforces the M12a build-time closed-set invariant: the set
 // of composed cell IDs must equal the assembly's declared cell-id set
 // (b.expectedCellIDs) — a bijection. It runs before any module Provide so a
@@ -201,6 +231,9 @@ func (b *Builder) Build(
 	runtimeOptsFn RuntimeOptionsFunc,
 ) (*App, error) {
 	if err := validateBuildInputs(shared, runtimeOptsFn); err != nil {
+		return nil, err
+	}
+	if err := b.validateRoleSpecMatchesShared(shared); err != nil {
 		return nil, err
 	}
 	if err := b.validateClosedSet(); err != nil {
@@ -267,7 +300,7 @@ func (b *Builder) Build(
 	//      review F1). shared.Topology is sealed (caller cannot forge it).
 	//   2. WithDeploymentTopology: lets phase0 seal+validate the codegen-derived
 	//      deployment placement spec into a runtime DeploymentTopology (#1962).
-	//      shared.DeploymentTopology is produced by generatedDeploymentTopology().
+	//      shared.DeploymentTopology is derived via SpecForRole(generatedTopologyGroups(), role).
 	// Both are appended to cellOpts — applied AFTER runtimeOpts in allOpts below —
 	// so a caller's runtimeOptsFn cannot override them.
 	//   3. WithInProcessTransport: hands bootstrap the SAME holder minted above so

@@ -65,6 +65,18 @@ type CellGenSpec struct {
 	// contractUsages[role=serve] with kind=grpc. Each entry emits one
 	// reg.GRPCService() call.
 	GrpcServices []GrpcServiceGenSpec
+	// HTTPMethodPermissions holds the cell-level (contractID → ABAC action) pairs
+	// derived from each served HTTP contract's endpoints.http.permission overlay
+	// (#2205), sorted by contract id for deterministic golden output. When non-empty,
+	// cell.tmpl renders a package-level resolver var
+	// `<cell>HTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{...})`
+	// (the HTTP transport's authz.MethodPolicyResolver, sibling of the gRPC
+	// registrar) that cell_init.go injects into the contract-derived slice handlers.
+	// Empty → no contract-derived HTTP gates in this cell; the resolver var and its
+	// runtime/auth import are omitted. MethodPermission.FullMethod holds the contract
+	// id here (not a gRPC method name); the field is reused to avoid a near-duplicate
+	// string→string pair type.
+	HTTPMethodPermissions []MethodPermission
 }
 
 // GrpcServiceGenSpec describes one reg.GRPCService() call derived from a
