@@ -288,7 +288,9 @@ func TestTokenIntent_IsValid(t *testing.T) {
 		valid  bool
 	}{
 		{auth.TokenIntentAccess, true},
+		{auth.TokenIntentEnrollment, true},
 		{auth.TokenIntent("refresh"), false},
+		{auth.TokenIntent("bootstrap"), false},
 		{auth.TokenIntent(""), false},
 	}
 	for _, tc := range tests {
