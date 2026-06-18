@@ -55,7 +55,10 @@
 //     is therefore vacuously green. Anti-vacuity is provided by the synthetic
 //     fixture (TestCellTransportDoContractCaller01_FixtureScanRED) which MUST fire
 //     on the fixture's direct ct.DoContract call, and by the pure-detector table
-//     (TestCellTransportDoContractCaller01_SyntheticDetector).
+//     (TestCellTransportDoContractCaller01_SyntheticDetector). The production scan
+//     becomes non-vacuous once a second cell adopts a generated contract client and
+//     a regression re-introduces a hand-written DoContract call in a cell package;
+//     until then the fixture + detector tests carry the reachability proof.
 //   - A cell HOLDING a transport.CellTransport (e.g. forwarding it into
 //     getv1.NewClient) is NOT flagged — only the DoContract CALL is. This is by
 //     design: the generated client's constructor needs the sealed transport, and

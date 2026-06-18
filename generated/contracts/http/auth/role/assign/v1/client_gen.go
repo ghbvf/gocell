@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
@@ -43,8 +45,9 @@ type Client struct {
 // NewClient constructs the generated client. t is the topology-injected sealed
 // transport (in-process or remote); ring signs the outbound service token;
 // callerCell is the calling cell's identity (one of contract.yaml
-// endpoints.clients). A nil/typed-nil transport or nil ring is a wiring error and
-// fails fast at construction, not at the first request.
+// endpoints.clients). All three strong deps are wiring inputs that fail fast at
+// construction (not at the first request): a nil/typed-nil transport, a nil ring,
+// or an empty callerCell each panics here.
 func NewClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell string, clk clock.Clock) *Client {
 	clock.MustHaveClock(clk, "generated client http.auth.role.assign.v1")
 	if validation.IsNilInterface(t) {
@@ -52,6 +55,9 @@ func NewClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell 
 	}
 	if validation.IsNilInterface(ring) {
 		panic(panicregister.Approved("http-auth-role-assign-v1-client-ring-nil", errcode.Assertion("generated client http.auth.role.assign.v1: ServiceKeyring must not be nil (the composition root must supply the internal service keyring)")))
+	}
+	if callerCell == "" {
+		panic(panicregister.Approved("http-auth-role-assign-v1-client-caller-cell-empty", errcode.Assertion("generated client http.auth.role.assign.v1: callerCell must not be empty (the wiring must supply the calling cell's id, one of contract.yaml endpoints.clients)")))
 	}
 	return &Client{transport: t, ring: ring, callerCell: callerCell, clock: clk}
 }
@@ -70,17 +76,26 @@ func (c *Client) Assign(ctx context.Context, tn tenant.TenantID, req *Request) (
 	if err != nil {
 		return nil, 0, fmt.Errorf("http.auth.role.assign.v1 client: build request: %w", err)
 	}
+	httpReq.Header.Set("Content-Type", "application/json")
 	// Sign with a service token so the InternalListener middleware accepts the
 	// request; tn travels as X-Tenant-ID (set by SignInternalRequest) so the
 	// server scopes the lookup to the caller's tenant.
 	if err := auth.SignInternalRequest(ctx, c.ring, c.callerCell, httpReq, tn, c.clock); err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("http.auth.role.assign.v1 client: sign request: %w", err)
 	}
 	resp, err := c.transport.DoContract(ctx, ClientContractID, httpReq)
 	if err != nil {
 		return nil, 0, fmt.Errorf("http.auth.role.assign.v1 client: do request: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		// Drain so the remote transport can reuse the keep-alive connection
+		// (net/http requires the body fully read before Close); log a close
+		// failure (TCP RST / pool signal) instead of dropping it silently.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if cerr := resp.Body.Close(); cerr != nil {
+			slog.WarnContext(ctx, "http.auth.role.assign.v1 client: response body close error", slog.Any("error", cerr))
+		}
+	}()
 	if resp.StatusCode != 201 {
 		// Non-success status: return it for the caller to map to a domain error.
 		return nil, resp.StatusCode, nil

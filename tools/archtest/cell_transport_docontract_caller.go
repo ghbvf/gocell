@@ -18,6 +18,12 @@ const ruleCellTransportDoContractCaller = "CELL-TRANSPORT-DOCONTRACT-CALLER-01"
 // seam package that declares CellTransport.DoContract. (Named distinctly from the
 // archtest-tagged transportPkgPath in inprocess_bind_authority_funnel_test.go so
 // this non-tagged detector file compiles in the default build.)
+//
+// Anchored to PlatformFrameworkModulePath so a module rename updates one place; if
+// the runtime/transport package itself is relocated, this constant must move with
+// it (a documented Go ceiling for path-anchored archtest rules, same as
+// COMMAND-ASYNC-EMIT-CALLER-01's package anchors). A stale path silently turns the
+// scan green — the synthetic fixture (FixtureScanRED) is the anti-vacuity guard.
 const doContractTransportPkgPath = PlatformFrameworkModulePath + "/runtime/transport"
 
 // doContractMethodName is the sole sealed cross-cell sync dispatch method.

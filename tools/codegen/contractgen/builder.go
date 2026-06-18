@@ -67,6 +67,7 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PanicReasonStandardSchemaCompileFailed:     kebab + "-standard-schema-compile-failed",
 		PanicReasonClientTransportNil:              kebab + "-client-transport-nil",
 		PanicReasonClientRingNil:                   kebab + "-client-ring-nil",
+		PanicReasonClientCallerCellEmpty:           kebab + "-client-caller-cell-empty",
 	}
 
 	// Fail closed on empty transports before any kind-specific template can
@@ -211,6 +212,19 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// field's resource-item DTO for projection contracts. No-op for
 	// non-projection contracts (the client decodes into Response directly).
 	deriveClientDecode(spec)
+
+	// Fail loud (not silent wrong code): a client is emitted for any internal
+	// contract that declares endpoints.clients (generator shouldEmitClient), but
+	// the client.tmpl success path always decodes a body — a NoContent (204)
+	// success has none, and a 204 contract may not even generate a Response type.
+	// Reject the combination at codegen rather than emit an uncompilable / always-
+	// EOF client. No current internal+clients contract is NoContent; if one is
+	// introduced, give it a real success body or drop it from endpoints.clients.
+	if len(endpointSpec.Clients) > 0 && endpointSpec.NoContent {
+		return fmt.Errorf("contractgen build: %q declares endpoints.clients (a generated cross-cell client) "+
+			"but is NoContent (204) — the generated client cannot decode a bodyless success; give it a response "+
+			"body or remove endpoints.clients", contract.ID)
+	}
 
 	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
 	// Only populated when the endpoint actually has a body (POST/PUT/PATCH with a

@@ -123,6 +123,10 @@ type ContractGenSpec struct {
 	// client's nil-keyring fail-fast (client.tmpl NewClient, #2093).
 	// Pre-computed from ContractID + "-client-ring-nil".
 	PanicReasonClientRingNil string
+	// PanicReasonClientCallerCellEmpty is the kebab-case reason literal for the
+	// generated client's empty-callerCell fail-fast (client.tmpl NewClient, #2093).
+	// Pre-computed from ContractID + "-client-caller-cell-empty".
+	PanicReasonClientCallerCellEmpty string
 }
 
 // DTOSpec is one Go struct definition.
