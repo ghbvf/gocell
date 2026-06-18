@@ -498,7 +498,7 @@ func (c *AuditCore) initQuerySlice(mode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)
 	}
-	c.queryHandler = auditquery.NewHandler(querySvc)
+	c.queryHandler = auditquery.NewHandler(querySvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(auditquery.SliceMetadata()))
 	return nil
 }

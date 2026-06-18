@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/auth/bootstrap-failed/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub2 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
@@ -49,6 +50,15 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.audit.get.v1": "audit:read",
+})
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registrar) error {
