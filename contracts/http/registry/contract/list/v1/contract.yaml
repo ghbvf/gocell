@@ -1,0 +1,39 @@
+id: http.registry.contract.list.v1
+kind: http
+ownerCell: registrycore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: registrycore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/registry/contracts
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        maxLength: 4096
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid cursor or limit query parameter."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the registry:read permission required to list contract registrations."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

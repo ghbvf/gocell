@@ -1,0 +1,20 @@
+id: registrycore
+type: core
+# L1 (not L0): a contract provider with an HTTP serving boundary cannot be L0
+# (TOPO-05 — only inbound webhook-receive is the L0-provider exception). The US4
+# skeleton backs submit/list with the in-mem kernel ContractRegistrar (#2233); it
+# persists nothing yet, so schema.primary reserves the cell_registry_core
+# namespace as the framework marker of a real boundary cell (FMT-06) and there is
+# no postgres requires — the durable contract_registrations store is US5.
+consistencyLevel: L1
+lifecycle: asset
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_registry_core
+verify:
+  smoke:
+    - smoke.registrycore.startup
+goStructName: RegistryCore
+l0Dependencies: []
