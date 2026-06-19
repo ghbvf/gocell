@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -56,11 +57,6 @@ const errLookupDeviceFmt = "device-command: lookup device: %w"
 // unconditional and fail-closed — there is deliberately no "off" switch for a
 // resource-exhaustion bound.
 const defaultMaxPendingPerDevice = 1000
-
-// errPendingLimitMsg is the const message for the per-device pending-limit
-// rejection (errcode rule: message must be a const literal; the runtime limit
-// value travels via WithDetails, not string interpolation).
-const errPendingLimitMsg = "device-command: per-device pending command limit exceeded"
 
 // Service handles device command business logic.
 //
@@ -308,42 +304,14 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, fmt.Errorf(errLookupDeviceFmt, err)
 	}
 
-	// Per-device Pending accumulation guard (F-S-005 #822). HTTP rate-limiting
-	// bounds QPS but not per-device queue depth; an offline device never
-	// dequeues, so its commands pile up as Pending unbounded. Reuse the existing
-	// ActiveScanner — ScanActive is uncapped (no SQL LIMIT, no in-mem truncation)
-	// in both the in-mem and PG stores, so len() is an accurate Pending count.
-	// Only Pending (status=1) counts: in-flight Sent/Delivered commands resolve
-	// on their own and must not consume the cap. The cap has no opt-out switch.
-	// Runs after the device-existence check so an unknown/forbidden device still
-	// gets 404/403, not 429.
-	//
-	// BEST-EFFORT, NOT a hard concurrent invariant: this ScanActive read and the
-	// Enqueue write below are NOT atomic — the Queue exposes them as independent
-	// ops (no count+insert under one lock / tx / constraint). Concurrent enqueues
-	// for the same device, within one process or across instances, can all pass
-	// this check before any write lands, transiently exceeding maxPending by the
-	// in-flight concurrency window. The guard bounds unbounded steady-state
-	// accumulation; it does NOT enforce a hard ceiling under concurrency. Making it
-	// a hard invariant requires sinking count+insert into the command.Queue write
-	// boundary (PG advisory lock / FOR UPDATE, in-mem same-lock) — tracked in #2457.
-	pending, err := s.queue.ScanActive(ctx, command.ScanFilter{
-		DeviceID: deviceID,
-		Statuses: []command.Status{command.StatusPending},
-	})
-	if err != nil {
-		return command.Entry{}, fmt.Errorf("device-command: count pending: %w", err)
-	}
-	if len(pending) >= s.maxPending {
-		s.logger.Warn("device-command: per-device pending command limit reached",
-			slog.String("device_id", deviceID),
-			slog.Int("pending_count", len(pending)),
-			slog.Int("limit", s.maxPending),
-		)
-		return command.Entry{}, errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited,
-			errPendingLimitMsg, errcode.WithDetails(errcode.PublicInt("limit", s.maxPending)))
-	}
-
+	// Per-device Pending accumulation guard (F-S-005 #822): HTTP rate-limiting
+	// bounds QPS but not per-device queue depth, so an offline device's commands
+	// would pile up as Pending unbounded. The cap is a HARD invariant enforced
+	// atomically at the queue write boundary via opts.MaxPendingPerDevice below
+	// (count + insert under one lock/transaction) — NOT a service-level
+	// ScanActive-then-Enqueue, which had a read-then-write TOCTOU window that let
+	// concurrent / multi-instance enqueues overshoot (#2457). Only Pending counts;
+	// in-flight Sent/Delivered free a slot. The cap has no opt-out switch.
 	id, err := generateID()
 	if err != nil {
 		return command.Entry{}, err
@@ -353,7 +321,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	// dispatches a command that was emitted with command.WithActiveUniqueness.
 	// ok=false for direct HTTP callers (no relay context) → today's behavior:
 	// random id, no dedup, no deadline.
-	opts := command.EnqueueOptions{Authz: s.authz}
+	opts := command.EnqueueOptions{Authz: s.authz, MaxPendingPerDevice: s.maxPending}
 	key, deadline, ok := commandruntime.DispatchedUniqueness(ctx)
 	if ok {
 		opts.IdempotencyKey = key
@@ -375,7 +343,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), timeouts, s.clock.Now())
 
 	if err := s.queue.Enqueue(ctx, entry, opts); err != nil {
-		return command.Entry{}, fmt.Errorf("device-command: enqueue: %w", err)
+		return command.Entry{}, s.enqueueError(deviceID, err)
 	}
 
 	s.logger.Info(
@@ -393,6 +361,21 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	}
 
 	return entry, nil
+}
+
+// enqueueError shapes a queue.Enqueue failure. The per-device Pending cap is
+// enforced atomically inside Enqueue; its rate-limited rejection is logged for ops
+// visibility and propagated UNWRAPPED so handlers map the typed errcode to HTTP 429
+// / gRPC ResourceExhausted. Any other enqueue error is wrapped for context.
+func (s *Service) enqueueError(deviceID string, err error) error {
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Kind == errcode.KindRateLimited {
+		s.logger.Warn("device-command: per-device pending command limit reached",
+			slog.String("device_id", deviceID),
+			slog.Int("limit", s.maxPending))
+		return err
+	}
+	return fmt.Errorf("device-command: enqueue: %w", err)
 }
 
 // EnqueueAsync emits the cmdremote command through the outbox so the relay's

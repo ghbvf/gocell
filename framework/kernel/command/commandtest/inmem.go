@@ -26,6 +26,12 @@ import (
 // constant carries no runtime data (MESSAGE-CONST-LITERAL-01 compliant).
 const msgCommandAlreadyExists = "commandtest: command already exists"
 
+// msgPendingLimitExceeded is the rate-limit message when a device is at its
+// per-device Pending cap (EnqueueOptions.MaxPendingPerDevice, F-S-005 #822). Kept
+// identical to the PG adapter's message so the two implementations are
+// wire-indistinguishable.
+const msgPendingLimitExceeded = "per-device pending command limit exceeded"
+
 // commandIDInternalPrefix is the WithInternal detail prefix carrying the
 // runtime command ID. Extracted to satisfy go:S1192 (used in 5 lookups).
 const commandIDInternalPrefix = "commandID="
@@ -123,12 +129,12 @@ func (q *InMemQueue) Enqueue(ctx context.Context, entry command.Entry, opts comm
 		return err
 	}
 
-	return q.storeIfNotDup(entry, opts.IdempotencyKey)
+	return q.storeIfNotDup(entry, opts.IdempotencyKey, opts.MaxPendingPerDevice)
 }
 
 // storeIfNotDup acquires the write lock, checks for state-aware idempotency
-// key dedup by scanning entries, and stores the entry.
-// Separated from Enqueue to reduce cognitive complexity.
+// key dedup by scanning entries, enforces the per-device Pending cap, and stores
+// the entry. Separated from Enqueue to reduce cognitive complexity.
 //
 // The idempotency check is O(n) over q.entries. This is intentional for a
 // test double: avoiding a separate side-set eliminates the drift-prone release
@@ -136,12 +142,18 @@ func (q *InMemQueue) Enqueue(ctx context.Context, entry command.Entry, opts comm
 // causing divergence from the PG implementation). For production use, the PG
 // adapter implements this via a partial index on non-terminal rows, achieving
 // O(log n) on the database side.
-func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) error {
+//
+// maxPending > 0 caps per-device Pending commands (EnqueueOptions.MaxPendingPerDevice,
+// F-S-005 #822): the count and the store both happen under this single write lock,
+// so concurrent enqueues for one device cannot overshoot — there is no read-then-
+// write window. The PG adapter achieves the same atomicity with a transaction-scoped
+// advisory lock; the commandtest conformance suite pins both.
+func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string, maxPending int) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if idempotencyKey != "" && q.hasActiveKey(idempotencyKey) {
-		return nil // idempotent no-op: active holder exists
+		return nil // idempotent no-op: active holder exists — adds nothing
 	}
 
 	// Reject duplicate IDs (consistent with PG PK constraint).
@@ -151,9 +163,29 @@ func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) e
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", entry.ID))))
 	}
 
+	// Per-device Pending cap (checked after the idempotency no-op so a coalesced
+	// re-enqueue, which adds nothing, never trips it — matching the PG adapter).
+	if maxPending > 0 && q.countPendingForDevice(entry.DeviceID) >= maxPending {
+		return errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited,
+			msgPendingLimitExceeded, errcode.WithDetails(errcode.PublicInt("limit", maxPending)))
+	}
+
 	cp := entry
 	q.entries[entry.ID] = &cp
 	return nil
+}
+
+// countPendingForDevice counts Pending (status=1) commands for deviceID. Must be
+// called with q.mu held. Mirrors the PG `SELECT count(*) … WHERE status = 1` the
+// per-device cap uses, so both implementations agree on what "Pending" counts.
+func (q *InMemQueue) countPendingForDevice(deviceID string) int {
+	n := 0
+	for _, e := range q.entries {
+		if e.Status == command.StatusPending && e.DeviceID == deviceID {
+			n++
+		}
+	}
+	return n
 }
 
 // hasActiveKey reports whether any non-terminal entry in q.entries carries the

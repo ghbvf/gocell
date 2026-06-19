@@ -92,6 +92,7 @@ func RunQueueConformance(t *testing.T, factory QueueFactory, features Features) 
 	t.Run("Enqueue/HappyPath", func(t *testing.T) { runEnqueueHappy(t, factory, features) })
 	t.Run("Enqueue/DuplicateID", func(t *testing.T) { runEnqueueDuplicateID(t, factory, features) })
 	t.Run("Enqueue/IdempotencyKeyDedup", func(t *testing.T) { runEnqueueIdempotencyKey(t, factory, features) })
+	t.Run("Enqueue/MaxPendingPerDeviceCap", func(t *testing.T) { runEnqueueMaxPendingCap(t, factory, features) })
 	t.Run("Enqueue/ActiveKeyBlocksAcrossNonTerminal", func(t *testing.T) { runEnqueueActiveKeyBlocks(t, factory, features) })
 	t.Run("Enqueue/KeyReleasedOnSucceeded", func(t *testing.T) {
 		runEnqueueKeyReleasedAfterAck(t, factory, features, "rel-ok", command.AckSuccess)
@@ -281,6 +282,75 @@ func runEnqueueIdempotencyKey(t *testing.T, factory QueueFactory, features Featu
 	// Only the first ID should exist; the second ID should not.
 	if _, err := scanner.GetCommand(ctx, "idem-2"); err == nil {
 		t.Fatal("expected idem-2 to not exist (idempotency key collapsed)")
+	}
+}
+
+// runEnqueueMaxPendingCap pins the atomic per-device Pending cap
+// (EnqueueOptions.MaxPendingPerDevice, F-S-005 #822): the queue admits at most
+// `limit` Pending commands per device, the cap is per-device, only Pending counts
+// (a drained command frees a slot), and an idempotency-coalesced re-enqueue never
+// trips it. The count+insert run at the write boundary under one lock/tx, so the
+// cap is a hard invariant — the concurrency proof is the in-mem -race test
+// (TestInMemQueue_MaxPendingPerDevice_Concurrent); this case pins the semantics
+// for both the in-mem and PG implementations.
+func runEnqueueMaxPendingCap(t *testing.T, factory QueueFactory, features Features) {
+	t.Helper()
+	q, scanner, tx, now, cleanup := factory(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const limit = 3
+	capped := command.EnqueueOptions{MaxPendingPerDevice: limit}
+	enqueue := func(id, deviceID string, opts command.EnqueueOptions) error {
+		return inTx(t, ctx, tx, features, func(c context.Context) error {
+			return q.Enqueue(c, makeEntry(id, deviceID, now()), opts)
+		})
+	}
+
+	// Fill dev-a to the cap — all admitted.
+	for _, id := range []string{"cap-a-1", "cap-a-2", "cap-a-3"} {
+		if err := enqueue(id, "dev-a", capped); err != nil {
+			t.Fatalf("Enqueue %s under cap: %v", id, err)
+		}
+	}
+	// One past the cap → rejected with rate-limited at the write boundary (the
+	// queue owns the invariant; no service-side pre-check).
+	requireErrCode(t, enqueue("cap-a-over", "dev-a", capped), errcode.ErrRateLimited)
+
+	// The cap is per-device: dev-b has its own budget.
+	if err := enqueue("cap-b-1", "dev-b", capped); err != nil {
+		t.Fatalf("Enqueue dev-b under its own cap: %v", err)
+	}
+
+	// An idempotency-coalesced re-enqueue adds no row, so it is a no-op even at the
+	// cap — NOT a rate-limit (dedup is decided before the cap).
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("cap-ak-1", "dev-keyed", now()), "cap-key")
+	for _, id := range []string{"cap-ak-2", "cap-ak-3"} {
+		if err := enqueue(id, "dev-keyed", capped); err != nil {
+			t.Fatalf("Enqueue %s under cap: %v", id, err)
+		}
+	}
+	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
+		return q.Enqueue(c, makeEntry("cap-ak-dup", "dev-keyed", now()),
+			command.EnqueueOptions{IdempotencyKey: "cap-key", MaxPendingPerDevice: limit})
+	}); err != nil {
+		t.Fatalf("idempotency-coalesced re-enqueue at cap must be a no-op, got: %v", err)
+	}
+
+	// Draining one Pending → Sent frees a slot (only Pending counts), so dev-a
+	// admits one more and ends holding exactly `limit` Pending.
+	dequeueOne(t, ctx, q, tx, features, "dev-a")
+	if err := enqueue("cap-a-after-drain", "dev-a", capped); err != nil {
+		t.Fatalf("Enqueue dev-a after a slot freed: %v", err)
+	}
+	pendingA, err := scanner.ScanActive(ctx, command.ScanFilter{
+		DeviceID: "dev-a", Statuses: []command.Status{command.StatusPending},
+	})
+	if err != nil {
+		t.Fatalf(fmtScanActive, err)
+	}
+	if len(pendingA) != limit {
+		t.Fatalf("dev-a Pending = %d, want exactly %d (hard cap)", len(pendingA), limit)
 	}
 }
 
