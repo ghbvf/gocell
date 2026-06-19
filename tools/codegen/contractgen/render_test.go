@@ -736,9 +736,10 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		// permission (#2205): byte-locks the contract-derived gate branch. A standard
 		// route declaring endpoints.http.permission renders NewHandler(svc, resolver
 		// authz.MethodPolicyResolver) + Policy: h.policy built via
-		// auth.RequirePermissionForContract(contractSpec.ID, resolver) (not the legacy
-		// policy-arg path), and adds the framework/pkg/authz import. A regression that
-		// drops the resolver branch (re-exposing NewHandler(svc, policy)) trips the golden.
+		// auth.RequirePermissionForContract(contractSpec, resolver) (not the legacy
+		// policy-arg path; #2355 passes the whole contractSpec so the funnel can dispatch
+		// on Resource/SelfScoped), and adds the framework/pkg/authz import. A regression
+		// that drops the resolver branch (re-exposing NewHandler(svc, policy)) trips the golden.
 		{"http.sample.permission.v1", "synth_http_auth_modes_permission"},
 		// permissionpre (#2205 + PasswordResetExempt): byte-locks the additive combination of
 		// a contract-derived permission gate and passwordResetExempt. The generated NewHandler

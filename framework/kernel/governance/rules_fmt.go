@@ -1204,11 +1204,13 @@ func (v *Validator) validateFMT42() []ValidationResult {
 
 // validateFMT42ResourceShape runs the #2355 owner-scoped / self-scoped overlay guards
 // for a single http contract: endpoints.http.resource (owner-scoped path param) and
-// endpoints.http.selfScoped (self-scoped subject). The structural mutexes are the Hard
-// primary at the schema layer (contract.schema.json if/then); this is the Medium
-// defense-in-depth arm, surfaced at `gocell validate` with a field-anchored fix. Runs
-// for every http contract (not gated on permission) so resource/selfScoped-without-
-// permission is caught.
+// endpoints.http.selfScoped (self-scoped subject). The shape RULES live in the single
+// metadata.ValidateHTTPResourceShape oracle (shared with the contractgen buildHTTPSpec
+// Hard gate, mirroring ClassifyHTTPAuthMode / ValidateHTTPHeaders); this is the Medium
+// validate-time arm that maps each violation to a field-anchored finding + fix. It
+// includes resource ∈ pathParams referential integrity (a typo'd resource that JSON
+// Schema cannot catch). Runs for every http contract (not gated on permission) so
+// resource/selfScoped-without-permission is caught.
 //
 // DELIBERATE non-port of gRPC FMT-41: there is NO "owner-scoped permission ⇒ resource
 // required" guard. The same action (e.g. user:write) gates BOTH owner routes (with
@@ -1222,46 +1224,36 @@ func (v *Validator) validateFMT42() []ValidationResult {
 func (v *Validator) validateFMT42ResourceShape(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) []ValidationResult {
 	file := contractFile(c)
 	var results []ValidationResult
-	if h.Resource != "" && h.Permission == "" {
-		results = append(results, v.newError(
-			codeFMT42, IssueRequired, file, fieldEndpointsHTTPResource,
-			fmt.Sprintf("http contract %q sets endpoints.http.resource %q without endpoints.http.permission; "+
-				"an owner-scoped gate still requires an action", c.ID, h.Resource),
-			"add endpoints.http.permission with the registered authz action this owner gate enforces (e.g. user:read)",
-		))
-	}
-	if h.SelfScoped && h.Permission == "" {
-		results = append(results, v.newError(
-			codeFMT42, IssueRequired, file, fieldEndpointsHTTPSelfScoped,
-			fmt.Sprintf("http contract %q sets endpoints.http.selfScoped without endpoints.http.permission; "+
-				"a self-scoped gate still requires an action", c.ID),
-			"add endpoints.http.permission with the registered authz action this self-scoped gate enforces (e.g. access:decide)",
-		))
-	}
-	if h.Resource != "" && h.SelfScoped {
-		results = append(results, v.newError(
-			codeFMT42, IssueInvalid, file, fieldEndpointsHTTPResource,
-			fmt.Sprintf("http contract %q sets both endpoints.http.resource and endpoints.http.selfScoped, which are "+
-				"mutually exclusive (owner-scoped path-param resource vs self-scoped subject)", c.ID),
-			"keep exactly one: endpoints.http.resource for a path-param-owned resource, or selfScoped for the caller's own subject",
-		))
-	}
-	// Resource must reference a declared path parameter: a typo in the resource value
-	// (e.g. "userId" when the path template declares "{id}") silently produces a gate
-	// that can never match. pathParams is non-nil only when the author declared it;
-	// an empty map or nil means no path params are declared, so a non-empty resource
-	// cannot be valid in that case either.
-	if h.Resource != "" {
-		if _, ok := h.PathParams[h.Resource]; !ok {
-			results = append(results, v.newError(
-				codeFMT42, IssueInvalid, file, fieldEndpointsHTTPResource,
-				fmt.Sprintf("http contract %q endpoints.http.resource %q is not declared in endpoints.http.pathParams", c.ID, h.Resource),
-				"endpoints.http.resource must name a path parameter declared in endpoints.http.pathParams; "+
-					"check the path template for the correct placeholder name",
-			))
+	for _, viol := range metadata.ValidateHTTPResourceShape(h) {
+		field := fieldEndpointsHTTPResource
+		if viol.Field == "selfScoped" {
+			field = fieldEndpointsHTTPSelfScoped
 		}
+		issue, fix := fmt42ResourceShapeIssueFix(viol.Kind)
+		results = append(results, v.newError(codeFMT42, issue, file, field,
+			fmt.Sprintf("http contract %q %s", c.ID, viol.Message), fix))
 	}
 	return results
+}
+
+// fmt42ResourceShapeIssueFix maps a metadata resource-shape violation kind to FMT-42's
+// IssueType + remediation hint. Kept in the governance layer (not metadata) so the
+// fix guidance stays with governance while the metadata oracle owns pure detection.
+func fmt42ResourceShapeIssueFix(kind metadata.HTTPResourceShapeViolationKind) (IssueType, string) {
+	switch kind {
+	case metadata.HTTPResourceWithoutPermission:
+		return IssueRequired, "add endpoints.http.permission with the registered authz action this owner gate enforces (e.g. user:read)"
+	case metadata.HTTPSelfScopedWithoutPermission:
+		return IssueRequired, "add endpoints.http.permission with the registered authz action this self-scoped gate enforces (e.g. access:decide)"
+	case metadata.HTTPResourceSelfScopedMutex:
+		return IssueInvalid, "keep exactly one: endpoints.http.resource for a path-param-owned resource, " +
+			"or selfScoped for the caller's own subject"
+	case metadata.HTTPResourceNotInPathParams:
+		return IssueInvalid, "endpoints.http.resource must name a path parameter declared in " +
+			"endpoints.http.pathParams; check the path template for the correct placeholder name"
+	default:
+		return IssueInvalid, "fix the endpoints.http.resource / selfScoped shape"
+	}
 }
 
 // validateFMT42AuthMode is the governance (Medium, validate-time) arm of the #2020

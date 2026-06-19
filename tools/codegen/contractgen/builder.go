@@ -232,6 +232,18 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q %s", contract.ID, v.Message())
 	}
 
+	// #2355 owner/self-scoped shape Hard gate at the same UNBYPASSABLE render core: a
+	// typo'd resource (e.g. "userId" when the path declares "{id}") or a resource⊕selfScoped
+	// mis-shape cannot be rendered, so the generated handler can never carry an
+	// auth.RequirePermissionForResource("<bad-param>", …) gate that silently never matches.
+	// JSON Schema cannot express resource ∈ pathParams referential integrity; this shares
+	// metadata.ValidateHTTPResourceShape with governance FMT-42 (one oracle, sibling of the
+	// ValidateHTTPHeaders / ClassifyHTTPAuthMode gates above).
+	if viols := metadata.ValidateHTTPResourceShape(http); len(viols) > 0 {
+		return fmt.Errorf("contractgen build: contract %q invalid endpoints.http resource shape: %s",
+			contract.ID, viols[0].Message)
+	}
+
 	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
 	// buildHTTPEndpointSpec need them (F-09: avoid calling builders twice).
 	pathParams := buildPathParams(http)

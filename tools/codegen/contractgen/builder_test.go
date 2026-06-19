@@ -965,6 +965,47 @@ func TestBuildHTTPSpec_ModelessRejected(t *testing.T) {
 	}
 }
 
+// TestBuildHTTPSpec_ResourceNotInPathParamsRejected is the RED test for the #2355
+// owner-scoped shape Hard gate inside buildHTTPSpec. A contract whose
+// endpoints.http.resource names a parameter NOT declared in endpoints.http.pathParams
+// (e.g. "userId" when the path template declares "{id}") would otherwise generate an
+// auth.RequirePermissionForResource("userId", …) gate whose path-param lookup always
+// returns "" — a silently-broken owner gate. JSON Schema cannot express this map-key
+// referential integrity; the buildHTTPSpec gate (sharing metadata.ValidateHTTPResourceShape
+// with governance FMT-42) must reject it before any artifact is emitted.
+func TestBuildHTTPSpec_ResourceNotInPathParamsRejected(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.synth.badresource.v1": {
+				ID:         "http.synth.badresource.v1",
+				Kind:       "http",
+				Lifecycle:  "active",
+				Codegen:    true,
+				Transports: []string{"http"},
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/api/v1/synth/badresource/{id}",
+						SuccessStatus: 200,
+						Permission:    "user:read", // mode-declared (passes ClassifyHTTPAuthMode)
+						Resource:      "userId",    // typo: path declares {id}, not {userId}
+						PathParams:    map[string]metadata.ParamSchema{"id": {Type: "string"}},
+					},
+				},
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := buildContractSpec(root, p, "http.synth.badresource.v1")
+	if err == nil {
+		t.Fatal("expected buildContractSpec to reject a resource not in pathParams, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not declared in endpoints.http.pathParams") {
+		t.Errorf("error should contain %q, got: %v", "not declared in endpoints.http.pathParams", err)
+	}
+}
+
 // TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that
 // HasBody=false when the contract is POST but declares no schemaRefs.request.
 // This is the "body-less POST" case (path-param-only endpoints).

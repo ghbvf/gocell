@@ -65,15 +65,20 @@ func withTenant(ctx context.Context) context.Context {
 // (authz.Allow/Deny) lives in this _test.go per AUTHZ-DECISION-ALLOW-DENY-CALLER-01.
 
 // capturingTestAuthorizer is a test auth.Authorizer that returns a fixed Decision
-// and records the action the gate asked the PDP for (action-pin in
-// TestAccessCore_ProductionAuthGateLock).
+// and records BOTH the action AND the resource the gate forwarded to the PDP
+// (action-pin + resource-pin in TestAccessCore_ProductionAuthGateLock). Recording
+// resource is what distinguishes an owner-scoped gate (forwards the canonical
+// path-param value) from a coarse gate (forwards r.URL.Path) — an owner→coarse
+// regression keeps the same action, so only the resource-pin catches it (#2355).
 type capturingTestAuthorizer struct {
-	decision  authz.Decision
-	gotAction string
+	decision    authz.Decision
+	gotAction   string
+	gotResource string
 }
 
-func (c *capturingTestAuthorizer) Authorize(_ context.Context, _, _, action string) (authz.Decision, error) {
+func (c *capturingTestAuthorizer) Authorize(_ context.Context, _, resource, action string) (authz.Decision, error) {
 	c.gotAction = action
+	c.gotResource = resource
 	return c.decision, nil
 }
 
@@ -907,6 +912,19 @@ func TestAccessCore_ProductionAuthGateLock(t *testing.T) {
 				"route %s %s must request PDP action %q (got %q); a misbinding would be masked by "+
 					"the role-agnostic baseline that allows admin for every accesscore perm",
 				g.method, g.path, g.wantAction, cap.gotAction)
+
+			// Resource-pin (#2355): owner-scoped routes (selfExempt) forward the canonical
+			// path-param VALUE (otherID) to the PDP; coarse routes forward r.URL.Path. An
+			// owner→coarse gate regression keeps the same action but forwards URL.Path
+			// instead of the resource id — only this assertion catches it.
+			wantResource := g.path
+			if g.selfExempt {
+				wantResource = otherID
+			}
+			assert.Equal(t, wantResource, cap.gotResource,
+				"route %s %s must forward resource %q to PDP (got %q); an owner gate regressed to coarse "+
+					"RequirePermission would forward r.URL.Path instead of the path-param value",
+				g.method, g.path, wantResource, cap.gotResource)
 
 			// Ownership gate: a caller naming ITSELF in the path is admitted WITH a
 			// wired allow-Authorizer (self is now a PDP baseline ownership rule,

@@ -331,9 +331,12 @@ type httpEndpointSpec struct {
 	// (#2205) — non-empty only for contract-derived gated routes. When set, the
 	// generated NewHandler takes a resolver authz.MethodPolicyResolver argument
 	// (instead of policy auth.Policy) and constructs the gate via
-	// auth.RequirePermissionForContract(contractSpec, resolver); when empty, the legacy
-	// hand-wired policy-arg path is generated unchanged. Mutually exclusive with the
-	// no-gate auth modes (AuthPublic/AuthBootstrap/AuthClientsOnly/AuthServiceOwned);
+	// auth.RequirePermissionForContract(contractSpec, resolver). When empty, the route is
+	// EITHER an explicit opt-out (AuthPublic/Bootstrap/ClientsOnly/ServiceOwned — those
+	// branches render their own constructor), OR a #2020-ledgered modeless legacy route
+	// that still takes the hand-wired policy-arg path. A non-ledgered modeless route with
+	// empty permission is rejected by the buildHTTPSpec ClassifyHTTPAuthMode Hard gate
+	// (never reaches this struct). Mutually exclusive with the no-gate auth modes;
 	// may accompany a standard route or AuthPasswordResetExempt.
 	Permission string
 	// Resource is the path-param name from contract.yaml endpoints.http.resource
