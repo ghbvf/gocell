@@ -98,14 +98,9 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   至少一个 `action`——一条空 Action 的 allow（叠加空 Conditions）会对任意 action、任意 subject 无条件
   permit，一条误配/恶意租户 policy 即可放空所有 permission 的路由门禁。三层 enforcement：写侧
   `abac.Rule.Validate` fail-closed（422）；读侧 evaluator `applyRule` 对空-Action allow fail-closed（视为
-  不适用、永不放行，纵深防御漏网/旧持久化规则）；baseline 静态面由 archtest
+  不适用、永不放行，纵深防御漏网/旧持久化规则——PG 读经 stored-read `ValidateStored` profile 对持久化行可达，
+  不复用 authoring `Validate` 误判致 503，#2409）；baseline 静态面由 archtest
   `BASELINE-ALLOW-ACTION-NONEMPTY-01`（Medium，value-level 同包冻结 + anti-vacuity + RED case）守。
-  **读侧 inert 对 PG 持久化行真实可达（#2409）**：空-Action 拒绝是 **authoring** 不变式、非存储完整性
-  不变式，故域层校验分两 profile——写路径用 authoring `Rule.Validate`/`Policy.Validate`（含空-Action 拒绝）；
-  repo 读路径（PG `scanPolicy`）用 stored-read `ValidateStored`（仅结构完整性，容忍 legacy 空-Action allow，
-  让其流入 evaluator 按上面 inert 处理）。否则 `scanPolicy` 复用 authoring `Validate` 会把一条 legacy 空-Action
-  allow 行判成 `ErrPGSchemaShape` → `ListByTenant` → 整租户 PDP 503（fail-closed 但破坏可用性，且使读侧 inert
-  成 dead code）。
   空 Action 仅对 `EffectDeny` 合法（deny-all，forbid-wins 覆盖全部 action）。wire 经契约
   `http.policy.shared/v1/rule.schema.json` 的 `action` 字段承载（present-only optional：结构真相单源在域层
   Validate，沿用 #1977 约定，非 schema 结构强制）。运行时谓词 `len(Action)>0` 不可在 Go 编译期表达，故
