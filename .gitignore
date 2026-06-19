@@ -30,6 +30,10 @@ dist/
 /cmd/gocell/gocell
 /cmd/corebundle/corebundle
 
+# externalcells/<name> modules (external-cell Operator-SDK skeletons, #2304): a bare
+# `go build ./...` inside cmd/<name> leaves an in-dir binary (mirrors the cmd/ pattern).
+/externalcells/mdm/cmd/mdmd/mdmd
+
 # Test
 *.test
 *.out
