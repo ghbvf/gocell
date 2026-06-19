@@ -24,6 +24,13 @@ import (
 
 const contractID = "http.registry.contract.submit.v1"
 
+// contractSubmitResolver mirrors the cellHTTPResolver for registrywrite contract
+// tests: the contract-derived resolver maps the submit contract to registry:submit
+// so RegisterRoutes installs the same PDP gate production uses (#2205, 303-US7).
+var contractSubmitResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	contractID: "registry:submit",
+})
+
 // testEpoch is a fixed clock instant so submit timestamps are deterministic.
 var testEpoch = mustTime("2026-06-18T00:00:00Z")
 
@@ -66,7 +73,7 @@ func newMux(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, contractSubmitResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/registry", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

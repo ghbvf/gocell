@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
@@ -49,17 +50,17 @@ func TestNew_Identity(t *testing.T) {
 }
 
 // TestInitInternal_WiresHandlers pins that the hand-written init hook constructs
-// both slice handlers the generated route group references.
+// all three slice handlers the generated route group references.
 func TestInitInternal_WiresHandlers(t *testing.T) {
 	c := newCell()
 	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
-	if c.writeHandler == nil || c.readHandler == nil {
+	if c.writeHandler == nil || c.readHandler == nil || c.adminHandler == nil {
 		t.Fatal("slice handlers nil after initInternal — generated route group would nil-deref")
 	}
-	// Both slices must be registered into the BaseCell inventory (OwnedSlices),
+	// All slices must be registered into the BaseCell inventory (OwnedSlices),
 	// mirroring configcore/auditcore/accesscore — declared slice set ↔ runtime
 	// inventory stay in sync.
 	owned := c.OwnedSlices()
@@ -67,8 +68,8 @@ func TestInitInternal_WiresHandlers(t *testing.T) {
 	for _, s := range owned {
 		ids[s.ID()] = true
 	}
-	if len(owned) != 2 || !ids["registrywrite"] || !ids["registryread"] {
-		t.Fatalf("OwnedSlices() = %d %v, want 2 (registrywrite + registryread)", len(owned), ids)
+	if len(owned) != 3 || !ids["registrywrite"] || !ids["registryread"] || !ids["registryadmin"] {
+		t.Fatalf("OwnedSlices() = %d %v, want 3 (registrywrite + registryread + registryadmin)", len(owned), ids)
 	}
 }
 
@@ -201,6 +202,37 @@ func TestInitInternal_DurableMode_DemoTxManager_Errors(t *testing.T) {
 	err = c.initInternal(context.Background(), rec)
 	if err == nil {
 		t.Fatal("initInternal(durable, demo txManager) must return error (CheckNotNoop)")
+	}
+}
+
+// cellTestTxRunner is a non-Nooper CellTxManager for durable-guard tests: it passes
+// outbox.CheckNotNoop (unlike DemoCellTxManager) so a durable test can advance past
+// the txManager guard and exercise a later guard.
+type cellTestTxRunner struct{}
+
+func (cellTestTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestInitInternal_DurableMode_NilStore_Errors pins that durable mode without an
+// injected registry store is a startup error (fail-closed, 303-US7 review F1): the
+// in-memory store (process-local state, always-ready probe) must not back a durable
+// assembly. A real tx + cursor are supplied so the store guard (last) is the one
+// that fires.
+func TestInitInternal_DurableMode_NilStore_Errors(t *testing.T) {
+	devKey := []byte("registrycore-cell-test-key-32bytes!")
+	codec, err := query.NewCursorCodec(devKey)
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(persistence.WrapForCell(cellTestTxRunner{})), // non-Nooper → passes CheckNotNoop
+		WithCursorCodec(codec),
+		// no WithRegistry → the store guard must fire
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	if err := c.initInternal(context.Background(), rec); err == nil {
+		t.Fatal("initInternal(durable, no registry store) must return error (fail-closed)")
 	}
 }
 
