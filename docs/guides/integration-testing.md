@@ -37,6 +37,7 @@ GOCELL_TEST_DOCKER_REQUIRED=1 go -C corecells test -tags=integration,e2e \
   ./accesscore/... \
   ./auditcore/... \
   ./configcore/... \
+  ./registrycore/... \
   -count=1 -timeout 15m -v
 ```
 
