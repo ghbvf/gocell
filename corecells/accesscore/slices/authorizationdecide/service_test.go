@@ -635,16 +635,102 @@ func TestMatchCondition_UnknownOperator_FailsClosed(t *testing.T) {
 	assert.False(t, matchCondition(c, r), "unknown operator must be fail-closed (condition unsatisfied)")
 }
 
-// TestMergeObligations_SkipsZeroRowScope_UnionsFieldMask covers the zero-RowScope
-// skip + FieldMask union/dedup in mergeObligations.
-func TestMergeObligations_SkipsZeroRowScope_UnionsFieldMask(t *testing.T) {
-	merged := mergeObligations([]authz.Obligations{
-		{RowScope: 0, FieldMask: authz.FieldMask{Fields: []string{"a"}}},
-		{RowScope: tenant.RowScopeTenant, FieldMask: authz.FieldMask{Fields: []string{"b", "a"}}},
-		{RowScope: tenant.RowScopeSelf},
-	})
-	assert.Equal(t, tenant.RowScopeSelf, merged.RowScope, "zero RowScope skipped; narrowest non-zero wins")
-	assert.ElementsMatch(t, []string{"a", "b"}, merged.FieldMask.Fields, "FieldMask is the deduped union")
+// TestMergeObligations is the exhaustive table for the fail-safe obligation
+// merge (mergeObligations): the security invariant is that combining multiple
+// permits can only TIGHTEN, never loosen, what the PEP enforces — RowScope
+// folds to the narrowest input (via tenant.RowScope's Narrower, whose pairwise
+// lattice self<device<tenant<all is owned and exhaustively tested by
+// framework/pkg/tenant's TestRowScope_Narrower / TestRowScope_StrictnessOrdering)
+// and FieldMask folds to the deduped union. This pins mergeObligations' OWN
+// logic — the N-ary fold, zero-scope seeding, and FieldMask union/dedup —
+// without re-enumerating the pairwise Narrower lattice. Every case is also
+// checked against the generic only-tighten invariant
+// (assertObligationsOnlyTighten), so a loosening regression is caught even for
+// input shapes this table omits.
+func TestMergeObligations(t *testing.T) {
+	obl := func(rs tenant.RowScope, fields ...string) authz.Obligations {
+		return authz.Obligations{RowScope: rs, FieldMask: authz.FieldMask{Fields: fields}}
+	}
+	// Local lattice aliases keep the cases on one readable line each.
+	self, dev, ten, all := tenant.RowScopeSelf, tenant.RowScopeDevice, tenant.RowScopeTenant, tenant.RowScopeAll
+
+	cases := []struct {
+		name       string
+		in         []authz.Obligations
+		wantScope  tenant.RowScope
+		wantFields []string
+	}{
+		// single permit: identity (the weak baseline the issue calls out).
+		{"single permit is identity", []authz.Obligations{obl(self, "a")}, self, []string{"a"}},
+
+		// N-ary fold: narrowest non-zero RowScope wins. Two representative pairs
+		// prove the fold delegates to Narrower; the lattice itself is single-
+		// sourced in framework/pkg/tenant, not re-enumerated here.
+		{"pair tenant+self → self", []authz.Obligations{obl(ten, "a"), obl(self, "b")}, self, []string{"a", "b"}},
+		{"pair device+all → device", []authz.Obligations{obl(dev, "x"), obl(all, "y")}, dev, []string{"x", "y"}},
+		{"three ordered → self", []authz.Obligations{obl(all), obl(ten), obl(self)}, self, nil},
+		{"three reordered → self (order-independent)", []authz.Obligations{obl(self), obl(all), obl(ten)}, self, nil},
+
+		// same-value folds.
+		{"same self+self → self", []authz.Obligations{obl(self, "a"), obl(self, "b")}, self, []string{"a", "b"}},
+		{"same all+all → all", []authz.Obligations{obl(all, "a"), obl(all, "b")}, all, []string{"a", "b"}},
+
+		// zero-scope seeding: 0 means "no row constraint", skipped in the fold.
+		{"zero scope alone stays zero, keeps fields", []authz.Obligations{obl(0, "a")}, 0, []string{"a"}},
+		{"zero+self → self", []authz.Obligations{obl(0, "a"), obl(self, "b")}, self, []string{"a", "b"}},
+		{"self+zero → self", []authz.Obligations{obl(self, "a"), obl(0, "b")}, self, []string{"a", "b"}},
+		{"zero+tenant → tenant", []authz.Obligations{obl(0), obl(ten)}, ten, nil},
+		{"all zero → zero", []authz.Obligations{obl(0), obl(0)}, 0, nil},
+		{"nil input → zero, empty", nil, 0, nil},
+
+		// FieldMask union / dedup.
+		{"disjoint union (same scope)", []authz.Obligations{obl(ten, "a"), obl(ten, "b")}, ten, []string{"a", "b"}},
+		{"overlapping union dedups", []authz.Obligations{obl(0, "a"), obl(ten, "b", "a"), obl(self)}, self, []string{"a", "b"}},
+		{"empty + non-empty mask", []authz.Obligations{obl(self), obl(self, "a")}, self, []string{"a"}},
+		{"three-way union with dups", []authz.Obligations{obl(ten, "a", "b"), obl(ten, "b", "c"), obl(ten, "a")}, ten, []string{"a", "b", "c"}},
+		{"all empty masks → empty", []authz.Obligations{obl(self), obl(ten)}, self, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := mergeObligations(tc.in)
+			assert.Equal(t, tc.wantScope, merged.RowScope, "RowScope folds to the narrowest non-zero input")
+			assert.ElementsMatch(t, tc.wantFields, merged.FieldMask.Fields, "FieldMask is the deduped union (set, order-agnostic)")
+			assertObligationsOnlyTighten(t, merged, tc.in)
+		})
+	}
+}
+
+// assertObligationsOnlyTighten checks the fail-safe merge invariant
+// (mergeObligations: combining permits can only tighten, never loosen)
+// independently of the merge implementation, so it catches a loosening
+// regression even for input shapes the enumerated table omits:
+//   - merged.RowScope is no wider than any non-zero input scope, and
+//   - merged.FieldMask.Fields is the deduped superset of every input's fields.
+//
+// It pairs with the enumerated wantScope/wantFields above: the property catches
+// under-tightening (the security failure), the enumerated values catch over- or
+// wrong-tightening (a correctness failure the property alone cannot see).
+func assertObligationsOnlyTighten(t *testing.T, merged authz.Obligations, in []authz.Obligations) {
+	t.Helper()
+	for _, o := range in {
+		if o.RowScope != 0 {
+			// Narrowing an already-narrowest scope by any input is a no-op; if
+			// merged were wider than o, Narrower would return o instead.
+			assert.Equalf(t, merged.RowScope, merged.RowScope.Narrower(o.RowScope),
+				"merged RowScope %v must be no wider than input %v", merged.RowScope, o.RowScope)
+		}
+		for _, f := range o.FieldMask.Fields {
+			assert.Containsf(t, merged.FieldMask.Fields, f,
+				"merged FieldMask must contain every input field %q (union)", f)
+		}
+	}
+	seen := make(map[string]struct{}, len(merged.FieldMask.Fields))
+	for _, f := range merged.FieldMask.Fields {
+		_, dup := seen[f]
+		assert.Falsef(t, dup, "merged FieldMask must be deduped; %q appears twice", f)
+		seen[f] = struct{}{}
+	}
 }
 
 // --- resource attribute provider wiring tests (PR-9 #1347) -------------------
