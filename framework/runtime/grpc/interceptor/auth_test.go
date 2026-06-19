@@ -259,7 +259,8 @@ func TestUnaryAuth_PermissionGate_LogsDeny(t *testing.T) {
 	var buf bytes.Buffer
 	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(&buf, nil)))
 
-	_, err := UnaryAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
+	_, err := UnaryAuth(
+		stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
 		WithPermissionResolver(permResolverFor(method)),
 		WithPDPAuthorizer(stubAuthorizer{dec: authz.Deny("test-deny-reason")}),
 	)(bearerCtx(), nil, info, okHandler(new(bool)))
@@ -288,7 +289,8 @@ func assertUnaryAuthForwardsPrincipal(t *testing.T, info *grpc.UnaryServerInfo) 
 	var gotPrincipal *auth.Principal
 	// #2008: a non-public authed method now also passes the PDP gate before the
 	// handler runs, so wire a permitting resolver + authorizer to reach it.
-	_, err := UnaryAuth(v,
+	_, err := UnaryAuth(
+		v,
 		WithPermissionResolver(permResolverFor(info.FullMethod)),
 		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
 	)(bearerCtx(), nil, info,
@@ -393,7 +395,8 @@ func assertUnaryAuthPasswordResetExempt(t *testing.T, info *grpc.UnaryServerInfo
 	called := false
 	exempt := WithPasswordResetExempt(func(m string) bool { return m == info.FullMethod })
 	// #2008: past the reset gate, the non-public method still passes the PDP gate.
-	_, err := UnaryAuth(v, exempt,
+	_, err := UnaryAuth(
+		v, exempt,
 		WithPermissionResolver(permResolverFor(info.FullMethod)),
 		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
 	)(bearerCtx(), nil, info, okHandler(&called))

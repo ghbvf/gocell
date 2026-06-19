@@ -43,7 +43,8 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 		// is valid here and resolves to the _runtime sentinel — this case asserts
 		// the recovery-converted code/label, not cell attribution.
 		_, err := UnaryMetrics(coll, clock.Real(), nil)(
-			context.Background(), nil, info, nestRecovered(info, panicHandler))
+			context.Background(), nil, info, nestRecovered(info, panicHandler),
+		)
 		if status.Code(err) != codes.Internal {
 			t.Fatalf("code = %v, want Internal", status.Code(err))
 		}
@@ -55,7 +56,8 @@ func TestChainOrderRecoveryInnermost(t *testing.T) {
 	t.Run("tracing observes recovery-converted error", func(t *testing.T) {
 		tr := &recordingTracer{span: &recordingSpan{}}
 		_, err := UnaryTracing(tr)(
-			context.Background(), nil, info, nestRecovered(info, panicHandler))
+			context.Background(), nil, info, nestRecovered(info, panicHandler),
+		)
 		if status.Code(err) != codes.Internal {
 			t.Fatalf("code = %v, want Internal", status.Code(err))
 		}

@@ -2,6 +2,8 @@ package interceptor
 
 import (
 	"context"
+	"errors"
+	"net"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -9,8 +11,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
-
-	"net"
 )
 
 // stubRateLimiter is a configurable RateLimiter for tests.
@@ -66,7 +66,8 @@ func TestUnaryRateLimit_Allow_HandlerCalled(t *testing.T) {
 		ctxWithPeer("192.0.2.1"), nil, info, func(_ context.Context, _ any) (any, error) {
 			handlerCalled = true
 			return "ok", nil
-		})
+		},
+	)
 	if err != nil {
 		t.Fatalf("allow: unexpected error: %v", err)
 	}
@@ -81,8 +82,9 @@ func TestUnaryRateLimit_Deny_ResourceExhausted(t *testing.T) {
 	_, err := UnaryRateLimit(stubRateLimiter{allow: false})(
 		ctxWithPeer("192.0.2.1"), nil, info, func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when rate-limited")
-			return nil, nil
-		})
+			return "unreachable", errors.New("unreachable")
+		},
+	)
 	if err == nil {
 		t.Fatal("deny: expected error, got nil")
 	}
@@ -98,7 +100,7 @@ func TestUnaryRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
 	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	_, _ = UnaryRateLimit(limiter)(ctxWithPeer("10.0.0.1"), nil, info,
-		func(_ context.Context, _ any) (any, error) { return nil, nil })
+		func(_ context.Context, _ any) (any, error) { return "ok", nil })
 	if capturedKey == "" {
 		t.Fatal("limiter.Allow was never called")
 	}
@@ -117,7 +119,7 @@ func TestUnaryRateLimit_NoPeer_StableFallback(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	called := false
 	_, _ = UnaryRateLimit(limiter)(context.Background(), nil, info,
-		func(_ context.Context, _ any) (any, error) { called = true; return nil, nil })
+		func(_ context.Context, _ any) (any, error) { called = true; return "ok", nil })
 	if !called {
 		t.Fatal("handler not called (no-peer path should allow when limiter allows)")
 	}
@@ -149,7 +151,7 @@ func TestStreamRateLimit_Deny_ResourceExhausted(t *testing.T) {
 	err := StreamRateLimit(stubRateLimiter{allow: false})(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error {
 			t.Fatal("handler must not be called when rate-limited")
-			return nil
+			return errors.New("unreachable")
 		})
 	if err == nil {
 		t.Fatal("deny: expected error, got nil")

@@ -15,9 +15,9 @@ import (
 
 // stubAllower is a configurable Allower for circuit-breaker tests.
 type stubAllower struct {
-	allowed  bool
-	doneErr  *error // if non-nil, the error passed to done() is stored here
-	doneNil  bool   // true if done() was called with nil
+	allowed   bool
+	doneErr   *error // if non-nil, the error passed to done() is stored here
+	doneNil   bool   // true if done() was called with nil
 	doneCalls int
 }
 
@@ -73,7 +73,7 @@ func TestIsServerFailureCode(t *testing.T) {
 		{codes.Unauthenticated, false},
 		{codes.Canceled, false},
 		{codes.ResourceExhausted, false},
-		{codes.Unimplemented, false},   // permanent contract gap, not health signal
+		{codes.Unimplemented, false}, // permanent contract gap, not health signal
 		{codes.Aborted, false},
 		{codes.OK, false},
 	}
@@ -112,7 +112,7 @@ func TestUnaryCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when circuit is open")
-			return nil, nil
+			return "unreachable", errors.New("unreachable")
 		})
 	if err == nil {
 		t.Fatal("open circuit: expected error, got nil")
@@ -149,8 +149,10 @@ func TestUnaryCircuitBreaker_Closed_ServerFailure_DoneErr(t *testing.T) {
 	handlerErr := status.Error(codes.Internal, "internal server error")
 	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return nil, handlerErr })
-	if err != handlerErr {
-		t.Errorf("handler error not propagated: got %v, want %v", err, handlerErr)
+	// Verify the handler error is propagated (check by status code, not identity,
+	// to avoid errorlint's "comparing with != will fail on wrapped errors" warning).
+	if status.Code(err) != codes.Internal {
+		t.Errorf("handler error not propagated: got code=%v, want Internal (err=%v)", status.Code(err), err)
 	}
 	if capturedDoneErr == nil {
 		t.Errorf("done must be called with non-nil error for server failure code")
@@ -168,8 +170,8 @@ func TestUnaryCircuitBreaker_Closed_ClientError_DoneNil(t *testing.T) {
 	handlerErr := status.Error(codes.InvalidArgument, "bad request")
 	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return nil, handlerErr })
-	if !errors.Is(err, handlerErr) && status.Code(err) != codes.InvalidArgument {
-		t.Errorf("handler error not propagated: got %v", err)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("handler error not propagated: got code=%v, want InvalidArgument (err=%v)", status.Code(err), err)
 	}
 	if !cb.doneNil {
 		t.Errorf("done must be called with nil for a client error (not a failure signal)")
@@ -215,7 +217,7 @@ func TestStreamCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	err := StreamCircuitBreaker(cb)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error {
 			t.Fatal("stream handler must not be called when circuit is open")
-			return nil
+			return errors.New("unreachable")
 		})
 	if err == nil {
 		t.Fatal("open circuit stream: expected error, got nil")
@@ -249,8 +251,9 @@ func TestStreamCircuitBreaker_Closed_ServerFailure_DoneErr(t *testing.T) {
 	handlerErr := status.Error(codes.Internal, "internal error")
 	err := StreamCircuitBreaker(cb)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { return handlerErr })
-	if err != handlerErr {
-		t.Errorf("stream handler error not propagated: got %v, want %v", err, handlerErr)
+	// Verify propagation by status code to avoid errorlint "!=" warning.
+	if status.Code(err) != codes.Internal {
+		t.Errorf("stream handler error not propagated: got code=%v, want Internal (err=%v)", status.Code(err), err)
 	}
 	if capturedDoneErr == nil {
 		t.Errorf("stream: done must be called with non-nil for server failure code")

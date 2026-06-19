@@ -121,7 +121,8 @@ func TestStreamAuth_PublicMethodBypasses(t *testing.T) {
 	handler := func(any, grpc.ServerStream) error { handlerReached = true; return nil }
 	ss := &fakeServerStream{ctx: context.Background()}
 	err := StreamAuth(stubVerifier{}, WithPublicMethod(func(m string) bool { return m == streamMethod }))(
-		nil, ss, streamInfo(), handler)
+		nil, ss, streamInfo(), handler,
+	)
 	if err != nil {
 		t.Fatalf("public method must bypass auth, got %v", err)
 	}
@@ -143,7 +144,8 @@ func TestStreamAuth_ValidTokenReachesHandlerWithPrincipal(t *testing.T) {
 	ss := &fakeServerStream{ctx: bearerCtx()}
 	// #2008: the non-public stream method also passes the PDP gate before the
 	// handler runs, so wire a permitting resolver + authorizer.
-	err := StreamAuth(stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
+	err := StreamAuth(
+		stubVerifier{claims: kauth.Claims{Subject: "user-1"}},
 		WithPermissionResolver(permResolverFor(streamMethod)),
 		WithPDPAuthorizer(stubAuthorizer{dec: mustAllow()}),
 	)(nil, ss, streamInfo(), handler)

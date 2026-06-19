@@ -191,9 +191,9 @@ type errcodeMappingFakeStream struct {
 	ctx context.Context
 }
 
-func (f *errcodeMappingFakeStream) Context() context.Context          { return f.ctx }
-func (f *errcodeMappingFakeStream) SendMsg(_ any) error               { return nil }
-func (f *errcodeMappingFakeStream) RecvMsg(_ any) error               { return nil }
-func (f *errcodeMappingFakeStream) SetHeader(_ metadata.MD) error     { return nil }
-func (f *errcodeMappingFakeStream) SendHeader(_ metadata.MD) error    { return nil }
-func (f *errcodeMappingFakeStream) SetTrailer(_ metadata.MD)          {}
+func (f *errcodeMappingFakeStream) Context() context.Context       { return f.ctx }
+func (f *errcodeMappingFakeStream) SendMsg(_ any) error            { return nil }
+func (f *errcodeMappingFakeStream) RecvMsg(_ any) error            { return nil }
+func (f *errcodeMappingFakeStream) SetHeader(_ metadata.MD) error  { return nil }
+func (f *errcodeMappingFakeStream) SendHeader(_ metadata.MD) error { return nil }
+func (f *errcodeMappingFakeStream) SetTrailer(_ metadata.MD)       {}

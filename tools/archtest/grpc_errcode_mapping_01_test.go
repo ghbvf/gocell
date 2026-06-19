@@ -64,9 +64,8 @@ import (
 )
 
 const (
-	// errcodePkgPath is the import path of pkg/errcode.
-	errcodePkgPath = PlatformFrameworkModulePath + "/pkg/errcode"
 	// errcodeKindTypeName is the exported type name of the mapping enum.
+	// errcodePkgPath is already declared in panic_invariants.go at package scope.
 	errcodeKindTypeName = "Kind"
 
 	// grpcErrcodeMappingInterceptorPkg is the package the rule scopes to.
