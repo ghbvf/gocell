@@ -18,7 +18,7 @@ endpoints:
     successStatus: 200
     noContent: false
     auth:
-      public: true  # demo-only: production MUST set public:false + configure a JWT plan. No machine guard exists for this (example scope); see backlog.
+      public: true  # demo-only: production MUST set public:false + configure a JWT plan.
       reason: "Demo-only: production MUST set public:false + configure a JWT plan (example scope)."
     responses:
       400:

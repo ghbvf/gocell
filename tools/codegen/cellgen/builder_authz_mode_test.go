@@ -60,6 +60,23 @@ func TestValidateHTTPAuthModeCompleteness(t *testing.T) {
 			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{Public: true}},
 			"must declare a non-empty endpoints.http.auth.reason",
 		},
+		{
+			"opt-out serviceOwned with reason ok", "http.demo.svc.v1", "active", true,
+			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{ServiceOwned: true, Reason: "service validates ownership"}}, "",
+		},
+		{
+			"opt-out clientsOnly with reason ok", "http.demo.clients.v1", "active", true,
+			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{ClientsOnly: true, Reason: "internal caller-cell allowlist"}}, "",
+		},
+		{
+			"opt-out bootstrap with reason ok", "http.demo.boot.v1", "active", true,
+			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{Bootstrap: true, Reason: "first-run admin bootstrap"}}, "",
+		},
+		{
+			"passwordResetExempt-only is modeless", "http.demo.pre.v1", "active", true,
+			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{PasswordResetExempt: true}}, "declares no AuthZ mode",
+		},
+		{"nil http block rejected", "http.demo.nilhttp.v1", "active", true, nil, "declares no AuthZ mode"},
 		{"draft modeless skipped", "http.demo.draft.v1", "draft", true, &metadata.HTTPTransportMeta{}, ""},
 		{"non-codegen modeless skipped", "http.demo.nocodegen.v1", "active", false, &metadata.HTTPTransportMeta{}, ""},
 	}
@@ -83,6 +100,10 @@ func TestValidateHTTPAuthModeCompleteness(t *testing.T) {
 	}
 
 	t.Run("modeless ledgered exempt", func(t *testing.T) {
+		// Exercises only the gate's ledger-exemption BRANCH: a modeless contract whose ID is
+		// ledgered passes. It does NOT assert the ledger ID actually maps to its real owner
+		// cell/slice (the demo/alpha fixture is synthetic) — that real-project correspondence
+		// is TestHTTPAuthModeLedger_MatchesProjectModeless's job (tools/archtest).
 		if ledgered == "" {
 			t.Skip("ledger drained — exemption path removed at #2020 endgame")
 		}

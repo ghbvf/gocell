@@ -266,6 +266,9 @@ func checkHTTPAuthModeDeclared(contractID string, h *metadata.HTTPTransportMeta)
 				"(public/bootstrap/clientsOnly/serviceOwned) (#2020 default-ABAC, strict fail-closed)",
 			errcode.WithDetails(errcode.PublicString("contract", contractID)))
 	}
+	// Reaching here means HTTPAuthModeDeclared(h) was true, so h is non-nil
+	// (HTTPAuthModeDeclared(nil)==false); the h != nil guard is defensive against future
+	// reordering and costs nothing.
 	if h != nil && metadata.HTTPAuthModeIsOptOut(h.Auth) && strings.TrimSpace(h.Auth.Reason) == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"cellgen build http: opt-out auth mode (public/bootstrap/clientsOnly/serviceOwned) "+

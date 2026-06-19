@@ -74,3 +74,14 @@ func TestHTTPAuthModeLedger_Accessors(t *testing.T) {
 		t.Error("IsHTTPAuthModeLedgered: unknown id must not be ledgered")
 	}
 }
+
+// TestHTTPAuthModeLedger_FrozenSize guards the frozen ceiling: the ledger may only
+// shrink, never grow. A growing ledger means a new modeless route was added AND
+// ledgered, bypassing the cellgen Hard gate — the size cap catches that.
+func TestHTTPAuthModeLedger_FrozenSize(t *testing.T) {
+	if got := len(httpAuthModeMigrationLedger); got > httpAuthModeLedgerFrozenSize {
+		t.Fatalf("ledger grew to %d entries (> frozen %d) — a new modeless route must declare "+
+			"a mode, not be ledgered (#2020 frozen). If you migrated/removed entries, decrement "+
+			"httpAuthModeLedgerFrozenSize to match", got, httpAuthModeLedgerFrozenSize)
+	}
+}

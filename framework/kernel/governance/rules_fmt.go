@@ -1184,6 +1184,11 @@ func (v *Validator) validateFMT42() []ValidationResult {
 			continue
 		}
 		h := c.Endpoints.HTTP
+		// Two complementary, non-overlapping checks: validateFMT42ForContract guards an
+		// EXISTING permission's legality (closed-set + mutex with opt-out modes), while
+		// validateFMT42AuthMode guards mode completeness + reason. They cannot double-report:
+		// when permission is present the route is mode-declared, so validateFMT42AuthMode
+		// never takes its modeless branch.
 		if h != nil && h.Permission != "" {
 			results = append(results, v.validateFMT42ForContract(c, h)...)
 		}

@@ -209,7 +209,7 @@ registry / golden churn）：在 `gocell validate` 阶段即报 modeless / opt-o
 | codegen 完整性预检（modeless/缺-reason → generate 失败，**唯一 Hard 主控制点**） | **Hard** | cellgen 单源读 `contract.yaml` | generated code 不可表达 modeless 路由（generate 直接失败；生成路径是单一出口） |
 | schema `auth.reason` 字段形状（`type:string` + `minLength:1`） | **Hard**（schema） | schema 钉死非空字符串（不表达 required/forbidden 耦合，避免与 2^5 auth-bool 矩阵耦合） | 空串 reason → schema 校验失败；required/forbidden 耦合由 codegen（Hard）+ FMT-42（Medium）承载 |
 | 迁移 ledger frozen + no-stale | **Medium** | golden 锁定冻结集（新 ID 不可入） | no-stale 反查驱动收敛（需运行测试，非编译期） |
-| FMT-42/43 扩展（authoring UX 纵深） | **Medium** | `gocell validate` | 早期提示，非唯一控制点 |
+| FMT-42 扩展（不新增 FMT-43，authoring UX 纵深） | **Medium** | `gocell validate` | 早期提示，非唯一控制点 |
 | `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（resolver 源单一性，既有） | **Medium** | archtest typed scan | D1 resolver 单源守卫，捕获 mis-wiring 偏离（Mount nil-policy 残留盲区的纵深防御） |
 
 > runtime `auth.Mount` 经评估**不作为载体**（D5），避免误杀 serviceOwned / operator 合法路由，与
