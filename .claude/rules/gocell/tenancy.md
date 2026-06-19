@@ -85,7 +85,11 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   request ctx（唯一 `auth.WithAuthorizer` 上游 + `AuthorizerFromContext`/`RequirePermission`
   下游）。Cell 不 import 兄弟 cell 的 Authorizer；强依赖缺失 fail-fast；可解析的 Authorizer
   在 bootstrap router build（Init 后、serve 前）经 `ResolveAuthorizer` 预解析，nil provider
-  在启动期 fail-fast 而非首请求才暴露。
+  在启动期 fail-fast 而非首请求才暴露。`auth.WithAuthorizer` 是导出函数，其 caller identity
+  由 archtest `AUTH-WITHAUTHORIZER-CALLER-01`（Medium，type-aware caller-allowlist）守——cell
+  的 `RouteGroup.Middleware` 执行序在 `RequirePermission` 之前，故业务侧调 `WithAuthorizer` 可
+  换掉 gate 读到的 PDP 而 neuter 自己的门禁；评级/盲区见该 archtest godoc 与 `permission.go`
+  `AUTHORIZER-CTX-FUNNEL-01` 分维评级。
 - PDP fail-closed：缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny。内置 baseline
   是 action-scoped + role-conditioned 的 allow 规则（复刻既有 role 门禁）；baseline ≠ 降级
   allow-all。租户 policy 叠加在 baseline 上，可加 allow 也可加 deny（forbid-wins 保证 deny
