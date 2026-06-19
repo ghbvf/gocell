@@ -18,6 +18,8 @@
           "kind",
           "state",
           "submitter",
+          "approver",
+          "payloadSchema",
           "createdAt",
           "updatedAt"
         ],
@@ -36,11 +38,12 @@
             "type": "string"
           },
           "approver": {
-            "type": "string",
-            "description": "Admin identity that approved the registration; absent until approved."
+            "type": ["string", "null"],
+            "description": "Admin identity that approved the registration; null until approved."
           },
           "payloadSchema": {
-            "type": "string"
+            "type": ["string", "null"],
+            "description": "Payload schema ref; null when not yet provided."
           },
           "createdAt": {
             "type": "string",

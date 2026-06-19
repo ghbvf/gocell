@@ -73,6 +73,5 @@ export * as httpOrderfulfillmentPlaceorderV1 from './contracts/http/orderfulfill
 export * as httpPolicyCreateV1 from './contracts/http/policy/create/v1/types';
 export * as httpPolicyDeleteV1 from './contracts/http/policy/delete/v1/types';
 export * as httpPolicyUpdateV1 from './contracts/http/policy/update/v1/types';
-export * as httpRegistryContractListV1 from './contracts/http/registry/contract/list/v1/types';
 export * as httpRegistryContractSubmitV1 from './contracts/http/registry/contract/submit/v1/types';
 export * as sagaOrderfulfillmentV1 from './contracts/saga/orderfulfillment/v1/types';

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -173,7 +174,7 @@ func TestRegistryPG_Integration_CrossTenantIsolation(t *testing.T) {
 	_, ok, err := repo.Get(ctx, itTenantB, "shared.id")
 	require.NoError(t, err)
 	assert.False(t, ok)
-	page, err := repo.List(ctx, itTenantB, query.ListParams{Limit: 50, Sort: []query.SortColumn{{Name: "id", Direction: query.SortASC}}})
+	page, err := repo.List(ctx, itTenantB, query.ListParams{Limit: 50, Sort: []query.SortColumn{{Name: "id", Direction: query.SortASC}}}, ports.ListFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, page)
 

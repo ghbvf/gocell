@@ -87,7 +87,9 @@ func (r *Registry) Get(_ context.Context, t tenant.TenantID, id string) (registr
 	return reg, ok, nil
 }
 
-func (r *Registry) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]registry.ContractRegistration, error) {
+func (r *Registry) List(
+	_ context.Context, t tenant.TenantID, params query.ListParams, filter ports.ListFilter,
+) ([]registry.ContractRegistration, error) {
 	if err := t.Validate(); err != nil {
 		return nil, invalidTenant(err)
 	}
@@ -96,6 +98,10 @@ func (r *Registry) List(_ context.Context, t tenant.TenantID, params query.ListP
 	all := make([]registry.ContractRegistration, 0, len(ids))
 	for _, id := range ids {
 		if cr, ok := reg.Get(id); ok {
+			// apply state filter before sort/cursor — zero State means no filter
+			if !filter.State.IsZero() && cr.State != filter.State {
+				continue
+			}
 			all = append(all, cr)
 		}
 	}

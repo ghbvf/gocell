@@ -22,6 +22,28 @@
 // package is large (a package-level allowlist would authorize far more than the
 // one entry the invariant protects).
 //
+// # Amendment — durable store persist entry (303-US6, #2237)
+//
+// US5 (#2236) introduced the durable ports.Registry store; its in-mem
+// implementation (corecells/registrycore/internal/mem) persists a `submitted`
+// registration by delegating to the kernel state machine — (*mem.Registry).Create
+// calls ContractRegistrar.Submit. This is a SECOND sanctioned persist entry: the
+// US6 submit path is registrywrite.Service.Submit → gate.Check (validate) →
+// store.Create → mem.Registry.Create → registrar.Submit. The "submitted only after
+// governance validation" invariant is preserved for this path by funnel
+// composition, NOT weakened:
+//
+//   - CONTRACT-REGISTRY-CREATE-CALLER-01 funnels ports.Registry.Create's callers to
+//     the registrywrite slice alone, and
+//   - registrywrite.Service.Submit runs gate.Check before store.Create (its
+//     behavioral test asserts a denied gate ⇒ zero store.Create calls).
+//
+// So (*mem.Registry).Create is allowlisted here, and the gate-before-persist
+// guarantee for the store path lives in CONTRACT-REGISTRY-CREATE-CALLER-01. (The PG
+// store builds the row with raw SQL and never calls registrar.Submit, so it is not
+// an entry here.) Both sanctioned entries are anti-vacuity-pinned to EXACTLY ONE
+// ContractRegistrar.Submit callsite each.
+//
 // # AI-robust rating
 //
 //   - MEDIUM (caller-allowlist, type-aware scan) — a GO-LANGUAGE CEILING, not a
@@ -64,9 +86,15 @@ import (
 
 const (
 	registrarPkgPath = PlatformFrameworkModulePath + "/kernel/registry"
-	// registrationGatePkgPath is the SOLE sanctioned caller of
+	// registrationGatePkgPath is the FIRST sanctioned caller of
 	// ContractRegistrar.Submit — the governance registration gate (gate.go).
 	registrationGatePkgPath = PlatformFrameworkModulePath + "/kernel/governance"
+	// registryMemStorePkgPath is the SECOND sanctioned caller of
+	// ContractRegistrar.Submit — the durable store's in-mem implementation
+	// ((*mem.Registry).Create), the US6 persist path (303-US6 #2237). Its
+	// gate-before-persist guarantee is CONTRACT-REGISTRY-CREATE-CALLER-01
+	// (see package godoc amendment).
+	registryMemStorePkgPath = PlatformCellsModulePath + "/registrycore/internal/mem"
 	// registrarSubmitFixturePkg is the RED-fixture package. Its path is
 	// deliberately NOT registrationGatePkgPath, so the main scan's allowlist does
 	// not falsely exempt the fixture's bypass call. If the fixture is ever moved
@@ -135,6 +163,16 @@ func isGateSubmitMethodDecl(fd *ast.FuncDecl) bool {
 	return fd.Name != nil && fd.Name.Name == "Submit" && recvTypeName(fd) == "RegistrationGate"
 }
 
+// isMemRegistryCreateMethodDecl reports whether fd is the durable in-mem store's
+// (*mem.Registry).Create — the SECOND sanctioned callsite of
+// ContractRegistrar.Submit (303-US6 #2237). Callers must additionally confirm fd
+// lives in the registrycore mem package (a same-named Registry.Create elsewhere —
+// e.g. the PG store — would not be this entry, and the PG store does not call
+// registrar.Submit anyway).
+func isMemRegistryCreateMethodDecl(fd *ast.FuncDecl) bool {
+	return fd.Name != nil && fd.Name.Name == "Create" && recvTypeName(fd) == "Registry"
+}
+
 // TestRegistrarSubmitCaller01 asserts that the ONLY production callsite of
 // registry.ContractRegistrar.Submit is inside (*RegistrationGate).Submit — an
 // entry-level allowlist, not a package-level one (any other callsite, even inside
@@ -145,35 +183,42 @@ func TestRegistrarSubmitCaller01(t *testing.T) {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
 
-	var sanctionedCallsites int
+	var gateSubmitCallsites, memCreateCallsites int
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
 		if !p.Typed() {
 			return nil
 		}
 		gatePkg := p.Pkg.Path() == registrationGatePkgPath
+		memPkg := p.Pkg.Path() == registryMemStorePkgPath
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
 			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				sanctioned := gatePkg && isGateSubmitMethodDecl(fd)
+				gateSanctioned := gatePkg && isGateSubmitMethodDecl(fd)
+				memSanctioned := memPkg && isMemRegistryCreateMethodDecl(fd)
 				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
 					if !isRegistrarSubmitCall(p.TypesInfo, call) {
 						return
 					}
-					if sanctioned {
-						sanctionedCallsites++
-						return // the single allowed callsite
+					switch {
+					case gateSanctioned:
+						gateSubmitCallsites++
+						return // sanctioned: the governance gate entry
+					case memSanctioned:
+						memCreateCallsites++
+						return // sanctioned: the durable store persist entry (gated by CONTRACT-REGISTRY-CREATE-CALLER-01)
 					}
 					pos := p.Fset.Position(call.Pos())
 					d = append(d, Diagnostic{
 						Rel:  rel,
 						Line: pos.Line,
 						Message: fmt.Sprintf(
-							"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit outside "+
-								"(*RegistrationGate).Submit. A runtime contract MUST enter `submitted` only through "+
-								"the governance registration gate, which validates the candidate and fail-closes on "+
-								"error. Any other callsite — even inside kernel/governance — re-admits the ungated "+
-								"\"submitted but invalid\" path the gate eliminates (303-US3 #2234).",
+							"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit outside the "+
+								"sanctioned persist entries ((*RegistrationGate).Submit, or the durable store's "+
+								"(*mem.Registry).Create which is itself gated by CONTRACT-REGISTRY-CREATE-CALLER-01). "+
+								"A runtime contract MUST enter `submitted` only after governance validation; any other "+
+								"callsite re-admits the ungated \"submitted but invalid\" path the gate eliminates "+
+								"(303-US3 #2234, amended 303-US6 #2237).",
 							rel),
 					})
 				})
@@ -182,17 +227,27 @@ func TestRegistrarSubmitCaller01(t *testing.T) {
 		return d
 	})
 
-	// Anti-vacuity: EXACTLY ONE sanctioned callsite must exist — the single
-	// store.Submit call inside (*RegistrationGate).Submit. 0 = the gate no longer
-	// persists (the funnel guards nothing); >1 = the gate grew a second Submit
-	// callsite that must be reviewed (the invariant is "the one gate entry", not
-	// "the gate package").
-	if sanctionedCallsites != 1 {
+	// Anti-vacuity: each sanctioned entry must hold EXACTLY ONE
+	// ContractRegistrar.Submit callsite. 0 = that entry no longer persists (its
+	// funnel guards nothing); >1 = it grew a second, unreviewed callsite. The two
+	// sanctioned entries are the governance gate ((*RegistrationGate).Submit) and the
+	// durable store ((*mem.Registry).Create, gated upstream by
+	// CONTRACT-REGISTRY-CREATE-CALLER-01).
+	if gateSubmitCallsites != 1 {
 		diags = append(diags, Diagnostic{
 			Message: fmt.Sprintf("REGISTRAR-SUBMIT-CALLER-01 anti-vacuity: expected EXACTLY 1 "+
 				"registry.ContractRegistrar.Submit callsite inside (*RegistrationGate).Submit, found %d "+
 				"(0 = gate no longer the registration entry → funnel vacuous; >1 = unreviewed second entry).",
-				sanctionedCallsites),
+				gateSubmitCallsites),
+		})
+	}
+	if memCreateCallsites != 1 {
+		diags = append(diags, Diagnostic{
+			Message: fmt.Sprintf("REGISTRAR-SUBMIT-CALLER-01 anti-vacuity: expected EXACTLY 1 "+
+				"registry.ContractRegistrar.Submit callsite inside (*mem.Registry).Create, found %d "+
+				"(0 = the durable store no longer persists via the kernel state machine → review; "+
+				">1 = unreviewed second callsite).",
+				memCreateCallsites),
 		})
 	}
 
@@ -227,6 +282,35 @@ func Submit() {}
 	assert.False(t, got["RegistrationGate.Check"], "non-Submit gate method must not be sanctioned")
 	assert.False(t, got["Other.Submit"], "Submit on a different receiver must not be sanctioned")
 	assert.False(t, got[".Submit"], "free function Submit must not be sanctioned")
+}
+
+// TestIsMemRegistryCreateMethodDecl unit-tests the second sanctioned-entry
+// discriminator (303-US6 #2237): it must accept (*mem.Registry).Create and reject a
+// non-Create Registry method / a Create on a different receiver / a free function.
+func TestIsMemRegistryCreateMethodDecl(t *testing.T) {
+	t.Parallel()
+	const src = `package mem
+type Registry struct{}
+type Other struct{}
+func (r *Registry) Create() {}
+func (r *Registry) Get() {}
+func (o *Other) Create() {}
+func Create() {}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := map[string]bool{}
+	EachInChildren[ast.FuncDecl](f, func(fd *ast.FuncDecl) {
+		key := recvTypeName(fd) + "." + fd.Name.Name
+		got[key] = isMemRegistryCreateMethodDecl(fd)
+	})
+	assert.True(t, got["Registry.Create"], "(*mem.Registry).Create must be sanctioned")
+	assert.False(t, got["Registry.Get"], "non-Create Registry method must not be sanctioned")
+	assert.False(t, got["Other.Create"], "Create on a different receiver must not be sanctioned")
+	assert.False(t, got[".Create"], "free function Create must not be sanctioned")
 }
 
 // TestRegistrarSubmitCaller01_RedFixture verifies the scanner fires against a

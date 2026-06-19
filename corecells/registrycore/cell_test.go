@@ -15,8 +15,13 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
+
+// testTenantStr is the canonical tenant UUID the cell-loop test scopes submit +
+// list to (submit/list are tenant-scoped via ports.Registry since 303-US6).
+const testTenantStr = "00000000-0000-0000-0000-000000000001"
 
 var testEpoch = func() time.Time {
 	ts, err := time.Parse(time.RFC3339, "2026-06-18T00:00:00Z")
@@ -94,6 +99,7 @@ func allowCtx() context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "cell-a", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
 	})
+	ctx = ctxkeys.WithTenantID(ctx, testTenantStr)
 	return auth.WithAuthorizer(ctx, allowAuthorizer{dec})
 }
 
@@ -123,9 +129,12 @@ func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	})
 	ctx := allowCtx()
 
+	const submitBody = `{"id":"http.example.foo.v1","kind":"http","ownerCell":"registrycore",` +
+		`"lifecycle":"active","endpoints":{"server":"registrycore"},` +
+		`"schemaRefs":{"response":"response.schema.json"}}`
 	postRec := httptest.NewRecorder()
 	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/registry/contracts",
-		bytes.NewReader([]byte(`{"id":"http.example.foo.v1","kind":"http"}`))).WithContext(ctx)
+		bytes.NewReader([]byte(submitBody))).WithContext(ctx)
 	postReq.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(postRec, postReq)
 	if postRec.Code != http.StatusCreated {

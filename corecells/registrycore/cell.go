@@ -1,28 +1,36 @@
 // Package registrycore implements the registrycore Cell: the runtime contract
 // registry's carrier cell (303-US4, #2235), a platform control-plane cell beside
 // accesscore / auditcore / configcore (dogfooding — the registry is itself a
-// Cell). Its two slices serve the submit and list HTTP contracts over the in-mem
-// kernel ContractRegistrar (303-US2, #2233): registrywrite serves
-// http.registry.contract.submit.v1 (POST), registryread serves
-// http.registry.contract.list.v1 (GET), both gated by a registry:* permission.
+// Cell). Its two slices serve the submit and list HTTP contracts over the durable
+// ports.Registry store (303-US5, #2236): registrywrite serves
+// http.registry.contract.submit.v1 (POST) — it decodes a full contract
+// declaration, runs the US3 governance gate (gate.Check), and on success persists
+// via ports.Registry; registryread serves http.registry.contract.list.v1 (GET) —
+// a tenant-scoped, HMAC-cursor-paginated view. Both are gated by a registry:*
+// permission.
 //
-// US4 is the skeleton: the cell-scoped ContractRegistrar is process-local and
-// tenant-agnostic, so submit/list are the minimal usable submission surface but
-// persist nothing durable. The durable contract_registrations store (behind a
-// ports.Registry interface) is US5; the governance gate, audit/events, and the
-// cellmodule + corebundle composition (with the PDP baseline grant) are US6.
-// registrycore never imports a sibling cell.
+// US6 (#2237) wires the durable store + governance gate into the submit/list MVP.
+// This slice-level wiring uses the in-mem ports.Registry (mem.NewRegistry) and a
+// development cursor key, fully exercised by contract/service tests. Deferred to a
+// follow-up composition issue: the cellmodule + corebundle composition (PG
+// topology, real cursor key via cellsecrets with postgres fail-closed, PDP
+// baseline grant) and activation-time declaration persistence. RLS-safe scoped
+// reads are #2392; audit/events are US8. registrycore never imports a sibling cell.
 package registrycore
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registryread"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registrywrite"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 )
 
 // RegistryCore is the platform runtime contract-registry cell. It embeds BaseCell
@@ -33,7 +41,7 @@ import (
 type RegistryCore struct {
 	*cell.BaseCell
 
-	// clk stamps registration timestamps inside the shared ContractRegistrar.
+	// clk stamps registration timestamps in the durable store and the gate.
 	clk clock.Clock
 
 	// +slice:route:slice=registrywrite,subPath=/contracts
@@ -43,8 +51,8 @@ type RegistryCore struct {
 }
 
 // New constructs the registrycore cell. clk is the positional clock dependency
-// (clock.Clock convention) the shared ContractRegistrar uses to stamp event
-// timestamps.
+// (clock.Clock convention) the durable store and governance gate use to stamp
+// registration timestamps.
 func New(clk clock.Clock) *RegistryCore {
 	clock.MustHaveClock(clk, "registrycore.New")
 	return &RegistryCore{
@@ -53,20 +61,42 @@ func New(clk clock.Clock) *RegistryCore {
 	}
 }
 
+// registryCursorDevKey is the development HMAC signing key for list cursors in
+// the memory/demo topology. It is NOT a secret: in this MVP registrycore is only
+// runnable in the in-mem topology (it is not yet composed into corebundle). When
+// the cellmodule lands (follow-up composition issue), the PG topology injects a
+// real key via cellsecrets and fail-closes when it is absent. 39 bytes ≥ the
+// query.CursorCodec 32-byte minimum.
+var registryCursorDevKey = []byte("registrycore-list-cursor-dev-key-0001!!")
+
 // initInternal is the K#04 hand-written init hook invoked by the generated Init
 // after BaseCell.Init and before the generated route-group mount. It builds the
-// single cell-scoped in-mem ContractRegistrar (#2233) shared by both slice
-// services — so a submit records a registration the list slice reads back — and
-// the slice handlers the generated route group references. No external I/O, no
-// goroutines, fail-fast (cell-patterns.md §Init fail-fast).
+// durable-store-backed slice services and the handlers the generated route group
+// references. No external I/O, no goroutines, fail-fast (cell-patterns.md §Init
+// fail-fast).
+//
+// MVP wiring (303-US6, #2237): the in-mem ports.Registry (mem.NewRegistry) is the
+// durable store both slices share — a submit persists a registration the list
+// slice reads back. The submit service validates each declaration through the US3
+// governance gate (gate.Check) before persisting; the gate is constructed over a
+// throwaway in-mem ContractRegistrar because Check is side-effect-free — only
+// gate.Submit (which this path never calls) would touch that registrar, so it
+// stays empty. The L1 store write is wrapped by a demo CellTxManager (PG-ready: a
+// cellmodule injects a real TxManager in the PG topology). The list cursor uses
+// the shared HMAC codec.
 func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
-	registrar := registry.NewContractRegistrar(c.clk)
+	store := mem.NewRegistry(c.clk)
+	gate := governance.NewRegistrationGate(registry.NewContractRegistrar(c.clk), c.clk)
+	codec, err := query.NewCursorCodec(registryCursorDevKey)
+	if err != nil {
+		return fmt.Errorf("registrycore: build list cursor codec: %w", err)
+	}
 
-	writeSvc, err := registrywrite.NewService(registrar)
+	writeSvc, err := registrywrite.NewService(store, gate, registrywrite.WithTxManager(outbox.DemoCellTxManager()))
 	if err != nil {
 		return fmt.Errorf("registrycore: build registrywrite service: %w", err)
 	}
-	readSvc, err := registryread.NewService(registrar)
+	readSvc, err := registryread.NewService(store, codec, nil)
 	if err != nil {
 		return fmt.Errorf("registrycore: build registryread service: %w", err)
 	}

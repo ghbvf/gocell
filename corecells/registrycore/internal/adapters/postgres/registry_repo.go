@@ -216,12 +216,17 @@ func (r *Registry) Get(ctx context.Context, t tenant.TenantID, id string) (regis
 	return scanRegistration(row, id)
 }
 
-func (r *Registry) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]registry.ContractRegistration, error) {
+func (r *Registry) List(
+	ctx context.Context, t tenant.TenantID, params query.ListParams, filter ports.ListFilter,
+) ([]registry.ContractRegistration, error) {
 	if err := t.Validate(); err != nil {
 		return nil, invalidTenant(err)
 	}
 	b := pgquery.NewBuilder()
 	b.AppendParam("SELECT id, "+colsProjection+" FROM contract_registrations WHERE tenant_id = ", t.String())
+	// optional state filter: applied before AppendKeyset so the keyset/ORDER/LIMIT
+	// operate on the already-filtered result set
+	b.AppendIf(!filter.State.IsZero(), " AND state = ", filter.State.String())
 	if err := pgquery.AppendKeyset(b, params); err != nil {
 		return nil, queryErr("list-keyset", err)
 	}

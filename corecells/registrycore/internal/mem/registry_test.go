@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -153,7 +154,7 @@ func TestRegistry_List_OrderedCursorPaginated(t *testing.T) {
 
 	// First page: limit=2, FetchLimit=3. 4 items exist → returns a, b, c (the
 	// caller trims to Limit=2 and builds the cursor for page 2 from item b).
-	page, err := r.List(ctx, testTenant, query.ListParams{Limit: 2, Sort: idASC})
+	page, err := r.List(ctx, testTenant, query.ListParams{Limit: 2, Sort: idASC}, ports.ListFilter{})
 	require.NoError(t, err)
 	require.Len(t, page, 3) // FetchLimit = Limit+1 for N+1 hasMore detection
 	assert.Equal(t, "a", page[0].ID)
@@ -162,7 +163,7 @@ func TestRegistry_List_OrderedCursorPaginated(t *testing.T) {
 
 	// Next page with cursor after "b" (last visible item from page 1).
 	// limit=2, FetchLimit=3, 2 remaining items (c, d) → returns c, d (< FetchLimit → no more).
-	page2, err := r.List(ctx, testTenant, query.ListParams{Limit: 2, Sort: idASC, CursorValues: []any{"b"}})
+	page2, err := r.List(ctx, testTenant, query.ListParams{Limit: 2, Sort: idASC, CursorValues: []any{"b"}}, ports.ListFilter{})
 	require.NoError(t, err)
 	require.Len(t, page2, 2)
 	assert.Equal(t, "c", page2[0].ID)
@@ -171,7 +172,7 @@ func TestRegistry_List_OrderedCursorPaginated(t *testing.T) {
 
 func TestRegistry_List_Empty(t *testing.T) {
 	r, _ := newRegistry(t)
-	page, err := r.List(context.Background(), testTenant, query.ListParams{Limit: 10, Sort: idASC})
+	page, err := r.List(context.Background(), testTenant, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, page)
 }
@@ -183,7 +184,7 @@ func TestRegistry_List_HasMoreNPlusOne(t *testing.T) {
 	}
 	// Request FetchLimit (limit+1 = 3) to detect hasMore: all 3 returned → hasMore=true.
 	params := query.ListParams{Limit: 2, Sort: idASC}
-	page, err := r.List(context.Background(), testTenant, params)
+	page, err := r.List(context.Background(), testTenant, params, ports.ListFilter{})
 	require.NoError(t, err)
 	// FetchLimit=3, have 3 rows → returns 3 items; caller detects len>limit → hasMore.
 	assert.Len(t, page, params.FetchLimit())
@@ -194,7 +195,7 @@ func TestRegistry_List_LimitTruncation(t *testing.T) {
 	for _, id := range []string{"a", "b", "c", "d", "e"} {
 		mustCreate(t, r, testTenant, id, "http", "alice")
 	}
-	page, err := r.List(context.Background(), testTenant, query.ListParams{Limit: 3, Sort: idASC})
+	page, err := r.List(context.Background(), testTenant, query.ListParams{Limit: 3, Sort: idASC}, ports.ListFilter{})
 	require.NoError(t, err)
 	// FetchLimit=4; 5 rows exist → returns first 4.
 	assert.Len(t, page, 4)
@@ -209,7 +210,7 @@ func TestRegistry_List_CursorLastPageEmpty(t *testing.T) {
 	// Cursor after the only item → empty next page.
 	page, err := r.List(context.Background(), testTenant, query.ListParams{
 		Limit: 10, Sort: idASC, CursorValues: []any{"a"},
-	})
+	}, ports.ListFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, page)
 }
@@ -225,7 +226,7 @@ func TestRegistry_AllMethods_InvalidTenant(t *testing.T) {
 	assertCode(t, tErr, errcode.ErrValidationFailed)
 	_, _, gErr := r.Get(ctx, zero, "x")
 	assertCode(t, gErr, errcode.ErrValidationFailed)
-	_, lErr := r.List(ctx, zero, query.ListParams{Limit: 10, Sort: idASC})
+	_, lErr := r.List(ctx, zero, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
 	assertCode(t, lErr, errcode.ErrValidationFailed)
 	_, hErr := r.History(ctx, zero, "x")
 	assertCode(t, hErr, errcode.ErrValidationFailed)
@@ -239,11 +240,98 @@ func TestRegistry_CrossTenantIsolation(t *testing.T) {
 	_, ok, err := r.Get(context.Background(), testTenantB, "http.foo.v1")
 	require.NoError(t, err)
 	assert.False(t, ok)
-	page, err := r.List(context.Background(), testTenantB, query.ListParams{Limit: 10, Sort: idASC})
+	page, err := r.List(context.Background(), testTenantB, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, page)
 
 	// The same id can be independently submitted in tenant B (per-tenant dedup).
 	_, err = r.Create(context.Background(), testTenantB, registry.SubmitInput{ID: "http.foo.v1", Kind: "http", Submitter: "bob"})
 	require.NoError(t, err)
+}
+
+// mustTransition advances a registration through one state transition in the
+// test registry. Used to set up multi-state fixtures for filter tests.
+func mustTransition(t *testing.T, r *Registry, tn tenant.TenantID, id string, to registry.RegistrationState) {
+	t.Helper()
+	_, err := r.Transition(context.Background(), tn, registry.AdvanceInput{
+		ID: id, To: to, Actor: "system",
+	})
+	require.NoError(t, err)
+}
+
+// TestRegistry_List_StateFilter_SubmittedOnly: only submitted registrations are
+// returned when filtering by submitted state.
+func TestRegistry_List_StateFilter_SubmittedOnly(t *testing.T) {
+	r, _ := newRegistry(t)
+	ctx := context.Background()
+	// Create two registrations: advance one to probing, leave the other submitted.
+	mustCreate(t, r, testTenant, "a", "http", "alice")
+	mustCreate(t, r, testTenant, "b", "http", "alice")
+	mustTransition(t, r, testTenant, "b", registry.StateProbing())
+
+	filter := ports.ListFilter{State: registry.StateSubmitted()}
+	page, err := r.List(ctx, testTenant, query.ListParams{Limit: 10, Sort: idASC}, filter)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "a", page[0].ID)
+	assert.Equal(t, registry.StateSubmitted(), page[0].State)
+}
+
+// TestRegistry_List_StateFilter_ProbingOnly: only probing registrations are
+// returned when filtering by probing state.
+func TestRegistry_List_StateFilter_ProbingOnly(t *testing.T) {
+	r, _ := newRegistry(t)
+	ctx := context.Background()
+	mustCreate(t, r, testTenant, "a", "http", "alice")
+	mustCreate(t, r, testTenant, "b", "http", "alice")
+	mustTransition(t, r, testTenant, "b", registry.StateProbing())
+
+	filter := ports.ListFilter{State: registry.StateProbing()}
+	page, err := r.List(ctx, testTenant, query.ListParams{Limit: 10, Sort: idASC}, filter)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "b", page[0].ID)
+	assert.Equal(t, registry.StateProbing(), page[0].State)
+}
+
+// TestRegistry_List_StateFilter_NoMatch: no rows for a state with no registrations.
+func TestRegistry_List_StateFilter_NoMatch(t *testing.T) {
+	r, _ := newRegistry(t)
+	ctx := context.Background()
+	mustCreate(t, r, testTenant, "a", "http", "alice") // only submitted
+
+	filter := ports.ListFilter{State: registry.StateApproved()}
+	page, err := r.List(ctx, testTenant, query.ListParams{Limit: 10, Sort: idASC}, filter)
+	require.NoError(t, err)
+	assert.Empty(t, page)
+}
+
+// TestRegistry_List_StateFilter_WithPagination: state filter + cursor pagination
+// returns only the filtered state across pages correctly.
+func TestRegistry_List_StateFilter_WithPagination(t *testing.T) {
+	r, _ := newRegistry(t)
+	ctx := context.Background()
+	// Seed 4 registrations: a,b,c submitted; d advanced to probing.
+	for _, id := range []string{"a", "b", "c", "d"} {
+		mustCreate(t, r, testTenant, id, "http", "alice")
+	}
+	mustTransition(t, r, testTenant, "d", registry.StateProbing())
+
+	filter := ports.ListFilter{State: registry.StateSubmitted()}
+	// Page 1: limit=2, FetchLimit=3 submitted; have 3 (a,b,c) → returns a,b,c.
+	page1, err := r.List(ctx, testTenant, query.ListParams{Limit: 2, Sort: idASC}, filter)
+	require.NoError(t, err)
+	// FetchLimit=3; 3 submitted rows → all 3 returned, caller detects hasMore.
+	require.Len(t, page1, 3)
+	assert.Equal(t, "a", page1[0].ID)
+	assert.Equal(t, "b", page1[1].ID)
+	assert.Equal(t, "c", page1[2].ID)
+
+	// Page 2 with cursor after "b": should return c only (1 remaining submitted row).
+	page2, err := r.List(ctx, testTenant, query.ListParams{
+		Limit: 2, Sort: idASC, CursorValues: []any{"b"},
+	}, filter)
+	require.NoError(t, err)
+	require.Len(t, page2, 1)
+	assert.Equal(t, "c", page2[0].ID)
 }

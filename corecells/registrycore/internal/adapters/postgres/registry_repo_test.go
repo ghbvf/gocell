@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -252,7 +253,7 @@ func TestRegistry_List_Success(t *testing.T) {
 	}}}
 	r := newRegistryFromDBTX(db)
 	params := query.ListParams{Limit: 10, Sort: unitIDASC}
-	out, err := r.List(context.Background(), unitTenant, params)
+	out, err := r.List(context.Background(), unitTenant, params, ports.ListFilter{})
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, "a", out[0].ID)
@@ -262,7 +263,7 @@ func TestRegistry_List_Success(t *testing.T) {
 
 func TestRegistry_List_QueryError(t *testing.T) {
 	r := newRegistryFromDBTX(&mockDB{queryErr: errors.New("boom")})
-	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC})
+	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC}, ports.ListFilter{})
 	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
 }
 
@@ -325,7 +326,7 @@ func TestRegistry_List_CorruptState(t *testing.T) {
 		append([]any{"a"}, projectionValues("http", "alice", "", "bogus")...),
 	}}}
 	r := newRegistryFromDBTX(db)
-	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC})
+	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC}, ports.ListFilter{})
 	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
 }
 
@@ -334,7 +335,7 @@ func TestRegistry_AllMethods_InvalidTenant(t *testing.T) {
 	zero := tenant.TenantID("")
 	_, _, gErr := r.Get(context.Background(), zero, "x")
 	assertCode(t, gErr, errcode.ErrValidationFailed)
-	_, lErr := r.List(context.Background(), zero, query.ListParams{Limit: 10, Sort: unitIDASC})
+	_, lErr := r.List(context.Background(), zero, query.ListParams{Limit: 10, Sort: unitIDASC}, ports.ListFilter{})
 	assertCode(t, lErr, errcode.ErrValidationFailed)
 	_, hErr := r.History(context.Background(), zero, "x")
 	assertCode(t, hErr, errcode.ErrValidationFailed)

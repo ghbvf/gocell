@@ -5,6 +5,7 @@
 export interface Request {
   cursor?: string;
   limit?: number;
+  state?: string;
 }
 
 /** http.registry.contract.list.v1.response */

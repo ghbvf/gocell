@@ -5,11 +5,39 @@
 export interface Request {
   id: string;
   kind: RequestKind;
+  ownerCell: string;
+  lifecycle: RequestLifecycle;
+  consistencyLevel?: RequestConsistencyLevel;
+  transports?: string[];
+  endpoints?: RequestEndpoints;
+  schemaRefs?: RequestSchemaRefs;
   payloadSchema?: string;
 }
 
 /** RequestKind enumerates the closed value-set for the kind field. */
 export type RequestKind = 'http' | 'event' | 'command' | 'projection' | 'saga' | 'webhook' | 'grpc';
+
+/** RequestLifecycle enumerates the closed value-set for the lifecycle field. */
+export type RequestLifecycle = 'draft' | 'active' | 'deprecated';
+
+/** RequestConsistencyLevel enumerates the closed value-set for the consistencyLevel field. */
+export type RequestConsistencyLevel = 'L0' | 'L1' | 'L2' | 'L3' | 'L4';
+
+export interface RequestEndpoints {
+  server?: string;
+  clients?: string[];
+  publisher?: string;
+  actorSubscribers?: string[];
+  handler?: string;
+  invokers?: string[];
+  provider?: string;
+  readers?: string[];
+}
+
+export interface RequestSchemaRefs {
+  request?: string;
+  response?: string;
+}
 
 /** http.registry.contract.submit.v1.response */
 export interface Response {

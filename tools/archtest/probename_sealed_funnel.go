@@ -56,10 +56,11 @@ var probeNameSanctionedPkgs = map[string]bool{
 	PlatformFrameworkModulePath + "/runtime/websocket": true,
 	PlatformFrameworkModulePath + "/runtime/saga":      true,
 	// Platform cells (cellgen healthz_gen.go — marker required)
-	PlatformCellsModulePath + "/configcore": true,
-	PlatformCellsModulePath + "/auditcore":  true,
-	PlatformCellsModulePath + "/accesscore": true,
-	PlatformCellsModulePath + "/syscore":    true, // #1860 (cellgen-emitted ProbeRepoReady; unused — no repo)
+	PlatformCellsModulePath + "/configcore":   true,
+	PlatformCellsModulePath + "/auditcore":    true,
+	PlatformCellsModulePath + "/accesscore":   true,
+	PlatformCellsModulePath + "/registrycore": true, // #2237 (303-US6; cellgen-emitted ProbeRepoReady)
+	PlatformCellsModulePath + "/syscore":      true, // #1860 (cellgen-emitted ProbeRepoReady; unused — no repo)
 	// Example cells (cellgen healthz_gen.go — marker required)
 	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,
@@ -75,6 +76,7 @@ var cellgenSanctionedPkgs = map[string]bool{
 	PlatformCellsModulePath + "/configcore":                                      true,
 	PlatformCellsModulePath + "/auditcore":                                       true,
 	PlatformCellsModulePath + "/accesscore":                                      true,
+	PlatformCellsModulePath + "/registrycore":                                    true, // #2237 (303-US6)
 	PlatformCellsModulePath + "/syscore":                                         true, // #1860
 	PlatformModulePath + "/examples/demo/cells/democell":                         true,
 	PlatformModulePath + "/examples/iotdevice/cells/devicecell":                  true,

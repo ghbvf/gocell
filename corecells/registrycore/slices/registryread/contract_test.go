@@ -6,19 +6,33 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
-	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 const contractID = "http.registry.contract.list.v1"
 
+const testTenantStr = "00000000-0000-0000-0000-000000000001"
+
 var testEpoch = mustTime("2026-06-18T00:00:00Z")
+
+func mustTime(s string) time.Time {
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic("mustTime: " + err.Error())
+	}
+	return ts
+}
 
 // mockAuthorizer is a test-only auth.Authorizer returning a fixed Decision.
 type mockAuthorizer struct {
@@ -42,13 +56,16 @@ func denyAuthorizer(reason string) *mockAuthorizer {
 	return &mockAuthorizer{decision: authz.Deny(reason)}
 }
 
-// newMuxOver mounts the list handler over the given registrar under the
-// production-mirroring prefix /api/v1/registry (auth.Mount strips it off
-// Contract.Path exactly as the cellgen route group does). RegisterRoutes installs
-// the registry:read RequirePermission policy.
-func newMuxOver(t *testing.T, registrar *registry.ContractRegistrar) http.Handler {
+// newMuxOver mounts the list handler over the given store under the
+// production-mirroring prefix /api/v1/registry. RegisterRoutes installs the
+// registry:read RequirePermission policy.
+func newMuxOver(t *testing.T, store ports.Registry) http.Handler {
 	t.Helper()
-	svc, err := NewService(registrar)
+	c, err := query.NewCursorCodec(devCursorKey)
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	svc, err := NewService(store, c, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -62,14 +79,18 @@ func newMuxOver(t *testing.T, registrar *registry.ContractRegistrar) http.Handle
 	return mux
 }
 
-func emptyRegistrar() *registry.ContractRegistrar {
-	return registry.NewContractRegistrar(clockmock.New(testEpoch))
+func emptyStore() *mem.Registry {
+	return mem.NewRegistry(clockmock.New(testEpoch))
 }
 
+// adminCtx returns a context with an admin principal, the test tenant, and the
+// given authorizer wired. Both tenant and authorizer are required for the list
+// service to reach the store successfully.
 func adminCtx(authorizer auth.Authorizer) context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
 	})
+	ctx = ctxkeys.WithTenantID(ctx, testTenantStr)
 	return auth.WithAuthorizer(ctx, authorizer)
 }
 
@@ -98,13 +119,20 @@ func TestContractListServe_QuerySchema(t *testing.T) {
 	// cursor: string maxLength 4096
 	c.ValidateQueryParam(t, "cursor", "http.example.foo.v1")
 	c.MustRejectQueryParam(t, "cursor", strings.Repeat("x", 4097)) // over maxLength
+	// state: optional string maxLength 32. The closed value set (submitted…retired)
+	// is enforced in the registryread service via registry.ParseState — NOT a
+	// queryParam enum (metadata.ParamSchema models no enum) — so schema-level
+	// coverage is the maxLength bound; service-level invalid-state → 400 is covered
+	// by TestList_StateFilter_InvalidState.
+	c.ValidateQueryParam(t, "state", "active")
+	c.MustRejectQueryParam(t, "state", strings.Repeat("s", 33)) // over maxLength 32
 }
 
 // TestContractListServe_OK: an authenticated admin (allow PDP) gets a 200 whose
 // body satisfies the paginated response schema (empty page is valid).
 func TestContractListServe_OK(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
-	rec := getList(t, newMuxOver(t, emptyRegistrar()), adminCtx(allowAuthorizer()), "limit=10")
+	rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(allowAuthorizer()), "limit=10")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
@@ -114,7 +142,7 @@ func TestContractListServe_OK(t *testing.T) {
 // TestContractListServe_Unauthenticated: no principal ⇒ RequirePermission 401.
 func TestContractListServe_Unauthenticated(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
-	rec := getList(t, newMuxOver(t, emptyRegistrar()), context.Background(), "")
+	rec := getList(t, newMuxOver(t, emptyStore()), context.Background(), "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
 	}
@@ -124,7 +152,7 @@ func TestContractListServe_Unauthenticated(t *testing.T) {
 // TestContractListServe_Forbidden: authenticated but the PDP denies registry:read ⇒ 403.
 func TestContractListServe_Forbidden(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
-	rec := getList(t, newMuxOver(t, emptyRegistrar()), adminCtx(denyAuthorizer("no registry:read")), "")
+	rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(denyAuthorizer("no registry:read")), "")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
@@ -133,15 +161,59 @@ func TestContractListServe_Forbidden(t *testing.T) {
 
 // TestContractListServe_BadRequest: an out-of-range limit (below the minimum 1 /
 // above the maximum 500) ⇒ 400 from the handler's ParsePageParams, with a shared
-// error envelope. Complements the schema-level MustRejectQueryParam cases with the
-// real HTTP path the contract declares.
+// error envelope.
 func TestContractListServe_BadRequest(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	for _, q := range []string{"limit=0", "limit=501"} {
-		rec := getList(t, newMuxOver(t, emptyRegistrar()), adminCtx(allowAuthorizer()), q)
+		rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(allowAuthorizer()), q)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("query %q: status = %d, want 400; body=%s", q, rec.Code, rec.Body.String())
 		}
 		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	}
+}
+
+// TestContractListServe_StateFilter_Valid: a valid state query parameter returns
+// 200 with a response body that satisfies the contract response schema.
+func TestContractListServe_StateFilter_Valid(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	// Test every valid state enum value returns 200 (empty page is valid).
+	for _, st := range []string{
+		"submitted", "probing", "conformant", "pending-approval",
+		"approved", "rejected", "active", "retired",
+	} {
+		rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(allowAuthorizer()), "state="+st)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("state=%q: status = %d, want 200; body=%s", st, rec.Code, rec.Body.String())
+		}
+		c.ValidateHTTPResponseRecorder(t, rec)
+	}
+}
+
+// TestContractListServe_StateFilter_Invalid: an unknown state value returns 400
+// from the handler's enum guard, with a shared error envelope.
+func TestContractListServe_StateFilter_Invalid(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	for _, q := range []string{"state=bogus", "state=SUBMITTED", "state=unknown"} {
+		rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(allowAuthorizer()), q)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: status = %d, want 400; body=%s", q, rec.Code, rec.Body.String())
+		}
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	}
+}
+
+// TestContractListServe_QuerySchema_State: contract schema validates state
+// string field (positive only — contracttest's inline param schema validates
+// type/length/format but not enum membership; enum enforcement is the handler
+// guard tested by TestContractListServe_StateFilter_Invalid).
+func TestContractListServe_QuerySchema_State(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	// positive: every declared enum value must pass the query param type check
+	for _, valid := range []string{
+		"submitted", "probing", "conformant", "pending-approval",
+		"approved", "rejected", "active", "retired",
+	} {
+		c.ValidateQueryParam(t, "state", valid)
 	}
 }

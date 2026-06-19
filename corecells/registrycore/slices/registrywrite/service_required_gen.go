@@ -4,15 +4,24 @@ package registrywrite
 
 import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // validateRequired verifies every required dependency on the Service struct
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
-	if s.registrar == nil {
+	if validation.IsNilInterface(s.store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"registrywrite.NewService: registrar required")
+			"registrywrite.NewService: store required")
+	}
+	if s.gate == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"registrywrite.NewService: gate required")
+	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"registrywrite: TxRunner required; use WithTxManager")
 	}
 	return nil
 }
