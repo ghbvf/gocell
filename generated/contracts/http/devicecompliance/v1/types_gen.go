@@ -35,7 +35,7 @@ type ResponseData struct {
 	Firewall       ResponseDataFirewall       `json:"firewall"`
 	// format: date-time
 	ObservedAt string `json:"observedAt"`
-	TenantID   string `json:"tenantId,omitempty"`
+	TenantID   string `json:"tenantId"`
 }
 
 // ResponseDataDiskEncryption enumerates the closed value-set of the diskEncryption field.

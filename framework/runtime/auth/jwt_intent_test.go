@@ -347,5 +347,37 @@ func TestJWTVerifier_VerifyIntent_RejectsNonStringTypHeader(t *testing.T) {
 		"non-string typ header must be rejected and must not panic")
 }
 
+// TestJWTIntent_EnrollmentTypMapping pins the enroll+jwt ↔ enrollment typ mapping
+// (both directions) so a device first-enrollment credential survives the
+// typ↔token_use agreement check, and a typ/intent confusion is rejected.
+func TestJWTIntent_EnrollmentTypMapping(t *testing.T) {
+	assert.Equal(t, "enroll+jwt", TypHeaderForIntent(TokenIntentEnrollment),
+		"enrollment credential must carry typ=enroll+jwt")
+
+	intent, ok := intentForJWTTyp("enroll+jwt")
+	require.True(t, ok, "enroll+jwt must map back to an intent")
+	assert.Equal(t, TokenIntentEnrollment, intent)
+
+	// enroll+jwt must NOT decode to access, and at+jwt must NOT decode to enrollment.
+	accessIntent, ok := intentForJWTTyp("at+jwt")
+	require.True(t, ok)
+	assert.NotEqual(t, TokenIntentEnrollment, accessIntent)
+}
+
+// TestJWTVerifier_VerifyIntent_RejectsEnrollmentTypAtAccessPath verifies that a
+// token whose typ/token_use say enrollment is rejected when access is expected
+// (the JOSE-header channel of the non-reuse guarantee).
+func TestJWTVerifier_VerifyIntent_RejectsEnrollmentTypAtAccessPath(t *testing.T) {
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	enroll := signRawIntentJWT(t, ks, string(TokenIntentEnrollment), "enroll+jwt", []string{"gocell"})
+
+	_, err = verifier.VerifyIntent(context.Background(), enroll, TokenIntentAccess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
+}
+
 // Compile-time check: *JWTVerifier satisfies IntentTokenVerifier.
 var _ IntentTokenVerifier = (*JWTVerifier)(nil)

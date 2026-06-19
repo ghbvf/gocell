@@ -172,6 +172,67 @@ func TestApplyResponseProjection_FailClosed(t *testing.T) {
 	})
 }
 
+// TestApplyResponseProjection_RejectsOptionalColumn pins the #2359 invariant: a
+// responseProjection item schema's `required` MUST list every item property (no
+// optional / not-in-required column). The full-column-set ToMap (#1875) emits every
+// key unconditionally, so an "optional" projection column is a category error — its
+// key is never actually absent on the wire, yet schema-validating clients are told it
+// MAY be absent, and its Go zero/nil value ("" / null) reaches the wire where it can
+// silently violate the schema. The codegen build-time check (Hard) is the schema
+// truth-source closure; its CI mirror is the archtest
+// PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01.
+func TestApplyResponseProjection_RejectsOptionalColumn(t *testing.T) {
+	t.Parallel()
+	// Response.Data -> ResponseData item DTO whose `label` column is NOT required.
+	spec := &ContractGenSpec{
+		ContractID: "http.test.optional.v1",
+		Endpoint:   &httpEndpointSpec{ResponseProjection: true},
+		DTOs: []DTOSpec{
+			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*ResponseData", ItemDTO: "ResponseData"}}},
+			{Name: "ResponseData", Fields: []DTOField{
+				{Name: "ID", BareJSONTag: "id", GoType: "string", Required: true},
+				{Name: "Label", BareJSONTag: "label", GoType: "string", Required: false}, // optional → violation
+			}},
+		},
+	}
+	err := applyResponseProjection(spec)
+	if err == nil {
+		t.Fatal("applyResponseProjection must reject a responseProjection item with an optional (not-in-required) column")
+	}
+	for _, want := range []string{"http.test.optional.v1", "label", "required"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q (contract id + offending column + the required-completeness reason)", err.Error(), want)
+		}
+	}
+}
+
+// TestApplyResponseProjection_AllRequiredColumnsOK is the GREEN control: an item DTO
+// whose every column is required (including a required-nullable column, whose
+// schema-valid "no value" is JSON null) passes the #2359 check and is flagged
+// EmitToMap. A nullable column is `Required: true` in the schema-required sense (its
+// key is always present) — value-optionality is expressed by Nullable, not by absence
+// from `required`.
+func TestApplyResponseProjection_AllRequiredColumnsOK(t *testing.T) {
+	t.Parallel()
+	spec := &ContractGenSpec{
+		ContractID: "http.test.allrequired.v1",
+		Endpoint:   &httpEndpointSpec{ResponseProjection: true},
+		DTOs: []DTOSpec{
+			{Name: "Response", Fields: []DTOField{{Name: "Data", GoType: "*ResponseData", ItemDTO: "ResponseData"}}},
+			{Name: "ResponseData", Fields: []DTOField{
+				{Name: "ID", BareJSONTag: "id", GoType: "string", Required: true},
+				{Name: "OccurredAt", BareJSONTag: "occurredAt", GoType: "*string", Required: true, Nullable: true},
+			}},
+		},
+	}
+	if err := applyResponseProjection(spec); err != nil {
+		t.Fatalf("all-required (incl. required-nullable) item must pass: %v", err)
+	}
+	if !spec.DTOs[1].EmitToMap {
+		t.Error("item DTO must still be flagged EmitToMap on the happy path")
+	}
+}
+
 // TestCollectDTOs_ProjectionItemMetadata pins the STRUCTURED projection-item
 // derivation at its source: collectDTOs must set DTOField.ItemDTO (the generated
 // item DTO name) and IsList directly from the schema shape, so the downstream
@@ -243,12 +304,21 @@ func TestIndexOfDTO(t *testing.T) {
 // each column's ZERO VALUE is schema-valid on the wire is proven at the contract
 // level — TestHttpAuditListV1Serve_ZeroOccurredAt_NullValidates validates a full
 // zero-value row against the real response schema (string→"", date-time→null). The
-// systematic guard that no optional projection column can have a schema-invalid zero
-// (e.g. an optional array/object whose nil marshals to JSON null) is tracked as a
-// follow-up; no production responseProjection contract has such a column today.
+// systematic guard that no optional projection column can carry a schema-invalid zero
+// is now closed (#2359): requireProjectionItemFullColumnSet (codegen build-fail) +
+// archtest PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01 forbid any optional
+// (not-in-`required`) projection column, so value-optionality is expressible only as a
+// schema-valid nullable. The residual (a required array/object whose producer emits
+// nil→null) is documented in ADR 202606112000-1350 §Amendment #2359.
 func TestToMap_FullColumnSet(t *testing.T) {
 	t.Parallel()
 
+	// This spec is rendered directly via renderTypes — it does NOT pass through
+	// applyResponseProjection, so the optional (Required:false) columns below are
+	// intentional ToMap-rendering inputs and do not trip requireProjectionItemFullColumnSet
+	// (#2359). The point here is that ToMap emits EVERY column unconditionally regardless
+	// of omitempty; full-column-set required-completeness is covered separately by
+	// TestApplyResponseProjection_RejectsOptionalColumn.
 	spec := &ContractGenSpec{
 		PackageName: "testpkg",
 		ContractID:  "http.test.x.v1",

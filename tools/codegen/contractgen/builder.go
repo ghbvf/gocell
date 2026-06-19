@@ -473,6 +473,9 @@ func applyResponseProjection(spec *ContractGenSpec) error {
 	if itemIdx < 0 {
 		return fmt.Errorf("contractgen build: %q responseProjection item DTO %q not found", spec.ContractID, dataField.ItemDTO)
 	}
+	if err := requireProjectionItemFullColumnSet(spec.ContractID, spec.DTOs[itemIdx]); err != nil {
+		return err
+	}
 	if dataField.IsList {
 		dataField.GoType = "[]projection.ResourceProjection"
 	} else {
@@ -508,6 +511,42 @@ func deriveClientDecode(spec *ContractGenSpec) {
 			return
 		}
 	}
+}
+
+// requireProjectionItemFullColumnSet enforces the #2359 schema truth-source closure:
+// a responseProjection item schema's `required` MUST list EVERY item column (no
+// optional / not-in-`required` column). The full-column-set ToMap (#1875) emits every
+// key unconditionally, so an "optional" projection column is a category error — its
+// key is never absent on the wire, yet a schema-validating client is told it MAY be,
+// and its Go zero/nil value ("" / null) reaches the wire where it can silently violate
+// the schema. Value-optionality is expressed by `nullable` (`["scalar","null"]`,
+// #1875), never by absence from `required`. This is the Hard (build-fail) leg of the
+// closure; its CI mirror is archtest PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01.
+//
+// Scope: this checks the TOP-LEVEL item columns only (the keys ToMap emits). A nested
+// object/array column's OWN optional sub-fields are NOT recursed — a nested value
+// serializes via its struct (not ToMap), so its sub-field presence is a normal schema
+// concern, not the full-column-set invariant. Residual (NOT covered, by design — see
+// ADR 202606112000-1350 §Amendment #2359): a required non-nullable array (`[]T` nil →
+// JSON null) / object (`*T` nil → null), or a required non-nullable `format` column
+// whose producer emits "", can still produce a schema-invalid wire value — outside
+// schema reach (declare empty-able columns nullable; array/object nil→`[]`/`{}`
+// normalization is a tracked follow-up).
+func requireProjectionItemFullColumnSet(contractID string, item DTOSpec) error {
+	var optional []string
+	for _, f := range item.Fields {
+		if !f.Required {
+			optional = append(optional, f.BareJSONTag)
+		}
+	}
+	if len(optional) > 0 {
+		return fmt.Errorf("contractgen build: %q responseProjection item %q has optional (not-in-`required`) "+
+			"column(s) %v — full-column-set ToMap emits every key, so the item schema `required` MUST list every "+
+			"property; add the column(s) to the item `required` (declare nullable [\"scalar\",\"null\"] for "+
+			"empty-able values), then re-run `gocell generate contract` (#2359)",
+			contractID, item.Name, optional)
+	}
+	return nil
 }
 
 // indexOfDTO returns the index of the DTO named name, or -1.

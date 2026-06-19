@@ -14,7 +14,8 @@
         "status",
         "notBefore",
         "notAfter",
-        "epoch"
+        "epoch",
+        "renewalTime"
       ],
       "properties": {
         "deviceId": {

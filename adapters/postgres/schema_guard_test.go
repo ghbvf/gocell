@@ -113,8 +113,12 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// reads (#1810). Both steps are wrapped in IF EXISTS guards — inert where the role
 	// is absent. schema_guard.go verifyRLS expects this second policy ONLY when
 	// gocell_audit_admin is provisioned, preserving the #1622 F1 invariant.
-	assert.Equal(t, int64(65), v,
-		"expected version should be exactly 65 (current migration max — 065_audit_admin_read_role)")
+	// 066 creates contract_registrations + contract_registration_events (runtime
+	// contract registry store, #2236 303-US5): both tenant-scoped under
+	// tenant_isolation; the history table has UPDATE/DELETE revoked from gocell_app
+	// (append-only). Registered in expectedRLSTables (verifyRLS).
+	assert.Equal(t, int64(66), v,
+		"expected version should be exactly 66 (current migration max — 066_create_contract_registrations)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

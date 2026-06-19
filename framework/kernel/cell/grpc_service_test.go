@@ -118,6 +118,18 @@ func TestRegistryRecorder_GRPCService_ValidateError(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestGRPCServiceSpec_Validate_PasswordResetExemptMethods verifies that a spec
+// carrying PasswordResetExemptMethods passes Validate (#1382): the field is optional
+// and additive, and Validate checks only the required fields (ContractID, CellID,
+// Listener, Register). This mirrors the symmetric PublicMethods acceptance test.
+func TestGRPCServiceSpec_Validate_PasswordResetExemptMethods(t *testing.T) {
+	t.Parallel()
+	spec := validGRPCSpec("grpc.my.service.v1")
+	spec.PasswordResetExemptMethods = []string{"/my.Service/ResetPassword"}
+	require.NoError(t, spec.Validate(),
+		"GRPCServiceSpec with PasswordResetExemptMethods must pass Validate")
+}
+
 // TestRegistryRecorder_GRPCService_AfterSnapshot_Panics verifies that calling
 // GRPCService after Snapshot() has been called panics with the registry-finalized panic.
 func TestRegistryRecorder_GRPCService_AfterSnapshot_Panics(t *testing.T) {

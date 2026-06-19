@@ -61,6 +61,13 @@ type ServiceRegistrar struct {
 	// an absent method is authed (fail-closed). Populated during Register, like
 	// the methods attribution map.
 	publicMethods map[string]struct{}
+	// passwordResetExemptMethods is the set of FULL method names
+	// (/{ServiceName}/{method}) declared exempt from the password-reset gate by a
+	// spec's GRPCServiceSpec.PasswordResetExemptMethods (#1382). It is the single
+	// runtime source the auth interceptor consults via IsPasswordResetExemptMethod;
+	// an absent method is blocked when the principal requires a password reset
+	// (fail-closed). Populated during Register, like the other overlay maps.
+	passwordResetExemptMethods map[string]struct{}
 	// methodPermissions maps each non-public FULL method name to the sealed
 	// authz.Permission it requires (#2008), resolved from
 	// GRPCServiceSpec.MethodPermissions at Register time (a string that is not a
@@ -125,11 +132,12 @@ type serviceOwner struct {
 // has populated it during the bootstrap drain.
 func NewServiceRegistrar(opts ...RegistrarOption) *ServiceRegistrar {
 	r := &ServiceRegistrar{
-		methods:           make(map[string]string),
-		publicMethods:     make(map[string]struct{}),
-		methodPermissions: make(map[string]authz.Permission),
-		methodResources:   make(map[string]string),
-		names:             make(map[string]serviceOwner),
+		methods:                    make(map[string]string),
+		publicMethods:              make(map[string]struct{}),
+		passwordResetExemptMethods: make(map[string]struct{}),
+		methodPermissions:          make(map[string]authz.Permission),
+		methodResources:            make(map[string]string),
+		names:                      make(map[string]serviceOwner),
 	}
 	for _, o := range opts {
 		o(r)
@@ -349,6 +357,23 @@ func (r *ServiceRegistrar) recordMethodOverlays(spec cell.GRPCServiceSpec, scope
 		}
 		r.methodResources[method] = field
 	}
+
+	// IsPasswordResetExemptMethod bypass set (#1382): each entry must name a method
+	// this spec registered (a stale key would carry an inert exempt entry). An exempt
+	// method is non-public and still requires a permission (the two are orthogonal and
+	// must coexist — enforced at authoring via the schema/cellgen path).
+	for _, m := range spec.PasswordResetExemptMethods {
+		if _, ok := scoped.localMethods[m]; !ok {
+			panic(panicregister.Approved("grpc-registrar-unknown-method-key",
+				errcode.Assertion(
+					"grpc: GRPCServiceSpec.PasswordResetExemptMethods[%q] does not name a method "+
+						"registered by this spec (contractID=%q, cellID=%q); the password-reset-exempt "+
+						"overlay must reference a real RPC — declare it via "+
+						"endpoints.grpc.methods[].passwordResetExempt",
+					m, spec.ContractID, spec.CellID)))
+		}
+		r.passwordResetExemptMethods[m] = struct{}{}
+	}
 }
 
 // CellIDForMethod returns the cellID attributed to fullMethod (e.g.
@@ -372,6 +397,22 @@ func (r *ServiceRegistrar) IsPublicMethod(fullMethod string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	_, ok := r.publicMethods[fullMethod]
+	return ok
+}
+
+// IsPasswordResetExemptMethod reports whether fullMethod (e.g.
+// "/grpc.health.v1.Health/Check") was declared exempt from the password-reset gate
+// via a spec's GRPCServiceSpec.PasswordResetExemptMethods (#1382). The fail-closed
+// default is false: an unknown or undeclared method is blocked when the principal
+// requires a password reset. Safe for concurrent use. The auth interceptor installs
+// this as its WithPasswordResetExempt predicate (chain.go / stream.go), making the
+// registrar the single runtime source of the password-reset-exempt set — the fourth
+// auth dimension sibling of IsPublicMethod, PermissionForMethod, and
+// ResourceFieldForMethod.
+func (r *ServiceRegistrar) IsPasswordResetExemptMethod(fullMethod string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.passwordResetExemptMethods[fullMethod]
 	return ok
 }
 

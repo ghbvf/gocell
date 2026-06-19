@@ -72,7 +72,13 @@ func TestAuditQueryColumnMaskE2E(t *testing.T) {
 		outbox.DemoCellTxManager(), query.RunModeProd)
 	require.NoError(t, err)
 
-	h := auditquery.NewHandler(svc)
+	// Contract-derived get gate (#2355): the published NewHandler takes the
+	// cell-level MethodPolicyResolver. This e2e drives the list route (column
+	// masking), but NewHandler also wires the get route's audit:read gate from the
+	// http.audit.get.v1 overlay, so supply the same one-entry resolver cellgen
+	// builds in production.
+	resolver := auth.NewStaticMethodPolicyResolver(map[string]string{"http.audit.get.v1": "audit:read"})
+	h := auditquery.NewHandler(svc, resolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
 		require.NoError(t, h.RegisterRoutes(sub))

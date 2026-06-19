@@ -16,8 +16,10 @@ package contracttest_test
 // security (Authorize) decision, and an absent optional enum would marshal to ""
 // through the responseProjection ToMap path (codex F1), which is not a valid enum
 // member. Making them required + unknown closes that schema-invalid-wire gap.
-// observedAt is a required freshness anchor. tenantId stays optional (omitted for
-// single-tenant deployments) and is framework-produced, never a client param.
+// observedAt is a required freshness anchor. tenantId is now also required
+// (full-column-set schema-truth-source closure, #2359): the projection column key is
+// always present on the wire. It is framework-produced (never a client param); a
+// single-tenant deployment still emits it (its tenant id), not an absent key.
 //
 // ref: docs/plans/specs/1895-device-identity-cert-framework/spec.md FR-013
 // ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
@@ -41,12 +43,14 @@ func TestDeviceCompliance_V1(t *testing.T) {
 	// not-reported posture → explicit "unknown" (required, never absent)
 	c.ValidateResponse(t, []byte(`{"data":{
 		"deviceId":"dev-1","compliant":false,"observedAt":"2026-06-13T00:00:00Z",
-		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown"
+		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown",
+		"tenantId":"t-1"
 	}}`))
 	// mixed posture
 	c.ValidateResponse(t, []byte(`{"data":{
 		"deviceId":"dev-1","compliant":false,"observedAt":"2026-06-13T00:00:00Z",
-		"diskEncryption":"disabled","antivirus":"enabled","patch":"outOfDate","firewall":"unknown"
+		"diskEncryption":"disabled","antivirus":"enabled","patch":"outOfDate","firewall":"unknown",
+		"tenantId":"t-1"
 	}}`))
 
 	// parameter errors — bad value on each posture attribute (closed enum; full set, one bad)
@@ -56,30 +60,35 @@ func TestDeviceCompliance_V1(t *testing.T) {
 		`"diskEncryption":"unknown","antivirus":"unknown","patch":"bogus","firewall":"unknown"`,
 		`"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"bogus"`,
 	} {
-		c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z",`+posture+`}}`))
+		c.MustRejectResponse(t, []byte(`{"data":{`+
+			`"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",`+posture+`}}`))
 	}
 	// regression (codex F1): empty string is NOT a valid enum — required posture closes the
 	// optional-enum + ToMap-ignores-omitempty schema-invalid-wire gap.
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z",`+
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",`+
 		`"diskEncryption":"","antivirus":"unknown","patch":"unknown","firewall":"unknown"}}`))
 	// missing a required posture attribute (each posture field is now required)
-	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z",`+
+	c.MustRejectResponse(t, []byte(`{"data":{"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",`+
 		`"antivirus":"unknown","patch":"unknown","firewall":"unknown"}}`)) // missing diskEncryption
 
 	// parameter errors — wrong type + missing base required + missing data
 	// (full posture so the rejection isolates the base-field problem)
 	c.MustRejectResponse(t, []byte(`{"data":{
-		"deviceId":"dev-1","compliant":"yes","observedAt":"2026-06-13T00:00:00Z",
+		"deviceId":"dev-1","compliant":"yes","observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",
 		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown"
 	}}`)) // compliant must be boolean
 	c.MustRejectResponse(t, []byte(`{"data":{
-		"compliant":true,"observedAt":"2026-06-13T00:00:00Z",
+		"compliant":true,"observedAt":"2026-06-13T00:00:00Z","tenantId":"t-1",
 		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown"
 	}}`)) // missing deviceId
 	c.MustRejectResponse(t, []byte(`{"data":{
-		"deviceId":"dev-1","compliant":true,
+		"deviceId":"dev-1","compliant":true,"tenantId":"t-1",
 		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown"
 	}}`)) // missing observedAt
+	c.MustRejectResponse(t, []byte(`{"data":{
+		"deviceId":"dev-1","compliant":true,"observedAt":"2026-06-13T00:00:00Z",
+		"diskEncryption":"unknown","antivirus":"unknown","patch":"unknown","firewall":"unknown"
+	}}`)) // missing tenantId (now required, #2359)
 	c.MustRejectResponse(t, []byte(`{}`)) // missing data (top-level required)
 
 	// query param validation (FMT-25 maxLength)

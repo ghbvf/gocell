@@ -990,16 +990,17 @@ func buildGrpcServiceSpecFromCU(
 	// but the proto lives at "<moduleBase>/contracts/grpc/…" (#1151).
 	contract := p.Contracts[cu.Contract] // non-nil: validateGrpcContractEndpoint succeeded above
 	return GrpcServiceGenSpec{
-		ContractID:        cu.Contract,
-		SliceID:           sliceID,
-		HandlerField:      fieldName,
-		RegisterFunc:      "Register" + simpleName + "Server",
-		ListenerConst:     "cell.PrimaryListener",
-		ProtoRel:          metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
-		Service:           g.Service,
-		PublicMethods:     grpcPublicMethods(g),
-		MethodPermissions: grpcMethodPermissions(g),
-		MethodResources:   grpcMethodResources(g),
+		ContractID:                 cu.Contract,
+		SliceID:                    sliceID,
+		HandlerField:               fieldName,
+		RegisterFunc:               "Register" + simpleName + "Server",
+		ListenerConst:              "cell.PrimaryListener",
+		ProtoRel:                   metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
+		Service:                    g.Service,
+		PublicMethods:              grpcPublicMethods(g),
+		MethodPermissions:          grpcMethodPermissions(g),
+		MethodResources:            grpcMethodResources(g),
+		PasswordResetExemptMethods: grpcPasswordResetExemptMethods(g),
 	}, nil
 }
 
@@ -1057,6 +1058,23 @@ func grpcMethodResources(g *metadata.GRPCTransportMeta) []MethodResource {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FullMethod < out[j].FullMethod })
+	return out
+}
+
+// grpcPasswordResetExemptMethods composes the per-method password-reset-exempt
+// overlay (#1382) into FULL method names (/{Service}/{Method}) for the
+// passwordResetExempt:true entries, keyed identically to the runtime registrar's
+// attribution map so a declared-exempt method matches the served RPC exactly.
+// Referential integrity (each name ∈ the proto method set) is the contractgen
+// pre-pass's job; here we only compose. Returns nil when no method is exempt (the
+// fail-closed default), so the template omits the PasswordResetExemptMethods field.
+func grpcPasswordResetExemptMethods(g *metadata.GRPCTransportMeta) []string {
+	var out []string
+	for _, m := range g.Methods {
+		if m.PasswordResetExempt {
+			out = append(out, "/"+g.Service+"/"+m.Name)
+		}
+	}
 	return out
 }
 
@@ -1197,6 +1215,30 @@ func grpcMethodSimpleName(full string) string {
 //     same FullMethod), or the device owner is silently locked out (fullMethod never
 //     equals device-id, so the PDP ownership rule never fires). Conversely, a coarse
 //     permission must NOT declare a resource selector (it is ignored, a misconfiguration).
+//
+// validateGrpcExemptReferential checks each passwordResetExempt overlay entry (#1382)
+// names a real proto RPC. Exempt entries accumulate NOTHING (unlike public/permission,
+// which feed `covered`): a reset-exempt method is non-public and still requires a
+// permission — that permission is what covers it (#2008 completeness). Accumulating the
+// exempt entry into `covered` would mask a reset-exempt-only method with no permission
+// (a dead 403 at the ABAC gate). Pure referential guard, factored out of
+// validateGrpcMethodOverlayAgainstProto to keep that function under the
+// cognitive-complexity limit (the sibling of FMT-41's validateFMT41Resource split).
+func validateGrpcExemptReferential(gs *GrpcServiceGenSpec, protoMethods map[string]struct{}) error {
+	for _, full := range gs.PasswordResetExemptMethods {
+		name := grpcMethodSimpleName(full)
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods passwordResetExempt entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
+	}
+	return nil
+}
+
 func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
 	protoMethods := make(map[string]struct{}, len(info.Methods))
 	for _, pm := range info.Methods {
@@ -1247,6 +1289,12 @@ func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contract
 					errcode.PublicString("method", name)))
 		}
 		resourceByFullMethod[mr.FullMethod] = mr.Field
+	}
+
+	// Referential check for passwordResetExempt entries (#1382). Factored into a helper
+	// to keep this function under the cognitive-complexity limit.
+	if err := validateGrpcExemptReferential(gs, protoMethods); err != nil {
+		return err
 	}
 
 	// Completeness (#2008): every proto RPC must be public or permissioned.

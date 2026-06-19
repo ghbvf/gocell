@@ -51,10 +51,12 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 	rd := devicestate.ResponseData{
 		DeviceID: req.ID,
 		State:    devicestate.ResponseDataStateUnknown,
-		// TenantID is intentionally left empty: without a device→tenant binding data
-		// source, back-filling the caller's JWT tenant claim would be misleading (that
-		// is the caller's tenant, not the device's tenant). Honest omission until a
-		// real provider supplies the device tenant context.
+		// TenantID is intentionally left nil → serializes as JSON null (the column is
+		// nullable per #2359): without a device→tenant binding data source, back-filling
+		// the caller's JWT tenant claim would be misleading (that is the caller's tenant,
+		// not the device's tenant). null is the honest "no binding" value (not an empty
+		// string that falsely reads as a real tenant id), present until a real provider
+		// supplies the device tenant context.
 		ObservedAt: s.clock.Now().UTC().Format(time.RFC3339),
 	}
 	// Identity projection: no field masking obligation on this read (matches the

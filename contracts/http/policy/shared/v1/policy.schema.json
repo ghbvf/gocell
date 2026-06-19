@@ -3,7 +3,7 @@
   "title": "policy",
   "description": "ABAC Policy response object. Deliberately carries no createdAt/updatedAt — the Policy domain uses CAS version for conflict detection, not timestamps.",
   "type": "object",
-  "required": ["id", "name", "version", "rules"],
+  "required": ["id", "name", "description", "version", "rules"],
   "additionalProperties": false,
   "properties": {
     "id": {

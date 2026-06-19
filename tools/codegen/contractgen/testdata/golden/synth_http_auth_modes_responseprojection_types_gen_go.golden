@@ -26,9 +26,9 @@ type Response struct {
 // ResponseData is a generated DTO for contract http.sample.responseprojection.v1.
 type ResponseData struct {
 	ID    string   `json:"id"`
-	Label string   `json:"label,omitempty"`
-	Score int64    `json:"score,omitempty"`
-	Tags  []string `json:"tags,omitempty"`
+	Label string   `json:"label"`
+	Score int64    `json:"score"`
+	Tags  []string `json:"tags"`
 	// format: date-time
 	LastSeenAt *string `json:"lastSeenAt"`
 }

@@ -14,8 +14,8 @@ labels（`epic` + `backlog` + `area-XX` + `pri-pX`）与 title `[EPIC] <能力�
 
 ## 实施顺序
 
-<!-- Wave 字段派生视图，自动重生成；初次可留空。滚动：仅列 OPEN 的 Wave 1-4，已完成不列，超窗(>W4)单列 -->
+<!-- pm:epic-wave 评论承载实施顺序；技能只追加评论，不写 Project Wave 字段、不改 epic body。滚动：仅列 OPEN 的 Wave 1-4，已完成与超窗(>W4)单列 -->
 
 Wave 1: #aaa, #bbb
 Wave 2: #ccc（blocked-by #aaa）
-超窗(>W4，未入字段): #fff
+超窗(>W4): #fff

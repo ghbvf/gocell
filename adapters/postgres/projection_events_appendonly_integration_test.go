@@ -28,33 +28,14 @@ import (
 // privileges.
 func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 	ctx := context.Background()
-	const (
-		appRole = "gocell_app"
-		appPass = "projevents_appkey"
-	)
 
 	// Fresh empty DB; the pool connects as the owning/migrating superuser.
 	dsn := sharedPG.EmptyDSN(t)
 	owner := openPerTestPool(t, dsn)
 
-	// Reproduce 10-restricted-role.sh ordering: role + default DML grant BEFORE
-	// migrations, so projection_events is born with UPDATE/DELETE for gocell_app
-	// and migration 058's REVOKE has something to remove. ALTER DEFAULT PRIVILEGES
-	// (no FOR ROLE) targets the current migrating role, matching deploy where the
-	// table owner grants to gocell_app.
-	provision := []string{
-		`DO $$ BEGIN
-		   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '` + appRole + `') THEN
-		     CREATE ROLE ` + appRole + ` LOGIN PASSWORD '` + appPass + `' NOSUPERUSER NOBYPASSRLS;
-		   END IF;
-		 END $$;`,
-		`GRANT USAGE ON SCHEMA public TO ` + appRole,
-		`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ` + appRole,
-	}
-	for _, s := range provision {
-		_, err := owner.DB().Exec(ctx, s)
-		require.NoErrorf(t, err, "provision serving role\nstmt: %s", s)
-	}
+	// Provision the shared serving role + default DML grant BEFORE migrations, so
+	// projection_events is born with UPDATE/DELETE that migration 058's REVOKE removes.
+	provisionServingRole(t, ctx, owner)
 
 	// Run the full platform migration set (058 creates projection_events and, with
 	// gocell_app present, revokes UPDATE/DELETE).
@@ -72,7 +53,7 @@ func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 		        has_table_privilege($1, 'projection_events', 'INSERT'),
 		        has_table_privilege($1, 'projection_events', 'UPDATE'),
 		        has_table_privilege($1, 'projection_events', 'DELETE')`,
-		appRole).Scan(&canSelect, &canInsert, &canUpdate, &canDelete))
+		servingRoleName).Scan(&canSelect, &canInsert, &canUpdate, &canDelete))
 	assert.True(t, canSelect, "serving role must keep SELECT (replay/Position read)")
 	assert.True(t, canInsert, "serving role must keep INSERT (same-tx journaling writer)")
 	assert.False(t, canUpdate, "append-only: serving role UPDATE must be revoked (058)")
@@ -80,7 +61,7 @@ func TestProjectionEvents_AppendOnly_ServingRoleRevoked(t *testing.T) {
 
 	// Behavioral assertion: connect AS gocell_app and prove it at the wire — INSERT
 	// succeeds, UPDATE/DELETE are denied by the engine (42501 insufficient_privilege).
-	app, err := NewPool(ctx, Config{DSN: swapUserInDSN(t, dsn, appRole, appPass)})
+	app, err := NewPool(ctx, Config{DSN: swapUserInDSN(t, dsn, servingRoleName, servingRolePassword)})
 	require.NoError(t, err, "open serving-role pool")
 	defer func() { _ = app.Close(ctx) }()
 

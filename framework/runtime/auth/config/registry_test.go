@@ -271,6 +271,69 @@ func TestNewJWTIssuerFromRegistry_NilRegistry(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewEnrollmentCredentialIssuerFromRegistry_Success(t *testing.T) {
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
+	reg, err := config.New(clock.Real(), config.Config{
+		Issuer:    "gocell",
+		Audiences: []string{"gocell-est"},
+		KeyProv:   ks,
+		KeyStore:  ks,
+		RealMode:  true,
+	})
+	require.NoError(t, err)
+
+	iss, err := config.NewEnrollmentCredentialIssuerFromRegistry(reg)
+	require.NoError(t, err)
+	require.NotNil(t, iss)
+
+	tok, err := iss.Issue("11111111-1111-1111-1111-111111111111", "device-1")
+	require.NoError(t, err)
+
+	// End-to-end: the registry-baked audience lets a registry verifier accept it.
+	jwtVer, err := config.NewJWTVerifierFromRegistry(reg)
+	require.NoError(t, err)
+	ver, err := auth.NewEnrollmentCredentialVerifier(jwtVer)
+	require.NoError(t, err)
+	id, err := ver.Verify(context.Background(), tok)
+	require.NoError(t, err)
+	assert.Equal(t, "device-1", id.Subject())
+}
+
+func TestNewEnrollmentCredentialIssuerFromRegistry_NilRegistry(t *testing.T) {
+	_, err := config.NewEnrollmentCredentialIssuerFromRegistry(nil)
+	require.Error(t, err)
+}
+
+func TestNewEnrollmentCredentialIssuerFromRegistry_NilKeyProv(t *testing.T) {
+	reg, err := config.New(clock.Real(), config.Config{
+		Issuer:    "gocell",
+		Audiences: []string{"gocell-est"},
+		KeyProv:   nil,
+		RealMode:  false,
+	})
+	require.NoError(t, err)
+	_, err = config.NewEnrollmentCredentialIssuerFromRegistry(reg)
+	require.Error(t, err, "nil KeyProv must return error")
+}
+
+// TestNewEnrollmentCredentialIssuerFromRegistry_EmptyAudienceFailsClosed is the
+// core F2 fix: an enrollment issuer constructed with no audience would mint
+// credentials every audience-requiring verifier rejects — the factory turns that
+// runtime 401 footgun into a startup error.
+func TestNewEnrollmentCredentialIssuerFromRegistry_EmptyAudienceFailsClosed(t *testing.T) {
+	ks, _, _ := keystest.MustNewKeySet(clock.Real())
+	reg, err := config.New(clock.Real(), config.Config{
+		Issuer:    "gocell",
+		Audiences: nil, // non-real mode allows empty audience at New; the factory must still reject
+		KeyProv:   ks,
+		RealMode:  false,
+	})
+	require.NoError(t, err)
+	_, err = config.NewEnrollmentCredentialIssuerFromRegistry(reg)
+	require.Error(t, err, "empty audience must fail-closed at enrollment issuer construction")
+	assert.Contains(t, err.Error(), "ERR_AUTH_VERIFIER_CONFIG")
+}
+
 // TestNewJWTIssuerFromRegistry_NilKeyProv returns an error when KeyProv is nil.
 func TestNewJWTIssuerFromRegistry_NilKeyProv(t *testing.T) {
 	reg, err := config.New(clock.Real(), config.Config{

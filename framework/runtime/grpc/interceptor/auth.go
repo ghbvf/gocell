@@ -194,23 +194,34 @@ func WithPublicMethod(pred func(fullMethod string) bool) AuthOption {
 	}
 }
 
-// WithPasswordResetExempt installs a predicate marking RPC methods exempt from
-// the password-reset gate (the gRPC analog of the HTTP route-based exempt
-// matcher). The default (nil predicate) is fail-closed — a reset-required token
-// is rejected on every method. Passing a nil predicate is a no-op; any
-// previously installed predicate is retained.
+// WithPasswordResetExempt adds pred to the predicates marking RPC methods exempt
+// from the password-reset gate (the gRPC analog of the HTTP route-based exempt
+// matcher). Multiple WithPasswordResetExempt options COMPOSE: a method is exempt
+// if ANY installed predicate returns true — marking methods exempt is additive,
+// not last-wins. The default (no predicate) is fail-closed: a reset-required token
+// is rejected on every method. A nil predicate is a no-op.
 //
-// NOTE the deliberate asymmetry with WithPublicMethod: this is LAST-WINS (a later
-// non-nil predicate replaces the earlier one), NOT OR-compose. Password-reset
-// exemption has a single source — there is no always-on registrar predicate to
-// union with — so multiple sources would be a configuration conflict, not an
-// additive set. WithPublicMethod composes (OR) precisely because the registrar
-// (#1675) is an always-present second source.
+// In production the registrar is the SINGLE source of the password-reset-exempt set
+// (#1382): runtime/grpc/interceptor/chain.go installs
+// WithPasswordResetExempt(reg.IsPasswordResetExemptMethod) (derived from each cell's
+// endpoints.grpc.methods[].passwordResetExempt overlay), and
+// GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01 forbids any other production reference
+// to WithPasswordResetExempt — so the composed union has exactly one member. Test
+// harnesses may OR-in additional exempt methods for synthetic services not backed by
+// a contract; the union semantics make that safe without weakening the production
+// single-source. (This OR-compose design mirrors WithPublicMethod (#1675); see its
+// godoc for the rationale.)
 func WithPasswordResetExempt(pred func(fullMethod string) bool) AuthOption {
 	return func(c *authConfig) {
-		if pred != nil {
-			c.passwordResetExempt = pred
+		if pred == nil {
+			return
 		}
+		if c.passwordResetExempt == nil {
+			c.passwordResetExempt = pred
+			return
+		}
+		prev := c.passwordResetExempt
+		c.passwordResetExempt = func(m string) bool { return prev(m) || pred(m) }
 	}
 }
 
@@ -238,8 +249,10 @@ func WithPDPAuthorizer(a auth.Authorizer) AuthOption {
 // single runtime source of the method→permission map, the authorization sibling of
 // the WithPublicMethod single source. A nil resolver is a no-op; the default (no
 // resolver) is fail-closed — every non-public method has no mapping → deny.
-// LAST-WINS (not OR-compose): like password-reset exemption, the permission map has
-// a single source, so a second resolver would be a configuration conflict.
+// LAST-WINS (not OR-compose): the permission map is a single registrar-sourced
+// resolver, NOT a predicate set — unlike the OR-composing public-method (#1675) and
+// password-reset-exempt (#1382) predicate sets, a second permission resolver would be
+// a configuration conflict, not an additive union.
 func WithPermissionResolver(r PermissionResolver) AuthOption {
 	return func(c *authConfig) {
 		if r != nil {
@@ -260,7 +273,8 @@ func WithPermissionResolver(r PermissionResolver) AuthOption {
 // PDP, not denied (so admin/operator who ignore the resource still pass). The SOLE installer
 // is chain.go (GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01). A nil resolver is a no-op;
 // the default (no resolver) is the coarse fallback (fullMethod as resource).
-// LAST-WINS: like password-reset exemption, the resource map has a single source.
+// LAST-WINS: the resource map is a single registrar-sourced resolver (like the
+// permission resolver), NOT an OR-composing predicate set.
 func WithResourceResolver(r ResourceResolver) AuthOption {
 	return func(c *authConfig) {
 		if r != nil {
@@ -375,6 +389,8 @@ func authorizeWithPrincipal(
 	}
 
 	if auth.PasswordResetBlocked(principal, callPredicate(cfg.passwordResetExempt, fullMethod)) {
+		slog.InfoContext(ctx, "grpc auth: password reset required — denying request",
+			slog.String("method", fullMethod), slog.String("subject", principal.Subject))
 		return ctx, nil, deniedStatus(codes.PermissionDenied, msgGRPCPasswordResetRequired,
 			reasonPasswordResetRequired, denyMeta(fullMethod, ""))
 	}
