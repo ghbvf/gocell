@@ -150,9 +150,10 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   `clientsOnly`/`serviceOwned`）；缺失（modeless）= codegen generate-time 完整性预检拒绝（**Hard 主载体**，
   与 gRPC `Completeness (#2008)` 同构）+ FMT-42 `gocell validate` 早报（Medium 纵深）。opt-out 必带非空
   `endpoints.http.auth.reason`（ABAC 自证、不带 reason；reason-without-opt-out 亦 forbidden）。判定收口为单一共享
-  oracle `metadata.ClassifyHTTPAuthMode`，**comprehensive 主控制点 = generate 编排层**
-  `cmd/gocell/app.validateProjectHTTPAuthModes`（每个 active codegen http 契约，覆盖 `generate cell`+`contract`），
-  cellgen serve-scan + FMT-42 复用同一 oracle（一处判定三处复用）。冻结迁移 ledger 单源在
+  oracle `metadata.ClassifyHTTPAuthMode`，**comprehensive 主控制点 = 共享 preflight**
+  `metadata.ValidateProjectHTTPAuthModes`（每个 active codegen http 契约），由所有 codegen/verify 入口复用
+  （`gocell generate` / `verify codegen-*` / `verify generated` 的 generatedverify 旁路）；cellgen serve-scan +
+  FMT-42 复用同一 oracle 作 defense / Medium 层（一处判定、多处复用，对标 k8s apiextensions 对象级校验）。冻结迁移 ledger 单源在
   `kernel/metadata/authz_mode.go`（`httpAuthModeMigrationLedger`）；frozen-subset（ledger ⊆ 不可变 37-ID 集，挡
   grow+swap）+ no-stale 由 metadata 测试 + archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守，随 #2355/#2358 迁移收敛到空后删豁免。
   runtime `auth.Mount` 经评估**不承载**此约束（serviceOwned≡nil-policy 设计本意 / operator·internal 鉴权来自

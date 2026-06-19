@@ -110,16 +110,17 @@ proto RPC 必须是 public 或 permissioned，否则 generate 失败）。
 - 非 opt-out 却带 `auth.reason` → `ReasonWithoutOptOut`（forbidden）。
 - ID ∈ 冻结 ledger → OK（豁免，直到 #2355/#2358 迁移）。
 
-**comprehensive 主控制点 = generate 编排层** `cmd/gocell/app` 的 `validateProjectHTTPAuthModes`（在
-`runCodegenGenerate` 内、`parseProject` 后、写盘前），对 `p.Contracts` **每个** active codegen http 契约跑
-classifier——覆盖 `generate cell` **与** `generate contract`（及 verify-generated.sh 的 `--verify` 路径），
-既补上 cellgen serve-scan 漏的「非 served 契约」（F2），也堵 contractgen 路径（F1），且 forbidden 分支
-（reason-without-opt-out）也在 codegen 期拦（F3，由共享 classifier 提供）。`cellgen/builder.go` 的 serve-scan
-（`validateHTTPAuthModeCompleteness`）与治理 FMT-42 复用**同一** classifier，分别作 cell 构建期 defense 与
-validate 期 Medium 层——一处判定、三处复用。
+**comprehensive 主控制点 = 共享 preflight** `metadata.ValidateProjectHTTPAuthModes(p)`，对 `p.Contracts`
+**每个** active codegen http 契约跑 classifier，并由**所有** codegen/verify 入口复用——`gocell generate`
+（`runCodegenGenerate`）、`gocell verify codegen-*`（`runCodegenVerifyInPlace`/`Sandbox`）、`gocell verify
+generated`（generatedverify/`RenderContractArtifacts` 派生）。这既补上 cellgen serve-scan 漏的「非 served
+契约」（F2），也堵 contractgen / RenderContractArtifacts 路径（F1），且 forbidden 分支（reason-without-opt-out）
+在 codegen 期拦（F3）。`cellgen/builder.go` 的 serve-scan（`validateHTTPAuthModeCompleteness`）与治理 FMT-42
+复用**同一** classifier，分别作 cell 构建期 defense 与 validate 期 Medium 层——一处判定、多处复用。
 
-> 原始单点（cellgen serve-scan）的覆盖洞由外部再审（Codex）发现并在本 PR 修正：判定上移到 generate 编排层 +
-> 抽共享 classifier，对标 k8s CRD validation（直接校验声明对象、非从消费者路径反推）。
+> 覆盖洞由外部再审（Codex）两轮发现并在本 PR 修正：先把判定抽为共享 classifier，再把项目级 preflight 收口为
+> `metadata.ValidateProjectHTTPAuthModes` 并接入**每个** generate/verify 入口（含 verify-codegen 与
+> generatedverify 的 RenderContractArtifacts 旁路），对标 k8s apiextensions（校验声明对象、非单一消费者命令外层）。
 
 **违反不可表达于 generated artifacts**：modeless 契约让 `gocell generate`（任一 kind）**报错**，即使 handler
 手写了正确 gate 也产不出 generated code。与 gRPC `Completeness (#2008)` 的 "dead 403 不可静默上线" 同构。

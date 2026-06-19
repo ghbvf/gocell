@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -80,6 +81,38 @@ func (v HTTPAuthModeViolation) Message() string {
 	default:
 		return ""
 	}
+}
+
+// ValidateProjectHTTPAuthModes is the COMPREHENSIVE #2020 Hard gate: it runs
+// ClassifyHTTPAuthMode over EVERY contract in the project and returns an aggregated error
+// naming each active codegen HTTP contract that violates the mandatory-mode rule. It is
+// the single object-level validation every codegen/verify entry point shares — `gocell
+// generate`, `gocell verify codegen-*`, and the generatedverify drift check all call it —
+// so no generation OR verification path can emit/accept a modeless route. This mirrors
+// k8s apiextensions (validate the declared object, not just one consumer command's outer
+// layer); the per-cell cellgen serve-scan and governance FMT-42 reuse the same
+// ClassifyHTTPAuthMode oracle as defense / authoring-time layers.
+func ValidateProjectHTTPAuthModes(p *ProjectMeta) error {
+	if p == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(p.Contracts))
+	for id := range p.Contracts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var bad []string
+	for _, id := range ids {
+		if v := ClassifyHTTPAuthMode(p.Contracts[id]); v != HTTPAuthModeOK {
+			bad = append(bad, fmt.Sprintf("  - %s: %s", id, v.Message()))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("#2020 AuthZ mode gate: %d HTTP contract(s) violate the mandatory-mode rule "+
+			"(declare endpoints.http.permission or an explicit opt-out + auth.reason, or add to the "+
+			"frozen migration ledger):\n%s", len(bad), strings.Join(bad, "\n"))
+	}
+	return nil
 }
 
 // ClassifyHTTPAuthMode is the single oracle for the #2020 mandatory-AuthZ-mode rule,

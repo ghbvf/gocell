@@ -1,6 +1,9 @@
 package metadata
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestHTTPAuthModeDeclared covers the #2020 mode-classification oracle: a route is
 // "mode-declared" iff it sets endpoints.http.permission (ABAC) or an opt-out flag.
@@ -107,6 +110,48 @@ func TestHTTPAuthModeLedger_FrozenSubset(t *testing.T) {
 				"only shrink)", id)
 		}
 	}
+}
+
+// TestValidateProjectHTTPAuthModes covers the comprehensive project-level gate shared by
+// every codegen/verify entry point: it must flag any active codegen HTTP contract that
+// violates the rule — including contracts with no cell/slice (the gap a serve-scan alone
+// misses) — and aggregate all offenders in one run.
+func TestValidateProjectHTTPAuthModes(t *testing.T) {
+	mk := func(id string, h *HTTPTransportMeta) *ContractMeta {
+		return &ContractMeta{ID: id, Kind: "http", Lifecycle: "active", Codegen: true, Endpoints: EndpointsMeta{HTTP: h}}
+	}
+	t.Run("nil project ok", func(t *testing.T) {
+		if err := ValidateProjectHTTPAuthModes(nil); err != nil {
+			t.Fatalf("nil project must pass, got: %v", err)
+		}
+	})
+	t.Run("clean project passes", func(t *testing.T) {
+		p := &ProjectMeta{Contracts: map[string]*ContractMeta{
+			"http.ok.v1": mk("http.ok.v1", &HTTPTransportMeta{Permission: "config:read"}),
+		}}
+		if err := ValidateProjectHTTPAuthModes(p); err != nil {
+			t.Fatalf("clean project must pass, got: %v", err)
+		}
+	})
+	t.Run("modeless contract fails even with no cell/slice", func(t *testing.T) {
+		p := &ProjectMeta{Contracts: map[string]*ContractMeta{
+			"http.bad.v1": mk("http.bad.v1", &HTTPTransportMeta{}),
+		}}
+		err := ValidateProjectHTTPAuthModes(p)
+		if err == nil || !strings.Contains(err.Error(), "http.bad.v1") {
+			t.Fatalf("modeless contract must fail naming the offender, got: %v", err)
+		}
+	})
+	t.Run("aggregates every violation", func(t *testing.T) {
+		p := &ProjectMeta{Contracts: map[string]*ContractMeta{
+			"http.a.v1": mk("http.a.v1", &HTTPTransportMeta{}),
+			"http.b.v1": mk("http.b.v1", &HTTPTransportMeta{Auth: HTTPAuthMeta{Public: true}}),
+		}}
+		err := ValidateProjectHTTPAuthModes(p)
+		if err == nil || !strings.Contains(err.Error(), "http.a.v1") || !strings.Contains(err.Error(), "http.b.v1") {
+			t.Fatalf("must aggregate both offenders, got: %v", err)
+		}
+	})
 }
 
 // TestClassifyHTTPAuthMode covers the shared oracle consumed by contractgen, cellgen,

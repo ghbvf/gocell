@@ -344,6 +344,13 @@ func verifyGenerated(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// #2020 comprehensive AuthZ-mode gate on the generatedverify path: generatedverify
+	// derives artifacts through contractgen.RenderContractArtifacts, which bypasses the
+	// per-cell cellgen serve-scan, so the project-level oracle must run here too.
+	if err := metadata.ValidateProjectHTTPAuthModes(project); err != nil {
+		return err
+	}
+
 	result, err := generatedverify.Verify(ctx, root, mod, project)
 	if cerr := ctxInterrupted(ctx, "generated"); cerr != nil {
 		return cerr

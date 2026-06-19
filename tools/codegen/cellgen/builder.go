@@ -209,12 +209,13 @@ func buildSliceDerivedSpecs(p *metadata.ProjectMeta, cellID string, fieldIndex *
 	return validateHTTPAuthModeCompleteness(p, cellID)
 }
 
-// validateHTTPAuthModeCompleteness is the per-cell SERVE-scoped arm of the #2020
-// mandatory-AuthZ-mode gate, run during BuildCellSpec over this cell's slice serve
-// usages. The COMPREHENSIVE generate-time carrier is contractgen.buildHTTPSpec, which
-// runs metadata.ClassifyHTTPAuthMode over EVERY active codegen HTTP contract (including
-// non-served ones); this serve-scan is a same-oracle defense layer so a cell build also
-// fails closed. Both mirror the gRPC #2008 completeness pre-pass.
+// validateHTTPAuthModeCompleteness is the per-cell SERVE-scoped defense arm of the #2020
+// mandatory-AuthZ-mode gate, run during BuildCellSpec over this cell's slice serve usages.
+// The COMPREHENSIVE carrier is metadata.ValidateProjectHTTPAuthModes (every active codegen
+// HTTP contract, including non-served ones), invoked by all codegen/verify entry points
+// (gocell generate, gocell verify codegen-*, generatedverify); this serve-scan reuses the
+// same metadata.ClassifyHTTPAuthMode oracle so a cell build also fails closed. Both mirror
+// the gRPC #2008 completeness pre-pass.
 //
 // Failing here makes the violation unrepresentable in generated code: a standard route
 // that silently forgot its authz mode cannot ship (dead-default fail-closed).
