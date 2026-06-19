@@ -2,12 +2,14 @@ package devicecommand
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	kcell "github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
@@ -26,6 +28,10 @@ type EnqueueAdapter struct{ S *Service }
 func (a EnqueueAdapter) Enqueue(ctx context.Context, req *enqueuecontract.Request) (enqueuecontract.EnqueueResponseObject, error) {
 	entry, err := a.S.Enqueue(ctx, req.ID, req.CommandType, req.Payload)
 	if err != nil {
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrRateLimited {
+			return enqueuecontract.Enqueue429ErrorResponse{Body: *ec}, nil
+		}
 		return nil, err
 	}
 	return enqueuecontract.Enqueue201JSONResponse{Data: toEnqueueResponseData(entry)}, nil

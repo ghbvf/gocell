@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.approve.v1.response",
+  "description": "The contract registration after the approve transition, projected from the kernel ContractRegistration (state advanced to 'approved'; approver is the authenticated admin subject).",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "submitter",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "Lifecycle state; the sealed RegistrationState wire spelling (after approve: 'approved')."
+        },
+        "submitter": {
+          "type": "string",
+          "description": "Authenticated principal subject that submitted the registration."
+        },
+        "approver": {
+          "type": "string",
+          "description": "Authenticated admin subject that approved the registration; set by the approve transition."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

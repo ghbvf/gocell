@@ -53,17 +53,27 @@ func newTestServer(t *testing.T) *Server {
 // the Service's WithOnEnqueue hook.
 func newTestServerWithNotifier(t *testing.T, notifier *devicecmd.Notifier) *Server {
 	t.Helper()
+	return newTestServerWith(t, notifier)
+}
+
+// newTestServerWith builds a Server backed by in-memory persistence with one
+// pre-seeded device ("device-1"), applying extra Service options on top of the
+// shared slice-name + notifier wiring. Lets a test vary the per-device Pending
+// limit (devicecmd.WithPendingLimit) without copying the construction boilerplate.
+func newTestServerWith(t *testing.T, notifier *devicecmd.Notifier, extra ...devicecmd.Option) *Server {
+	t.Helper()
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, err := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	if err != nil {
 		t.Fatalf("cursor codec: %v", err)
 	}
-	svc, err := devicecmd.NewService(
-		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd,
+	opts := append([]devicecmd.Option{
 		devicecmd.WithSliceName("devicecommandrpc"),
 		devicecmd.WithOnEnqueue(notifier.Notify),
-	)
+	}, extra...)
+	svc, err := devicecmd.NewService(
+		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd, opts...)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -143,31 +153,7 @@ func assertIssueCommandValidationError(t *testing.T, srv *Server, name string, r
 // non-OK status (the precise errcode→codes mapping lands in PR-12).
 func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 	t.Parallel()
-	const bufSize = 1024 * 1024
-	lis := bufconn.Listen(bufSize)
-	grpcServer := grpc.NewServer()
-	commandv1.RegisterDeviceCommandServiceServer(grpcServer, newTestServer(t))
-
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- grpcServer.Serve(lis) }()
-	t.Cleanup(func() {
-		grpcServer.GracefulStop()
-		if err := <-serveErr; err != nil {
-			t.Errorf("grpc Serve: %v", err)
-		}
-	})
-
-	conn, err := grpc.NewClient(
-		"passthrough:///bufnet",
-		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) { return lis.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-
-	client := commandv1.NewDeviceCommandServiceClient(conn)
+	client := dialInProcess(t, newTestServer(t))
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancel()
 
@@ -189,10 +175,12 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 	})
 
 	// Both validation branches over the wire return a non-OK status. We assert
-	// only "not OK" (not the precise code): a returned *errcode.Error currently
-	// surfaces as codes.Unknown — the errcode→codes.Code mapping table lands in
-	// PR-12 (the Kratos GRPCStatus() model), at which point these become
-	// codes.InvalidArgument.
+	// only "not OK" (not the precise code): a returned *errcode.Error still
+	// surfaces as codes.Unknown — the general errcode.Kind→codes.Code mapping
+	// table lands in PR-12 (the Kratos GRPCStatus() model), at which point these
+	// become codes.InvalidArgument. Rate-limit is the one exception today: the
+	// handler projects KindRateLimited → codes.ResourceExhausted in-handler as an
+	// interim measure (asserted by TestServer_IssueCommand_OverCap_ResourceExhausted).
 	errCases := []struct {
 		name string
 		req  *commandv1.IssueCommandRequest
@@ -209,4 +197,63 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestServer_IssueCommand_OverCap_ResourceExhausted asserts the per-device
+// Pending cap (F-S-005 #822) surfaces over the gRPC wire as the standard
+// codes.ResourceExhausted, not the codes.Unknown an unmapped *errcode.Error
+// would yield. The handler projects errcode.KindRateLimited → ResourceExhausted
+// in-handler as an interim measure until the general errcode.Kind→codes.Code
+// mapper (PR-12, the Kratos GRPCStatus() model) lands; at that point the inline
+// projection is deleted and this assertion holds via the central mapper instead.
+func TestServer_IssueCommand_OverCap_ResourceExhausted(t *testing.T) {
+	t.Parallel()
+	// Limit 1: the first enqueue fills the device's Pending cap, the second exceeds it.
+	client := dialInProcess(t, newTestServerWith(t, devicecmd.NewNotifier(), devicecmd.WithPendingLimit(1)))
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
+	defer cancel()
+
+	req := &commandv1.IssueCommandRequest{DeviceId: seededDeviceID, CommandType: "reboot", Payload: []byte("{}")}
+	if _, err := client.IssueCommand(ctx, req); err != nil {
+		t.Fatalf("first IssueCommand (fills cap): unexpected error: %v", err)
+	}
+	_, err := client.IssueCommand(ctx, req)
+	if err == nil {
+		t.Fatalf("expected over-cap error on second IssueCommand, got nil")
+	}
+	if got := status.Code(err); got != codes.ResourceExhausted {
+		t.Errorf("status code = %v, want ResourceExhausted; err=%v", got, err)
+	}
+}
+
+// dialInProcess starts srv on an in-process bufconn listener and returns a
+// connected client. Server graceful-stop and connection teardown are registered
+// via t.Cleanup, so callers just dial and issue. Shared by the over-the-wire
+// gRPC tests so the bufconn boilerplate lives in one place.
+func dialInProcess(t *testing.T, srv *Server) commandv1.DeviceCommandServiceClient {
+	t.Helper()
+	const bufSize = 1024 * 1024
+	lis := bufconn.Listen(bufSize)
+	grpcServer := grpc.NewServer()
+	commandv1.RegisterDeviceCommandServiceServer(grpcServer, srv)
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- grpcServer.Serve(lis) }()
+	t.Cleanup(func() {
+		grpcServer.GracefulStop()
+		if err := <-serveErr; err != nil {
+			t.Errorf("grpc Serve: %v", err)
+		}
+	})
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return commandv1.NewDeviceCommandServiceClient(conn)
 }
