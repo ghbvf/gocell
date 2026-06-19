@@ -39,7 +39,7 @@ func frameworkTestFuncs(workspaceRoot string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ruleFuncsForIDs(idx, scoperules.FrameworkRuleIDs)
+	return ruleFuncsForIDs(idx, scoperules.FrameworkRuleIDs())
 }
 
 // ruleFuncsForIDs returns the de-duplicated union of the test functions that
@@ -102,7 +102,9 @@ func applyScope(req Request, discovered []string) ([]string, error) {
 	if req.Rule != "" && !isFrameworkRule(req.Rule) {
 		return nil, fmt.Errorf(
 			"archtestrunner: rule %q is not in framework scope (it is a workspace-only rule);"+
-				" drop --scope=framework or use --scope=workspace to run it", req.Rule,
+				" drop --scope=framework or use --scope=workspace to run it"+
+				" (list framework-scope rules: gocell verify archtest --scope=framework --list-tests)",
+			req.Rule,
 		)
 	}
 	frameworkFuncs, err := frameworkTestFuncs(req.WorkspaceRoot)
@@ -114,7 +116,7 @@ func applyScope(req Request, discovered []string) ([]string, error) {
 
 // isFrameworkRule reports whether ruleID is part of the framework-scope set.
 func isFrameworkRule(ruleID string) bool {
-	for _, id := range scoperules.FrameworkRuleIDs {
+	for _, id := range scoperules.FrameworkRuleIDs() {
 		if id == ruleID {
 			return true
 		}

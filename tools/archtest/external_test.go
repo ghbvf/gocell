@@ -59,8 +59,9 @@ func TestStandardCellRulesComposition(t *testing.T) {
 	// no rule was paired with a nil Run. Adding/dropping a framework rule is a
 	// single-line edit to scoperules.FrameworkRuleIDs; the runner (gocell verify
 	// archtest --scope=framework) reads the identical leaf, so the two cannot drift.
-	wantRuleIDs := make(map[string]bool, len(scoperules.FrameworkRuleIDs))
-	for _, id := range scoperules.FrameworkRuleIDs {
+	frameworkIDs := scoperules.FrameworkRuleIDs()
+	wantRuleIDs := make(map[string]bool, len(frameworkIDs))
+	for _, id := range frameworkIDs {
 		wantRuleIDs[id] = true
 	}
 	for id := range seen {

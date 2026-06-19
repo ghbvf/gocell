@@ -64,7 +64,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 	if *rule != "" && *changed {
 		return req, false, "", fmt.Errorf(
 			"--rule and --changed are mutually exclusive: --changed already narrows by scan domain;" +
-				" to run one rule unfiltered, drop --changed and use --rule=<ID>")
+				" to run one rule unfiltered, drop --changed and use --rule=<ID>",
+		)
 	}
 
 	shard, shardErr := parseShard(*shardStr)
@@ -87,7 +88,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", fmt.Errorf(
 			"--timeout: must be a positive duration (e.g. 5m); got %q"+
 				" (0 disables go test timeout, hanging CI shards until GHA's 10m backstop)",
-			*timeout)
+			*timeout,
+		)
 	}
 
 	workspaceRoot := *root
@@ -123,10 +125,16 @@ func emitChangedSelectionSummary(w io.Writer, req archtestrunner.Request, select
 	if !req.Changed {
 		return
 	}
+	// Note the active scope so a 0-result under --scope=framework --changed reads as
+	// "the framework set ∩ changed was empty", not "the full suite passed".
+	scopeNote := ""
+	if req.Scope == archtestrunner.ScopeFramework {
+		scopeNote = " --scope=framework"
+	}
 	// Best-effort diagnostic line; a stderr write failure must not fail the run.
 	_, _ = fmt.Fprintf(w,
-		"archtest --changed: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
-			" this is a pre-filter, not the authoritative full run\n", selectedCount)
+		"archtest --changed%s: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+			" this is a pre-filter, not the authoritative full run\n", scopeNote, selectedCount)
 }
 
 // runArchtestListTests handles --list-tests mode: prints one name per line to

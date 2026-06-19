@@ -30,7 +30,15 @@
 // tools/archtest/*_test.go header — is enforced fail-loud by the runner's
 // zero-func guard (an unanchored framework ID is a hard error, never a silent
 // skip).
+//
+// Guard timing: that check is a RUNTIME guard, fired when `gocell verify archtest
+// --scope=framework` resolves the set — NOT a compile-time or `go build` check.
+// So after adding an ID here, add its `// INVARIANT: <id>` anchor to the owning
+// *_test.go and verify locally with `gocell verify archtest --scope=framework
+// --list-tests`; otherwise the mismatch surfaces only when that command runs.
 package scoperules
+
+import "slices"
 
 // Framework-scope rule IDs. Each maps to a portable Check* in
 // tools/archtest.StandardCellRules() and to an `// INVARIANT: <id>` anchor in a
@@ -49,10 +57,13 @@ const (
 	ProdMainWiringNoopReject01      = "PROD-MAIN-WIRING-NOOP-REJECT-01"
 )
 
-// FrameworkRuleIDs is the ordered framework-scope membership list — the single
+// frameworkRuleIDs is the ordered framework-scope membership list — the single
 // source consumed by StandardCellRules() (derive) and the archtest scope runner.
-// Order mirrors StandardCellRules()'s historical registration order.
-var FrameworkRuleIDs = []string{
+// Order mirrors StandardCellRules()'s historical registration order. It is
+// unexported and only reachable through [FrameworkRuleIDs], which returns a copy,
+// so no consumer can mutate (append / index-assign / reassign) the membership —
+// the single-source guarantee is structural, not by convention.
+var frameworkRuleIDs = []string{
 	PanicRegistered01,
 	ErrcodeKindLiteral01,
 	MessageConstLiteral01,
@@ -64,3 +75,8 @@ var FrameworkRuleIDs = []string{
 	SagaStepCompensatePure01,
 	ProdMainWiringNoopReject01,
 }
+
+// FrameworkRuleIDs returns a fresh copy of the framework-scope membership list.
+// Returning a copy (not the backing slice) keeps [frameworkRuleIDs] the sole
+// mutable holder, so the set cannot drift via a caller's append or element write.
+func FrameworkRuleIDs() []string { return slices.Clone(frameworkRuleIDs) }

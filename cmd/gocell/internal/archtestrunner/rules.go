@@ -170,6 +170,17 @@ func extractInvariantIDs(groups []*ast.CommentGroup) []string {
 //     INVARIANT:` list) and is skipped — it documents the file, it does not own funcs.
 //   - A func with no preceding section anchor is unattributed (excluded), so a
 //     consolidation/helper test above the first section never leaks into a scope.
+//
+// Known assumption / blind spot (Medium heuristic, acceptable): "single-ID comment
+// group == section anchor" is positional, not semantic — a prose comment that
+// happens to name exactly one INVARIANT ID, or a rule split into two anchor
+// sections in one file, will attribute funcs by nearest-preceding-anchor, which
+// can differ from intent. This only ever MIS-SCOPES GoCell's own dogfood subset
+// (the framework integration test asserts framework ⊊ workspace, so gross drift
+// is caught); it can never weaken a rule's real enforcement, because
+// --scope=workspace still runs every test. The archtest authoring convention
+// (one contiguous `// INVARIANT: <id>` section per rule per file, inventory as a
+// multi-ID list) keeps the heuristic exact for the curated framework set.
 func buildFrameworkFuncIndex(workspaceRoot string) (ruleIndex, error) {
 	idx := make(ruleIndex)
 	dir := filepath.Join(workspaceRoot, archtestPkgDir)

@@ -346,8 +346,9 @@ func StandardCellRules() []*CellRule {
 		// See prod_main_wiring_noop_reject.go godoc.
 		scoperules.ProdMainWiringNoopReject01: CheckProdMainWiringNoopReject,
 	}
-	rules := make([]*CellRule, 0, len(scoperules.FrameworkRuleIDs))
-	for _, id := range scoperules.FrameworkRuleIDs {
+	ids := scoperules.FrameworkRuleIDs()
+	rules := make([]*CellRule, 0, len(ids))
+	for _, id := range ids {
 		rules = append(rules, &CellRule{ID: id, Run: runByID[id]})
 	}
 	return rules

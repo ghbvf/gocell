@@ -80,15 +80,15 @@ func TestRuleFuncsForIDs_ZeroFuncGuard(t *testing.T) {
 // dir that anchors every scoperules.FrameworkRuleIDs entry, so the test adapts as
 // the portable set grows. It proves the leaf set drives the runner's selection.
 func TestFrameworkTestFuncs_RealIDs(t *testing.T) {
-	require.NotEmpty(t, scoperules.FrameworkRuleIDs, "framework rule set must be non-empty")
+	require.NotEmpty(t, scoperules.FrameworkRuleIDs(), "framework rule set must be non-empty")
 
 	files := map[string]string{}
-	wantFuncs := make([]string, 0, len(scoperules.FrameworkRuleIDs))
-	for i, id := range scoperules.FrameworkRuleIDs {
+	wantFuncs := make([]string, 0, len(scoperules.FrameworkRuleIDs()))
+	for i, id := range scoperules.FrameworkRuleIDs() {
 		fn := fmt.Sprintf("TestFrameworkRule%d", i)
 		wantFuncs = append(wantFuncs, fn)
 		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
-			"//go:build archtest\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
+			"//go:build archtest\n\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
 			id, fn,
 		)
 	}
@@ -129,12 +129,12 @@ func TestBuildFrameworkFuncIndex_ConsolidatedFile(t *testing.T) {
 // scope is a pass-through.
 func TestApplyFilters_FrameworkScopeNarrows(t *testing.T) {
 	files := map[string]string{}
-	frameworkFuncs := make([]string, 0, len(scoperules.FrameworkRuleIDs))
-	for i, id := range scoperules.FrameworkRuleIDs {
+	frameworkFuncs := make([]string, 0, len(scoperules.FrameworkRuleIDs()))
+	for i, id := range scoperules.FrameworkRuleIDs() {
 		fn := fmt.Sprintf("TestFrameworkRule%d", i)
 		frameworkFuncs = append(frameworkFuncs, fn)
 		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
-			"//go:build archtest\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
+			"//go:build archtest\n\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
 			id, fn,
 		)
 	}
@@ -163,7 +163,7 @@ func TestApplyFilters_FrameworkScopeNarrows(t *testing.T) {
 // selection (a vacuous-green run).
 func TestApplyFilters_FrameworkRuleOutOfScope(t *testing.T) {
 	root := makeFakeArchtestDir(t, map[string]string{
-		"layer_test.go": "//go:build archtest\n// INVARIANT: LAYER-05\npackage archtest\nimport \"testing\"\nfunc TestLayer(t *testing.T) {}\n",
+		"layer_test.go": "//go:build archtest\n\n// INVARIANT: LAYER-05\npackage archtest\nimport \"testing\"\nfunc TestLayer(t *testing.T) {}\n",
 	})
 	e := engine{exec: defaultExec, changed: changedRepoFiles}
 	_, err := e.applyFilters(t.Context(),
@@ -192,4 +192,60 @@ func TestRun_UnknownScopeFailClosed(t *testing.T) {
 	_, rerr := e.run(t.Context(), Request{WorkspaceRoot: t.TempDir(), Scope: "bogus"})
 	require.Error(t, rerr)
 	assert.Contains(t, rerr.Error(), "bogus")
+}
+
+// TestIsFrameworkRule covers both membership branches of the gate used by
+// --scope=framework --rule.
+func TestIsFrameworkRule(t *testing.T) {
+	assert.True(t, isFrameworkRule(scoperules.PanicRegistered01), "a registered framework rule is in scope")
+	assert.False(t, isFrameworkRule("LAYER-05"), "a workspace-only rule is not in scope")
+	assert.False(t, isFrameworkRule(""), "empty rule id is not in scope")
+}
+
+// TestApplyFilters_FrameworkRuleInScope: --scope=framework with a --rule that IS
+// in the framework set passes applyScope and narrows to that rule's funcs (the
+// positive counterpart of TestApplyFilters_FrameworkRuleOutOfScope). The fake dir
+// anchors EVERY framework rule because applyScope resolves the whole set (a
+// partial dir would trip the zero-func guard on the unanchored rules).
+func TestApplyFilters_FrameworkRuleInScope(t *testing.T) {
+	ids := scoperules.FrameworkRuleIDs()
+	files := map[string]string{}
+	for i, id := range ids {
+		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
+			"//go:build archtest\n\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc TestFrameworkRule%d(t *testing.T) {}\n",
+			id, i,
+		)
+	}
+	root := makeFakeArchtestDir(t, files)
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
+	// Rule = the first framework rule; its func is TestFrameworkRule0.
+	got, err := e.applyFilters(t.Context(),
+		Request{WorkspaceRoot: root, Scope: ScopeFramework, Rule: ids[0]},
+		[]string{"TestFrameworkRule0", "TestOther"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"TestFrameworkRule0"}, got)
+}
+
+// TestBuildFrameworkFuncIndex_AnchorWithProse locks the heuristic: a comment group
+// that declares exactly one INVARIANT ID is a section anchor even with trailing
+// prose, and the following func is attributed to it. (Documents the
+// "single-ID comment group == anchor" assumption in buildFrameworkFuncIndex.)
+func TestBuildFrameworkFuncIndex_AnchorWithProse(t *testing.T) {
+	root := makeFakeArchtestDir(t, map[string]string{
+		"prose_test.go": "//go:build archtest\n\npackage archtest\n\nimport \"testing\"\n\n" +
+			"// INVARIANT: GAMMA-01\n// Extra prose explaining the rule; still one anchor.\n" +
+			"func TestGamma(t *testing.T) {}\n",
+	})
+	idx, err := buildFrameworkFuncIndex(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"TestGamma"}, idx["GAMMA-01"])
+}
+
+// TestBuildFrameworkFuncIndex_NonexistentDir: a missing tools/archtest dir yields
+// an empty index without error (parity with buildRuleIndex), so discovery — not
+// the index builder — owns the "no archtest" failure.
+func TestBuildFrameworkFuncIndex_NonexistentDir(t *testing.T) {
+	idx, err := buildFrameworkFuncIndex(t.TempDir())
+	require.NoError(t, err)
+	assert.Empty(t, idx)
 }
