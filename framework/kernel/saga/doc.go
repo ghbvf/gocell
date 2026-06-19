@@ -11,9 +11,9 @@
 //
 //	Pending ──► Running ──► Succeeded                    (happy path)
 //	   │           │
-//	   │           ├──► Compensating ──► Compensated      (rollback succeeded)
-//	   │           │           └──────► Failed            (compensation itself failed)
-//	   │           └──► Failed                            (failed before any step committed)
+//	   │           ├──► Compensating ──► Compensated          (rollback succeeded)
+//	   │           │           └──────► CompensationFailed    (rollback failed)
+//	   │           └──► Failed                                (failed before rollback)
 //	   │
 //	   └──► Failed | Expired                              (rejected / expired while queued)
 //
@@ -25,9 +25,10 @@
 // Running:      executing steps forward; CurrentStep advances via AdvanceStep.
 // Compensating: a step failed with prior committed work; undoing in reverse.
 // Succeeded:    all steps committed (terminal).
-// Failed:       terminal; reachable from Running (nothing to undo) or Compensating (second-order failure).
-// Compensated:  forward failed, rollback completed cleanly (terminal).
-// Expired:      overall timeout elapsed (terminal).
+// Failed:             terminal; forward failure before rollback is entered.
+// Compensated:        forward failed, rollback completed cleanly (terminal).
+// Expired:            overall timeout elapsed (terminal).
+// CompensationFailed: terminal; rollback itself failed and needs ops intervention.
 //
 // # Time injection
 //

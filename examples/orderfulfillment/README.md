@@ -141,7 +141,7 @@ The `status` field reflects the saga state:
 | `running` | One or more forward steps have started |
 | `succeeded` | All four steps completed (`KindSagaSucceeded`) |
 | `compensated` | At least one step failed and all prior steps were rolled back (`KindSagaCompensated`) |
-| `failed` | Saga failed without full compensation (`KindSagaFailed` / expired / compensation failed) |
+| `failed` | Saga reached a failure terminal visible through this demo API (`KindSagaFailed` / `KindSagaExpired` / `KindSagaCompensationFailed`); use the saga journal and `docs/ops/saga-runbook.md` to distinguish forward failure, timeout, and rollback failure root causes |
 
 ## Health
 

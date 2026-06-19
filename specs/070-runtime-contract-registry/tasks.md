@@ -57,8 +57,8 @@
 
 ### US6 — submit/list handlers + service 接线 + 契约测试（P1）→ #2237
 
-- [ ] T060 [US6] submit/list handler（typed response envelope）+ application service（`gocell:"required"` 依赖）接 US2 状态机 / US3 gate / US5 store；list 强制分页（`limit`≤500 截断 + `data`/`nextCursor`/`hasMore` envelope，per go-standards；复用现有 query pagination helper）
-- [ ] T061 [P] [US6] httptest：submit（合法→pending / 非法→4xx shared error schema）+ list（按 state 过滤 + cursor 翻页 + limit 上限截断）端到端闭环
+- [x] T060 [US6] submit/list handler（typed response envelope）+ application service（`gocell:"required"` 依赖）接 US2 状态机 / US3 gate / US5 store；list 强制分页（`limit`≤500 截断 + `data`/`nextCursor`/`hasMore` envelope，per go-standards；复用现有 query pagination helper）
+- [x] T061 [P] [US6] httptest：submit（合法→pending / 非法→4xx shared error schema）+ list（按 state 过滤 + cursor 翻页 + limit 上限截断）端到端闭环
 
 ## Phase 5: 审批 + 审计/事件（Wave 5，blocked-by US6）
 

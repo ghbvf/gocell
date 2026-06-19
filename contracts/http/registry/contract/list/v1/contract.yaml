@@ -20,6 +20,18 @@ endpoints:
         required: false
         minimum: 1
         maximum: 500
+      # Optional registration-state filter. Omit to return all states.
+      # Closed value set (8 values):
+      #   submitted | probing | conformant | pending-approval |
+      #   approved  | rejected | active    | retired
+      # The enum is NOT declared in queryParam schema — metadata.ParamSchema does
+      # not model enum/description on params — so the membership check is enforced
+      # in the registryread service via registry.ParseState (unknown value → 400),
+      # covered by contract tests.
+      state:
+        type: string
+        required: false
+        maxLength: 32
     successStatus: 200
     auth:
       responses:
@@ -28,7 +40,7 @@ endpoints:
     responseProjection: true
     responses:
       400:
-        description: "Bad request — invalid cursor or limit query parameter."
+        description: "Bad request — invalid cursor, limit, or state query parameter."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token."

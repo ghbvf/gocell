@@ -8,11 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/governance"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -51,11 +55,14 @@ func denyAuthorizer(reason string) *mockAuthorizer {
 // cellgen route group does (prefix /api/v1/registry + mux.Route("/contracts")).
 // RegisterRoutes installs the registry:submit RequirePermission policy, so the
 // contract test exercises the same gate production uses. The returned mux holds a
-// single Service over one registrar, so a duplicate submit through the same mux
-// hits the real dedup path.
+// single Service over the in-memory store + real gate, so a duplicate submit
+// through the same mux hits the real dedup path.
 func newMux(t *testing.T) http.Handler {
 	t.Helper()
-	svc, err := NewService(registry.NewContractRegistrar(clockmock.New(testEpoch)))
+	clk := clockmock.New(testEpoch)
+	store := mem.NewRegistry(clk)
+	gate := governance.NewRegistrationGate(registry.NewContractRegistrar(clk), clk)
+	svc, err := NewService(store, gate, WithTxManager(persistence.WrapForCell(noopTxRunner{})))
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -69,11 +76,17 @@ func newMux(t *testing.T) http.Handler {
 	return mux
 }
 
+// adminCtx returns a context with an admin principal, a test tenant, and the
+// given authorizer injected. Tests that don't need the authorizer can pass nil.
 func adminCtx(authorizer auth.Authorizer) context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "cell-a", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
 	})
-	return auth.WithAuthorizer(ctx, authorizer)
+	ctx = ctxkeys.WithTenantID(ctx, testTenantStr)
+	if authorizer != nil {
+		ctx = auth.WithAuthorizer(ctx, authorizer)
+	}
+	return ctx
 }
 
 func postSubmit(t *testing.T, mux http.Handler, ctx context.Context, body string) *httptest.ResponseRecorder {
@@ -85,24 +98,34 @@ func postSubmit(t *testing.T, mux http.Handler, ctx context.Context, body string
 	return rec
 }
 
-const validBody = `{"id":"http.example.foo.v1","kind":"http"}`
+// validBody is a full contract declaration that satisfies the gate's curated
+// rule set (CH-01 ownerCell, CH-02 lifecycle, CH-03 schemaRefs.response, FMT-08
+// id prefix, REG-01 endpoints.server).
+//
+//nolint:lll // JSON body literals cannot be split across lines without breaking encoding
+const validBody = `{"id":"http.example.foo.v1","kind":"http","ownerCell":"registrycore","lifecycle":"active","endpoints":{"server":"registrycore"},"schemaRefs":{"response":"response.schema.json"}}`
 
 // TestContractSubmitServe_RequestSchema validates the request body schema
 // (positive + per-constraint negatives) independent of the handler.
 func TestContractSubmitServe_RequestSchema(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	c.ValidateRequest(t, []byte(validBody))
-	c.ValidateRequest(t, []byte(`{"id":"http.example.foo.v1","kind":"event","payloadSchema":"sha256:abc"}`))
-	// Each required field / closed constraint has ≥1 rejection case.
-	c.MustRejectRequest(t, []byte(`{"kind":"http"}`))                          // missing id
-	c.MustRejectRequest(t, []byte(`{"id":"x"}`))                               // missing kind
-	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"nope"}`))                 // kind not in enum
-	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","extra":"field"}`)) // additionalProperties:false
-	c.MustRejectRequest(t, []byte(`{"id":"","kind":"http"}`))                  // id minLength
+	// ownerCell / lifecycle are now required in the schema.
+	c.MustRejectRequest(t, []byte(`{"kind":"http","ownerCell":"registrycore","lifecycle":"active"}`))          // missing id
+	c.MustRejectRequest(t, []byte(`{"id":"x","ownerCell":"registrycore","lifecycle":"active"}`))               // missing kind
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"nope","ownerCell":"registrycore","lifecycle":"active"}`)) // kind not in enum
+	// additionalProperties:false — extra field rejected
+	c.MustRejectRequest(t, []byte(
+		`{"id":"x","kind":"http","ownerCell":"registrycore","lifecycle":"active","extra":"f"}`,
+	))
+	c.MustRejectRequest(t, []byte(`{"id":"","kind":"http","ownerCell":"registrycore","lifecycle":"active"}`)) // id minLength
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","lifecycle":"active"}`))                           // missing ownerCell
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","ownerCell":"registrycore"}`))                     // missing lifecycle
+	c.MustRejectRequest(t, []byte(`{"id":"x","kind":"http","ownerCell":"registrycore","lifecycle":"nope"}`))  // lifecycle not in enum
 }
 
 // TestContractSubmitServe_OK: an authenticated principal (allow PDP) submitting a
-// valid contract gets 201 whose body satisfies the response schema.
+// valid contract declaration gets 201 whose body satisfies the response schema.
 func TestContractSubmitServe_OK(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	rec := postSubmit(t, newMux(t), adminCtx(allowAuthorizer()), validBody)
@@ -144,7 +167,7 @@ func TestContractSubmitServe_BadRequest(t *testing.T) {
 }
 
 // TestContractSubmitServe_Duplicate: submitting the same id twice through the same
-// service ⇒ the second is a real 409 (registrar dedup), not a fabricated branch.
+// service ⇒ the second is a real 409 (store dedup), not a fabricated branch.
 func TestContractSubmitServe_Duplicate(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	mux := newMux(t)
@@ -160,15 +183,31 @@ func TestContractSubmitServe_Duplicate(t *testing.T) {
 }
 
 // TestContractSubmitServe_PayloadTooLarge: a body exceeding the JSON decode limit
-// ⇒ 413, the contract's declared payload-too-large response (the generated
-// handler's io.LimitReader(DefaultDecodeJSONLimit+1)+DecodeJSONStrict path).
+// ⇒ 413, the contract's declared payload-too-large response.
 func TestContractSubmitServe_PayloadTooLarge(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	// A huge id string pushes the body past httputil.DefaultDecodeJSONLimit (1 MiB).
 	huge := strings.Repeat("a", int(httputil.DefaultDecodeJSONLimit)+1024)
-	rec := postSubmit(t, newMux(t), adminCtx(allowAuthorizer()), `{"id":"`+huge+`","kind":"http"}`)
+	body := `{"id":"` + huge + `","kind":"http","ownerCell":"registrycore","lifecycle":"active"}`
+	rec := postSubmit(t, newMux(t), adminCtx(allowAuthorizer()), body)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractSubmitServe_GateReject: a schema-valid payload that passes JSON
+// decode but fails the gate (missing endpoints.server → REG-01) returns 400.
+func TestContractSubmitServe_GateReject(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	// Valid JSON per schema (ownerCell + lifecycle present), but missing
+	// endpoints.server → REG-01 rejects at the gate layer.
+	//
+	//nolint:lll // JSON body literal
+	body := `{"id":"http.noprovider.v1","kind":"http","ownerCell":"registrycore","lifecycle":"active","schemaRefs":{"response":"response.schema.json"}}`
+	rec := postSubmit(t, newMux(t), adminCtx(allowAuthorizer()), body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (gate reject); body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }

@@ -70,6 +70,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Cursor = page.Cursor
 	req.Limit = int64(page.Limit)
+
+	req.State = r.URL.Query().Get("state")
+	if len(req.State) > 32 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(errcode.PublicString("field", "state"), errcode.PublicString("reason", "invalid"))))
+		return
+	}
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

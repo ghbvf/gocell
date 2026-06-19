@@ -140,3 +140,38 @@ func TestParseState_UnknownRejected(t *testing.T) {
 		}
 	}
 }
+
+// TestStateNames verifies StateNames returns a non-empty slice whose elements
+// match the closed allRegistrationStates registry exactly (anti-vacuity: same
+// count, same values), each of which round-trips through ParseState.
+func TestStateNames(t *testing.T) {
+	t.Parallel()
+	got := StateNames()
+	if len(got) != len(allRegistrationStates) {
+		t.Fatalf("StateNames() len=%d, want %d", len(got), len(allRegistrationStates))
+	}
+	seen := make(map[string]int, len(got))
+	for _, name := range got {
+		seen[name]++
+		if _, ok := ParseState(name); !ok {
+			t.Errorf("StateNames() returned %q which ParseState rejects", name)
+		}
+	}
+	for _, s := range allRegistrationStates {
+		if seen[s.v] != 1 {
+			t.Errorf("StateNames() missing or duplicate %q", s.v)
+		}
+	}
+}
+
+// TestStateNames_IsCopy verifies mutation of the returned slice does not affect
+// subsequent calls (fresh copy invariant).
+func TestStateNames_IsCopy(t *testing.T) {
+	t.Parallel()
+	first := StateNames()
+	first[0] = "mutated"
+	second := StateNames()
+	if second[0] == "mutated" {
+		t.Error("StateNames() returned same backing array; mutation affected subsequent call")
+	}
+}
