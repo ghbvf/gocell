@@ -1213,11 +1213,14 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 			Name: structName + "Module",
 			ID:   cellIDStr,
 		})
-		// Module is the zero Scalar for same-module (scalar shorthand); a non-empty
-		// Module renders the cross-module object form. Both routed through
-		// yamlsafe.Quote (YAML-QUOTE-FUNNEL-01) — safe in flow-mapping context.
+		// Module is the zero Scalar for same-module (scalar shorthand); only a
+		// genuinely cross-module ref renders the object form. The render gate uses
+		// the same g.crossModule predicate as the compositionAPI / derived-file-skip
+		// decisions, so an explicit module == own module normalizes to the scalar
+		// shorthand (no redundant `module:`) instead of diverging. Both fields route
+		// through yamlsafe.Quote (YAML-QUOTE-FUNNEL-01) — safe in flow-mapping context.
 		entry := scaffoldAssemblyCellYAML{ID: yamlsafe.Quote(cellIDStr)}
-		if ref.Module != "" {
+		if g.crossModule(ref.Module) {
 			entry.Module = yamlsafe.Quote(ref.Module)
 		}
 		cellYAMLs = append(cellYAMLs, entry)

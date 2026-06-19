@@ -68,7 +68,8 @@ func TestPlanAssemblyScaffold_CrossModule_SkeletonOnly(t *testing.T) {
 
 // TestPlanAssemblyScaffold_ExplicitSameModuleNotCrossModule verifies that a
 // ScaffoldCellRef whose Module equals the assembly's own module is treated as
-// same-module: derived files are NOT skipped and compositionAPI is not emitted.
+// same-module: derived files are NOT skipped, compositionAPI is not emitted, and
+// the redundant `module:` is normalized away to the scalar shorthand.
 func TestPlanAssemblyScaffold_ExplicitSameModuleNotCrossModule(t *testing.T) {
 	t.Parallel()
 	root, pm := scaffoldTestProject(t)
@@ -83,8 +84,10 @@ func TestPlanAssemblyScaffold_ExplicitSameModuleNotCrossModule(t *testing.T) {
 	plan, err := gen.PlanAssemblyScaffold(spec)
 	require.NoError(t, err)
 	require.Len(t, plan, 6, "explicit same-module ref must keep the full derived plan")
-	assert.NotContains(t, planContent(t, plan, "assembly.yaml"), "compositionAPI",
-		"module == own module must not trigger compositionAPI")
+	asm := planContent(t, plan, "assembly.yaml")
+	assert.NotContains(t, asm, "compositionAPI", "module == own module must not trigger compositionAPI")
+	assert.NotContains(t, asm, "module:", "module == own module must render scalar shorthand, no redundant module:")
+	assert.Contains(t, asm, "- examplecell", "must render the same-module scalar form")
 }
 
 // TestScaffoldAssembly_CrossModuleYAMLInjection asserts that a cross-module

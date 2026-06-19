@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
 	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
+	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
 // scaffoldAssembly is the subcommand entry for `gocell scaffold assembly`.
@@ -125,11 +126,18 @@ func scaffoldAssembly(root string, args []string) error {
 		// Cross-module cell metadata is not locally resolvable, so only the
 		// assembly.yaml (build.compositionAPI: true) + run.go/app.go skeleton are
 		// emitted; the K#10 derived files are deferred (mirrors --skip-generate).
+		// The hint keeps the two distinct prerequisites separate (Go build vs
+		// GoCell metadata discovery) and does not over-promise a working build:
+		// the generated run.go skeleton is the legacy form and still needs manual
+		// composition wiring for cross-module assemblies (tracked on PR #2480).
 		fmt.Printf("scaffold assembly: cross-module cell(s) present — wrote assembly.yaml "+
 			"(build.compositionAPI: true) + skeleton; derived files (modules_gen.go / "+
-			"main.go / boundary.yaml) skipped.\nNext: (1) add the external module(s) to "+
-			"your go.work so the cross-module cells build locally, then (2) run "+
-			"`gocell generate assembly --id=%s` to materialize them.\n", *id)
+			"main.go / boundary.yaml) skipped.\nBefore `gocell generate assembly --id=%s` "+
+			"can materialize them, the cross-module cells must be (a) buildable — add the "+
+			"external module(s) to your go.work — and (b) metadata-discoverable in this "+
+			"project (e.g. workspace mode via .gocell/manifest.yaml; see "+
+			"docs/guides/cell-development-guide.md). The compositionAPI run.go wiring may "+
+			"still need manual completion.\n", *id)
 	}
 	return nil
 }
@@ -306,22 +314,18 @@ func parseCellEntry(raw string) (assembly.ScaffoldCellRef, error) {
 			"--cell module is empty after '@' (omit '@' for a same-module cell)",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q", raw))))
 	}
-	// '@' is the id@module delimiter; a Go module path never contains '@', so a
-	// second '@' (e.g. id@@module) is a typo rather than a valid module path.
-	if strings.Contains(modulePart, "@") {
-		return assembly.ScaffoldCellRef{}, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"--cell module path must not contain '@' (expected <id>@<module>)",
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q", raw))))
-	}
-	if !metadata.MatchAssemblyModulePath(modulePart) {
-		return assembly.ScaffoldCellRef{}, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
-			"--cell module path has an invalid character",
-			errcode.WithDetails(
-				errcode.PublicString("flag", "--cell"),
-				errcode.PublicString("pattern", metadata.AssemblyModulePathPattern),
-			),
-			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell module=%q pattern=%s",
-				modulePart, metadata.AssemblyModulePathPattern))))
+	// The module value flows into the generated "<module>/cellmodules/<id>" import,
+	// so validate it as a Go import path via the single-source gomodutil helper
+	// (the same one --module-path uses). It is stronger than the metadata
+	// char-blocklist: it also rejects '@', whitespace, and trailing/double slashes
+	// that would corrupt the emitted import. The generator-side funnel
+	// (validateAssemblyScaffoldSpec → MatchAssemblyModulePath) stays as the
+	// YAML/import-literal hygiene check that must mirror the assembly.yaml decoder.
+	if err := gomodutil.ValidateModulePath(modulePart); err != nil {
+		return assembly.ScaffoldCellRef{}, errcode.Wrap(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--cell module is not a valid Go module path", err,
+			errcode.WithDetails(errcode.PublicString("flag", "--cell")),
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell module=%q", modulePart))))
 	}
 	return assembly.ScaffoldCellRef{ID: cid, Module: modulePart}, nil
 }

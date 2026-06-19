@@ -503,6 +503,9 @@ func TestRunScaffoldAssembly_CellFlag_ExplicitSameModule(t *testing.T) {
 	if strings.Contains(string(asmYAML), "compositionAPI") {
 		t.Errorf("module == own module must not emit compositionAPI; got:\n%s", asmYAML)
 	}
+	if strings.Contains(string(asmYAML), "module:") {
+		t.Errorf("module == own module must normalize to scalar shorthand (no redundant module:); got:\n%s", asmYAML)
+	}
 }
 
 // TestRunScaffoldAssembly_CellFlag_CrossModule asserts that --cell id@module
