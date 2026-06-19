@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,38 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 )
+
+// TestBrokerBackedSplit_NoStaticBrokerGate is the #2196 blind-spot ② green: a
+// split topology with a cross-process active amqp event no longer trips a static
+// broker gate. The old static TOPO-13 rule fired here (over-constraining legal
+// broker-backed splits because a static rule cannot see the runtime-injected
+// broker); it has been removed, leaving the bootstrap runtime gate
+// (validateSplitTopologyBroker, keyed off the codegen-derived
+// RequiresBrokerForCrossProcessEvents signal) as the sole broker-mandatory
+// enforcement point.
+func TestBrokerBackedSplit_NoStaticBrokerGate(t *testing.T) {
+	pub := metadatatest.CellIDCellA
+	sub := metadatatest.CellIDCellB
+	contract := topoTestContract("event.data.v1", "event", pub)
+	contract.Transports = []string{"amqp"}
+	contract.Endpoints.Subscribers = []string{sub}
+	pm := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{pub: topoTestCell(pub), sub: topoTestCell(sub)},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{"event.data.v1": contract},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"testasm": topoTestAssembly([]string{pub, sub}, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
+				{Role: "core", Cells: []string{pub}, Endpoint: "core.svc:9090"},
+				{Role: "edge", Cells: []string{sub}, Endpoint: "edge.svc:9090"},
+			}}),
+		},
+	}
+	results, err := NewValidator(pm, ".", clock.Real()).ValidateStrict(context.Background(), false, false)
+	require.NoError(t, err)
+	assert.Empty(t, findByCode(results, RuleCode("TOPO-13")),
+		"broker-backed split must not trip a static broker gate (TOPO-13 removed, #2196)")
+}
 
 // --- helpers ---
 
