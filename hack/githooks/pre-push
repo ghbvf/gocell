@@ -27,8 +27,10 @@
 #     -tags=integration` (integration-test job). It is added here as an
 #     extra local guard because the integration-tag build break is a
 #     repeatedly-forgotten failure mode (project memory: integration-tag
-#     build). The other three commands do mirror real CI steps
-#     (_build-lint.yml: go build ./... / go vet -tags=e2e ./tests/e2e/...;
+#     build). In pure go.work mode these commands run per workspace module
+#     through hack/lib/modules.sh; if a root go.mod exists, the root commands
+#     also mirror real CI steps (_build-lint.yml: go build ./... /
+#     go vet -tags=e2e ./tests/e2e/...;
 #     bare `go vet ./...` is intentionally absent from CI because govet
 #     is in golangci-lint v2's default linter set, but the hook still runs
 #     it as a fast standalone fail-fast independent of the lint step).
@@ -46,10 +48,10 @@
 #     pre-push gate. Developers who want PR-time archtest feedback run
 #     `bash hack/verify-archtest.sh` or `make verify` explicitly.
 #   - golangci-lint runs CI-faithfully —
-#     `golangci-lint run --new-from-merge-base=origin/develop` with the
-#     version pinned by hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION (the
-#     project's single source of truth, which CI's lint step sources via the
-#     same gocell::golangci_lint::ensure; NOT go.mod
+#     `golangci-lint run --new-from-merge-base=origin/develop` per workspace
+#     module with the version pinned by hack/lib/golangci-lint.sh::
+#     GOLANGCI_LINT_VERSION (the project's single source of truth, which CI's
+#     lint step sources via the same gocell::golangci_lint::ensure; NOT go.mod
 #     like gofumpt — golangci-lint is not a go.mod tool dependency).
 #     Three honest caveats: (a) MEASURED cost is ~7s warm but ~295s
 #     (~5min) COLD — i.e. after `go clean -cache`, a dependency bump, or
@@ -242,10 +244,15 @@ gofumpt_gate() {
 # resolver / install error returns non-zero so run_bg blocks the push
 # (no-soft-fallback — never silently skip the gate).
 lint_gate() {
-    local bin
+    local bin module_dirs dir build_tags
     # shellcheck source=/dev/null
     if ! source "${ROOT}/hack/lib/golangci-lint.sh" 2>/dev/null; then
         printf 'golangci-lint gate: cannot source hack/lib/golangci-lint.sh\n'
+        return 1
+    fi
+    # shellcheck source=/dev/null
+    if ! source "${ROOT}/hack/lib/modules.sh" 2>/dev/null; then
+        printf 'golangci-lint gate: cannot source hack/lib/modules.sh\n'
         return 1
     fi
     if ! bin="$(gocell::golangci_lint::ensure)"; then
@@ -270,7 +277,23 @@ lint_gate() {
     # aborting a slow cold-cache range — it does not change which findings the
     # hook vs. CI report (verdict parity comes from the shared binary + config,
     # not the timeout).
-    "${bin}" run "--new-from-merge-base=${BASE_BRANCH}" --timeout=10m
+    if ! "${bin}" config verify --config "${ROOT}/.golangci.yml"; then
+        return 1
+    fi
+    if ! module_dirs="$(gocell::modules::dirs)"; then
+        printf 'golangci-lint gate: workspace module enumeration failed\n'
+        return 1
+    fi
+    while IFS= read -r dir; do
+        [[ -n "${dir}" && "${dir}" != "." ]] || continue
+        build_tags=""
+        [[ "${dir#./}" == "tools" ]] && build_tags="--build-tags=archtest,releasesmoke"
+        (
+            cd "${ROOT}/${dir}"
+            # shellcheck disable=SC2086 # build_tags is intentionally split into CLI flags.
+            "${bin}" run --config "${ROOT}/.golangci.yml" "--new-from-merge-base=${BASE_BRANCH}" --timeout=10m ${build_tags} ./...
+        ) || return 1
+    done <<<"${module_dirs}"
 }
 
 # ---------------------------------------------------------------------------
@@ -316,10 +339,12 @@ if [[ ${go_changed} -eq 1 ]]; then
     [[ ${#fmt_targets[@]} -gt 0 ]] && \
         run_bg "gofumpt formatter (run: make fmt)" gofumpt_gate "${fmt_targets[@]}"
 
-    run_bg "go build ./..."                        go build ./...
-    run_bg "go build -tags=integration ./..."      go build -tags=integration ./...
-    run_bg "go vet ./..."                          go vet ./...
-    run_bg "go vet -tags=e2e ./tests/e2e/..."      go vet -tags=e2e ./tests/e2e/...
+    if [[ -f go.mod ]]; then
+        run_bg "go build ./..."                   go build ./...
+        run_bg "go build -tags=integration ./..." go build -tags=integration ./...
+        run_bg "go vet ./..."                     go vet ./...
+    fi
+    run_bg "go vet -tags=e2e ./tests/e2e/..." go vet -tags=e2e ./tests/e2e/...
     # examples/* are their own go.work modules (#1556); root ./... stops at the
     # nested-module boundary. Enumerate every satellite from the SAME go.work
     # funnel the CI build/test gates use (hack/lib/modules.sh → `go work edit

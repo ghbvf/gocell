@@ -31,5 +31,6 @@ slice 使用 `role: orchestrate` 时，所属 cell 必须声明 L3。
 ## 参考
 
 - ADR：`docs/architecture/202606021000-adr-saga-l3-orchestration-engine.md`
+- ADR：`docs/architecture/202606051200-1609-adr-saga-journal-projection-source.md`
 - Runbook：`docs/ops/saga-runbook.md`
 - 扇出规则：`.claude/rules/gocell/contract-fanout.md`
