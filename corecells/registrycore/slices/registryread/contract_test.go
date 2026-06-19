@@ -2,6 +2,7 @@ package registryread
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -109,6 +110,45 @@ func TestContractListServe_OK(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestContractListServe_OK_WithApprovedItem: an approved registration serializes
+// its now-required approver/payloadSchema columns (#2401: optional→required) all
+// the way through the masking funnel to a schema-valid 200 body. This is the HTTP
+// contract-layer counterpart to service_test's TestList_SingleItem — it proves the
+// full serialize → projection funnel → wire → schema-validate path keeps the
+// required columns present and non-empty, which the empty-registrar OK test cannot.
+func TestContractListServe_OK_WithApprovedItem(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	reg := seedApproved(t, "http.example.approved.v1", "cell-a", "admin-1", "schema-ref-1")
+	rec := getList(t, newMuxOver(t, reg), adminCtx(allowAuthorizer()), "limit=10")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	var resp struct {
+		Data []struct {
+			ID            string `json:"id"`
+			Approver      string `json:"approver"`
+			PayloadSchema string `json:"payloadSchema"`
+			State         string `json:"state"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal body: %v; body=%s", err, rec.Body.String())
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("len(data) = %d, want 1; body=%s", len(resp.Data), rec.Body.String())
+	}
+	switch it := resp.Data[0]; {
+	case it.Approver != "admin-1":
+		t.Errorf("approver = %q, want admin-1 (required column visible after approve)", it.Approver)
+	case it.PayloadSchema != "schema-ref-1":
+		t.Errorf("payloadSchema = %q, want schema-ref-1", it.PayloadSchema)
+	case it.State != registry.StateApproved().String():
+		t.Errorf("state = %q, want %q", it.State, registry.StateApproved().String())
+	}
 }
 
 // TestContractListServe_Unauthenticated: no principal ⇒ RequirePermission 401.

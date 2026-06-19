@@ -47,6 +47,29 @@ func seed(t *testing.T, ids ...string) *registry.ContractRegistrar {
 	return r
 }
 
+// seedApproved registers id with payloadSchema then drives it through the full
+// legal transition chain to StateApproved (the approving Actor is recorded as the
+// registration's Approver). It exercises the projection wire path for the
+// approver/payloadSchema columns, which moved optional→required in #2401
+// (full-column-set), so their non-empty values must survive serialize → mask
+// funnel → wire → schema validation.
+func seedApproved(t *testing.T, id, submitter, approver, payloadSchema string) *registry.ContractRegistrar {
+	t.Helper()
+	r := registry.NewContractRegistrar(clockmock.New(testEpoch))
+	if _, err := r.Submit(registry.SubmitInput{ID: id, Kind: "http", Submitter: submitter, PayloadSchema: payloadSchema}); err != nil {
+		t.Fatalf("submit %q: %v", id, err)
+	}
+	for _, to := range []registry.RegistrationState{
+		registry.StateProbing(), registry.StateConformant(),
+		registry.StatePendingApproval(), registry.StateApproved(),
+	} {
+		if _, err := r.Advance(registry.AdvanceInput{ID: id, To: to, Actor: approver}); err != nil {
+			t.Fatalf("advance %q -> %v: %v", id, to, err)
+		}
+	}
+	return r
+}
+
 func mustList(t *testing.T, svc *Service, req *list.Request) list.List200JSONResponse {
 	t.Helper()
 	resp, err := svc.List(context.Background(), req)
