@@ -17,7 +17,7 @@ endpoints:
     noContent: false
     responses:
       400:
-        description: "Bad request — malformed JSON body, oversized payload, or invalid field (id/kind)."
+        description: "Bad request — malformed JSON body, missing/invalid field (id, kind, ownerCell, lifecycle), or contract-declaration governance validation failure (schemaRefs/endpoints/transports). Oversized payloads return 413."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token."

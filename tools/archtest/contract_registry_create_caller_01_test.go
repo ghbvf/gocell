@@ -137,6 +137,14 @@ func registryPortsReceiverName(t types.Type) string {
 	return ""
 }
 
+// isServiceSubmitMethodDecl reports whether fd is the sanctioned registrywrite
+// entry method (*Service).Submit — the ONE callsite allowed to reach
+// ports.Registry.Create. Callers must additionally confirm fd lives in the
+// registrywrite package (a same-named type elsewhere would not be the service).
+func isServiceSubmitMethodDecl(fd *ast.FuncDecl) bool {
+	return fd.Name != nil && fd.Name.Name == "Submit" && recvTypeName(fd) == "Service"
+}
+
 // isCreateCallOnInterface reports whether call is a `.Create(` selector call whose
 // resolved *types.Func lives in pkgPath and whose receiver type has name "Registry".
 // This is the generalized detector used by the RedFixture to target the fixture's
@@ -180,44 +188,47 @@ func TestContractRegistryCreateCaller01(t *testing.T) {
 		var d []Diagnostic
 		for _, file := range p.Files {
 			rel := p.Rel(file)
-			EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
-				if !isRegistryCreateCall(p.TypesInfo, call) {
-					return
-				}
-				if inAllowlist {
-					sanctionedCallsites++
-					return // the sanctioned caller
-				}
-				pos := p.Fset.Position(call.Pos())
-				d = append(d, Diagnostic{
-					Rel:  rel,
-					Line: pos.Line,
-					Message: fmt.Sprintf(
-						"CONTRACT-REGISTRY-CREATE-CALLER-01: %s calls ports.Registry.Create outside "+
-							"corecells/registrycore/slices/registrywrite. A durable contract registration "+
-							"MUST be persisted only through the registrywrite.Service.Submit path, which "+
-							"runs governance.RegistrationGate.Check before calling store.Create. Any "+
-							"other caller bypasses the gate and admits an unvalidated registration "+
-							"into the durable store (MDM/zero-trust governance bypass, #2237 303-US6).",
-						rel),
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				sanctioned := inAllowlist && isServiceSubmitMethodDecl(fd)
+				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
+					if !isRegistryCreateCall(p.TypesInfo, call) {
+						return
+					}
+					if sanctioned {
+						sanctionedCallsites++
+						return // the sanctioned caller: (*Service).Submit inside registrywrite
+					}
+					pos := p.Fset.Position(call.Pos())
+					d = append(d, Diagnostic{
+						Rel:  rel,
+						Line: pos.Line,
+						Message: fmt.Sprintf(
+							"CONTRACT-REGISTRY-CREATE-CALLER-01: %s calls ports.Registry.Create outside "+
+								"(*registrywrite.Service).Submit. A durable contract registration "+
+								"MUST be persisted only through the registrywrite.Service.Submit path, which "+
+								"runs governance.RegistrationGate.Check before calling store.Create. Any "+
+								"other caller bypasses the gate and admits an unvalidated registration "+
+								"into the durable store (MDM/zero-trust governance bypass, #2237 303-US6).",
+							rel),
+					})
 				})
 			})
 		}
 		return d
 	})
 
-	// Anti-vacuity: at least one sanctioned callsite must exist — the store.Create
-	// call inside registrywrite.Service.Submit. 0 = the registrywrite service no
-	// longer persists via the ports.Registry interface (the funnel guards nothing);
-	// this catches accidental renames or refactors that move the Create call out of
-	// the interface-typed path.
-	if sanctionedCallsites == 0 {
+	// Anti-vacuity: exactly one sanctioned callsite must exist — the store.Create
+	// call inside (*registrywrite.Service).Submit. 0 = the service no longer persists
+	// via the ports.Registry interface (the funnel guards nothing); >1 = a second
+	// unreviewed callsite inside (*Service).Submit appeared. Both drift cases are
+	// caught here rather than silently passing.
+	if sanctionedCallsites != 1 {
 		diags = append(diags, Diagnostic{
-			Message: fmt.Sprintf("CONTRACT-REGISTRY-CREATE-CALLER-01 anti-vacuity: expected ≥ 1 "+
-				"ports.Registry.Create callsite inside %s, found %d "+
+			Message: fmt.Sprintf("CONTRACT-REGISTRY-CREATE-CALLER-01 anti-vacuity: expected EXACTLY 1 "+
+				"ports.Registry.Create callsite inside (*Service).Submit, found %d "+
 				"(0 = registrywrite no longer persists via ports.Registry.Create → funnel vacuous; "+
-				"check registrywrite/service.go store.Create call or service refactor).",
-				registryWriteServicePkgPath, sanctionedCallsites),
+				">1 = unreviewed second callsite inside (*Service).Submit).",
+				sanctionedCallsites),
 		})
 	}
 

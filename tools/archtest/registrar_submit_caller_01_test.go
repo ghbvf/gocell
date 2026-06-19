@@ -173,6 +173,48 @@ func isMemRegistryCreateMethodDecl(fd *ast.FuncDecl) bool {
 	return fd.Name != nil && fd.Name.Name == "Create" && recvTypeName(fd) == "Registry"
 }
 
+// scanRegistrarSubmitCalls inspects a single Pass for ContractRegistrar.Submit
+// callsites. It returns counts for the two sanctioned entries (gate and
+// durable store) and any violation diagnostics for unsanctioned calls.
+// gatePkg and memPkg report whether the Pass's package is, respectively, the
+// governance gate package and the in-mem store package.
+func scanRegistrarSubmitCalls(p *Pass, gatePkg, memPkg bool) (gateCount, memCount int, diags []Diagnostic) {
+	for _, file := range p.Files {
+		rel := p.Rel(file)
+		EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+			gateSanctioned := gatePkg && isGateSubmitMethodDecl(fd)
+			memSanctioned := memPkg && isMemRegistryCreateMethodDecl(fd)
+			EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
+				if !isRegistrarSubmitCall(p.TypesInfo, call) {
+					return
+				}
+				switch {
+				case gateSanctioned:
+					gateCount++
+					return // sanctioned: the governance gate entry
+				case memSanctioned:
+					memCount++
+					return // sanctioned: the durable store persist entry (gated by CONTRACT-REGISTRY-CREATE-CALLER-01)
+				}
+				pos := p.Fset.Position(call.Pos())
+				diags = append(diags, Diagnostic{
+					Rel:  rel,
+					Line: pos.Line,
+					Message: fmt.Sprintf(
+						"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit outside the "+
+							"sanctioned persist entries ((*RegistrationGate).Submit, or the durable store's "+
+							"(*mem.Registry).Create which is itself gated by CONTRACT-REGISTRY-CREATE-CALLER-01). "+
+							"A runtime contract MUST enter `submitted` only after governance validation; any other "+
+							"callsite re-admits the ungated \"submitted but invalid\" path the gate eliminates "+
+							"(303-US3 #2234, amended 303-US6 #2237).",
+						rel),
+				})
+			})
+		})
+	}
+	return gateCount, memCount, diags
+}
+
 // TestRegistrarSubmitCaller01 asserts that the ONLY production callsite of
 // registry.ContractRegistrar.Submit is inside (*RegistrationGate).Submit — an
 // entry-level allowlist, not a package-level one (any other callsite, even inside
@@ -190,40 +232,9 @@ func TestRegistrarSubmitCaller01(t *testing.T) {
 		}
 		gatePkg := p.Pkg.Path() == registrationGatePkgPath
 		memPkg := p.Pkg.Path() == registryMemStorePkgPath
-		var d []Diagnostic
-		for _, file := range p.Files {
-			rel := p.Rel(file)
-			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
-				gateSanctioned := gatePkg && isGateSubmitMethodDecl(fd)
-				memSanctioned := memPkg && isMemRegistryCreateMethodDecl(fd)
-				EachInSubtree[ast.CallExpr](fd, func(call *ast.CallExpr) {
-					if !isRegistrarSubmitCall(p.TypesInfo, call) {
-						return
-					}
-					switch {
-					case gateSanctioned:
-						gateSubmitCallsites++
-						return // sanctioned: the governance gate entry
-					case memSanctioned:
-						memCreateCallsites++
-						return // sanctioned: the durable store persist entry (gated by CONTRACT-REGISTRY-CREATE-CALLER-01)
-					}
-					pos := p.Fset.Position(call.Pos())
-					d = append(d, Diagnostic{
-						Rel:  rel,
-						Line: pos.Line,
-						Message: fmt.Sprintf(
-							"REGISTRAR-SUBMIT-CALLER-01: %s calls registry.ContractRegistrar.Submit outside the "+
-								"sanctioned persist entries ((*RegistrationGate).Submit, or the durable store's "+
-								"(*mem.Registry).Create which is itself gated by CONTRACT-REGISTRY-CREATE-CALLER-01). "+
-								"A runtime contract MUST enter `submitted` only after governance validation; any other "+
-								"callsite re-admits the ungated \"submitted but invalid\" path the gate eliminates "+
-								"(303-US3 #2234, amended 303-US6 #2237).",
-							rel),
-					})
-				})
-			})
-		}
+		g, m, d := scanRegistrarSubmitCalls(p, gatePkg, memPkg)
+		gateSubmitCallsites += g
+		memCreateCallsites += m
 		return d
 	})
 

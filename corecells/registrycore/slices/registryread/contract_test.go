@@ -13,9 +13,11 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
@@ -83,6 +85,61 @@ func emptyStore() *mem.Registry {
 	return mem.NewRegistry(clockmock.New(testEpoch))
 }
 
+// seededStore returns a *mem.Registry populated with two registrations:
+//   - "http.example.minimal.v1": submitted only (approver=null, payloadSchema=null)
+//   - "http.example.full.v1": fully populated — payloadSchema set at submit,
+//     advanced through the full lifecycle to approved (approver non-null)
+//
+// This exercises both branches of the nullable-required fields (approver /
+// payloadSchema) so ValidateHTTPResponseRecorder / assertResponseMatchesSchema
+// validates the per-item schema against non-empty data instead of an empty array.
+func seededStore(t *testing.T) *mem.Registry {
+	t.Helper()
+	ctx := context.Background()
+	tnt, err := tenant.ParseTenantID(testTenantStr)
+	if err != nil {
+		t.Fatalf("seededStore: parse tenant: %v", err)
+	}
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+
+	// Item 1: minimal — no payloadSchema, stays in submitted state (both nullable
+	// fields remain null in the wire response).
+	if _, err := store.Create(ctx, tnt, registry.SubmitInput{
+		ID:        "http.example.minimal.v1",
+		Kind:      "http",
+		Submitter: "cell-a",
+	}); err != nil {
+		t.Fatalf("seededStore: create minimal: %v", err)
+	}
+
+	// Item 2: fully-populated — payloadSchema set at submit, advanced to approved so
+	// approver is non-null (both nullable fields are non-null in the wire response).
+	if _, err := store.Create(ctx, tnt, registry.SubmitInput{
+		ID:            "http.example.full.v1",
+		Kind:          "http",
+		PayloadSchema: `{"type":"object"}`,
+		Submitter:     "cell-b",
+	}); err != nil {
+		t.Fatalf("seededStore: create full: %v", err)
+	}
+	steps := []registry.RegistrationState{
+		registry.StateProbing(),
+		registry.StateConformant(),
+		registry.StatePendingApproval(),
+		registry.StateApproved(),
+	}
+	for _, st := range steps {
+		if _, err := store.Transition(ctx, tnt, registry.AdvanceInput{
+			ID:    "http.example.full.v1",
+			To:    st,
+			Actor: "system",
+		}); err != nil {
+			t.Fatalf("seededStore: advance to %v: %v", st, err)
+		}
+	}
+	return store
+}
+
 // adminCtx returns a context with an admin principal, the test tenant, and the
 // given authorizer wired. Both tenant and authorizer are required for the list
 // service to reach the store successfully.
@@ -129,8 +186,24 @@ func TestContractListServe_QuerySchema(t *testing.T) {
 }
 
 // TestContractListServe_OK: an authenticated admin (allow PDP) gets a 200 whose
-// body satisfies the paginated response schema (empty page is valid).
+// body satisfies the paginated response schema when the store has items.
+// Two registrations are seeded: one minimal (approver + payloadSchema = null)
+// and one fully-populated (approver + payloadSchema non-null), exercising both
+// branches of the nullable-required item fields so the schema validator checks
+// per-item constraints on real data rather than an empty array.
 func TestContractListServe_OK(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	rec := getList(t, newMuxOver(t, seededStore(t)), adminCtx(allowAuthorizer()), "limit=10")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestContractListServe_OK_EmptyPage: schema is also valid for the empty-data
+// envelope (data=[], nextCursor="", hasMore=false). This keeps envelope-only
+// coverage alongside the seeded-store test above.
+func TestContractListServe_OK_EmptyPage(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
 	rec := getList(t, newMuxOver(t, emptyStore()), adminCtx(allowAuthorizer()), "limit=10")
 	if rec.Code != http.StatusOK {

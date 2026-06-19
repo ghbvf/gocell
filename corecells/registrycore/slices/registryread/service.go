@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
@@ -179,18 +180,25 @@ func toListItem(reg registry.ContractRegistration) list.ResponseDataItem {
 
 // parseStateFilter converts the optional state wire value from the request into a
 // ports.ListFilter. An empty string (omitted param) returns a zero filter (no
-// filter). An unrecognized value returns a 400-worthy error. The state value set
-// is not declared as a queryParam enum (metadata.ParamSchema models no enum), so
-// this registry.ParseState membership check is the sole guard for an invalid
-// state value (→ 400).
+// filter). An unrecognized value returns a 400-worthy error with structured
+// details (field / value / allowed) sourced from the canonical registry.StateNames
+// closed set. The state value set is not declared as a queryParam enum
+// (metadata.ParamSchema models no enum), so this registry.ParseState membership
+// check is the sole guard for an invalid state value (→ 400).
 func parseStateFilter(stateParam string) (ports.ListFilter, error) {
 	if stateParam == "" {
 		return ports.ListFilter{}, nil
 	}
 	state, ok := registry.ParseState(stateParam)
 	if !ok {
+		allowed := strings.Join(registry.StateNames(), ", ")
 		return ports.ListFilter{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			msgInvalidStateParam,
+			errcode.WithDetails(
+				errcode.PublicString("field", "state"),
+				errcode.PublicString("value", stateParam),
+				errcode.PublicString("allowed", allowed),
+			),
 		)
 	}
 	return ports.ListFilter{State: state}, nil

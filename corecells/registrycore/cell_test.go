@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
@@ -163,5 +164,56 @@ func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	}
 	if body.Data[0].State != registry.StateSubmitted().String() {
 		t.Fatalf("submitted contract state = %q, want %q (sealed)", body.Data[0].State, registry.StateSubmitted().String())
+	}
+}
+
+// TestInitInternal_DurableMode_NilCursorCodec_Errors pins that durable mode without
+// an injected CursorCodec is a startup error (fail-closed, mirrors auditcore/
+// configcore). A real TxManager is NOT required for this guard — the codec check
+// fires first; the test supplies a demo TxManager to isolate the codec guard.
+func TestInitInternal_DurableMode_NilCursorCodec_Errors(t *testing.T) {
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(outbox.DemoCellTxManager()), // isolate codec guard
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	err := c.initInternal(context.Background(), rec)
+	if err == nil {
+		t.Fatal("initInternal(durable, nil codec) must return error (fail-closed)")
+	}
+}
+
+// TestInitInternal_DurableMode_DemoTxManager_Errors pins that durable mode with a
+// demo (noop) TxManager is rejected by outbox.CheckNotNoop — an assembly that
+// forgets to wire a real TxManager must fail at Init() time. A real codec is NOT
+// required because the TxManager guard runs before the codec guard.
+func TestInitInternal_DurableMode_DemoTxManager_Errors(t *testing.T) {
+	// Build a real cursor codec so only the TxManager guard fires.
+	devKey := []byte("registrycore-cell-test-key-32bytes!")
+	codec, err := query.NewCursorCodec(devKey)
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(outbox.DemoCellTxManager()),
+		WithCursorCodec(codec),
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	err = c.initInternal(context.Background(), rec)
+	if err == nil {
+		t.Fatal("initInternal(durable, demo txManager) must return error (CheckNotNoop)")
+	}
+}
+
+// TestInitInternal_DemoMode_Fallbacks_Succeed pins that demo mode with no injected
+// TxManager or CursorCodec succeeds by falling back to the built-in defaults.
+// This is the normal in-mem / CI topology.
+func TestInitInternal_DemoMode_Fallbacks_Succeed(t *testing.T) {
+	c := New(clockmock.New(testEpoch)) // no options — demo fallbacks apply
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
+		t.Fatalf("initInternal(demo, no opts) must succeed: %v", err)
+	}
+	if c.writeHandler == nil || c.readHandler == nil {
+		t.Fatal("handlers nil after demo fallback initInternal")
 	}
 }

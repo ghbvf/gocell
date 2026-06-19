@@ -28,7 +28,6 @@ import (
 // const messages — MESSAGE-CONST-LITERAL-01: errcode.New message must be a literal.
 const (
 	msgGateValidationFailed = "contract declaration failed governance validation"
-	msgGateInvalidInput     = "contract declaration is malformed or missing a required field"
 	msgGateTenantInvalid    = "request carries an invalid or missing tenant scope"
 	msgGateUnavailable      = "governance validator is temporarily unavailable"
 	msgTenantRequired       = "tenant scope required to submit a contract"

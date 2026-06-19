@@ -11,7 +11,7 @@
 // tools/archtest cannot import — so this fixture declares its OWN stand-in
 // Registry interface mirroring the shape of ports.Registry: a Create method
 // with the same structural role. The RedFixture test runs the SAME detector
-// core (isRegistryCreateCallByName) targeted at THIS package's interface type
+// core (isCreateCallOnInterface) targeted at THIS package's interface type
 // to prove the receiver-binding fires on a genuine interface method call. A
 // 0 result means the detector regressed and a direct ports.Registry.Create
 // bypass could slip in unnoticed.

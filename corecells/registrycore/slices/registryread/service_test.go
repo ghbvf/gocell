@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
@@ -299,7 +300,8 @@ func TestList_StateFilter_NoMatch(t *testing.T) {
 	}
 }
 
-// TestList_StateFilter_InvalidState: unknown state value → 400.
+// TestList_StateFilter_InvalidState: unknown state value → 400 with structured
+// details carrying field=state, value=<input>, and allowed=<canonical set>.
 func TestList_StateFilter_InvalidState(t *testing.T) {
 	ctx := tenantCtx(testTenantStr)
 	svc := newSvc(t, newMemStore(t))
@@ -310,8 +312,40 @@ func TestList_StateFilter_InvalidState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List returned unexpected error %v, want 400 response", err)
 	}
-	if _, ok := resp.(list.List400ErrorResponse); !ok {
+	e400, ok := resp.(list.List400ErrorResponse)
+	if !ok {
 		t.Fatalf("List with invalid state returned %T, want List400ErrorResponse", resp)
+	}
+
+	// Verify structured details: field=state, value=bogus-state, allowed contains all states.
+	ce := &e400.Body
+	fieldDetail, ok := ce.FindAttr("field")
+	if !ok {
+		t.Fatal("400 error must carry detail field=state; got none")
+	}
+	if got := fieldDetail.Value(); got != "state" {
+		t.Errorf("detail field value = %v, want state", got)
+	}
+	valueDetail, ok := ce.FindAttr("value")
+	if !ok {
+		t.Fatal("400 error must carry detail value=bogus-state; got none")
+	}
+	if got := valueDetail.Value(); got != "bogus-state" {
+		t.Errorf("detail value value = %v, want bogus-state", got)
+	}
+	allowedDetail, ok := ce.FindAttr("allowed")
+	if !ok {
+		t.Fatal("400 error must carry detail allowed=<set>; got none")
+	}
+	allowedStr, ok := allowedDetail.Value().(string)
+	if !ok {
+		t.Fatalf("detail allowed value is %T, want string", allowedDetail.Value())
+	}
+	// Verify the allowed string contains every canonical state name.
+	for _, name := range registry.StateNames() {
+		if !strings.Contains(allowedStr, name) {
+			t.Errorf("detail allowed %q missing state %q", allowedStr, name)
+		}
 	}
 }
 

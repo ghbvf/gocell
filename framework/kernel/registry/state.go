@@ -108,6 +108,21 @@ func (s RegistrationState) IsTerminal() bool {
 	}
 }
 
+// StateNames returns the ordered wire/label values for every producible
+// RegistrationState. The slice is sorted in lifecycle order and is the canonical
+// single source for "what strings are valid?" — used by validation helpers to
+// populate the allowed-values detail in structured error responses without
+// hard-coding the list in call sites.
+//
+// The returned slice is a fresh copy each call; callers must not mutate it.
+func StateNames() []string {
+	names := make([]string, len(allRegistrationStates))
+	for i, s := range allRegistrationStates {
+		names[i] = s.v
+	}
+	return names
+}
+
 // ParseState resolves a wire/label string back to its sealed RegistrationState —
 // the inverse of String() and the sole way a durable store reconstructs a state
 // read from its `state TEXT` column without forging one (the unexported field
