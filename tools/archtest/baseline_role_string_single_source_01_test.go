@@ -89,6 +89,12 @@ const rolesGoRelPath = "runtime/auth/roles.go"
 // baselineRoleAllowRel 是允许包含平台 role 值字面量的文件（仅 roles.go 本身）。
 const baselineRoleAllowRel = rolesGoRelPath
 
+// authorizationdecideRelPrefix 是 ABAC baseline 包在模块内的逻辑路径前缀
+// （corecells 不剥前缀）。断言2 的两个扫描根之一；anti-vacuity 借此确认该根
+// 未单独漂移——只查 fileCount>0 会被另一个根（framework/runtime/auth）的文件
+// 掩盖「authorizationdecide 路径被删/改名」的半空洞化。
+const authorizationdecideRelPrefix = "corecells/accesscore/slices/authorizationdecide/"
+
 // TestBASELINE_ROLE_STRING_SINGLE_SOURCE_01_Freeze 断言1：
 // 扫描 roles.go 提取 const Role* 集合，断言与 frozenPlatformRoles 完全相等（Hard value-golden）。
 // 同时断言 rolePrefixPlatformAlias（ROLE-PREFIX-NAMESPACED-01 同包 var）与 frozenPlatformRoles
@@ -231,8 +237,8 @@ func TestBASELINE_ROLE_STRING_SINGLE_SOURCE_01(t *testing.T) {
 		baselineRoleAllowRel: {},
 	}
 
-	var fileCount int
 	var rolesGoSeen bool
+	var authorizationdecideSeen bool
 
 	diags := Run(t,
 		Typed(TypedOpts{Tests: false}, []string{
@@ -242,24 +248,28 @@ func TestBASELINE_ROLE_STRING_SINGLE_SOURCE_01(t *testing.T) {
 		func(p *Pass) []Diagnostic {
 			for _, f := range p.Files {
 				rel := p.Rel(f)
-				fileCount++
 				if rel == rolesGoRelPath {
 					rolesGoSeen = true
+				}
+				if strings.HasPrefix(rel, authorizationdecideRelPrefix) {
+					authorizationdecideSeen = true
 				}
 			}
 			return baselineRoleLiteralDiagnostics(p, banned, allow)
 		})
 
-	// Anti-vacuity: 确保扫描确实覆盖了 roles.go 和足够多的文件。
+	// Anti-vacuity: 必须确认**每个**扫描根都被实际覆盖。只查总文件数 > 0 会被
+	// 任一根掩盖另一根的漂移（如 authorizationdecide 路径被删/改名时，
+	// framework/runtime/auth 的文件仍使总数非零，半空洞化静默通过）。
 	if !rolesGoSeen {
 		t.Errorf("%s anti-vacuity: roles.go (%q) 未被扫描到；"+
-			"扫描范围可能已漂移，请检查 Typed patterns",
+			"framework/runtime/auth 扫描根可能已漂移，请检查 Typed patterns",
 			ruleBaselineRoleStringSingleSource01, rolesGoRelPath)
 	}
-	if fileCount == 0 {
-		t.Errorf("%s anti-vacuity: 扫描到的文件数为 0；"+
-			"扫描范围已完全空洞化",
-			ruleBaselineRoleStringSingleSource01)
+	if !authorizationdecideSeen {
+		t.Errorf("%s anti-vacuity: ABAC baseline 包 (%q) 未被扫描到；"+
+			"authorizationdecide 扫描根可能已漂移，请检查 Typed patterns",
+			ruleBaselineRoleStringSingleSource01, authorizationdecideRelPrefix)
 	}
 
 	Report(t, ruleBaselineRoleStringSingleSource01, diags)
