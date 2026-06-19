@@ -115,6 +115,14 @@ type ContractGenSpec struct {
 	// Pre-computed from ContractID + "-standard-schema-compile-failed".
 	// Example: "http-order-create-v1-standard-schema-compile-failed".
 	PanicReasonStandardSchemaCompileFailed string
+	// PanicReasonClientTransportNil is the kebab-case reason literal for the
+	// generated client's nil-transport fail-fast (client.tmpl newClient, #2093).
+	// Pre-computed from ContractID + "-client-transport-nil".
+	PanicReasonClientTransportNil string
+	// PanicReasonClientRingNil is the kebab-case reason literal for the generated
+	// client's nil-keyring fail-fast (client.tmpl newClient, #2093).
+	// Pre-computed from ContractID + "-client-ring-nil".
+	PanicReasonClientRingNil string
 }
 
 // DTOSpec is one Go struct definition.
@@ -341,6 +349,21 @@ type httpEndpointSpec struct {
 	// EmitToMap, so the handler must route wire data through the masking funnel
 	// (epic #1337 PR-12, RESOURCE-PROJECTION-CALLSITE-LOCK-01).
 	ResponseProjection bool
+	// ClientDecodeDTO names the resource-item DTO the generated cross-cell client
+	// (client_gen.go, #2093) decodes the success `data` envelope into, for
+	// responseProjection contracts whose server-side Response.Data is the SEALED
+	// projection.ResourceProjection carrier (no UnmarshalJSON — a client cannot
+	// decode into Response). Empty for non-projection contracts: those decode
+	// straight into the generated Response (directly unmarshalable). Set by the
+	// deriveClientDecode post-pass from the Response `data` field's ItemDTO, after
+	// applyResponseProjection. Only consumed by client.tmpl (gated by
+	// shouldEmitClient); zero impact on handler/iface/types rendering.
+	ClientDecodeDTO string
+	// ClientDecodeList is true when the responseProjection `data` field is an array
+	// ([]projection.ResourceProjection), so the generated client decodes
+	// {data: []ClientDecodeDTO} and returns a slice. Paired with ClientDecodeDTO;
+	// both are empty/false for non-projection contracts.
+	ClientDecodeList bool
 }
 
 // IsPagination reports whether this endpoint uses the canonical cursor+limit
