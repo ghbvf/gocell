@@ -324,14 +324,14 @@ func runEnqueueMaxPendingCap(t *testing.T, factory QueueFactory, features Featur
 
 	// An idempotency-coalesced re-enqueue adds no row, so it is a no-op even at the
 	// cap — NOT a rate-limit (dedup is decided before the cap).
-	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("cap-ak-1", "dev-keyed", now()), "cap-key")
+	seedEntryWithKey(t, ctx, q, tx, features, makeEntry("cap-ak-1", "dev-x", now()), "cap-key")
 	for _, id := range []string{"cap-ak-2", "cap-ak-3"} {
-		if err := enqueue(id, "dev-keyed", capped); err != nil {
+		if err := enqueue(id, "dev-x", capped); err != nil {
 			t.Fatalf("Enqueue %s under cap: %v", id, err)
 		}
 	}
 	if err := inTx(t, ctx, tx, features, func(c context.Context) error {
-		return q.Enqueue(c, makeEntry("cap-ak-dup", "dev-keyed", now()),
+		return q.Enqueue(c, makeEntry("cap-ak-dup", "dev-x", now()),
 			command.EnqueueOptions{IdempotencyKey: "cap-key", MaxPendingPerDevice: limit})
 	}); err != nil {
 		t.Fatalf("idempotency-coalesced re-enqueue at cap must be a no-op, got: %v", err)
