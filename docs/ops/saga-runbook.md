@@ -175,14 +175,14 @@ ORDER BY updated_at ASC LIMIT 20;
 
 ## 场景 5：投影 tailer 停滞（#1609 PR-04）
 
-对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，per-(cellID, projectionID) 粒度——两个 cell 可合法共用同一 projectionID，故 key 必须带 cellID；区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
+对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerDrainErrors` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，per-(cellID, projectionID) 粒度——两个 cell 可合法共用同一 projectionID，故 key 必须带 cellID；区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
 
 **症状**：读投影读到陈旧 saga 终态；`last_success_timestamp` 不前进 / `pending_events` 持续增长。
 
 **根因（按概率）**：
 
 1. **无 leader 在跑**：没有 tailer pod 抢到 per-projection distlock（部署缩到 0 副本 / 全部副本崩溃）。
-2. **drain 反复失败**：`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——apply 路径或 checkpoint 事务故障；`drain_total{result="head_error"}` 持续 >0——saga journal Head 读取失败（journal / DB 不可达），drain 在 replay 前即中止。
+2. **drain 反复失败**：`drain_total{result="head_error"}` 持续 >0——saga journal Head 读取失败（journal / DB 不可达），drain 在 replay 前即中止，`pending_events` 可能停留在上次干净 tick 的旧值，`GoCellSagaTailerLagHigh` 不一定触发；`drain_total{result="store_error"}` 持续 >0——checkpoint `LoadOffset` 失败；`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——replay/apply 路径或 checkpoint 事务故障。
 3. **distlock 后端故障**：`lock_acquire_failed_total{reason="backend_error"}` 持续 >0（Redis 不可达），fail-closed → 无 drain。
 
 **诊断**：

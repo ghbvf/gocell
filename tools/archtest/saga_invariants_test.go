@@ -2243,6 +2243,7 @@ const (
 	sfcKindTypeName   = "EventKind"
 	sfcReadyzDocRel   = "docs/ops/readyz.md"
 	sfcAlertingDocRel = "docs/ops/alerting-rules.md"
+	sfcSagaRunbookRel = "docs/ops/saga-runbook.md"
 	sfcGenFileRel     = "kernel/saga/sagajournaltest/terminal_coverage_gen.go"
 )
 
@@ -3886,6 +3887,60 @@ func TestSagaMetricLabelValuesFrozen01(t *testing.T) {
 				typeName, len(gotVals), len(want))
 		}
 	}
+}
+
+func TestSagaTailerDrainErrorsAlertCoversAllNonOKDrainResults(t *testing.T) {
+	t.Parallel()
+
+	alerting := sagaDocSection(t,
+		string(sfcReadFile(t, findModuleRoot(t), "docs/ops", sfcAlertingDocRel, ".md")),
+		"### SagaTailerDrainErrors")
+	require.Contains(t, alerting, "- alert: GoCellSagaTailerDrainErrors",
+		"saga tailer drain failures need a dedicated alert before the slower stalled-tailer backstop")
+	require.Contains(t, alerting, "gocell_saga_journal_tailer_drain_total",
+		"the alert must use the drain_total counter, not only stalled/lag backstops")
+	require.Contains(t, alerting, "by (cell, projection, result)",
+		"result must remain a grouping label so head/store/apply failures are directly actionable")
+
+	for _, result := range sagaTailerNonOKDrainResults() {
+		require.Contains(t, alerting, result,
+			"GoCellSagaTailerDrainErrors must cover non-ok drain result %q", result)
+	}
+	require.NotContains(t, alerting, `result=~"ok`,
+		"the drain-error alert must not page on healthy ok drains")
+}
+
+func TestSagaTailerDrainErrorsRunbookCoversAllNonOKDrainResults(t *testing.T) {
+	t.Parallel()
+
+	runbook := sagaDocSection(t,
+		string(sfcReadFile(t, findModuleRoot(t), "docs/ops", sfcSagaRunbookRel, ".md")),
+		"## 场景 5：投影 tailer 停滞")
+	require.Contains(t, runbook, "GoCellSagaTailerDrainErrors",
+		"scenario 5 must list the dedicated drain-error alert as an entry point")
+	for _, result := range sagaTailerNonOKDrainResults() {
+		require.Contains(t, runbook, result,
+			"scenario 5 must explain drain_total result %q", result)
+	}
+}
+
+func sagaTailerNonOKDrainResults() []string {
+	out := slices.Clone(sagaLabelEnumWant["DrainResult"])
+	out = slices.DeleteFunc(out, func(v string) bool { return v == "ok" })
+	sort.Strings(out)
+	return out
+}
+
+func sagaDocSection(t *testing.T, doc, heading string) string {
+	t.Helper()
+	start := strings.Index(doc, heading)
+	require.NotEqualf(t, -1, start, "missing heading %q", heading)
+	rest := doc[start:]
+	next := strings.Index(rest[len(heading):], "\n##")
+	if next == -1 {
+		return rest
+	}
+	return rest[:len(heading)+next]
 }
 
 // TestSagaMetricLabelValuesFrozen01_CallsiteGuard is the production GREEN
