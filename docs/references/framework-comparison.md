@@ -95,9 +95,46 @@ deviations:
 ### pkg/errcode/ — 错误模型
 
 ```
-primary:   go-kratos/kratos    → errors/（code + reason + message + metadata）
+primary:   go-kratos/kratos    → errors/errors.go（code + reason + message + metadata；GRPCStatus() 转换）
 secondary: zeromicro/go-zero   → core/errorx/
-goal:      保持现有 errcode 包风格，参考 Kratos 的 GRPCStatus() 转换
+           grpc-ecosystem/grpc-gateway → runtime/errors.go（DefaultHTTPErrorHandler 409→Aborted 等映射约定）
+goal:      保持 errcode.Kind 类型化闭集风格（parallel to Kratos errors.Error）；
+           将 HTTP→gRPC status 转换放在 ErrcodeMap 拦截器（runtime/grpc/interceptor/errcode_mapping.go），
+           而非 errcode.Error.GRPCStatus()，以维持 pkg/errcode ⊥ grpc 层依赖约束
+deviations:
+  - Kratos 在错误类型本身实现 GRPCStatus()，要求 errors 包 import grpc/status；
+    GoCell 的 pkg/errcode 不得 import google.golang.org/grpc（kernel 依赖污染），
+    故将映射逻辑上移至 runtime 层的拦截器——语义目标相同（每个 Kind 产生确定 codes.Code），
+    结构载体不同（拦截器 vs 类型方法）。
+  - 映射表见 ADR docs/architecture/202605260100-adr-grpc-errcode-mapping.md §D1；
+    exhaustiveness 由 archtest GRPC-ERRCODE-MAPPING-01 守卫（Medium，永久 Go 上限）。
+```
+
+### runtime/grpc/ + adapters/grpc — gRPC 传输适配器（PR-12 后完整状态）
+
+```
+primary:   go-kratos/kratos    → transport/grpc/（Server/Client 封装、中间件链、错误 GRPCStatus() 模型）
+           google.golang.org/grpc → server.go（拦截器链 chain.UnaryServerInterceptor/
+                                     StreamServerInterceptor，server.Register 方式）
+secondary: grpc-ecosystem/grpc-gateway → runtime/errors.go（HTTP↔gRPC status 映射惯例）
+           grpc-ecosystem/go-grpc-middleware → 链式拦截器组合惯例
+goal:      grpc-go 原生 + 单一拦截器 funnel（interceptor.NewServerInterceptors，sealed，
+           GRPC-WIRING-BUNDLE-CALLER-01 Hard 守卫）；错误映射放在 ErrcodeMap 拦截器；
+           限流/熔断 opt-in via Deps 字段（nil = passthrough），同一 concrete 实例可同时
+           服务 HTTP 中间件和 gRPC 拦截器（transport-agnostic 接口）
+deviations:
+  - Kratos GRPCStatus() 模型（在 error type 实现转换）→ 改为 ErrcodeMap 拦截器（pkg/errcode ⊥ grpc）
+  - Kratos 手写服务注册 → cellgen 从 contract.yaml + .proto 派生 reg.GRPCService 调用（golden 锁定）；
+    contractgen 不为 kind=grpc 生成 Go 接口（#1688），buf 的 pb.<Svc>Server 是唯一 server contract
+  - go-kratos 的 per-RPC auth middleware → GoCell 用 contract endpoints.grpc.methods[] 覆盖派生
+    MethodPermissions/PublicMethods/PasswordResetExemptMethods，拦截器在 Auth 阶段统一执行 PDP gate；
+    handler 不手写 authorize() 谓词
+  - 熔断计失败集 = {Internal, Unknown, Unavailable, DataLoss, DeadlineExceeded}，
+    排除 Unimplemented（永久契约缺口）和 ResourceExhausted（过载/限流，属 4xx 语义），
+    镜像 HTTP 仅计 5xx 的约定
+
+ref PR series: ADR docs/architecture/202605260000-adr-grpc-transport-adapter.md（PR 1–11 设计决策）
+ref ADR:       docs/architecture/202605260100-adr-grpc-errcode-mapping.md（PR-12 errcode 映射）
 ```
 
 ### runtime/worker/ + runtime/scheduler/ — 后台任务
@@ -239,6 +276,7 @@ docs/architecture/202606131142-1423-adr-cell-deployment-topology.md §#1967 Amen
 | adapters/mqtt | `eclipse/paho.golang` (autopaho) | `eclipse/paho.golang` | ConnectionManager 内置重连（`ReconnectBackoff` 注入）、`ConnackError.ReasonCode` typed reason code、`SessionExpiryInterval` 会话恢复；v5 only，不用 v3 shim |
 | adapters/rabbitmq | `rabbitmq/amqp091-go` | `rabbitmq/amqp091-go` | Channel 不跨 goroutine、重连、Confirm |
 | runtime/http | stdlib `net/http.ServeMux` (Go 1.22+) | — (no third-party router) | 中间件顺序、route-pattern recorder（mux.Handler + ServeHTTP 双 pass） |
+| runtime/grpc | `google.golang.org/grpc` | `grpc/grpc-go` | 拦截器链顺序、ServiceRegistrar、bufconn 测试；interceptor.NewServerInterceptors 是唯一 funnel |
 | runtime/auth/jwt | `golang-jwt/jwt/v5` | `golang-jwt/jwt` | SigningMethod、Claims、kid |
 | adapters/oidc | `coreos/go-oidc/v3` | `coreos/go-oidc` | Provider 缓存、JWKS 刷新 |
 | adapters/s3 | `aws/aws-sdk-go-v2` | `aws/aws-sdk-go-v2` | Retry、Context 超时 |

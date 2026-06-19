@@ -68,3 +68,8 @@
   risk: low
   blocker: ""
   updatedAt: 2026-06-18
+- journeyId: J-grpc-roundtrip
+  state: doing
+  risk: low
+  blocker: ""
+  updatedAt: 2026-06-20
