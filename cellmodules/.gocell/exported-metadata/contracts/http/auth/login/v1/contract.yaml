@@ -1,0 +1,66 @@
+# Response headers (documentation): response-header emission is a middleware
+# concern, not contractgen — they stay middleware-emitted by design (#1494 added
+# request-header codegen only; the X-Tenant-ID request header is now the
+# endpoints.http.headers block below).
+#
+#   Set-Cookie: __Host-gocell_rt=<refreshToken>; HttpOnly; Secure; SameSite=Strict;
+#               Path=/; Max-Age=<refresh TTL in seconds>
+#     Condition: emitted on 201 only (4xx/5xx leave the cookie untouched).
+#     Naming:    the __Host- prefix is browser-enforced host-binding (requires
+#                Secure, no Domain, Path=/) so a sibling subdomain cannot set or
+#                override this long-lived refresh credential.
+#     Source:    httpcookie.Middleware (corecells/accesscore/internal/httpcookie)
+#                wraps the response writer and writes the Set-Cookie header
+#                before the status is committed.
+#     Note:      the response body also returns refreshToken for clients that
+#                cannot read httpOnly cookies (e.g. native apps). Both are
+#                always emitted on success — the cookie is the primary channel
+#                for browser clients (BR-005 #1278).
+id: http.auth.login.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.session.created.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/sessions/login
+    headers:
+      # X-Tenant-ID carries the pre-login tenant scope (no JWT exists yet).
+      # Populate-only at codegen → merged into the generated Request field; the
+      # sessionlogin LoginAdapter (handler) then applies a two-stage check before
+      # delegating to Service.Login, which receives a canonical typed
+      # tenant.TenantID and trusts it (ADR 1160; adapter-owned fail, not a codegen gate):
+      #   - absent header (empty value) → 400 ERR_AUTH_LOGIN_INVALID_INPUT:
+      #     a malformed request, not a tenant-existence probe.
+      #   - present but non-canonical UUID → 401 (ErrAuthLoginFailed), the same
+      #     opaque shape as wrong-password, to prevent tenant enumeration.
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
+    successStatus: 201
+    auth:
+      public: true
+      reason: "Authentication entrypoint: the caller has no JWT yet, so login MUST be public."
+    idempotency:
+      exempt: true
+    noContent: false
+    responses:
+      400:
+        description: Invalid login request.
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      401:
+        description: "Login failed — uniform response covers missing user / wrong password / inactive account (locked or suspended) to prevent account enumeration. Wire shape: code=ERR_AUTH_LOGIN_FAILED, message=\"invalid credentials\". Server-side slog records the real failure reason via errcode.WithInternal."
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

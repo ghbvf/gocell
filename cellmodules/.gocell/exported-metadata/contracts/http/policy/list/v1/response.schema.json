@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.policy.list.v1.response",
+  "description": "Paginated list of ABAC Policies.",
+  "type": "object",
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ],
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "../../shared/v1/policy.schema.json"
+      }
+    },
+    "nextCursor": {
+      "type": "string"
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
+  }
+}

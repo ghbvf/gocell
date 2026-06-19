@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.policy.update.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "$ref": "../../shared/v1/policy.schema.json"
+    }
+  }
+}

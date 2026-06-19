@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.session.revoked.v1.payload",
+  "type": "object",
+  "properties": {
+    "sessionId": {
+      "type": "string"
+    },
+    "userId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "sessionId",
+    "userId"
+  ]
+}

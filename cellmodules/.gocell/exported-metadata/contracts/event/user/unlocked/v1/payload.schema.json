@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.user.unlocked.v1.payload",
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string"
+    },
+    "actorId": {
+      "type": "string",
+      "description": "Identity of the principal that triggered the unlock. UUID for admin-initiated unlocks; the sentinel 'system' for auto-unlocks triggered by accountlockout TTL expiry (cells/accesscore/internal/accountlockout)."
+    }
+  },
+  "required": [
+    "userId",
+    "actorId"
+  ]
+}

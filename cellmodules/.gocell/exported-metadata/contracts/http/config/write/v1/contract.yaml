@@ -1,0 +1,36 @@
+id: http.config.write.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.config.entry-upserted.v1
+endpoints:
+  server: configcore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/config/
+    permission: config:write
+    successStatus: 201
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body or oversized payload"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the config:write permission; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -1,0 +1,46 @@
+id: http.auth.user.change-password.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/users/{id}/password
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    successStatus: 200
+    noContent: false
+    auth:
+      passwordResetExempt: true
+      responses:
+        - 503
+    idempotency:
+      exempt: true
+    responses:
+      400:
+        description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID), request body decode failure, or new password equals old password"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token, or old password incorrect (ErrAuthOldPasswordIncorrect)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the user:write permission and is not the target subject — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; or the subject account is suspended/locked (ERR_AUTH_USER_NOT_ACTIVE). The built-in baseline also grants user:write to the admin and super-admin roles."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — user with given id does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — concurrent password change detected; reload and retry (ERR_VERSION_CONFLICT)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

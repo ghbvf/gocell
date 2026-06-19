@@ -1,0 +1,38 @@
+id: http.policy.get.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/policies/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 128
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — path parameter id fails length or format constraints"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the policy:read permission; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — policy with given id does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

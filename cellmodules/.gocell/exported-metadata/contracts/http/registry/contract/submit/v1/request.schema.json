@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.submit.v1.request",
+  "description": "Submit a runtime contract declaration for governance gate check and durable registration (303-US6, #2237). Fields mirror ContractMeta / EndpointsMeta / SchemaRefsMeta so the gate runs the same curated declaration rules (CH-01 ownerCell, CH-02 lifecycle, CH-03 HTTP schemaRefs, REG-01 fanout completeness) as `gocell validate`. The submitter identity is taken from the authenticated principal, never the body.",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "ownerCell",
+    "lifecycle"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Registration identifier (the contract id, e.g. http.example.foo.v1); dedup key within a tenant. A duplicate id yields 409."
+    },
+    "kind": {
+      "type": "string",
+      "maxLength": 16,
+      "enum": [
+        "http",
+        "event",
+        "command",
+        "projection",
+        "saga",
+        "webhook",
+        "grpc"
+      ],
+      "description": "Contract kind. FMT-08 requires the id prefix to match (e.g. http.* for kind=http)."
+    },
+    "ownerCell": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Owning cell id (CH-01). Must be a valid no-dash cell id."
+    },
+    "lifecycle": {
+      "type": "string",
+      "maxLength": 16,
+      "enum": [
+        "draft",
+        "active",
+        "deprecated"
+      ],
+      "description": "Contract lifecycle stage (CH-02 / FMT-01). draft = not yet serving; active = production; deprecated = retiring."
+    },
+    "consistencyLevel": {
+      "type": "string",
+      "maxLength": 8,
+      "enum": [
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4"
+      ],
+      "description": "Consistency level of the contract (optional; inferred by governance if omitted)."
+    },
+    "transports": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 32
+      },
+      "description": "Wire transports (optional; defaults to kind-specific transport when omitted, mirroring NormalizeRuntimeContract)."
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Kind-specific endpoint declarations. Mirror of EndpointsMeta yaml fields (REG-01 provider/consumer completeness).",
+      "properties": {
+        "server": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Provider cell for kind=http/grpc/saga."
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "description": "Consumer cells for kind=http/grpc."
+        },
+        "publisher": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Provider cell for kind=event."
+        },
+        "actorSubscribers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "description": "Actor (external) subscribers for kind=event (NormalizeRuntimeContract derives Subscribers from this)."
+        },
+        "handler": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Provider cell for kind=command."
+        },
+        "invokers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "description": "Consumer cells for kind=command."
+        },
+        "provider": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Provider cell for kind=projection."
+        },
+        "readers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "description": "Consumer cells for kind=projection."
+        }
+      }
+    },
+    "schemaRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "JSON Schema file references (CH-03: http contracts require schemaRefs.response).",
+      "properties": {
+        "request": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Request schema ref."
+        },
+        "response": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Response schema ref (required for kind=http by CH-03)."
+        }
+      }
+    },
+    "payloadSchema": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Opaque payload-schema reference/hash recorded at submit; uninterpreted by the gate (retained for US5 PG store)."
+    }
+  }
+}

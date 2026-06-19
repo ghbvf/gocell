@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.admin.health.cells.v1.response",
+  "description": "Aggregated runtime health for operator/admin consoles. A single composite resource wrapped in the {data: {...}} envelope (NOT a paginated list): the cell set is bounded by the assembly. `cells` carries per-cell live/ready/status plus the cell's own readiness probes (deps); `adapters` carries the assembly-global infrastructure probes (postgres_ready/redis_ready/... and framework probes) that are not owned by any single cell.",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "overall",
+        "cells",
+        "adapters"
+      ],
+      "properties": {
+        "overall": {
+          "type": "string",
+          "description": "Worst-case status across every cell and adapter probe. One of: healthy | degraded | unhealthy."
+        },
+        "cells": {
+          "type": "array",
+          "description": "Per-cell health, in assembly registration order.",
+          "items": {
+            "type": "object",
+            "required": ["id", "live", "ready", "status", "deps"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Cell identifier (assembly closed set)."
+              },
+              "live": {
+                "type": "boolean",
+                "description": "Cell is running in the started assembly. In-process liveness equals assembly-started, so this is true while the endpoint is reachable; the discriminating signals are ready and status."
+              },
+              "ready": {
+                "type": "boolean",
+                "description": "Cell reports itself ready to serve (CellStatus.Ready)."
+              },
+              "status": {
+                "type": "string",
+                "description": "Cell health snapshot. One of: healthy | degraded | unhealthy."
+              },
+              "deps": {
+                "type": "array",
+                "description": "Readiness probes this cell registered (structurally per-cell).",
+                "items": {
+                  "type": "object",
+                  "required": ["name", "status", "durationMs"],
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "Probe status. One of: healthy | degraded | unhealthy | timeout."
+                    },
+                    "durationMs": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "adapters": {
+          "type": "array",
+          "description": "Assembly-global infrastructure probes not owned by any cell (adapter *_ready probes plus framework probes), by structural set-difference against the per-cell probe sets.",
+          "items": {
+            "type": "object",
+            "required": ["name", "status", "durationMs"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "description": "Probe status. One of: healthy | degraded | unhealthy | timeout."
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

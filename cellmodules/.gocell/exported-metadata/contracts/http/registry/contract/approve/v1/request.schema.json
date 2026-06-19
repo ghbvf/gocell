@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.approve.v1.request",
+  "description": "Approve a pending-approval contract registration. The id is the path parameter; the body carries an optional free-form approval note (recorded on the registration's append-only migration event as the transition Reason).",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "type": "string",
+      "maxLength": 1024,
+      "description": "Optional free-form approval note recorded as the transition Reason."
+    }
+  }
+}

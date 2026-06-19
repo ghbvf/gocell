@@ -1,0 +1,50 @@
+id: http.auth.setup.admin.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.user.created.v1
+  - event.auth.bootstrap-failed.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/setup/admin
+    headers:
+      # X-Tenant-ID carries the pre-bootstrap tenant scope (no JWT yet).
+      # Populate-only at codegen → merged into the generated Request field; the
+      # setup admin AdminAdapter (handler) parses it via tenant.ParseTenantID and
+      # rejects a missing/malformed value with 400 ERR_AUTH_IDENTITY_INVALID_INPUT
+      # (ADR 1160 — adapter-owned fail, not a codegen gate); Service.CreateAdmin
+      # receives a canonical typed CreateAdminInput.TenantID and trusts it.
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
+    successStatus: 201
+    noContent: false
+    auth:
+      bootstrap: true
+      reason: "First-run bootstrap: provisions the first admin via env-credentialed HTTP Basic before any JWT/RBAC exists."
+      responses:
+        - 401
+        - 429
+    responses:
+      400:
+        description: "Bad request — missing or blank required fields, oversized username/email, or password outside 8-72 printable ASCII bytes"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — requested first-admin username already belongs to a non-recoverable user or provisioning attempt"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      410:
+        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the decode limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

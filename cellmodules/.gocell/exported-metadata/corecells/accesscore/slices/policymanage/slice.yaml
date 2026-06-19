@@ -1,0 +1,31 @@
+id: policymanage
+belongsToCell: accesscore
+consistencyLevel: L2
+lifecycle: asset
+contractUsages:
+  - contract: event.policy.updated.v1
+    role: publish
+  - contract: http.policy.create.v1
+    role: serve
+  - contract: http.policy.get.v1
+    role: serve
+  - contract: http.policy.update.v1
+    role: serve
+  - contract: http.policy.delete.v1
+    role: serve
+  - contract: http.policy.list.v1
+    role: serve
+verify:
+  unit:
+    - unit.policymanage.service
+  contract:
+    - contract.event.policy.updated.v1.publish
+    - contract.http.policy.create.v1.serve
+    - contract.http.policy.get.v1.serve
+    - contract.http.policy.update.v1.serve
+    - contract.http.policy.delete.v1.serve
+    - contract.http.policy.list.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/accesscore/slices/policymanage/**

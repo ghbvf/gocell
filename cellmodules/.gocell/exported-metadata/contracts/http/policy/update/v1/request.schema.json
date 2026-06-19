@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.policy.update.v1.request",
+  "type": "object",
+  "required": ["name", "rules", "expectedVersion"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "../../shared/v1/rule.schema.json"
+      }
+    },
+    "expectedVersion": {
+      "$ref": "../../../../shared/cas/v1/expected_version.schema.json"
+    }
+  }
+}

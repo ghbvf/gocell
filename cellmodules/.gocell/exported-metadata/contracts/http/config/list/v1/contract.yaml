@@ -1,0 +1,41 @@
+id: http.config.list.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: configcore
+  clients:
+    - accesscore
+  http:
+    method: GET
+    path: /api/v1/config/
+    permission: config:read
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        maxLength: 4096
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — invalid cursor or limit parameter"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the config:read permission required to enumerate config keys; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

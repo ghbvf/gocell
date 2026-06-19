@@ -1,0 +1,24 @@
+id: configreceive
+belongsToCell: accesscore
+consistencyLevel: L3
+lifecycle: asset
+contractUsages:
+  - contract: event.config.entry-upserted.v1
+    role: subscribe
+    handler: HandleEntryUpserted
+  - contract: event.config.entry-deleted.v1
+    role: subscribe
+    handler: HandleEntryDeleted
+  - contract: http.config.internal.get.v1
+    role: call
+verify:
+  unit:
+    - unit.configreceive.service
+  contract:
+    - contract.event.config.entry-upserted.v1.subscribe
+    - contract.event.config.entry-deleted.v1.subscribe
+    - contract.http.config.internal.get.v1.call
+
+allowedFiles:
+  - corecells/accesscore/slices/configreceive/**
+  - corecells/accesscore/internal/adapters/http/configclient*.go

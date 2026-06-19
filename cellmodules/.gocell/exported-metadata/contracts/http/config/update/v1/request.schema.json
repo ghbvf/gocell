@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.update.v1.request",
+  "type": "object",
+  "properties": {
+    "value": { "type": "string", "maxLength": 4096 },
+    "expectedVersion": { "$ref": "../../../../shared/cas/v1/expected_version.schema.json" }
+  },
+  "required": ["value", "expectedVersion"],
+  "additionalProperties": false
+}

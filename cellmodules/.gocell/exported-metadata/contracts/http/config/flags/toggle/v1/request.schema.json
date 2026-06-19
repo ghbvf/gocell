@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.toggle.v1.request",
+  "type": "object",
+  "required": ["enabled", "expectedVersion"],
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "expectedVersion": { "$ref": "../../../../../shared/cas/v1/expected_version.schema.json" }
+  },
+  "additionalProperties": false
+}

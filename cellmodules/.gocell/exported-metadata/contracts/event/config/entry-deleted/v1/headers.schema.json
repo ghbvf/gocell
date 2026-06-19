@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.config.entry-deleted.v1.headers",
+  "type": "object",
+  "description": "Event envelope headers. eventId is the idempotency key declared in contract.yaml; it is carried in outbox.Entry.ID at the transport level.",
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "description": "Prefixed event identifier (evt-{uuid}), used as idempotency key"
+    }
+  },
+  "required": [
+    "eventId"
+  ]
+}

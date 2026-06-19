@@ -1,0 +1,18 @@
+id: accesscore
+type: core
+consistencyLevel: L3
+lifecycle: asset
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_access_core
+verify:
+  smoke:
+    - smoke.accesscore.startup
+goStructName: AccessCore
+l0Dependencies: []
+requires:
+  - postgres
+  - redis

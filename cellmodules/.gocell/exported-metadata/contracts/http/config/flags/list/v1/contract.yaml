@@ -1,0 +1,45 @@
+id: http.config.flags.list.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: configcore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/flags/
+    permission: flag:read
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        maxLength: 4096
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — invalid pagination parameter"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the flag:read permission required to enumerate flag keys; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

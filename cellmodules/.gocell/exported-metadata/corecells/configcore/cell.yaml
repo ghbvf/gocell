@@ -1,0 +1,17 @@
+id: configcore
+type: core
+consistencyLevel: L3
+lifecycle: asset
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_config_core
+verify:
+  smoke:
+    - smoke.configcore.startup
+goStructName: ConfigCore
+l0Dependencies: []
+requires:
+  - postgres

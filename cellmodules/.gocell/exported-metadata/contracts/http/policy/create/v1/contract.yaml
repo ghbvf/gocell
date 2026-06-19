@@ -1,0 +1,38 @@
+id: http.policy.create.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.policy.updated.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/policies
+    successStatus: 201
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body, missing required fields, or field validation error"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the policy:write permission; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      422:
+        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors (e.g. null array items, unknown enum values, or an allow rule without a non-empty action set — #1979)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -1,0 +1,37 @@
+id: http.auth.role.assign.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.role.assigned.v1
+endpoints:
+  server: accesscore
+  clients:
+    - accesscore
+  http:
+    method: POST
+    path: /internal/v1/access/roles/assign
+    successStatus: 201
+    auth:
+      responses:
+        - 503
+    responses:
+      400:
+        description: "Bad request — request body decode failure, or userId/roleId/tenantId blank or malformed (tenantId must be a valid UUID) (ErrAuthRBACInvalidInput)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid service token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller_cell not in contract.clients allowlist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — role with given id does not exist (ErrAuthRoleNotFound)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

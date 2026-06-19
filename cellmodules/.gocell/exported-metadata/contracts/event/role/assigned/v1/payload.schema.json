@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.role.assigned.v1.payload",
+  "type": "object",
+  "properties": {
+    "userId": {
+      "type": "string"
+    },
+    "roleId": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "actorId": {
+      "type": "string",
+      "description": "Identity of the caller that drove the role mutation. For service-token callers (internal listener), this is the CallerCellID. Optional for backward compatibility with the original v1 schema; auditcore's role-event consumer requires it via ActorRequireExplicit and DLX-rejects payloads where it is absent."
+    }
+  },
+  "required": [
+    "userId",
+    "roleId",
+    "action"
+  ]
+}

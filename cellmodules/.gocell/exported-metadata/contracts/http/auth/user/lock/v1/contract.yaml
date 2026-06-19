@@ -1,0 +1,42 @@
+id: http.auth.user.lock.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.user.locked.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/users/{id}/lock
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the user:write permission, OR ERR_AUTH_LAST_ADMIN_PROTECTED when locking this user would leave the system with no effective admin (status='active' AND admin role) [S4.0]. The built-in baseline grants user:write to the admin and super-admin roles."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — user with given id does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Request body too large"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -1,0 +1,16 @@
+id: sessionrefresh
+belongsToCell: accesscore
+consistencyLevel: L1
+lifecycle: asset
+contractUsages:
+  - contract: http.auth.refresh.v1
+    role: serve
+verify:
+  unit:
+    - unit.sessionrefresh.service
+  contract:
+    - contract.http.auth.refresh.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/accesscore/slices/sessionrefresh/**

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.user.create.v1.request",
+  "type": "object",
+  "properties": {
+    "username": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "email": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
+    },
+    "password": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 72
+    },
+    "requirePasswordReset": {
+      "type": "boolean"
+    }
+  },
+  "required": ["username", "email", "password"],
+  "additionalProperties": false
+}
