@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,6 +179,32 @@ func decodeData(t *testing.T, body []byte) (state, approver string) {
 func approvePath(id string) string { return "/api/v1/registry/contracts/" + id + "/approve" }
 func rejectPath(id string) string  { return "/api/v1/registry/contracts/" + id + "/reject" }
 func retirePath(id string) string  { return "/api/v1/registry/contracts/" + id + "/retire" }
+
+// TestContractAdmin_PathParamCoverage exercises the contract-level {id} path-param
+// validation funnel for all three admin contracts (the CONTRACT-PATH-QUERY-COVERAGE-01
+// archtest gate requires every pathParam-declaring contract's test to cover a valid
+// value + the boundary rejects). The id declares minLength 1 / maxLength 256.
+//
+// Each contract uses a distinct LoadByID-bound var with a compile-time-const
+// contract ID: the archtest associates MustRejectPathParam call sites to a contract
+// by statically resolving LoadByID's third arg, so a range/loop variable would be
+// unattributable (it must be a const literal, not a runtime expression).
+func TestContractAdmin_PathParamCoverage(t *testing.T) {
+	approveC := contracttest.LoadByID(t, contracttest.ContractsRoot(t), approveContractID)
+	approveC.ValidatePathParam(t, "id", "http.example.foo.v1")
+	approveC.MustRejectPathParam(t, "id", "")
+	approveC.MustRejectPathParam(t, "id", strings.Repeat("x", 257))
+
+	rejectC := contracttest.LoadByID(t, contracttest.ContractsRoot(t), rejectContractID)
+	rejectC.ValidatePathParam(t, "id", "http.example.foo.v1")
+	rejectC.MustRejectPathParam(t, "id", "")
+	rejectC.MustRejectPathParam(t, "id", strings.Repeat("x", 257))
+
+	retireC := contracttest.LoadByID(t, contracttest.ContractsRoot(t), retireContractID)
+	retireC.ValidatePathParam(t, "id", "http.example.foo.v1")
+	retireC.MustRejectPathParam(t, "id", "")
+	retireC.MustRejectPathParam(t, "id", strings.Repeat("x", 257))
+}
 
 // --- approve ---------------------------------------------------------------
 

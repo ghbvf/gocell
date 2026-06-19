@@ -326,8 +326,8 @@ HTTP 数据面从「启动期一次性 drain 注册」升级为运行时 add/rem
 - **FR-002**: 注册时 MUST 经 governance gate（复用 `governance.Validator`）同步校验，校验不过的契约不进 submitted；gate fail-closed（校验器/租户/store 不可用 → deny）。
 - **FR-003**: 契约状态机 MUST 为 sealed，合法迁移：主路径 `submitted→probing→conformant→pending-approval→approved→active→retired`；终态分支 `probing→rejected`（conformance 失败）与 `pending-approval→rejected`（admin 拒绝）——`rejected` 为终态、**无 →active 迁移**。不变式「approved 才能 active」「reject 不可激活」由迁移表强制，包外不可伪造状态。
 - **FR-004**: in-tree 编译期静态治理（cellgen / archtest 扇出闭环 / `gocell validate`）MUST 零回归；其对 runtime 注册契约 vacuous 是设计预期，由 P0 ADR 显式声明。
-- **FR-005**: approve/reject/retire MUST 经 PDP（`auth.RequirePermission`）接 accesscore admin 决策，不硬编 role 字面量；缺 Authorizer fail-closed。retire 是 `active→retired` 终态迁移，触发数据面 remove。
-- **FR-006**: submit/approve/reject/retire MUST 经 auditcore hash chain 落账（replayable PII hash/redaction）；激活/退役 MUST 发 L2 OutboxFact 事件。
+- **FR-005**: approve/reject/retire MUST 经 PDP（`endpoints.http.permission` overlay → `auth.RequirePermissionForContract`）接 accesscore admin 决策，不硬编 role 字面量；缺 Authorizer fail-closed。retire 是 `active→retired` 终态迁移。**交付划分**：路由门禁 + 状态迁移由 US7（#2238）交付；retire 触发的数据面 remove（移除该契约订阅/路由）由 US11/US12 消费 `contract-retired` 事件实现，非 US7 端点同步副作用。
+- **FR-006**: submit/approve/reject/retire MUST 经 auditcore hash chain 落账（replayable PII hash/redaction）；激活/退役 MUST 发 L2 OutboxFact 事件。**交付划分**：审计落账 + `contract-activated`/`contract-retired` 事件由 US8（#2239）交付（与 auditcore 消费者同址，避免死事件），非 US7。
 - **FR-007**: EventRouter MUST 支持运行时 add/remove subscription（per-handler 子 ctx 生命周期，fail-closed 无半启动），消费 contract-activated 动态加载；HTTP Router MUST 支持运行时 add/remove route（不绕过 auth chain）。
 - **FR-008**: 数据面加载 MUST 版本化 + 版本回退 fail-closed（保留 last-good）+ 激活事件 debounce 批量合并。
 - **FR-009**: 注册 MUST 唯一性校验 `(kind,domain-path,version,owner)` 四元组 + 外部契约命名空间前缀；consistency 越权 fail-closed。

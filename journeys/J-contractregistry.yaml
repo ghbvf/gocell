@@ -27,5 +27,5 @@ passCriteria:
     mode: manual
   - text: admin（registry:approve/reject/retire 经 PDP baseline 授予）POST approve 推进 pending-approval→approved、reject→rejected、retire 推进 active→retired；非 admin 被门禁拒绝（401/403），不触碰状态机
     mode: manual
-  - text: 非法状态迁移返回 409（如对 submitted 契约 approve、对 pending-approval 契约 retire）、未知 id 返回 404，均带 shared error envelope
+  - text: 非法状态迁移返回 400（如对 submitted 契约 approve、对 pending-approval 契约 retire；ErrRegistrationInvalidTransition 为 KindInvalid→400，对齐 saga.Transition 约定）、未知 id 返回 404，均带 shared error envelope
     mode: manual
