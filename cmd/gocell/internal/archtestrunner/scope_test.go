@@ -26,7 +26,7 @@ func TestResolveScope_Valid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.in), func(t *testing.T) {
-			got, err := resolveScope(tc.in)
+			got, err := ResolveScope(tc.in)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -38,7 +38,7 @@ func TestResolveScope_Valid(t *testing.T) {
 func TestResolveScope_Invalid(t *testing.T) {
 	for _, in := range []Scope{"bogus", "WORKSPACE", "Framework", "all"} {
 		t.Run(string(in), func(t *testing.T) {
-			_, err := resolveScope(in)
+			_, err := ResolveScope(in)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), string(in), "error must name the bad scope value")
 		})
@@ -89,13 +89,39 @@ func TestFrameworkTestFuncs_RealIDs(t *testing.T) {
 		wantFuncs = append(wantFuncs, fn)
 		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
 			"//go:build archtest\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
-			id, fn)
+			id, fn,
+		)
 	}
 	root := makeFakeArchtestDir(t, files)
 
 	got, err := frameworkTestFuncs(root)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, wantFuncs, got, "framework funcs must cover every scoperules ID's anchor")
+}
+
+// TestBuildFrameworkFuncIndex_ConsolidatedFile proves the func-level attribution:
+// in a theme-consolidated file the inventory header (a multi-ID list) is skipped
+// and each rule gets ONLY the funcs under its own section anchor — not the whole
+// file. A consolidation/helper test above the first section is unattributed.
+func TestBuildFrameworkFuncIndex_ConsolidatedFile(t *testing.T) {
+	root := makeFakeArchtestDir(t, map[string]string{
+		"theme_test.go": "//go:build archtest\n\n" +
+			"// Theme file.\n//   - INVARIANT: ALPHA-01\n//   - INVARIANT: BETA-01\n" +
+			"package archtest\n\nimport \"testing\"\n\n" +
+			"func TestConsolidationHelper(t *testing.T) {}\n\n" + // before any section → unattributed
+			"// INVARIANT: ALPHA-01\nfunc TestAlphaOne(t *testing.T) {}\n\n" +
+			"func TestAlphaTwo(t *testing.T) {}\n\n" +
+			"// INVARIANT: BETA-01\nfunc TestBetaOne(t *testing.T) {}\n",
+	})
+
+	idx, err := buildFrameworkFuncIndex(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"TestAlphaOne", "TestAlphaTwo"}, idx["ALPHA-01"],
+		"ALPHA-01 must own only its section's funcs, not the whole file")
+	assert.Equal(t, []string{"TestBetaOne"}, idx["BETA-01"])
+	assert.NotContains(t, idx["ALPHA-01"], "TestConsolidationHelper",
+		"a func above the first section anchor is unattributed (not leaked into a rule)")
+	assert.NotContains(t, idx["BETA-01"], "TestConsolidationHelper")
 }
 
 // TestApplyFilters_FrameworkScopeNarrows: framework scope keeps only the
@@ -109,7 +135,8 @@ func TestApplyFilters_FrameworkScopeNarrows(t *testing.T) {
 		frameworkFuncs = append(frameworkFuncs, fn)
 		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
 			"//go:build archtest\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc %s(t *testing.T) {}\n",
-			id, fn)
+			id, fn,
+		)
 	}
 	root := makeFakeArchtestDir(t, files)
 	e := engine{exec: defaultExec, changed: changedRepoFiles}
@@ -153,7 +180,9 @@ func TestApplyFilters_FrameworkRuleOutOfScope(t *testing.T) {
 // bogus scope as workspace.
 func TestRun_UnknownScopeFailClosed(t *testing.T) {
 	e := engine{
-		exec:    func(_ context.Context, _ string, _, _ []string) ([]byte, error) { panic("exec must not run on bad scope") },
+		exec: func(_ context.Context, _ string, _, _ []string) ([]byte, error) {
+			panic("exec must not run on bad scope")
+		},
 		changed: changedRepoFiles,
 	}
 	_, lerr := e.listTests(t.Context(), Request{WorkspaceRoot: t.TempDir(), Scope: "bogus"})

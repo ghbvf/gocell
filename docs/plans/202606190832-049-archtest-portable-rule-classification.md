@@ -12,8 +12,11 @@
 
 ### 1.1 活口径单源是代码注册表，不是本文档
 
-`tools/archtest/external.go` 的 `StandardCellRules()` 是已迁移外部安全规则的权威集合；其
-godoc 块同时列出了"明确不注册"的内部规则及原因。任何规则的当前桶归属，以该文件为准。
+`tools/archtest/external.go` 的 `StandardCellRules()` 是已迁移外部安全规则的权威**访问器**（返回
+`{ID, Run}` 配对 + 「明确不注册」叙事 godoc）。自 #2331 起，framework-scope **membership 字面量单源**
+落在零依赖叶子 `tools/archtest/scoperules.FrameworkRuleIDs`：`StandardCellRules()` 迭代该列表派生成员，
+`gocell verify archtest --scope=framework` 的 runner（`cmd/gocell/internal/archtestrunner`）读同一叶子——
+二者无法对成员各持己见（AI-robust Hard）。任何规则的当前桶归属，以 `external.go` + `scoperules` 为准。
 
 本文档的职责仅有两个：
 
