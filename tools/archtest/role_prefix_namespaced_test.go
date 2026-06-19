@@ -69,6 +69,11 @@
 //     provides indirect coverage for "admin"; "superadmin" has no separate literal
 //     guard (residual blind spot — this godoc is the authoritative blind-spot
 //     record; ADR 202606151430-639 §3.1 summarizes enforcement).
+//     Both residual blind spots (superadmin bare-value literal guard and alias-map↔roles.go
+//     sync enforcement) are now closed by BASELINE-ROLE-STRING-SINGLE-SOURCE-01
+//     (#1915): assertion 1 freezes the exact {name→value} set from roles.go and
+//     asserts it equals rolePrefixPlatformAlias; assertion 2 scans for bare role
+//     value literals in the ABAC baseline/auth derivation paths.
 //
 // # Anti-vacuity
 //

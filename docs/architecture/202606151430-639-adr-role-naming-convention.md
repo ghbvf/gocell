@@ -77,10 +77,42 @@ principal → RowScope 派生逻辑（admin → tenant、superadmin → all）�
 
 ---
 
+## Amendment 2026-06-19 — #1915 BASELINE-ROLE-STRING-SINGLE-SOURCE-01
+
+### 闭合的盲区
+
+`ROLE-PREFIX-NAMESPACED-01` godoc §盲区 记录了两处 enforcement 空白：
+
+1. **`"superadmin"` 裸值无单独字面量守卫**：`ROLE-ADMIN-LITERAL-01` 仅覆盖 `"admin"`；`"superadmin"` 直接出现在 ABAC baseline composite literal 中不被捕获。
+2. **alias map↔roles.go 手动同步、无 enforcement**：`rolePrefixPlatformAlias` 需人工与 `roles.go` 保持一致，drift 不触发 CI。
+
+新守卫 `BASELINE-ROLE-STRING-SINGLE-SOURCE-01`（`tools/archtest/baseline_role_string_single_source_01_test.go`，#1915）闭合上述两处盲区：
+
+- **断言 1（Hard，value-golden freeze）**：`TestBASELINE_ROLE_STRING_SINGLE_SOURCE_01_Freeze` AST 扫 `roles.go`，提取 `const Role*` 集合，断言与 `frozenPlatformRoles` 完全相等；同时断言 `rolePrefixPlatformAlias == frozenPlatformRoles`——alias map↔roles.go 同步提升为 CI-checked，漂移即 CI 红。
+- **断言 2（Medium，AST funnel）**：`TestBASELINE_ROLE_STRING_SINGLE_SOURCE_01` 扫 `./framework/runtime/auth` + `./corecells/accesscore/slices/authorizationdecide`（Tests:false），检测裸 role 值字面量（"admin"/"superadmin"），仅 `runtime/auth/roles.go` 豁免；包含 anti-vacuity 与 RED fixture self-check。
+
+### 评级重评
+
+| 守卫 | 评级 | 说明 |
+|---|---|---|
+| `ROLE-PREFIX-NAMESPACED-01` | Medium（不变）| 业务 role 前缀命名空间扫描；alias map 同步现由断言 1 Hard 闭合 |
+| `BASELINE-ROLE-STRING-SINGLE-SOURCE-01` 断言 1 | **Hard** | value-golden freeze；roles.go 漂移 → reflect.DeepEqual 失败 → CI 红 |
+| `BASELINE-ROLE-STRING-SINGLE-SOURCE-01` 断言 2 | **Medium** | AST funnel；sanctioned Medium，原因如下 |
+
+### 为何断言 2 不追求 Hard（全 sealed Role type）
+
+评估过路径：将 `RoleAdmin`/`RoleSuperAdmin` 改为专有 sealed 类型。结论：pre-GA 不追求，理由四条：
+
+1. `abac.Condition.Values` 是通用 `[]string`（ABAC evaluator 语义），sealed type 在此位置依然需要 archtest 兜底——无法达到全 Hard。
+2. 全部替换影响 `auth.Principal.Roles`、JWT 解析和整个 ABAC evaluator，超出 Cx-2 范围，违背 §2.2 既定权衡。
+3. 代价（大范围接口改动）超过收益（断言 2 已 Medium 可检测，realistic drift path 已覆盖）。
+4. pre-GA 阶段无外部消费方，Medium + RED fixture 已满足 AI-robust 最低门槛。
+
 ## References
 
 - `framework/runtime/auth/roles.go` — 平台保留 role 的权威定义（`RoleAdmin`、`RoleSuperAdmin`）
 - `tools/archtest/role_prefix_namespaced_test.go` — `ROLE-PREFIX-NAMESPACED-01` archtest（符号、盲区、anti-vacuity）
 - `tools/archtest/role_admin_literal_test.go` — `ROLE-ADMIN-LITERAL-01` archtest（admin 裸名复制 ban）
+- `tools/archtest/baseline_role_string_single_source_01_test.go` — `BASELINE-ROLE-STRING-SINGLE-SOURCE-01` archtest（#1915，断言1 Hard + 断言2 Medium）
 - `.claude/rules/gocell/tenancy.md` — principal → RowScope 派生规则（admin → tenant、superadmin → all）
 - PR#267 — role 命名约定首次出现（iotdevice authz.go 注释）
