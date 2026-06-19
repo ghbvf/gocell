@@ -42,7 +42,7 @@ endpoints:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       422:
-        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors (e.g. null array items, unknown enum values)"
+        description: "Unprocessable Entity — request body is structurally valid JSON but contains semantic validation errors (e.g. null array items, unknown enum values, or an allow rule without a non-empty action set — #1979)"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

@@ -143,6 +143,7 @@ func conformTestPolicy(id string, tid tenant.TenantID) *abac.Policy {
 				ID:     "rule-1",
 				Name:   "Allow Rule",
 				Effect: authz.EffectAllow,
+				Action: []string{"user:read"}, // #1979: allow rules must declare a non-empty Action
 				Conditions: []abac.Condition{
 					{
 						Source:   abac.SourceSubject,
@@ -178,6 +179,7 @@ func conformTestPolicyWithCrossAttrCondition(id string, tid tenant.TenantID) *ab
 				ID:     "rule-cross-attr",
 				Name:   "Subject is resource",
 				Effect: authz.EffectAllow,
+				Action: []string{"user:read"}, // #1979: allow rules must declare a non-empty Action
 				Conditions: []abac.Condition{
 					{
 						Source:    abac.SourceSubject,

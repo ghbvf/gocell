@@ -114,10 +114,11 @@ func setupPolicyHandler(t testing.TB) http.Handler {
 }
 
 // minimalCreateBody returns a valid JSON body for POST /api/v1/access/policies.
-const minimalCreateBody = `{"name":"TestPolicy","rules":[{"id":"r1","name":"Allow all","effect":"allow"}]}`
+const minimalCreateBody = `{"name":"TestPolicy","rules":[{"id":"r1","name":"Allow all","effect":"allow","action":["audit:read"]}]}`
 
 // minimalUpdateBody returns a valid JSON body for PUT /api/v1/access/policies/{id}.
-const minimalUpdateBody = `{"name":"Updated","rules":[{"id":"r1","name":"Allow all","effect":"allow"}],"expectedVersion":1}`
+const minimalUpdateBody = `{"name":"Updated","rules":[{"id":"r1","name":"Allow all",` +
+	`"effect":"allow","action":["audit:read"]}],"expectedVersion":1}`
 
 // --- Create tests ---
 
@@ -156,7 +157,7 @@ func TestHandler_Create_MissingName(t *testing.T) {
 	handler := setupPolicyHandler(t)
 
 	w := httptest.NewRecorder()
-	body := `{"rules":[{"id":"r1","name":"Allow all","effect":"allow"}]}`
+	body := `{"rules":[{"id":"r1","name":"Allow all","effect":"allow","action":["audit:read"]}]}`
 	req := httptest.NewRequest(http.MethodPost, policiesPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, withHandlerAdmin(req))
@@ -182,7 +183,7 @@ func TestHandler_Create_UnknownField(t *testing.T) {
 	handler := setupPolicyHandler(t)
 
 	w := httptest.NewRecorder()
-	body := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow"}],"unknown":1}`
+	body := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"]}],"unknown":1}`
 	req := httptest.NewRequest(http.MethodPost, policiesPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, withHandlerAdmin(req))
@@ -402,7 +403,7 @@ func TestHandler_Update_VersionConflict(t *testing.T) {
 	policyID := created.Data.ID
 
 	// Update with wrong version (99 instead of 1).
-	body := `{"name":"Updated","rules":[{"id":"r1","name":"Allow all","effect":"allow"}],"expectedVersion":99}`
+	body := `{"name":"Updated","rules":[{"id":"r1","name":"Allow all","effect":"allow","action":["audit:read"]}],"expectedVersion":99}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, policiesPrefix+"/"+policyID, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -515,7 +516,7 @@ func TestHandler_List_WithItems(t *testing.T) {
 
 	// Create two policies.
 	for i := range 2 {
-		body := `{"name":"P` + string(rune('0'+i)) + `","rules":[{"id":"r1","name":"Allow all","effect":"allow"}]}`
+		body := `{"name":"P` + string(rune('0'+i)) + `","rules":[{"id":"r1","name":"Allow all","effect":"allow","action":["audit:read"]}]}`
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, policiesPrefix, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -558,7 +559,7 @@ func TestCreateAdapter_HappyPath_Returns201(t *testing.T) {
 
 	body := &policyCreate.Request{
 		Name:  "P",
-		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 	}
 	ctx := ctxkeys.WithTenantID(auth.TestContext(testHandlerAdminSubject, []string{auth.RoleAdmin}), testHandlerTenantStr)
 	resp, err := ad.Create(ctx, body)
@@ -573,7 +574,7 @@ func TestUpdateAdapter_NotFound_Returns404Typed(t *testing.T) {
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              "pol-ghost",
 		Name:            "X",
-		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 		ExpectedVersion: 1,
 	})
 	require.NoError(t, err)
@@ -592,7 +593,7 @@ func TestUpdateAdapter_VersionConflict_Returns409Typed(t *testing.T) {
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              p.ID,
 		Name:            "X",
-		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 		ExpectedVersion: 99, // wrong version
 	})
 	require.NoError(t, err)

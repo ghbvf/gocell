@@ -84,22 +84,19 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			wantAllow: false,
 		},
 		{
-			name: "empty Action rule applies to every action (match-all preserved)",
+			// #1979: an untargeted (empty Action) allow is NOT a wildcard — the
+			// evaluator's read-side fail-closed treats it as not-applicable, so it
+			// never grants (Rule.Validate rejects it on the write path; this guards
+			// a legacy/persisted rule). Built inline because permitRule now bakes a
+			// non-empty Action. Synthetic non-baseline action so only this rule
+			// could possibly grant — proving the empty-Action allow is inert.
+			name: "empty Action allow is inert (read-side fail-closed)",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRule("r1", authz.Obligations{}, roleCond),
+				abac.Rule{ID: "r1", Name: "r1", Effect: authz.EffectAllow, Conditions: []abac.Condition{roleCond}},
 			)},
 			action:    "other:write",
-			wantAllow: true,
-		},
-		{
-			name: "empty Action rule applies to every action including audit:read",
-			policies: []*abac.Policy{policyWith(
-				"p1",
-				permitRule("r1", authz.Obligations{}, roleCond),
-			)},
-			action:    testAuditRead,
-			wantAllow: true,
+			wantAllow: false,
 		},
 		{
 			name: "forbid-wins: targeted deny overrides a matching permit for the same action",
@@ -115,7 +112,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			name: "targeted deny does NOT fire for a different action (no forbid-wins for mismatched action)",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRule("allow", authz.Obligations{}, roleCond),
+				permitRuleWithAction("allow", []string{testAuditRead}, roleCond),
 				forbidRuleWithAction("deny", []string{"config:delete"}),
 			)},
 			action:    testAuditRead,
@@ -125,7 +122,7 @@ func TestEvaluate_ActionTargeting(t *testing.T) {
 			name: "untargeted deny (empty Action) still forbid-wins over any action",
 			policies: []*abac.Policy{policyWith(
 				"p1",
-				permitRule("allow", authz.Obligations{}, roleCond),
+				permitRuleWithAction("allow", []string{testAuditRead}, roleCond),
 				forbidRule("deny"),
 			)},
 			action:    testAuditRead,
@@ -251,9 +248,13 @@ func TestEvaluate_MatchedRuleID(t *testing.T) {
 		{
 			// A matching permit whose merged obligation is invalid (FieldMask key with
 			// whitespace → authz.Allow returns err) → fail-closed Deny + sentinel.
+			// Built inline with the synthetic action so the permit is applicable
+			// (permitRule bakes "read", which would not match synthetic → #1979).
 			name: "invalid combined obligations → sentinel",
-			policies: []*abac.Policy{policyWith("p1",
-				permitRule("bad-obl", authz.Obligations{FieldMask: authz.FieldMask{Fields: []string{"bad key"}}}))},
+			policies: []*abac.Policy{policyWith("p1", abac.Rule{
+				ID: "bad-obl", Name: "bad-obl", Effect: authz.EffectAllow, Action: []string{synthetic},
+				Obligations: authz.Obligations{FieldMask: authz.FieldMask{Fields: []string{"bad key"}}},
+			})},
 			resolver:   plainResolver,
 			action:     synthetic,
 			wantAllow:  false,

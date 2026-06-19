@@ -333,9 +333,16 @@ type policyRowScanner interface {
 
 // scanPolicy scans a single policy row and reconstructs the aggregate. TenantID
 // is supplied by the caller (the WHERE predicate guarantees the row belongs to
-// t). The decoded policy is re-validated defensively: a row that no longer
-// satisfies Policy.Validate (e.g. a forward-incompatible rule shape) surfaces as
-// ErrPGSchemaShape rather than flowing a corrupt aggregate into the evaluator.
+// t). The decoded policy is re-validated defensively with the STORED-READ profile
+// (abac.Policy.ValidateStored, not the authoring Policy.Validate): a row that is
+// genuinely corrupt or forward-incompatible (bad enum code, empty ID/Name,
+// duplicate rule IDs) surfaces as ErrPGSchemaShape rather than flowing a corrupt
+// aggregate into the evaluator. The stored-read profile deliberately does NOT
+// re-apply authoring-only invariants — notably #1979's non-empty-Action-for-Allow:
+// a legacy persisted empty-Action allow row (valid before #1979) is benign because
+// the evaluator renders it inert (never grants), so rejecting it here would turn a
+// single legacy row into a tenant-wide PDP 503 (#2409 F1). Write paths
+// (Create / Update) keep the authoring Policy.Validate.
 func scanPolicy(s policyRowScanner, t tenant.TenantID) (*abac.Policy, error) {
 	var id, name, description string
 	var rulesJSON []byte
@@ -355,7 +362,7 @@ func scanPolicy(s policyRowScanner, t tenant.TenantID) (*abac.Policy, error) {
 		Rules:       rules,
 		Version:     version,
 	}
-	if err := p.Validate(); err != nil {
+	if err := p.ValidateStored(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrPGSchemaShape, "policy_repo: reconstructed policy invalid", err)
 	}
 	return p, nil

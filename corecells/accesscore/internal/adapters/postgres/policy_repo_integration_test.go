@@ -90,6 +90,7 @@ func richPolicy(id string, tid tenant.TenantID) *abac.Policy {
 				ID:     "r-allow",
 				Name:   "Allow eng non-secret",
 				Effect: authz.EffectAllow,
+				Action: []string{"user:read"}, // #1979: allow rules must declare a non-empty Action
 				Conditions: []abac.Condition{
 					{Source: abac.SourceSubject, Key: "department", Operator: abac.OpEquals, Values: []string{"eng"}},
 					{Source: abac.SourceResource, Key: "classification", Operator: abac.OpNotIn, Values: []string{"secret", "top_secret"}},
@@ -161,7 +162,7 @@ func TestPGPolicyRepo_UpdateCASSuccess(t *testing.T) {
 		ID:       "pol-x",
 		TenantID: tid,
 		Name:     "Updated",
-		Rules:    []abac.Rule{{ID: "only", Name: "Allow all", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "only", Name: "Allow all", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	got, err := repo.Update(ctx, tid, "pol-x", 1, v2)
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestPGPolicyRepo_UpdateVersionConflict(t *testing.T) {
 		ID:       "pol-x",
 		TenantID: tid,
 		Name:     "Should not stick",
-		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	_, err := repo.Update(ctx, tid, "pol-x", 99 /* wrong */, v2)
 	require.Error(t, err)
@@ -207,7 +208,7 @@ func TestPGPolicyRepo_UpdateNotFound(t *testing.T) {
 		ID:       "nonexistent",
 		TenantID: tid,
 		Name:     "ghost",
-		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	_, err := repo.Update(ctx, tid, "nonexistent", 1, v2)
 	require.Error(t, err)
@@ -288,5 +289,47 @@ func TestPGPolicyRepo_CorruptRulesRow_FailsClosed(t *testing.T) {
 	t.Run("ListByTenant", func(t *testing.T) {
 		_, err := repo.ListByTenant(ctx, tid)
 		assertSchemaShape(t, err)
+	})
+}
+
+// TestPGPolicyRepo_LegacyEmptyActionAllowRow_StoredReadTolerant is the #2409 F1
+// regression on the real PG read path: a row written legitimately BEFORE #1979
+// added the authoring non-empty-Action rule for Allow (an untargeted allow → no
+// `action` key, byte-identical to a pre-field row) must survive BOTH read paths,
+// NOT be rejected as ErrPGSchemaShape. Inserted directly (the codec/repo write path
+// would now reject it) to faithfully simulate the legacy stored row. After the fix
+// scanPolicy uses the stored-read profile, so the row decodes and flows to the
+// evaluator (which renders it inert); before the fix a single such row turned the
+// whole tenant's ListByTenant — the PDP hot path — into a 503.
+func TestPGPolicyRepo_LegacyEmptyActionAllowRow_StoredReadTolerant(t *testing.T) {
+	repo, pool := setupPolicyRepoPG(t)
+	ctx := context.Background()
+	tid := newIntegrationTenant(t)
+
+	_, err := pool.DB().Exec(ctx,
+		`INSERT INTO policies (tenant_id, id, name, description, rules, created_at, updated_at)
+		 VALUES ($1, $2, $3, '', $4, now(), now())`,
+		string(tid), "pol-legacy", "Legacy untargeted allow",
+		[]byte(`[{"id":"r1","name":"untargeted allow","effect":"allow","obligations":{}}]`))
+	require.NoError(t, err)
+
+	assertLegacyTolerated := func(t *testing.T, p *abac.Policy, err error) {
+		t.Helper()
+		require.NoError(t, err, "a legacy empty-Action allow row must read successfully (not ErrPGSchemaShape/503)")
+		require.NotNil(t, p)
+		require.Len(t, p.Rules, 1)
+		assert.Empty(t, p.Rules[0].Action, "the empty Action must round-trip from the legacy row")
+		assert.Equal(t, authz.EffectAllow, p.Rules[0].Effect)
+	}
+
+	t.Run("GetByID", func(t *testing.T) {
+		p, err := repo.GetByID(ctx, tid, "pol-legacy")
+		assertLegacyTolerated(t, p, err)
+	})
+	t.Run("ListByTenant", func(t *testing.T) {
+		pols, err := repo.ListByTenant(ctx, tid)
+		require.NoError(t, err, "one legacy row must not fail the tenant-wide read (the PDP hot path)")
+		require.Len(t, pols, 1)
+		assertLegacyTolerated(t, pols[0], err)
 	})
 }

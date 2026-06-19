@@ -13,6 +13,14 @@ import (
 )
 
 // --- Request → domain converters ---
+//
+// Rule.Action (#1979) is a plain pass-through here (item.Action → abac.Rule.Action
+// in createRuleItemToDomain / updateRuleItemToDomain, and r.Action → wire in every
+// polRulesTo*Wire below). The "allow rules must declare a non-empty Action" rule is
+// NOT enforced in this converter — it is the domain validator's job (abac.Rule.Validate,
+// invoked downstream in service.go), keeping the domain the single source of structural
+// truth (same split as the condition RHS, #1977). So an empty-Action allow round-trips
+// faithfully here and is rejected later with 422.
 
 // createRulesFromRequest converts a create request's rules to domain []abac.Rule.
 // Returns KindInvalid/ErrValidationFailed on any unrecognized enum code.
@@ -51,6 +59,7 @@ func createRuleItemToDomain(item *policyCreate.RequestRulesItem) (abac.Rule, err
 		ID:          item.ID,
 		Name:        item.Name,
 		Effect:      effect,
+		Action:      item.Action,
 		Conditions:  conds,
 		Obligations: obs,
 	}, nil
@@ -174,6 +183,7 @@ func updateRuleItemToDomain(item *policyUpdate.RequestRulesItem) (abac.Rule, err
 		ID:          item.ID,
 		Name:        item.Name,
 		Effect:      effect,
+		Action:      item.Action,
 		Conditions:  conds,
 		Obligations: obs,
 	}, nil
@@ -257,6 +267,7 @@ func polRulesToCreateWire(rules []abac.Rule) []*policyCreate.ResponseDataRulesIt
 			ID:          r.ID,
 			Name:        r.Name,
 			Effect:      r.Effect.String(),
+			Action:      r.Action,
 			Conditions:  polCondsToCreateWire(r.Conditions),
 			Obligations: polObsToCreateWire(r.Obligations),
 		}
@@ -309,7 +320,7 @@ func polRulesToGetWire(rules []abac.Rule) []*policyGet.ResponseDataRulesItem {
 	items := make([]*policyGet.ResponseDataRulesItem, 0, len(rules))
 	for _, r := range rules {
 		items = append(items, &policyGet.ResponseDataRulesItem{
-			ID: r.ID, Name: r.Name, Effect: r.Effect.String(),
+			ID: r.ID, Name: r.Name, Effect: r.Effect.String(), Action: r.Action,
 			Conditions:  polCondsToGetWire(r.Conditions),
 			Obligations: polObsToGetWire(r.Obligations),
 		})
@@ -360,7 +371,7 @@ func polRulesToUpdateWire(rules []abac.Rule) []*policyUpdate.ResponseDataRulesIt
 	items := make([]*policyUpdate.ResponseDataRulesItem, 0, len(rules))
 	for _, r := range rules {
 		items = append(items, &policyUpdate.ResponseDataRulesItem{
-			ID: r.ID, Name: r.Name, Effect: r.Effect.String(),
+			ID: r.ID, Name: r.Name, Effect: r.Effect.String(), Action: r.Action,
 			Conditions:  polCondsToUpdateWire(r.Conditions),
 			Obligations: polObsToUpdateWire(r.Obligations),
 		})
@@ -411,7 +422,7 @@ func polRulesToListWire(rules []abac.Rule) []*policyList.ResponseDataItemRulesIt
 	items := make([]*policyList.ResponseDataItemRulesItem, 0, len(rules))
 	for _, r := range rules {
 		items = append(items, &policyList.ResponseDataItemRulesItem{
-			ID: r.ID, Name: r.Name, Effect: r.Effect.String(),
+			ID: r.ID, Name: r.Name, Effect: r.Effect.String(), Action: r.Action,
 			Conditions:  polCondsToListWire(r.Conditions),
 			Obligations: polObsToListWire(r.Obligations),
 		})
