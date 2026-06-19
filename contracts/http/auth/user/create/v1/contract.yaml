@@ -13,6 +13,7 @@ endpoints:
     method: POST
     path: /api/v1/access/users
     successStatus: 201
+    permission: user:write
     auth:
       responses:
         - 503

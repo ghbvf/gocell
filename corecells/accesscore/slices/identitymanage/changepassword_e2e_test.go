@@ -200,7 +200,7 @@ func newE2EFixture() *e2eFixture {
 	// delete/lock/unlock/change-password) with their declared auth policies, matching
 	// the production wiring in cell_init.go.
 	mux := celltest.NewTestMux()
-	h := NewHandler(idmSvc)
+	h := NewHandler(idmSvc, testResolver())
 	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			panic("newE2EFixture: RegisterRoutes: " + err.Error())

@@ -17,12 +17,22 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// testResolver returns a MethodPolicyResolver seeded with the rbaccheck
+// contract→action map, mirroring the cellgen-wired resolver in cell_init.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.auth.role.list.v1":  "role:read",
+		"http.auth.role.check.v1": "role:read",
+	})
+}
 
 // testTenantID is the canonical test tenant UUID used in rbaccheck tests.
 var testTenantID = func() tenant.TenantID {
@@ -78,7 +88,7 @@ func newContractRBACHandler() http.Handler {
 	}
 
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/roles", func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			panic("newContractRBACHandler: RegisterRoutes: " + err.Error())

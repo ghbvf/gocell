@@ -18,6 +18,7 @@ endpoints:
         minLength: 1
         maxLength: 128
     successStatus: 200
+    permission: policy:write
     auth:
       responses:
         - 503

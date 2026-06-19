@@ -127,7 +127,7 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 		panic(err)
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/roles", func(s cell.RouteMux) {
 		require.NoError(t, h.RegisterRoutes(s))
 	})

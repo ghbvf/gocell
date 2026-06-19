@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
@@ -23,6 +24,14 @@ import (
 	decidegen "github.com/ghbvf/gocell/generated/contracts/http/auth/decide/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+// testResolver returns a MethodPolicyResolver seeded with the authorizationdecide
+// contract→action map, mirroring the cellgen-wired resolver in cell_init.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.auth.decide.v1": "access:decide",
+	})
+}
 
 // decideTestSubject is the canonical subject UUID used across the decide
 // contract tests. The PDP self rule (subject.sub == resource.id) and the
@@ -56,7 +65,7 @@ func newDecideMux(t *testing.T, repo ports.PolicyRepository) (http.Handler, *Ser
 		t.Fatalf("newDecideMux: NewService: %v", err)
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/decide", func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			t.Fatalf("newDecideMux: RegisterRoutes: %v", err)

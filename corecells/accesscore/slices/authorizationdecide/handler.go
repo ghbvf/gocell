@@ -88,15 +88,17 @@ type Handler struct {
 
 // NewHandler creates an authorizationdecide HTTP Handler from the PDP Service.
 //
-// The decide endpoint is gated by auth.RequirePermissionForSelf(access:decide):
-// it forwards the caller's OWN subject to the PDP as resource, so the access:decide
-// baseline self rule (subject.sub == resource.id) grants any authenticated user the
-// right to introspect themselves — a conditioned PDP grant, not a Go short-circuit
-// and not an unconditional allow (see baseline.go + BASELINE-OWNER-RULE-TENANT-FREEZE-01).
-func NewHandler(svc *Service) *Handler {
-	policy := auth.RequirePermissionForSelf(authz.PermAccessDecide())
+// Authorization is contract-derived (#2355): the decide contract declares
+// endpoints.http.{permission: access:decide, selfScoped: true}, so the generated
+// handler builds the self-scoped gate via the auth.RequirePermissionForContract funnel
+// (→ RequirePermissionForSelf), forwarding the caller's OWN subject to the PDP as
+// resource. The access:decide baseline self rule (subject.sub == resource.id) grants
+// any authenticated user the right to introspect themselves — a conditioned PDP grant,
+// not a Go short-circuit and not an unconditional allow (see baseline.go +
+// BASELINE-OWNER-RULE-TENANT-FREEZE-01). This slice only forwards the cell resolver.
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		decideH: decidegen.NewHandler(DecideAdapter{svc}, policy),
+		decideH: decidegen.NewHandler(DecideAdapter{svc}, resolver),
 	}
 }
 

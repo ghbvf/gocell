@@ -138,7 +138,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 // sub-router structure — auth.Mount strips the canonical API prefix off
 // Contract.Path so requests match without any relative-alias magic.
 func buildMux(svc *Service) *celltest.TestMux {
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/access/users", func(sub kcell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

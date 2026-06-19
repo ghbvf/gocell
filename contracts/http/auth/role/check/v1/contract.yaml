@@ -19,6 +19,8 @@ endpoints:
         minLength: 1
         maxLength: 256
     successStatus: 200
+    permission: role:read
+    resource: userID
     auth:
       responses:
         - 503

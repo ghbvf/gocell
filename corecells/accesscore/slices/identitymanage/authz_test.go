@@ -27,6 +27,21 @@ func (a fixedAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Dec
 	return a.decision, nil
 }
 
+// testResolver returns a MethodPolicyResolver seeded with the identitymanage
+// contract→action map, mirroring the cellgen-wired resolver in cell_init.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.auth.user.create.v1":          "user:write",
+		"http.auth.user.get.v1":             "user:read",
+		"http.auth.user.update.v1":          "user:write",
+		"http.auth.user.patch.v1":           "user:write",
+		"http.auth.user.delete.v1":          "user:write",
+		"http.auth.user.lock.v1":            "user:write",
+		"http.auth.user.unlock.v1":          "user:write",
+		"http.auth.user.change-password.v1": "user:write",
+	})
+}
+
 // withAllowAuthorizer wraps ctx with an allow-all Authorizer (the success-path PDP).
 func withAllowAuthorizer(ctx context.Context) context.Context {
 	dec, err := authz.Allow(authz.Obligations{})

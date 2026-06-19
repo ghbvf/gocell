@@ -9,7 +9,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	policyCreate "github.com/ghbvf/gocell/generated/contracts/http/policy/create/v1"
 	policyDelete "github.com/ghbvf/gocell/generated/contracts/http/policy/delete/v1"
 	policyGet "github.com/ghbvf/gocell/generated/contracts/http/policy/get/v1"
@@ -239,19 +238,19 @@ type Handler struct {
 }
 
 // NewHandler creates a policymanage Handler using generated per-contract handlers.
-// Read endpoints (GET) are gated by authz.PermPolicyRead() ("policy:read");
-// write endpoints (POST/PUT/DELETE) are gated by authz.PermPolicyWrite()
-// ("policy:write"). The built-in PDP baseline grants both permissions to
+// Authorization is contract-derived (#2355): each contract declares
+// endpoints.http.permission (policy:read on GET, policy:write on POST/PUT/DELETE —
+// both coarse, no resource), so each generated handler builds its own coarse gate via
+// the auth.RequirePermissionForContract funnel (→ RequirePermission); this slice only
+// forwards the cell resolver. The built-in PDP baseline grants both permissions to
 // admin and super-admin.
-func NewHandler(svc *Service) *Handler {
-	policyRead := auth.RequirePermission(authz.PermPolicyRead())
-	policyWrite := auth.RequirePermission(authz.PermPolicyWrite())
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		createH: policyCreate.NewHandler(CreateAdapter{s: svc}, policyWrite),
-		getH:    policyGet.NewHandler(GetAdapter{s: svc}, policyRead),
-		updateH: policyUpdate.NewHandler(UpdateAdapter{s: svc}, policyWrite),
-		deleteH: policyDelete.NewHandler(DeleteAdapter{s: svc}, policyWrite),
-		listH:   policyList.NewHandler(ListAdapter{s: svc}, policyRead),
+		createH: policyCreate.NewHandler(CreateAdapter{s: svc}, resolver),
+		getH:    policyGet.NewHandler(GetAdapter{s: svc}, resolver),
+		updateH: policyUpdate.NewHandler(UpdateAdapter{s: svc}, resolver),
+		deleteH: policyDelete.NewHandler(DeleteAdapter{s: svc}, resolver),
+		listH:   policyList.NewHandler(ListAdapter{s: svc}, resolver),
 	}
 }
 

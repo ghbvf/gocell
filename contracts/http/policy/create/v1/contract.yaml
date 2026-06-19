@@ -13,6 +13,7 @@ endpoints:
     method: POST
     path: /api/v1/access/policies
     successStatus: 201
+    permission: policy:write
     auth:
       responses:
         - 503

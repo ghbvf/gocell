@@ -73,7 +73,7 @@ func setupRowScopeHandler(t *testing.T) (http.Handler, *mem.UserRepository) {
 		t.Fatalf("setupRowScopeHandler: NewService: %v", err)
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route(rowScopeAPIPrefix, func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			t.Fatalf("setupRowScopeHandler: RegisterRoutes: %v", err)
