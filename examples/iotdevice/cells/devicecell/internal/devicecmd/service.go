@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -48,6 +49,15 @@ const MaxLeaseExtension = time.Hour
 // Dequeue, and ScanActive (CLAUDE.md: 同义字符串 ≥ 3 次抽常量).
 const errLookupDeviceFmt = "device-command: lookup device: %w"
 
+// defaultMaxPendingPerDevice caps how many Pending commands a single device may
+// accumulate (F-S-005 #822). HTTP rate-limiting bounds request QPS but not
+// per-device queue depth: an offline device never dequeues, so its commands
+// pile up as Pending without bound. This is the single source of the default;
+// composition roots override it via WithPendingLimit (env-driven). The guard is
+// unconditional and fail-closed — there is deliberately no "off" switch for a
+// resource-exhaustion bound.
+const defaultMaxPendingPerDevice = 1000
+
 // Service handles device command business logic.
 //
 // NewService accepts a kernel/command.QueueWithScanner (Queue + ActiveScanner)
@@ -74,6 +84,11 @@ type Service struct {
 	runMode    query.RunMode
 	clock      clock.Clock
 	sliceName  string
+
+	// maxPending caps per-device Pending commands (F-S-005 #822); see
+	// defaultMaxPendingPerDevice. Always ≥1 — the default is applied in
+	// NewService and overrides (WithPendingLimit) only accept positive values.
+	maxPending int
 
 	// authz is the optional T3 DEVICE-ENQUEUE-RBAC hook. Nil means no authz
 	// check (demo mode). It is set by direct field assignment in test helpers
@@ -143,6 +158,27 @@ func WithOnEnqueue(hook func(context.Context, command.Entry)) Option {
 	}
 }
 
+// WithPendingLimit caps per-device Pending commands at n (F-S-005 #822).
+// Non-positive n is ignored — the bounded default stays, the cap can never be
+// disabled.
+//
+// Replaces the NewService default (defaultMaxPendingPerDevice). Wired by the
+// composition root from GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE.
+//
+// Only a positive n takes effect; a non-positive n is ignored, leaving the
+// (bounded) default in place. This is NOT a disable path — maxPending stays ≥1
+// at all times, so the resource-exhaustion guard can never be switched off. It
+// just keeps an unset cell field (zero value) from accidentally driving the cap
+// to 0 (which would fail-closed and reject every enqueue). The env boundary
+// (run.go) additionally fail-fasts on a non-positive value.
+func WithPendingLimit(n int) Option {
+	return func(s *Service) {
+		if n > 0 {
+			s.maxPending = n
+		}
+	}
+}
+
 // NewService creates a device-command Service. sliceName identifies the owning
 // slice in observability labels (e.g. "devicecommand" or "devicecommandinternal");
 // each slice must create its own Service instance so that cursor-error logs and
@@ -168,6 +204,9 @@ func NewService(
 		logger:     logger,
 		runMode:    runMode,
 		clock:      clk,
+		// Default per-device Pending cap (F-S-005 #822). The sole place the
+		// default lives; WithPendingLimit overrides it when env-configured.
+		maxPending: defaultMaxPendingPerDevice,
 		// Safe default: demo/no-op tx manager. Durable assemblies override it via
 		// WithCommandTxManager so EnqueueAsync's outbox write joins a real PG tx.
 		txRunner: outbox.DemoCellTxManager(),
@@ -265,6 +304,14 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, fmt.Errorf(errLookupDeviceFmt, err)
 	}
 
+	// Per-device Pending accumulation guard (F-S-005 #822): HTTP rate-limiting
+	// bounds QPS but not per-device queue depth, so an offline device's commands
+	// would pile up as Pending unbounded. The cap is a HARD invariant enforced
+	// atomically at the queue write boundary via opts.MaxPendingPerDevice below
+	// (count + insert under one lock/transaction) — NOT a service-level
+	// ScanActive-then-Enqueue, which had a read-then-write TOCTOU window that let
+	// concurrent / multi-instance enqueues overshoot (#2457). Only Pending counts;
+	// in-flight Sent/Delivered free a slot. The cap has no opt-out switch.
 	id, err := generateID()
 	if err != nil {
 		return command.Entry{}, err
@@ -274,7 +321,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	// dispatches a command that was emitted with command.WithActiveUniqueness.
 	// ok=false for direct HTTP callers (no relay context) → today's behavior:
 	// random id, no dedup, no deadline.
-	opts := command.EnqueueOptions{Authz: s.authz}
+	opts := command.EnqueueOptions{Authz: s.authz, MaxPendingPerDevice: s.maxPending}
 	key, deadline, ok := commandruntime.DispatchedUniqueness(ctx)
 	if ok {
 		opts.IdempotencyKey = key
@@ -296,7 +343,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), timeouts, s.clock.Now())
 
 	if err := s.queue.Enqueue(ctx, entry, opts); err != nil {
-		return command.Entry{}, fmt.Errorf("device-command: enqueue: %w", err)
+		return command.Entry{}, s.enqueueError(deviceID, err)
 	}
 
 	s.logger.Info(
@@ -314,6 +361,21 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	}
 
 	return entry, nil
+}
+
+// enqueueError shapes a queue.Enqueue failure. The per-device Pending cap is
+// enforced atomically inside Enqueue; its rate-limited rejection is logged for ops
+// visibility and propagated UNWRAPPED so handlers map the typed errcode to HTTP 429
+// / gRPC ResourceExhausted. Any other enqueue error is wrapped for context.
+func (s *Service) enqueueError(deviceID string, err error) error {
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Kind == errcode.KindRateLimited {
+		s.logger.Warn("device-command: per-device pending command limit reached",
+			slog.String("device_id", deviceID),
+			slog.Int("limit", s.maxPending))
+		return err
+	}
+	return fmt.Errorf("device-command: enqueue: %w", err)
 }
 
 // EnqueueAsync emits the cmdremote command through the outbox so the relay's

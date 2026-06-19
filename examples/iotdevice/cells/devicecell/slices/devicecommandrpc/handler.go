@@ -16,7 +16,11 @@ package devicecommandrpc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/devicecmd"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
@@ -33,6 +37,12 @@ import (
 // pagination) until the backend reports no more, so a device with more than one
 // page of active commands still receives all of them at watch-open time.
 const watchSnapshotPageSize = 100
+
+// msgPendingLimitReached is the client-facing gRPC status message for the
+// per-device Pending cap rejection (F-S-005 #822). It mirrors the HTTP 429
+// envelope's intent without echoing the numeric limit, keeping the gRPC status
+// minimal and free of capacity detail.
+const msgPendingLimitReached = "per-device pending command limit reached"
 
 // Server implements commandv1.DeviceCommandServiceServer.
 type Server struct {
@@ -81,8 +91,14 @@ func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, notifier *devicecmd.N
 // matching the HTTP devicecommand enqueue route gate (RequirePermission(PermDeviceCommand)).
 // The interceptor gate runs before any field validation, preserving the
 // 403-before-404 ordering so an unauthorized caller cannot probe device existence.
-// A domain error is returned as an *errcode.Error; the gRPC interceptor chain maps
-// it to a status code.
+//
+// A domain error is returned as an *errcode.Error. There is no general
+// errcode.Kind → codes.Code mapper yet (issue #2458, the Kratos GRPCStatus()
+// model), so most domain errors still surface to the client as codes.Unknown.
+// The per-device pending-limit rejection (KindRateLimited) is the one exception:
+// it is projected to codes.ResourceExhausted here as an interim measure so the
+// rate-limit semantic is not lost on the gRPC path (the HTTP path already returns
+// a typed 429). Delete that inline projection once #2458 lands.
 func (s *Server) IssueCommand(
 	ctx context.Context,
 	req *commandv1.IssueCommandRequest,
@@ -99,6 +115,14 @@ func (s *Server) IssueCommand(
 	}
 	entry, err := s.cmdSvc.Enqueue(ctx, req.GetDeviceId(), req.GetCommandType(), string(req.GetPayload()))
 	if err != nil {
+		// Interim transport projection (remove when issue #2458 lands): the
+		// per-device Pending cap is a rate-limit, whose gRPC analog is
+		// ResourceExhausted. Project it here so clients get the standard code
+		// instead of the codes.Unknown an unmapped *errcode.Error yields.
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Kind == errcode.KindRateLimited {
+			return nil, status.Error(codes.ResourceExhausted, msgPendingLimitReached)
+		}
 		return nil, err
 	}
 	slog.InfoContext(ctx, "devicecommandrpc: command enqueued",

@@ -65,6 +65,21 @@ func newTestService() (*Service, *mem.DeviceRepository, *commandtest.InMemQueue)
 	return svc, devRepo, q
 }
 
+// newTestServiceWithLimit builds a Service with an explicit per-device
+// pending-command cap, used by the F-S-005 #822 guard tests. The guard tests
+// drive Pending state through the Service (Enqueue/Dequeue), so the underlying
+// queue handle is not returned.
+func newTestServiceWithLimit(limit int) (*Service, *mem.DeviceRepository) {
+	devRepo := mem.NewDeviceRepository()
+	q := commandtest.NewInMemQueue()
+	svc, err := NewService(clock.Real(), q, devRepo, testCodec(), slog.Default(), query.RunModeProd,
+		WithPendingLimit(limit))
+	if err != nil {
+		panic(err)
+	}
+	return svc, devRepo
+}
+
 func seedDevice(repo *mem.DeviceRepository, id, name string) {
 	_ = repo.Create(context.Background(), &domain.Device{
 		ID: id, Name: name, Status: "online",
@@ -194,6 +209,76 @@ func TestService_Enqueue_AuthzCheckedBeforeDeviceLookup(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrAuthForbidden, ecErr.Code,
 		"authz must be checked before device lookup — must return Forbidden, not NotFound")
+}
+
+// TestService_Enqueue_PendingLimit guards the per-device pending-command cap
+// (F-S-005 #822): HTTP rate-limit bounds QPS, not per-device queue depth, so an
+// offline device's commands pile up as Pending unbounded. Enqueue rejects with
+// ErrRateLimited (HTTP 429) once the device already holds maxPending Pending
+// commands. Only Pending (status=1) counts — in-flight Sent/Delivered resolve
+// on their own and must not consume the cap.
+func TestService_Enqueue_PendingLimit(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("default limit is 1000", func(t *testing.T) {
+		svc, _, _ := newTestService()
+		assert.Equal(t, defaultMaxPendingPerDevice, svc.maxPending)
+	})
+
+	t.Run("non-positive override is ignored — keeps default, never disables", func(t *testing.T) {
+		// A zero/negative cap is not an "unlimited" switch: WithPendingLimit
+		// leaves the bounded default in place rather than driving maxPending to 0.
+		svc, _ := newTestServiceWithLimit(0)
+		assert.Equal(t, defaultMaxPendingPerDevice, svc.maxPending)
+	})
+
+	t.Run("at limit succeeds, over limit returns rate-limited", func(t *testing.T) {
+		svc, devRepo := newTestServiceWithLimit(2)
+		seedDevice(devRepo, "dev-1", "sensor-a")
+
+		_, err := svc.Enqueue(ctx, "dev-1", "reboot", "p1")
+		require.NoError(t, err)
+		_, err = svc.Enqueue(ctx, "dev-1", "reboot", "p2")
+		require.NoError(t, err)
+
+		entry, err := svc.Enqueue(ctx, "dev-1", "reboot", "p3")
+		require.Error(t, err)
+		assert.Zero(t, entry)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrRateLimited, ec.Code)
+	})
+
+	t.Run("cap is per-device, not global", func(t *testing.T) {
+		svc, devRepo := newTestServiceWithLimit(1)
+		seedDevice(devRepo, "dev-1", "sensor-a")
+		seedDevice(devRepo, "dev-2", "sensor-b")
+
+		_, err := svc.Enqueue(ctx, "dev-1", "reboot", "p1")
+		require.NoError(t, err)
+		// dev-2's own Pending count is independent and starts at 0.
+		_, err = svc.Enqueue(ctx, "dev-2", "reboot", "p1")
+		require.NoError(t, err)
+	})
+
+	t.Run("only Pending counts — dequeued (Sent) commands free capacity", func(t *testing.T) {
+		svc, devRepo := newTestServiceWithLimit(2)
+		seedDevice(devRepo, "dev-1", "sensor-a")
+
+		_, err := svc.Enqueue(ctx, "dev-1", "reboot", "p1")
+		require.NoError(t, err)
+		_, err = svc.Enqueue(ctx, "dev-1", "reboot", "p2")
+		require.NoError(t, err)
+
+		// Dequeue moves one Pending → Sent, dropping the Pending count to 1.
+		sent, err := svc.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+		require.NoError(t, err)
+		require.Len(t, sent, 1)
+
+		// One more Pending now fits (1 Pending + 1 Sent; cap is 2 on Pending).
+		_, err = svc.Enqueue(ctx, "dev-1", "reboot", "p3")
+		require.NoError(t, err)
+	})
 }
 
 func TestService_Dequeue(t *testing.T) {
