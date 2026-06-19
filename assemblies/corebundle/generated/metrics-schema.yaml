@@ -3,6 +3,45 @@ assemblyId: corebundle
 scope: assembly-reachable
 entrypoint: cmd/corebundle/main.go
 metrics:
+    - name: audit_chain_verify_duration_seconds
+      fqName: gocell_audit_chain_verify_duration_seconds
+      namespace: gocell
+      type: histogram
+      help: Wall-clock duration of a full admin audit chain verify run.
+      labels: []
+      buckets:
+        - "0.01"
+        - "0.05"
+        - "0.1"
+        - "0.5"
+        - "1"
+        - "2"
+        - "5"
+        - "10"
+        - "30"
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_errored_chains
+      fqName: gocell_audit_chain_verify_errored_chains
+      namespace: gocell
+      type: gauge
+      help: Number of audit chains whose verify could not complete in the last run.
+      labels: []
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_invalid_chains
+      fqName: gocell_audit_chain_verify_invalid_chains
+      namespace: gocell
+      type: gauge
+      help: Number of per-(namespace,tenant) audit chains found tampered in the last verify run.
+      labels: []
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_runs_total
+      fqName: gocell_audit_chain_verify_runs_total
+      namespace: gocell
+      type: counter
+      help: Total admin audit chain verify runs, by outcome (success|invalid_found|error).
+      labels:
+        - outcome
+      file: framework/runtime/audit/chain_verify_runner.go
     - name: auth_account_lockout_total
       fqName: gocell_auth_account_lockout_total
       namespace: gocell
