@@ -18,12 +18,13 @@
 // key carries BOTH the cellID and projectionID because the projection identity is
 // that pair (two cells may legitimately share a projectionID).
 //
-// Checkpoint advance is funneled through exactly one function, Tailer.commitEvent
-// (the sole sanctioned caller of projection.OwnerCheckpointStore.AdvanceIfOwner,
-// locked by archtest SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01). apply + advance
-// commit in the same transaction (exactly-once within an owner, D5(a)); the
-// AdvanceIfOwner CAS fences checkpoint regression across leader handoff (D5(b),
-// mem this PR; PG owner-column fence token deferred to PR-PG).
+// Checkpoint advance is funneled through two sanctioned callers of
+// projection.OwnerCheckpointStore.AdvanceIfOwner, locked by archtest
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: commitEvent (clean apply path) and
+// skipPoisonEvent (poison-event dead-letter skip, #2110). Both paths commit
+// apply/record + advance in the same transaction (exactly-once within an owner,
+// D5(a)); the AdvanceIfOwner CAS fences checkpoint regression across leader
+// handoff (D5(b), mem this PR; PG owner-column fence token deferred to PR-PG).
 //
 // The Tailer self-carries its operational surface (ADR §4.3): a readiness probe
 // (<cell>_saga_tailer_<proj>_ready) and metrics via the Observer sink

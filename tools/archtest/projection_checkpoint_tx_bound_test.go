@@ -11,10 +11,14 @@
 // repo/store types.
 //
 // This rule enforces: every concrete production type implementing
-// kernel/projection.CheckpointStore must NOT directly hold a *pgxpool.Pool
-// struct field. Pool-holding implementations bypass the ambient-tx contract
-// and make it impossible to commit the offset advance atomically with the
-// Apply mutation (the core exactly-once guarantee of PR-01).
+// kernel/projection.CheckpointStore OR kernel/projection.DeadLetterStore must NOT
+// directly hold a *pgxpool.Pool struct field. Pool-holding implementations bypass
+// the ambient-tx contract and make it impossible to commit the offset advance
+// atomically with the Apply mutation (CheckpointStore: the PR-01 exactly-once
+// guarantee) or the dead-letter record atomically with the checkpoint advance
+// (DeadLetterStore: #2110 "skipped ⟺ recorded" — the saga Tailer records the
+// poison event AND advances past it in one RunInTx; a pool-holding impl would
+// commit the record outside that tx, breaking the coupling).
 //
 // PR-01 status: vacuous-but-real pass. The only production implementation is
 // MemCheckpointStore (no pool, no DB). A discovery sanity anchor asserts ≥1
@@ -80,7 +84,33 @@ import (
 const (
 	checkpointStoreIfacePkg  = PlatformFrameworkModulePath + "/kernel/projection"
 	checkpointStoreIfaceName = "CheckpointStore"
+	// deadLetterStoreIfaceName shares the ambient-tx contract (#2110): the saga
+	// Tailer records the dead-letter AND advances the checkpoint in one RunInTx, so
+	// a pool-holding DeadLetterStore impl would break that atomicity exactly like a
+	// pool-holding CheckpointStore. Same package, same scan.
+	deadLetterStoreIfaceName = "DeadLetterStore"
 )
+
+// resolveProjectionIface returns the named interface ifaceName from the
+// kernel/projection package scope, completed, or nil.
+func resolveProjectionIface(p *Pass, ifaceName string) *types.Interface {
+	if p.Pkg == nil || p.Pkg.Path() != checkpointStoreIfacePkg {
+		return nil
+	}
+	obj := p.Pkg.Scope().Lookup(ifaceName)
+	if obj == nil {
+		return nil
+	}
+	named, ok := obj.Type().(*types.Named)
+	if !ok {
+		return nil
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok {
+		return nil
+	}
+	return iface.Complete()
+}
 
 // TestProjectionCheckpointTxBound01 enforces PROJECTION-CHECKPOINT-TX-BOUND-01:
 // every concrete production type implementing kernel/projection.CheckpointStore
@@ -106,7 +136,7 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 	// are both in kernel/projection and thus in the same load.
 	prodPatterns := prodscan.Patterns(root)
 
-	var checkpointStoreIface *types.Interface
+	var checkpointStoreIface, deadLetterStoreIface *types.Interface
 	var implPkgs []*types.Package
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
@@ -114,17 +144,12 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-
-			if p.Pkg.Path() == checkpointStoreIfacePkg {
-				if obj := p.Pkg.Scope().Lookup(checkpointStoreIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if iface, ok := named.Underlying().(*types.Interface); ok {
-							checkpointStoreIface = iface.Complete()
-						}
-					}
-				}
+			if iface := resolveProjectionIface(p, checkpointStoreIfaceName); iface != nil {
+				checkpointStoreIface = iface
 			}
-
+			if iface := resolveProjectionIface(p, deadLetterStoreIfaceName); iface != nil {
+				deadLetterStoreIface = iface
+			}
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
 		})
@@ -132,21 +157,26 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 	require.NotNil(t, checkpointStoreIface,
 		"PROJECTION-CHECKPOINT-TX-BOUND-01: failed to resolve CheckpointStore interface; "+
 			"check import path %s", checkpointStoreIfacePkg)
+	require.NotNil(t, deadLetterStoreIface,
+		"PROJECTION-CHECKPOINT-TX-BOUND-01: failed to resolve DeadLetterStore interface; "+
+			"check import path %s", checkpointStoreIfacePkg)
 
 	// Discovery sanity anchor: assert ≥1 implementation was found.
 	// This prevents a prodscan regression from producing a spurious vacuous-green.
-	// "pkg/path.TypeName" → *types.Named
+	// Both CheckpointStore and DeadLetterStore impls share the ambient-tx contract;
+	// collect them into one set ("pkg/path.TypeName" → *types.Named).
 	checkpointStoreImpls := make(map[string]*types.Named)
 	for _, pkg := range implPkgs {
 		if pkg == nil {
 			continue
 		}
 		collectCheckpointStoreImpls(pkg, checkpointStoreIface, checkpointStoreImpls)
+		collectCheckpointStoreImpls(pkg, deadLetterStoreIface, checkpointStoreImpls)
 	}
 
 	require.NotEmpty(t, checkpointStoreImpls,
-		"PROJECTION-CHECKPOINT-TX-BOUND-01: zero CheckpointStore implementations collected — "+
-			"discovery sanity anchor: at least kernel/projection.MemCheckpointStore must be found. "+
+		"PROJECTION-CHECKPOINT-TX-BOUND-01: zero CheckpointStore/DeadLetterStore implementations collected — "+
+			"discovery sanity anchor: at least kernel/projection.MemCheckpointStore + MemDeadLetterStore must be found. "+
 			"Likely a prodscan regression or type-universe mismatch.")
 
 	// Scan for pool fields in each impl.
@@ -186,13 +216,13 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 							Rel:  rel,
 							Line: line,
 							Message: fmt.Sprintf(
-								"PROJECTION-CHECKPOINT-TX-BOUND-01: CheckpointStore impl %s "+
-									"field %s holds *pgxpool.Pool directly. "+
-									"SaveOffset must use persistence.TxFromContext(ctx) to "+
+								"PROJECTION-CHECKPOINT-TX-BOUND-01: ambient-tx projection store impl %s "+
+									"(CheckpointStore/DeadLetterStore) field %s holds *pgxpool.Pool directly. "+
+									"SaveOffset/Record must use persistence.TxFromContext(ctx) to "+
 									"obtain the ambient transaction — a raw pool bypasses atomic "+
-									"commit with the Apply mutation (exactly-once guarantee). "+
-									"Hold pgexec.PGExecutor (interface) instead; wrap the pool "+
-									"via the adapter's internal/pgexec/.New factory (mirroring "+
+									"commit with the Apply mutation / checkpoint advance (exactly-once / "+
+									"skipped⟺recorded). Hold pgexec.PGExecutor (interface) instead; wrap the "+
+									"pool via the adapter's internal/pgexec/.New factory (mirroring "+
 									"PG-REPO-AMBIENT-TX-01 R1).",
 								ts.Name.Name, fieldName,
 							),
@@ -213,18 +243,21 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 }
 
 // TestProjectionCheckpointTxBound01_RedFixture loads the synthetic violation
-// fixture and asserts that the pool-field rule fires on badCheckpointStore.
+// fixture and asserts that the pool-field rule fires on both badCheckpointStore
+// and badDeadLetterStore.
 //
-// The fixture (internal/projectioncheckpointtxfixture) contains a struct named
-// badCheckpointStore that holds a *pgxpool.Pool field. The detection logic scans
-// for struct fields of type *pgxpool.Pool in types.Info — the same predicate used
-// by the production rule for CheckpointStore implementations. We apply it without
-// the impl-filter here (the fixture is explicitly designed to trigger the detector)
-// to prove isPgxPoolType correctly identifies the field.
+// The fixture (internal/projectioncheckpointtxfixture) contains:
+//   - badCheckpointStore: implements projection.CheckpointStore and holds *pgxpool.Pool.
+//   - badDeadLetterStore: implements projection.DeadLetterStore and holds *pgxpool.Pool.
+//
+// Both must be detected. We apply the pool-field scan without the impl-filter here
+// (the fixture is explicitly designed to trigger the detector) to prove
+// isPgxPoolType correctly identifies the field in each violating struct.
 func TestProjectionCheckpointTxBound01_RedFixture(t *testing.T) {
 	t.Parallel()
 
 	var diags []Diagnostic
+	flaggedStructs := map[string]bool{}
 
 	_ = Run(
 		t, Fixture(
@@ -255,6 +288,7 @@ func TestProjectionCheckpointTxBound01_RedFixture(t *testing.T) {
 							fieldName = field.Names[0].Name
 						}
 						line := p.Fset.Position(field.Type.Pos()).Line
+						flaggedStructs[ts.Name.Name] = true
 						diags = append(diags, Diagnostic{
 							Rel:  rel,
 							Line: line,
@@ -273,13 +307,20 @@ func TestProjectionCheckpointTxBound01_RedFixture(t *testing.T) {
 
 	assert.NotEmpty(t, diags,
 		"PROJECTION-CHECKPOINT-TX-BOUND-01 RED fixture: expected ≥1 diagnostic for "+
-			"badCheckpointStore *pgxpool.Pool field; rule logic is broken or fixture is missing")
+			"pool fields; rule logic is broken or fixture is missing")
+	assert.True(t, flaggedStructs["badCheckpointStore"],
+		"PROJECTION-CHECKPOINT-TX-BOUND-01 RED fixture: badCheckpointStore must be flagged "+
+			"(CheckpointStore impl with *pgxpool.Pool field)")
+	assert.True(t, flaggedStructs["badDeadLetterStore"],
+		"PROJECTION-CHECKPOINT-TX-BOUND-01 RED fixture: badDeadLetterStore must be flagged "+
+			"(DeadLetterStore impl with *pgxpool.Pool field — anti-vacuity for #2110 expansion)")
 }
 
 // TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal (blind spot B1)
-// asserts no production non-test CheckpointStore implementation package declares
-// a package-level variable of type *pgxpool.Pool. Such a global would escape
-// the struct-field scan.
+// asserts no production non-test CheckpointStore or DeadLetterStore implementation
+// package declares a package-level variable of type *pgxpool.Pool. Such a global
+// would escape the struct-field scan. Both interface impls are covered because
+// PROJECTION-CHECKPOINT-TX-BOUND-01 applies to both (#2110 expansion).
 func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
@@ -289,10 +330,10 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 	root := findModuleRoot(t)
 	prodPatterns := prodscan.Patterns(root)
 
-	var checkpointStoreIface *types.Interface
+	var checkpointStoreIface, deadLetterStoreIface *types.Interface
 	var implPkgPaths []string
 
-	// First pass: collect iface + impl package paths.
+	// First pass: collect both iface types from kernel/projection.
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
 			if p.Pkg == nil {
@@ -306,6 +347,13 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 						}
 					}
 				}
+				if obj := p.Pkg.Scope().Lookup(deadLetterStoreIfaceName); obj != nil {
+					if named, ok := obj.Type().(*types.Named); ok {
+						if iface, ok := named.Underlying().(*types.Interface); ok {
+							deadLetterStoreIface = iface.Complete()
+						}
+					}
+				}
 			}
 			return nil
 		})
@@ -315,7 +363,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 		return
 	}
 
-	// Second pass: collect impl pkg paths.
+	// Second pass: collect impl pkg paths for both CheckpointStore and DeadLetterStore.
 	implsByPkg := make(map[string]*types.Named)
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
 		func(p *Pass) []Diagnostic {
@@ -323,6 +371,9 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 				return nil
 			}
 			collectCheckpointStoreImpls(p.Pkg, checkpointStoreIface, implsByPkg)
+			if deadLetterStoreIface != nil {
+				collectCheckpointStoreImpls(p.Pkg, deadLetterStoreIface, implsByPkg)
+			}
 			return nil
 		})
 
@@ -363,7 +414,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 						for _, name := range vs.Names {
 							violations = append(violations, fmt.Sprintf(
 								"%s:%d: package-level var %s of type *pgxpool.Pool in "+
-									"CheckpointStore impl package (B1 blind spot — "+
+									"CheckpointStore/DeadLetterStore impl package (B1 blind spot — "+
 									"PROJECTION-CHECKPOINT-TX-BOUND-01)",
 								rel, line, name.Name,
 							))
@@ -375,7 +426,7 @@ func TestProjectionCheckpointTxBound01_ReverseBlindSpot_NoPoolGlobal(t *testing.
 		})
 
 	assert.Empty(t, violations,
-		"B1 blind-spot: no CheckpointStore impl package should have a package-level *pgxpool.Pool var; "+
+		"B1 blind-spot: no CheckpointStore/DeadLetterStore impl package should have a package-level *pgxpool.Pool var; "+
 			"scanned packages: %v", implPkgPaths)
 }
 

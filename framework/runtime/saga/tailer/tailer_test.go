@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/projection"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/distlock"
@@ -136,9 +137,163 @@ var _ projection.OwnerCheckpointStore = (*fakeOwnerStore)(nil)
 // is structural here, exercised for real in PG integration per ADR §9 PR-PG).
 type fakeTxRunner struct{}
 
+// stagingDeadLetterStore wraps a MemDeadLetterStore and stages Record calls.
+// Staged records are only committed to the real store when Commit() is called;
+// Rollback() discards them. This is used by atomicFakeTxRunner to model
+// both-or-neither semantics between Record and AdvanceIfOwner inside a
+// single skipPoisonEvent transaction.
+type stagingDeadLetterStore struct {
+	real   *projection.MemDeadLetterStore
+	staged []projection.DeadLetter
+	mu     sync.Mutex
+}
+
+func newStagingDeadLetterStore(real *projection.MemDeadLetterStore) *stagingDeadLetterStore {
+	return &stagingDeadLetterStore{real: real}
+}
+
+func (s *stagingDeadLetterStore) Record(_ context.Context, dl projection.DeadLetter) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staged = append(s.staged, dl)
+	return nil
+}
+
+func (s *stagingDeadLetterStore) Records() []projection.DeadLetter {
+	return s.real.Records()
+}
+
+func (s *stagingDeadLetterStore) commit(ctx context.Context) {
+	s.mu.Lock()
+	recs := append([]projection.DeadLetter(nil), s.staged...)
+	s.mu.Unlock()
+	for _, dl := range recs {
+		_ = s.real.Record(ctx, dl)
+	}
+}
+
+func (s *stagingDeadLetterStore) rollback() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.staged = nil
+}
+
+var _ projection.DeadLetterStore = (*stagingDeadLetterStore)(nil)
+
+// stagingOwnerCheckpointStore wraps MemOwnerCheckpointStore and stages
+// AdvanceIfOwner calls. Only the staged advance offset is kept; actual commits
+// to the real store happen on commit(). failAtCall, when > 0, causes
+// AdvanceIfOwner to return failErr on the Nth call (1-based), simulating a tx
+// fault at a specific point so RunInTx rolls back the entire tx for that call.
+// This lets the test fault only the skipPoisonEvent advance (call N=2) while
+// allowing the commitEvent advance for evt-1 (call N=1) to succeed.
+type stagingOwnerCheckpointStore struct {
+	real         *projection.MemOwnerCheckpointStore
+	failAtCall   int   // 1-based index; 0 = never fail
+	failErr      error // error to return at failAtCall
+	callCount    int
+	stagedOffset int64
+	stagedOwner  string
+	hasStaged    bool
+	mu           sync.Mutex
+}
+
+func newStagingOwnerCheckpointStore(real *projection.MemOwnerCheckpointStore) *stagingOwnerCheckpointStore {
+	return &stagingOwnerCheckpointStore{real: real}
+}
+
+func (s *stagingOwnerCheckpointStore) LoadOffset(ctx context.Context, cellID, projectionID string) (int64, error) {
+	return s.real.LoadOffset(ctx, cellID, projectionID)
+}
+
+func (s *stagingOwnerCheckpointStore) AdvanceIfOwner(_ context.Context, _, _, ownerToken string, offset int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.callCount++
+	if s.failAtCall > 0 && s.callCount == s.failAtCall {
+		return s.failErr
+	}
+	s.stagedOffset = offset
+	s.stagedOwner = ownerToken
+	s.hasStaged = true
+	return nil
+}
+
+func (s *stagingOwnerCheckpointStore) commit(ctx context.Context) {
+	s.mu.Lock()
+	has := s.hasStaged
+	offset := s.stagedOffset
+	owner := s.stagedOwner
+	s.mu.Unlock()
+	if has {
+		_ = s.real.AdvanceIfOwner(ctx, testCell, testProj, owner, offset)
+	}
+}
+
+func (s *stagingOwnerCheckpointStore) rollback() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hasStaged = false
+}
+
+var _ projection.OwnerCheckpointStore = (*stagingOwnerCheckpointStore)(nil)
+
+// atomicFakeTxRunner models transactional both-or-neither semantics for
+// skipPoisonEvent. It routes each RunInTx through staging stores; on callback
+// success it commits both (record+advance together); on callback error it rolls
+// both back. This lets TestTailer_PermanentApplyError_RecordAndAdvanceAtomicThroughSkipPoison
+// prove that injecting an advance failure also rolls back the dead-letter record —
+// exactly the regression a "split into two txs" refactor would introduce.
+//
+// The Tailer must be constructed with the staging stores as its deps (not the
+// real ones), so it issues all calls into the staging layer. The runner is then
+// set as the txRunner dep.
+type atomicFakeTxRunner struct {
+	stagingDL    *stagingDeadLetterStore
+	stagingStore *stagingOwnerCheckpointStore
+}
+
+func (r *atomicFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	// Reset staging state for this transaction.
+	r.stagingDL.rollback()
+	r.stagingStore.rollback()
+
+	if err := fn(ctx); err != nil {
+		// Rollback: both staged DL records and staged offset are discarded.
+		r.stagingDL.rollback()
+		r.stagingStore.rollback()
+		return err
+	}
+	// Commit both atomically.
+	r.stagingDL.commit(ctx)
+	r.stagingStore.commit(ctx)
+	return nil
+}
+
 func (fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
+
+// fakeDeadLetterStore embeds the real mem store but allows injecting a Record
+// fault to exercise the poison-skip fail-closed branch (#2110). recordErr is
+// applied BEFORE delegating, so a forced error means nothing is recorded.
+type fakeDeadLetterStore struct {
+	*projection.MemDeadLetterStore
+	recordErr error
+}
+
+func newFakeDeadLetterStore() *fakeDeadLetterStore {
+	return &fakeDeadLetterStore{MemDeadLetterStore: projection.NewMemDeadLetterStore()}
+}
+
+func (f *fakeDeadLetterStore) Record(ctx context.Context, dl projection.DeadLetter) error {
+	if f.recordErr != nil {
+		return f.recordErr
+	}
+	return f.MemDeadLetterStore.Record(ctx, dl)
+}
+
+var _ projection.DeadLetterStore = (*fakeDeadLetterStore)(nil)
 
 // acquireErrDriver wraps a FakeDriver and injects a SetNX backend I/O error so
 // distlock.Acquire returns a non-timeout (backend) error — exercising the
@@ -249,7 +404,8 @@ func newTestTailerWithDeps(
 	locker distlock.Locker,
 	opts ...Option,
 ) (*Tailer, error) {
-	return NewTailer(clk, replay, cursor, store, fakeTxRunner{}, apply, locker, testCell, testProj, opts...)
+	return NewTailer(clk, replay, cursor, store, projection.NewMemDeadLetterStore(), fakeTxRunner{},
+		apply, locker, testCell, testProj, opts...)
 }
 
 func events(seqs ...int64) []*fakeEvent {
@@ -435,10 +591,10 @@ func TestTailer_NilDepErrRedaction(t *testing.T) {
 		newCall func() (*Tailer, error)
 	}{
 		{"replay", func() (*Tailer, error) {
-			return NewTailer(clk, nil, src, store, fakeTxRunner{}, apply, locker, testCell, testProj)
+			return NewTailer(clk, nil, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, testCell, testProj)
 		}},
 		{"apply", func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, nil, locker, testCell, testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, nil, locker, testCell, testProj)
 		}},
 	}
 	for _, tc := range cases {
@@ -505,6 +661,116 @@ func TestTailer_ApplyErrorStopsAndReports(t *testing.T) {
 	}
 	if len(drains) != 1 || drains[0] != DrainApplyError {
 		t.Errorf("drains = %v, want [apply_error]", drains)
+	}
+}
+
+// TestTailer_PermanentApplyError_DeadLettersAndSkips verifies a permanent apply
+// error (outbox.PermanentError) is dead-lettered and the checkpoint advances PAST
+// the poison event — the projection is NOT frozen (#2110). Contrast with
+// TestTailer_ApplyErrorStopsAndReports, which proves a transient (plain) error
+// stalls.
+func TestTailer_PermanentApplyError_DeadLettersAndSkips(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+	dlx := newFakeDeadLetterStore()
+	poison := outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "unknown event kind"))
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		if evt.EventID() == "evt-2" {
+			return poison
+		}
+		return nil
+	}
+	obs := &recordingObserver{}
+	tl, err := NewTailer(clk, src, src, store, dlx, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("poison event must be skipped, not surfaced as a tick error: %v", err)
+	}
+
+	// Checkpoint advanced past the poison evt-2 to evt-3: the single bad event did
+	// not freeze the projection.
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 3 {
+		t.Errorf("checkpoint = %d, want 3 (poison evt-2 skipped)", off)
+	}
+
+	recs := dlx.Records()
+	if len(recs) != 1 {
+		t.Fatalf("dead letters = %d, want 1", len(recs))
+	}
+	dl := recs[0]
+	if dl.GlobalSeq != 2 || dl.EventID != "evt-2" || dl.CellID != testCell || dl.ProjectionID != testProj {
+		t.Errorf("dead letter = %+v, want GlobalSeq=2 EventID=evt-2 cell=%s proj=%s", dl, testCell, testProj)
+	}
+	if dl.ErrorType != string(errcode.ErrValidationFailed) {
+		t.Errorf("dead letter ErrorType = %q, want %q", dl.ErrorType, errcode.ErrValidationFailed)
+	}
+	if dl.ErrorMessage == "" {
+		t.Error("dead letter ErrorMessage must be populated (redacted reason)")
+	}
+
+	_, drains, advances, _, _ := obs.snapshot()
+	wantAdv := []AdvanceResult{AdvanceOK, AdvancePoisonSkip, AdvanceOK} // evt-1 ok, evt-2 poison_skip, evt-3 ok
+	if len(advances) != len(wantAdv) {
+		t.Fatalf("advances = %v, want %v", advances, wantAdv)
+	}
+	for i := range wantAdv {
+		if advances[i] != wantAdv[i] {
+			t.Errorf("advances[%d] = %v, want %v (full %v)", i, advances[i], wantAdv[i], advances)
+		}
+	}
+	if len(drains) != 1 || drains[0] != DrainOK {
+		t.Errorf("drains = %v, want [ok] (drain made progress)", drains)
+	}
+}
+
+// TestTailer_PermanentApplyError_RecordFailStallsFailClosed verifies that when the
+// dead-letter Record fails, the Tailer fails closed: the checkpoint does NOT
+// advance past the poison event (it is neither applied nor skipped), and nothing
+// is recorded. Skip is gated on a successful dead-letter record — "skipped ⟺
+// recorded" (#2110). Full DB record+advance atomicity (both-or-neither commit) is
+// a real-transaction guarantee, asserted in the PG integration test.
+func TestTailer_PermanentApplyError_RecordFailStallsFailClosed(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+	dlx := newFakeDeadLetterStore()
+	dlx.recordErr = errors.New("dead-letter storage down")
+	poison := outbox.NewPermanentError(errors.New("bad payload"))
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		if evt.EventID() == "evt-2" {
+			return poison
+		}
+		return nil
+	}
+	obs := &recordingObserver{}
+	tl, err := NewTailer(clk, src, src, store, dlx, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	if err := tl.pollOnce(context.Background()); err == nil {
+		t.Fatal("dead-letter record failure must fail closed (surface as a tick error)")
+	}
+
+	// Fail-closed: checkpoint stuck at evt-1 — evt-2 was neither applied nor
+	// skipped-past, evt-3 never reached.
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 1 {
+		t.Errorf("checkpoint = %d, want 1 (poison NOT skipped when dead-letter record fails)", off)
+	}
+	if recs := dlx.Records(); len(recs) != 0 {
+		t.Errorf("dead letters = %d, want 0 (record failed, nothing persisted)", len(recs))
+	}
+
+	_, _, advances, _, _ := obs.snapshot()
+	// evt-1 ok; evt-2 record-fail classified as an advance fault (not poison_skip).
+	if len(advances) != 2 || advances[0] != AdvanceOK || advances[1] != AdvanceError {
+		t.Errorf("advances = %v, want [ok error]", advances)
 	}
 }
 
@@ -575,8 +841,11 @@ func TestTailer_ConstructorNilGuards(t *testing.T) {
 		"nil store": func() (*Tailer, error) {
 			return newTestTailerWithDeps(clk, src, src, nil, apply, locker)
 		},
+		"nil deadLetters": func() (*Tailer, error) {
+			return NewTailer(clk, src, src, store, nil, fakeTxRunner{}, apply, locker, testCell, testProj)
+		},
 		"nil tx": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, nil, apply, locker, testCell, testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), nil, apply, locker, testCell, testProj)
 		},
 		"nil apply": func() (*Tailer, error) {
 			return newTestTailerWithDeps(clk, src, src, store, nil, locker)
@@ -585,10 +854,10 @@ func TestTailer_ConstructorNilGuards(t *testing.T) {
 			return newTestTailerWithDeps(clk, src, src, store, apply, nil)
 		},
 		"empty cell": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, "", testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, "", testProj)
 		},
 		"empty proj": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, testCell, "")
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, testCell, "")
 		},
 	}
 	for name, ctor := range cases {
@@ -607,7 +876,7 @@ func TestTailer_NilClockPanics(t *testing.T) {
 		}
 	}()
 	src := &fakeSource{}
-	_, _ = NewTailer(nil, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
+	_, _ = NewTailer(nil, src, src, projection.NewMemOwnerCheckpointStore(), projection.NewMemDeadLetterStore(), fakeTxRunner{},
 		func(context.Context, projection.ProjectionEvent) error { return nil },
 		newTestLocker(t, clockmock.New(time.Unix(0, 0))), testCell, testProj)
 }
@@ -616,7 +885,7 @@ func TestTailer_ConfigValidation(t *testing.T) {
 	clk := clockmock.New(time.Unix(0, 0))
 	src := &fakeSource{}
 	mk := func(cfg Config) error {
-		_, err := NewTailer(clk, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
+		_, err := NewTailer(clk, src, src, projection.NewMemOwnerCheckpointStore(), projection.NewMemDeadLetterStore(), fakeTxRunner{},
 			func(context.Context, projection.ProjectionEvent) error { return nil },
 			newTestLocker(t, clk), testCell, testProj, WithConfig(cfg))
 		return err
@@ -926,7 +1195,8 @@ func TestTailer_StopTimeoutRetryable(t *testing.T) {
 
 	// Real clock + short poll interval so the loop ticks into apply promptly.
 	realClock := clock.Real()
-	tl, err := NewTailer(realClock, src, src, store, fakeTxRunner{}, apply, newTestLocker(t, realClock), testCell, testProj,
+	tl, err := NewTailer(realClock, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{},
+		apply, newTestLocker(t, realClock), testCell, testProj,
 		WithConfig(Config{PollInterval: testFastPoll, LeaseTTL: testLockTTL}))
 	if err != nil {
 		t.Fatalf("NewTailer: %v", err)
@@ -1116,6 +1386,125 @@ func TestTailer_ProbeStaysHealthyOnContention(t *testing.T) {
 	}
 	if err := tl.checkReady(context.Background()); err != nil {
 		t.Errorf("checkReady = %v, want nil (contention is normal multi-replica)", err)
+	}
+}
+
+// TestTailer_PermanentApplyError_RecordAndAdvanceAtomicThroughSkipPoison verifies
+// that skipPoisonEvent commits dead-letter record + checkpoint advance
+// atomically (both-or-neither). It injects an AdvanceIfOwner failure AFTER a
+// successful Record inside a single RunInTx call and asserts that the
+// dead-letter record is also absent — proving the two writes share one
+// transaction. If skipPoisonEvent were refactored into two separate txs, this
+// test would catch the regression: a split-tx impl would leave a dead-letter
+// record without an advance, or an advance without a record.
+//
+// Mechanism: atomicFakeTxRunner wraps staging stores. The staging
+// OwnerCheckpointStore is pre-faulted to return an error on AdvanceIfOwner,
+// which causes RunInTx to rollback both staged effects. The test then asserts
+// that neither the real DL store nor the real checkpoint store was mutated.
+func TestTailer_PermanentApplyError_RecordAndAdvanceAtomicThroughSkipPoison(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2)}
+
+	// Real backing stores (start empty).
+	realDL := projection.NewMemDeadLetterStore()
+	realStore := projection.NewMemOwnerCheckpointStore()
+
+	// Staging stores that proxy calls from the Tailer's deps.
+	stagingDL := newStagingDeadLetterStore(realDL)
+	stagingStore := newStagingOwnerCheckpointStore(realStore)
+
+	// Fault the staging checkpoint store on the 2nd AdvanceIfOwner call (the one
+	// inside skipPoisonEvent for evt-2). The 1st call (commitEvent for evt-1) is
+	// allowed through so evt-1 is committed normally. The 2nd call fails → the
+	// RunInTx callback returns an error → atomicFakeTxRunner rolls back both the
+	// staged DL record and the staged advance, proving both-or-neither semantics.
+	stagingStore.failAtCall = 2
+	stagingStore.failErr = errors.New("advance storage fault injected for atomicity test")
+
+	txRunner := &atomicFakeTxRunner{stagingDL: stagingDL, stagingStore: stagingStore}
+
+	poison := outbox.NewPermanentError(errors.New("unknown event"))
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		if evt.EventID() == "evt-2" {
+			return poison
+		}
+		return nil
+	}
+	obs := &recordingObserver{}
+
+	// Wire Tailer with staging stores as its direct deps.
+	tl, err := NewTailer(clk, src, src, stagingStore, stagingDL, txRunner, apply,
+		newTestLocker(t, clk), testCell, testProj, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	// pollOnce: evt-1 applies cleanly (using fakeTxRunner path via commitEvent);
+	// evt-2 is poison → skipPoisonEvent → advance fails → tx rolled back.
+	if err := tl.pollOnce(context.Background()); err == nil {
+		t.Fatal("advance failure inside skipPoisonEvent must surface as a tick error")
+	}
+
+	// Both-or-neither: advance rolled back → dead-letter record must ALSO be absent.
+	if recs := realDL.Records(); len(recs) != 0 {
+		t.Errorf("dead-letter records = %d, want 0 — record must roll back when advance fails (both-or-neither)", len(recs))
+	}
+
+	// Checkpoint must not have advanced past evt-1 (evt-2 skip rolled back).
+	off, _ := realStore.LoadOffset(context.Background(), testCell, testProj)
+	if off != 1 {
+		t.Errorf("checkpoint = %d, want 1 (evt-2 skip rolled back, evt-1 committed via commitEvent)", off)
+	}
+}
+
+// TestTailer_PermanentApplyError_DeadLetterErrorMessageRedacted verifies that
+// the ErrorMessage stored in the dead-letter record has its sensitive substrings
+// redacted. A raw applyErr containing "password=hunter2" must not appear
+// verbatim in the dead-letter record — only the redacted form must be present.
+// This exercises the redaction.RedactError call inside skipPoisonEvent.
+func TestTailer_PermanentApplyError_DeadLetterErrorMessageRedacted(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1)}
+	store := projection.NewMemOwnerCheckpointStore()
+	dlx := newFakeDeadLetterStore()
+
+	const sensitiveFragment = "hunter2"
+	// Construct a permanent error whose .Error() contains a key=value pair that
+	// redaction.RedactError will catch (defaultPattern matches password=<value>).
+	rawApplyErr := outbox.NewPermanentError(fmt.Errorf("failed to decode event: password=%s", sensitiveFragment))
+
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		return rawApplyErr
+	}
+
+	tl, err := NewTailer(clk, src, src, store, dlx, fakeTxRunner{}, apply,
+		newTestLocker(t, clk), testCell, testProj)
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("poison skip should not surface as tick error when record+advance succeed: %v", err)
+	}
+
+	recs := dlx.Records()
+	if len(recs) != 1 {
+		t.Fatalf("dead-letter records = %d, want 1", len(recs))
+	}
+	dl := recs[0]
+
+	// The raw sensitive value must not appear in the stored ErrorMessage.
+	if strings.Contains(dl.ErrorMessage, sensitiveFragment) {
+		t.Errorf("dead-letter ErrorMessage %q contains sensitive fragment %q — redaction.RedactError not applied",
+			dl.ErrorMessage, sensitiveFragment)
+	}
+	// The ErrorMessage must be non-empty and contain a redaction marker.
+	if dl.ErrorMessage == "" {
+		t.Error("dead-letter ErrorMessage must be non-empty")
+	}
+	if !strings.Contains(dl.ErrorMessage, "REDACTED") {
+		t.Errorf("dead-letter ErrorMessage %q does not contain REDACTED marker — redaction may not have fired", dl.ErrorMessage)
 	}
 }
 

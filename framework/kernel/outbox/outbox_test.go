@@ -715,6 +715,27 @@ func TestPermanentError_ErrorsAs_ThroughWrapping(t *testing.T) {
 	assert.Equal(t, inner, target.Err)
 }
 
+func TestIsPermanent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "plain error", err: errors.New("transient db timeout"), want: false},
+		{name: "permanent", err: NewPermanentError(errors.New("unknown kind")), want: true},
+		{name: "wrapped permanent", err: fmt.Errorf("apply: %w", NewPermanentError(errors.New("bad payload"))), want: true},
+		{name: "double wrapped permanent", err: fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", NewPermanentError(errors.New("x")))), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsPermanent(tt.err))
+		})
+	}
+}
+
 // --- Entry.Validate Tests (F-OB-03) ---
 
 func TestEntry_Validate(t *testing.T) {

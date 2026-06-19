@@ -25,10 +25,9 @@ var terminalStatuses = map[orderstatusgen.ResponseDataStatus]struct{}{
 // replay.
 //
 // Unknown/zero kind → fail-closed: returns ("", error) wrapped permanent. A
-// permanent apply error HALTS the saga-journal Tailer's checkpoint advance
-// (fail-closed — the poison event blocks the projection until operator
-// intervention); it does NOT route to a DLX (the saga-journal Tailer has no
-// dead-letter path, unlike the outbox ConsumerBase).
+// permanent apply error makes the saga-journal Tailer SKIP the poison event —
+// record it to the dead-letter sink and advance the checkpoint past it in one
+// transaction — so a single bad event does not freeze the projection (#2110).
 //
 // Note: "accepted" is NOT a valid stored status — it means the read model has
 // NO row yet (handled by the query layer). FoldStatus only stores Running or a
@@ -51,9 +50,9 @@ func FoldStatus(prev orderstatusgen.ResponseDataStatus, kind journal.EventKind) 
 		return orderstatusgen.ResponseDataStatusRunning, nil
 	default:
 		// Unknown / zero kind — fail-closed as a PermanentError so the bad event
-		// is not silently retried. There is no DLX on the saga-journal Tailer
-		// path: a permanent apply error HALTS the Tailer's checkpoint advance
-		// (the poison event blocks the projection until operator intervention).
+		// is not silently retried. The saga-journal Tailer dead-letters the poison
+		// event and advances its checkpoint past it (#2110), so the projection
+		// keeps progressing instead of freezing on the one bad event.
 		return "", outbox.NewPermanentError(
 			fmt.Errorf("projection.FoldStatus: unknown journal.EventKind %q; reject as permanent", kind.String()),
 		)
