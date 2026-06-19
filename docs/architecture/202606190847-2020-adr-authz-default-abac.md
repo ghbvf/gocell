@@ -110,22 +110,23 @@ proto RPC 必须是 public 或 permissioned，否则 generate 失败）。
 - 非 opt-out 却带 `auth.reason` → `ReasonWithoutOptOut`（forbidden）。
 - ID ∈ 冻结 ledger → OK（豁免，直到 #2355/#2358 迁移）。
 
-**comprehensive 主控制点 = 共享 preflight** `metadata.ValidateProjectHTTPAuthModes(p)`，对 `p.Contracts`
-**每个** active codegen http 契约跑 classifier，并由**所有** codegen/verify 入口复用——`gocell generate`
-（`runCodegenGenerate`）、`gocell verify codegen-*`（`runCodegenVerifyInPlace`/`Sandbox`）、`gocell verify
-generated`（generatedverify/`RenderContractArtifacts` 派生）。这既补上 cellgen serve-scan 漏的「非 served
-契约」（F2），也堵 contractgen / RenderContractArtifacts 路径（F1），且 forbidden 分支（reason-without-opt-out）
-在 codegen 期拦（F3）。`cellgen/builder.go` 的 serve-scan（`validateHTTPAuthModeCompleteness`）与治理 FMT-42
-复用**同一** classifier，分别作 cell 构建期 defense 与 validate 期 Medium 层——一处判定、多处复用。
+**不可绕过的 Hard 核心 = `contractgen.buildHTTPSpec`** 内对**每个被渲染契约**跑 classifier。**所有** HTTP 契约
+渲染路径——`gocell generate` / `gocell verify codegen-*` / `gocell verify generated`（generatedverify）/ cellgen
+`stage_render` / 任何直接 `RenderContractArtifacts` 调用——都经 `buildContractSpec → buildHTTPSpec`，故 modeless /
+mis-reasoned 路由无论从哪个入口都生成不出来（与同位置的 `ValidateHTTPHeaders` gate 及 k8s apiextensions 对象级
+校验同构）。这一处即闭合 F1（RenderContractArtifacts/verify 旁路）+ F2（非 served 契约：`generate contract --all`
+渲染全部契约）+ F3（forbidden 分支）。**纵深层**（同一 classifier、不同 scope）：`cmd/gocell/app`
+`ValidateProjectHTTPAuthModes`（CLI 入口项目级聚合报错，UX）+ `cellgen` serve-scan（cell 构建期）+ 治理 FMT-42
+（`gocell validate` Medium）——一处判定、多处复用。
 
-> 覆盖洞由外部再审（Codex）两轮发现并在本 PR 修正：先把判定抽为共享 classifier，再把项目级 preflight 收口为
-> `metadata.ValidateProjectHTTPAuthModes` 并接入**每个** generate/verify 入口（含 verify-codegen 与
-> generatedverify 的 RenderContractArtifacts 旁路），对标 k8s apiextensions（校验声明对象、非单一消费者命令外层）。
+> 覆盖洞由外部再审（Codex）三轮逐步发现并收敛修正：① 抽共享 classifier；② 项目级 preflight 接入 CLI 入口；
+> ③ 最终把 gate 下沉到不可绕过的对象渲染核心 `buildHTTPSpec`（导出的 `RenderContractArtifacts` 也内置同一 gate，
+> 不再依赖「锁住每个调用方」）。对标 k8s apiextensions（校验声明对象、非单一消费者命令外层）。
 
-**违反不可表达于 generated artifacts**：modeless 契约让 `gocell generate`（任一 kind）**报错**，即使 handler
-手写了正确 gate 也产不出 generated code。与 gRPC `Completeness (#2008)` 的 "dead 403 不可静默上线" 同构。
+**违反不可表达于 generated artifacts**：modeless 契约让任何渲染路径 **报错**，即使 handler 手写了正确 gate 也产
+不出 generated code。与 gRPC `Completeness (#2008)` 的 "dead 403 不可静默上线" 同构。
 
-**AI-robust 评级（Hard）**：上游 = generate 编排单源读 `contract.yaml` + 共享 classifier；下游 = generated
+**AI-robust 评级（Hard）**：上游 = 渲染核心 `buildHTTPSpec` 单一不可绕入口 + 共享 classifier；下游 = generated
 artifacts 不可表达 modeless 路由（generate 失败）。
 
 ### D5 — runtime `auth.Mount` 不作为载体（设计裁决）
@@ -217,7 +218,8 @@ registry / golden churn）：在 `gocell validate` 阶段即报 modeless / opt-o
 
 | 措施 | 评级 | 上游 | 下游 |
 |------|------|------|------|
-| codegen 完整性预检（generate 编排层 comprehensive，modeless/缺-reason/reason-forbidden → generate 失败，**Hard 主控制点**） | **Hard** | generate 编排单源读 `contract.yaml` + 共享 `ClassifyHTTPAuthMode` oracle | generated artifacts 不可表达 modeless 路由（任一 kind generate 直接失败；覆盖每个 active codegen http 契约） |
+| `contractgen.buildHTTPSpec` AuthZ-mode gate（不可绕渲染核心，modeless/缺-reason/reason-forbidden → 渲染失败，**Hard 主控制点**） | **Hard** | 每个被渲染契约必经 `buildContractSpec→buildHTTPSpec` + 共享 `ClassifyHTTPAuthMode` oracle | generated artifacts 不可表达 modeless 路由（任一渲染路径直接失败；导出 `RenderContractArtifacts` 也内置同一 gate） |
+| `ValidateProjectHTTPAuthModes` CLI 项目级预检（聚合报错 UX）+ cellgen serve-scan | Medium | CLI 入口 + cell 构建期，复用同一 classifier | 纵深层，非唯一控制点（核心是 buildHTTPSpec） |
 | schema `auth.reason` 字段形状（`type:string` + `minLength:1`） | **Hard**（schema） | schema 钉死非空字符串（不表达 required/forbidden 耦合，避免与 2^5 auth-bool 矩阵耦合） | 空串 reason → schema 校验失败；required/forbidden 耦合由 codegen（Hard）+ FMT-42（Medium）承载 |
 | 迁移 ledger frozen-subset + no-stale | **Medium** | frozen 37-ID 不可变集（ledger 须为子集，挡 grow+swap） | no-stale 双向反查驱动收敛（需运行测试，非编译期） |
 | FMT-42 扩展（不新增 FMT-43，authoring UX 纵深） | **Medium** | `gocell validate` | 早期提示，非唯一控制点 |

@@ -11,6 +11,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/sample/idempotency-exempt
+    permission: sample:write
     successStatus: 201
     auth:
       passwordResetExempt: true

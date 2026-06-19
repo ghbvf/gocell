@@ -83,15 +83,15 @@ func (v HTTPAuthModeViolation) Message() string {
 	}
 }
 
-// ValidateProjectHTTPAuthModes is the COMPREHENSIVE #2020 Hard gate: it runs
+// ValidateProjectHTTPAuthModes is the #2020 CLI-entry project-level layer: it runs
 // ClassifyHTTPAuthMode over EVERY contract in the project and returns an aggregated error
-// naming each active codegen HTTP contract that violates the mandatory-mode rule. It is
-// the single object-level validation every codegen/verify entry point shares — `gocell
-// generate`, `gocell verify codegen-*`, and the generatedverify drift check all call it —
-// so no generation OR verification path can emit/accept a modeless route. This mirrors
-// k8s apiextensions (validate the declared object, not just one consumer command's outer
-// layer); the per-cell cellgen serve-scan and governance FMT-42 reuse the same
-// ClassifyHTTPAuthMode oracle as defense / authoring-time layers.
+// naming each active codegen HTTP contract that violates the mandatory-mode rule. CLI
+// codegen/verify entry points call it so a single run reports every offender up front
+// (better UX than the render core's first-fail). The UNBYPASSABLE Hard gate is
+// contractgen.buildHTTPSpec, which runs ClassifyHTTPAuthMode on every contract it renders
+// regardless of entry point (mirrors k8s apiextensions object-level validation); this
+// project scan, the per-cell cellgen serve-scan, and governance FMT-42 are same-oracle
+// defense / authoring-time layers.
 func ValidateProjectHTTPAuthModes(p *ProjectMeta) error {
 	if p == nil {
 		return nil

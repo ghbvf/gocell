@@ -351,14 +351,14 @@ type HTTPAuthMeta struct {
 	// bootstrap / clientsOnly) is set, and forbidden otherwise — ABAC (the default,
 	// expressed via endpoints.http.permission) is self-justifying and needs no reason.
 	// The required/forbidden coupling is the Hard carrier in codegen: the shared oracle
-	// metadata.ClassifyHTTPAuthMode, run project-wide by metadata.ValidateProjectHTTPAuthModes
-	// at every codegen/verify entry point (gocell generate, gocell verify codegen-*, and the
-	// generatedverify drift check), with cellgen's serve-scan and governance FMT-42 reusing
-	// the same oracle as defense / Medium validate-time layers. JSON Schema only pins the
-	// field SHAPE (non-empty string), NOT the coupling, to keep the auth bool-mutex matrix
-	// at 2^5. It is NOT a mutex-governed mode flag, so it stays outside the AuthComboLegal
-	// matrix (like Responses). passwordResetExempt is a modifier, not an opt-out mode, and
-	// does not require a reason on its own.
+	// metadata.ClassifyHTTPAuthMode, enforced at the UNBYPASSABLE render core
+	// contractgen.buildHTTPSpec (every rendered contract, any entry point), with
+	// metadata.ValidateProjectHTTPAuthModes (CLI project-level aggregate), cellgen's
+	// serve-scan, and governance FMT-42 reusing the same oracle as defense / Medium
+	// validate-time layers. JSON Schema only pins the field SHAPE (non-empty string), NOT
+	// the coupling, to keep the auth bool-mutex matrix at 2^5. It is NOT a mutex-governed
+	// mode flag, so it stays outside the AuthComboLegal matrix (like Responses).
+	// passwordResetExempt is a modifier, not an opt-out mode, and does not require a reason.
 	Reason string `yaml:"reason,omitempty" json:"reason,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware,
 	// NOT emitted by the handler/adapter — so they are declared here (no typed
