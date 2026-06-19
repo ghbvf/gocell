@@ -5,6 +5,7 @@ package main
 import (
 	cellmodulesaccesscore "github.com/ghbvf/gocell/cellmodules/accesscore"
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
+	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
@@ -14,6 +15,7 @@ func generatedCellModules() []composition.CellModule {
 	return []composition.CellModule{
 		cellmodulesaccesscore.Module(),
 		cellmodulesauditcore.Module(),
+		cellmodulesconfigcore.Module(),
 	}
 }
 
@@ -68,7 +70,10 @@ func generatedPostgresCells() []string {
 // `gocell generate assembly`, and `--verify` red-flags stale output. ALWAYS emitted
 // (nil when no broker cells) so the composition root can call it unconditionally.
 func generatedBrokerCells() []string {
-	return nil
+	return []string{
+		"accesscore",
+		"auditcore",
+	}
 }
 
 // generatedFrameworkServedContracts is the sorted list of framework-owned
@@ -94,14 +99,22 @@ func generatedFrameworkServedContracts() []string {
 func generatedTopologyGroups() []bootstrap.TopologyGroup {
 	return []bootstrap.TopologyGroup{
 		{
-			Role:     "core",
-			Cells:    []string{"accesscore"},
-			Endpoint: "https://core.svc:9443",
+			Role:                                "core",
+			Cells:                               []string{"accesscore"},
+			Endpoint:                            "https://core.svc:9443",
+			RequiresBrokerForCrossProcessEvents: true,
 		},
 		{
-			Role:     "edge",
-			Cells:    []string{"auditcore"},
-			Endpoint: "https://edge.svc:9443",
+			Role:                                "edge",
+			Cells:                               []string{"auditcore"},
+			Endpoint:                            "https://edge.svc:9443",
+			RequiresBrokerForCrossProcessEvents: true,
+		},
+		{
+			Role:                                "standalone",
+			Cells:                               []string{"configcore"},
+			Endpoint:                            "https://standalone.svc:9443",
+			RequiresBrokerForCrossProcessEvents: false,
 		},
 	}
 }

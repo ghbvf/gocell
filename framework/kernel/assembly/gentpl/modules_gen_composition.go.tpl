@@ -129,9 +129,10 @@ func generatedTopologyGroups() []bootstrap.TopologyGroup {
 	return []bootstrap.TopologyGroup{
 {{- range .TopologyGroups.Groups}}
 		{
-			Role:     {{printf "%q" .Role}},
-			Cells:    []string{{"{"}}{{range $i, $c := .Cells}}{{if $i}}, {{end}}{{printf "%q" $c}}{{end}}{{"}"}},
-			Endpoint: {{printf "%q" .Endpoint}},
+			Role:                                {{printf "%q" .Role}},
+			Cells:                               []string{{"{"}}{{range $i, $c := .Cells}}{{if $i}}, {{end}}{{printf "%q" $c}}{{end}}{{"}"}},
+			Endpoint:                            {{printf "%q" .Endpoint}},
+			RequiresBrokerForCrossProcessEvents: {{printf "%v" .RequiresBrokerForCrossProcessEvents}},
 		},
 {{- end}}
 	}
