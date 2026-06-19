@@ -90,7 +90,8 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 	if c.advance, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name: "saga_journal_tailer_checkpoint_advance_total",
 		Help: "Total saga-journal tailer checkpoint AdvanceIfOwner attempts, labeled by result " +
-			"(ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault). " +
+			"(ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault; " +
+			"poison_skip = dead-lettered poison event, checkpoint advanced past it (#2110)). " +
 			"Alert on result=error; exclude result=stale_owner.",
 		LabelNames: []string{"cell", "projection", "result"},
 	}, &registered); err != nil {

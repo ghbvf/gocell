@@ -49,6 +49,9 @@ func TestResolve_DemoMemory(t *testing.T) {
 	if deps.OwnerStore == nil {
 		t.Fatal("demo OwnerStore is nil")
 	}
+	if deps.DeadLetters == nil {
+		t.Fatal("demo DeadLetters is nil (Tailer requires a non-nil DeadLetterStore for poison-event skip)")
+	}
 	if deps.Locker == nil {
 		t.Fatal("demo Locker is nil (Tailer requires a non-nil distlock.Locker)")
 	}

@@ -268,10 +268,9 @@ func TestHandleOrderEvent_UnknownKind(t *testing.T) {
 }
 
 // TestHandleOrderEvent_MalformedEventID verifies that a malformed EventID (no @)
-// returns a permanent error. A permanent apply error HALTS the Tailer's
-// checkpoint advance (fail-closed); it does NOT route to a DLX (the saga-journal
-// Tailer has no dead-letter path). The test asserts only the PermanentError
-// classification — the halt-not-DLX behavior lives in runtime/saga/tailer.
+// returns a permanent error. A permanent apply error makes the Tailer dead-letter
+// and skip the poison event (#2110). The test asserts only the PermanentError
+// classification — the dead-letter+skip behavior lives in runtime/saga/tailer.
 func TestHandleOrderEvent_MalformedEventID(t *testing.T) {
 	t.Parallel()
 	b := newBundle(t)

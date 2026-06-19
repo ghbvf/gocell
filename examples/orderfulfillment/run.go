@@ -100,6 +100,7 @@ func runOrderfulfillment(ctx context.Context, assemblyID string, assemblyCellIDs
 		// Tailer for the orderstatus saga-journal projection (registered in cell_gen.go).
 		bootstrap.WithSagaJournalReader(deps.Reader),
 		bootstrap.WithSagaProjectionOwnerCheckpointStore(deps.OwnerStore),
+		bootstrap.WithSagaProjectionDeadLetterStore(deps.DeadLetters),
 		bootstrap.WithSagaProjectionLocker(deps.Locker),
 		bootstrap.WithProjectionTxRunner(deps.TxRunner),
 	}

@@ -131,6 +131,10 @@ func (b *Bootstrap) checkSagaProjectionDeps() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: saga-journal projection declared but no owner checkpoint store configured; "+
 				"add WithSagaProjectionOwnerCheckpointStore to bootstrap options")
+	case validation.IsNilInterface(b.sagaProjDeadLetters):
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: saga-journal projection declared but no dead-letter store configured; "+
+				"add WithSagaProjectionDeadLetterStore to bootstrap options")
 	case validation.IsNilInterface(b.projectionTxRunner):
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: saga-journal projection declared but no tx runner configured; "+
@@ -224,12 +228,13 @@ func (b *Bootstrap) buildOneSagaTailer(req cell.ProjectionRequest) (*tailer.Tail
 	// implements both interfaces); the TxRunner is shared with the outbox path.
 	return tailer.NewTailer(
 		b.clock,
-		src,                  // replay (projection.ReplaySource)
-		src,                  // cursor (projection.Cursor)
-		b.sagaProjOwnerStore, // fenced OwnerCheckpointStore
-		b.projectionTxRunner, // shared tx runner
-		req.Apply,            // projection.Apply (alias passthrough)
-		b.sagaProjLocker,     // per-projection leader gate
+		src,                   // replay (projection.ReplaySource)
+		src,                   // cursor (projection.Cursor)
+		b.sagaProjOwnerStore,  // fenced OwnerCheckpointStore
+		b.sagaProjDeadLetters, // poison-event dead-letter sink (#2110)
+		b.projectionTxRunner,  // shared tx runner
+		req.Apply,             // projection.Apply (alias passthrough)
+		b.sagaProjLocker,      // per-projection leader gate
 		req.CellID,
 		req.ProjectionID,
 		opts...,

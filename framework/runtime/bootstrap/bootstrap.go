@@ -297,6 +297,7 @@ type Bootstrap struct {
 	// reg.RegisterProjection (NewSagaJournalProjectionRequest).
 	sagaJournalReader   journal.GlobalReader
 	sagaProjOwnerStore  projection.OwnerCheckpointStore
+	sagaProjDeadLetters projection.DeadLetterStore
 	sagaProjLocker      distlock.Locker
 	sagaTailerConfig    tailer.Config
 	sagaTailerConfigSet bool
