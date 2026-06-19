@@ -99,7 +99,19 @@ replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
 
+replace github.com/ghbvf/gocell/adapters/rabbitmq => ../../adapters/rabbitmq
+
+replace github.com/ghbvf/gocell/adapters/ratelimit => ../../adapters/ratelimit
+
+replace github.com/ghbvf/gocell/adapters/redis => ../../adapters/redis
+
+replace github.com/ghbvf/gocell/adapters/softca => ../../adapters/softca
+
+replace github.com/ghbvf/gocell/adapters/vault => ../../adapters/vault
+
 replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
+
+replace github.com/ghbvf/gocell/corecells => ../../corecells
 
 replace github.com/ghbvf/gocell/generated => ../../generated
 
