@@ -16,6 +16,7 @@ adapters/softca	github.com/ghbvf/gocell/adapters/softca
 adapters/vault	github.com/ghbvf/gocell/adapters/vault
 adapters/websocket	github.com/ghbvf/gocell/adapters/websocket
 cellmodules	github.com/ghbvf/gocell/cellmodules
+cellmodules/grpclistener	github.com/ghbvf/gocell/cellmodules/grpclistener
 corecells	github.com/ghbvf/gocell/corecells
 framework	github.com/ghbvf/gocell/framework
 generated	github.com/ghbvf/gocell/generated
