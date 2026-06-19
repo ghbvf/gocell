@@ -11,10 +11,11 @@
 // only be called from a closed set of sanctioned packages:
 //
 //   - framework/runtime/http/tlsutil/tlsutiltest — the single sanctioned source
-//     of self-signed mTLS cert material for tests (issue #2287). Before it, ~8
-//     near-equivalent "self-signed CA + cell leaf" cert-gen helpers were copy-
-//     pasted across the test tree (the mqtt copy even carried a "Ported from
-//     adapters/grpc/cert_test.go" comment). cert-gen detail — curve, validity,
+//     of self-signed mTLS cert material for tests (issue #2287). Before it, 9
+//     near-equivalent cert-gen helpers (8 "self-signed CA + cell leaf" chains +
+//     1 CA-only pool fixture) were copy-pasted across the test tree (the mqtt
+//     copy even carried a "Ported from adapters/grpc/cert_test.go" comment).
+//     cert-gen detail — curve, validity,
 //     EKU, SAN — is sensitive to mTLS correctness, so a bug in one copy is
 //     invisible to the others; centralizing the mint makes the shape a single
 //     source and this funnel keeps it centralized.
@@ -54,6 +55,15 @@
 // is deliberately absent from FlatNonDefaultTags (#944), so the RED fixture is
 // never compiled into the dogfood.
 //
+// # CI lane (nightly-only, like CELLTLS-MATERIAL-FUNNEL-01)
+//
+// This rule runs Production(Tests:true) + FlatNonDefaultTags() — a heavy
+// whole-tree packages.Load (two passes) — so it belongs to the nightly archtest
+// bucket (verify-archtest.sh / `go test -tags=archtest ./tools/archtest/...`),
+// NOT the cheap PR-time fast lane (hack/verify-archtest-invariants.sh, reserved
+// for non-packages.Load invariants). Same disposition + cost class as
+// CELLTLS-MATERIAL-FUNNEL-01.
+//
 // # Blind spots (BS)
 //
 //   - BS-1 Reverse build constraints (//go:build !tag): files excluded from a
@@ -66,6 +76,13 @@
 //     resolves to *types.Var (ok=false) and is not flagged. Accepted: no
 //     sanctioned or migrated caller does this.
 //   - BS-4 Reflection construction: out of scope per ai-robust.md §3.
+//   - BS-5 Rel-prefix coupling: tlsTestMaterialSanctionedDirs matches Pass.Rel's
+//     framework-stripped, module-relative form (runtime/… for the framework
+//     module, <module>/… otherwise). If newPackageRel / stripFrameworkPrefix
+//     changes, this list AND TestIsTLSTestMaterialSanctioned (which feeds
+//     pre-stripped literals) must be updated together. A strip-behavior change
+//     would silently false-RED (a sanctioned caller stops matching) — fail-safe,
+//     not fail-open, so it surfaces as CI red rather than a missed violation.
 package archtest
 
 import (
@@ -94,10 +111,15 @@ const (
 // packages appear as "runtime/…" here, NOT "framework/runtime/…". Non-framework
 // modules (adapters/, cellmodules/, tools/) are not stripped.
 var tlsTestMaterialSanctionedDirs = []string{
-	"runtime/http/tlsutil/tlsutiltest/",
-	"runtime/certsigning/",
-	"runtime/certlifecycle/",
-	"adapters/softca/",
+	// framework module: Pass.Rel strips the leading "framework/" (#1565), so
+	// these appear as "runtime/…", NOT "framework/runtime/…".
+	"runtime/http/tlsutil/tlsutiltest/", // the sanctioned test mTLS-material minter (#2287)
+	"runtime/certsigning/",              // CSR→cert pipeline test: cert is SUT input, not a fixture
+	"runtime/certlifecycle/",            // cert renewal/lifecycle test: cert is SUT input, not a fixture
+	// non-framework modules: rel path is module-prefixed as-is (no strip).
+	"adapters/softca/", // production soft-CA implementation (the real authority, not test material)
+	// NOTE: tlsutil/ itself (client_test/server_test) is deliberately NOT here —
+	// those callers were migrated to tlsutiltest and must route through it.
 }
 
 // CheckTLSTestMaterialFunnel enforces TLS-TEST-MATERIAL-FUNNEL-01 over the whole

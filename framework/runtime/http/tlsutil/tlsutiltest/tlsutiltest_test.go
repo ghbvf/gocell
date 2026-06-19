@@ -29,6 +29,10 @@ func TestIssueLeaf_VerifiesAgainstCAPool(t *testing.T) {
 	if _, err := leaf.Cert.Verify(x509.VerifyOptions{Roots: ca.Pool, KeyUsages: anyEKU}); err != nil {
 		t.Fatalf("leaf must verify against CA pool: %v", err)
 	}
+	// Zero-value LeafOptions.NotAfter must default to a future expiry.
+	if !leaf.Cert.NotAfter.After(time.Now()) {
+		t.Fatalf("default-NotAfter leaf must be valid into the future, got NotAfter=%s", leaf.Cert.NotAfter)
+	}
 }
 
 func TestIssueLeaf_SANsLandInCert(t *testing.T) {
@@ -112,6 +116,15 @@ func TestLeaf_WriteFilesReadable(t *testing.T) {
 	if _, err := tlsutil.NewClientCAPool(caPEM); err != nil {
 		t.Fatalf("written CA must parse into a pool: %v", err)
 	}
+	// The private key file must be owner-only (0o600). umask only clears bits,
+	// and 0o600 has no group/other bits to clear, so this is umask-robust.
+	info, err := os.Stat(keyFile)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("key file mode = %o, want 0600 (owner-only private key)", got)
+	}
 }
 
 func TestIssueLeaf_CurveIsECDSA(t *testing.T) {
@@ -131,5 +144,20 @@ func TestNewCA_DistinctCertsAcrossInstances(t *testing.T) {
 	b := tlsutiltest.NewCA(t)
 	if a.Cert.Equal(b.Cert) {
 		t.Fatal("independent CAs must yield distinct certs")
+	}
+}
+
+func TestIssueLeaf_DistinctSerialsWithinCA(t *testing.T) {
+	t.Parallel()
+	// One CA issuing multiple leaves must give each a distinct serial (RFC 5280
+	// §4.1.2.2) and none may collide with the root's serial.
+	ca := tlsutiltest.NewCA(t)
+	a := ca.IssueLeaf(t, tlsutiltest.LeafOptions{})
+	b := ca.IssueLeaf(t, tlsutiltest.LeafOptions{})
+	if a.Cert.SerialNumber.Cmp(b.Cert.SerialNumber) == 0 {
+		t.Fatalf("leaves from the same CA must have distinct serials, both = %s", a.Cert.SerialNumber)
+	}
+	if a.Cert.SerialNumber.Cmp(ca.Cert.SerialNumber) == 0 || b.Cert.SerialNumber.Cmp(ca.Cert.SerialNumber) == 0 {
+		t.Fatalf("leaf serial must differ from the root serial %s", ca.Cert.SerialNumber)
 	}
 }

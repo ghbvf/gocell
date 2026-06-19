@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -31,12 +32,19 @@ const (
 	defaultLeafValidity = time.Hour
 )
 
-// pemFileMode is the permission for PEM files written by WriteFiles — private
-// key material, so owner-only.
-const pemFileMode os.FileMode = 0o600
+// File permissions for WriteFiles: the leaf private key is owner-only; the leaf
+// cert and CA cert are public material (world-readable), matching the
+// adapters/softca convention (key 0o600, cert 0o644).
+const (
+	keyFileMode  os.FileMode = 0o600
+	certFileMode os.FileMode = 0o644
+)
 
 // CA is a self-signed ECDSA P-256 root CA for tests. It can issue any number of
-// leaves via IssueLeaf; each gets a distinct serial. Construct it with NewCA.
+// leaves via IssueLeaf; each gets a distinct, monotonically increasing serial
+// (root = 1, leaves = 2,3,…). Construct it with NewCA. A *CA is safe for
+// concurrent IssueLeaf calls from multiple goroutines — the serial counter is
+// atomic and the rest of issuance (key-gen, signing) is local.
 type CA struct {
 	// Cert is the parsed root certificate.
 	Cert *x509.Certificate
@@ -46,8 +54,8 @@ type CA struct {
 	// trust root to NewClientCAPool consumers or tls verification.
 	Pool *x509.CertPool
 
-	key        *ecdsa.PrivateKey
-	nextSerial int64
+	key    *ecdsa.PrivateKey
+	serial atomic.Int64 // last issued serial; root = 1, leaves start at 2
 }
 
 // NewCA generates a self-signed ECDSA P-256 root CA with a generous validity
@@ -79,13 +87,14 @@ func NewCA(t *testing.T) *CA {
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
 
-	return &CA{
-		Cert:       cert,
-		CertPEM:    pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		Pool:       pool,
-		key:        key,
-		nextSerial: 2, // root is 1
+	ca := &CA{
+		Cert:    cert,
+		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		Pool:    pool,
+		key:     key,
 	}
+	ca.serial.Store(1) // root cert used serial 1; leaves start at 2
+	return ca
 }
 
 // LeafOptions configures a leaf cert issued by IssueLeaf. The zero value yields
@@ -98,7 +107,9 @@ type LeafOptions struct {
 	DNSNames []string
 	// IPs are IP SANs.
 	IPs []net.IP
-	// EKU is the ExtKeyUsage set; when nil it defaults to ServerAuth+ClientAuth.
+	// EKU is the ExtKeyUsage set; when nil it defaults to BOTH ServerAuth and
+	// ClientAuth — a dual-purpose leaf usable as server or client, the shape the
+	// original per-file helpers used. Set it explicitly to narrow the usage.
 	EKU []x509.ExtKeyUsage
 	// NotAfter overrides the leaf expiry. The zero value means
 	// now+defaultLeafValidity; a past time produces an already-expired leaf
@@ -110,9 +121,10 @@ type LeafOptions struct {
 type Leaf struct {
 	// Cert is the parsed leaf certificate.
 	Cert *x509.Certificate
-	// CertPEM / KeyPEM are the PEM-encoded leaf cert and PKCS#8 private key.
+	// CertPEM is the PEM-encoded leaf certificate.
 	CertPEM []byte
-	KeyPEM  []byte
+	// KeyPEM is the PEM-encoded PKCS#8 leaf private key.
+	KeyPEM []byte
 	// TLSCert is a ready-to-use tls.Certificate (Leaf field populated).
 	TLSCert tls.Certificate
 }
@@ -136,7 +148,7 @@ func (ca *CA) IssueLeaf(t *testing.T, opts LeafOptions) Leaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(ca.nextSerial),
+		SerialNumber: big.NewInt(ca.serial.Add(1)),
 		Subject:      pkix.Name{CommonName: "tlsutiltest-leaf"},
 		NotBefore:    time.Now().Add(-certBackdate),
 		NotAfter:     notAfter,
@@ -146,7 +158,6 @@ func (ca *CA) IssueLeaf(t *testing.T, opts LeafOptions) Leaf {
 		DNSNames:     opts.DNSNames,
 		IPAddresses:  opts.IPs,
 	}
-	ca.nextSerial++
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.key)
 	if err != nil {
@@ -172,8 +183,10 @@ func (ca *CA) IssueLeaf(t *testing.T, opts LeafOptions) Leaf {
 	return Leaf{Cert: cert, CertPEM: certPEM, KeyPEM: keyPEM, TLSCert: tlsCert}
 }
 
-// SPIFFEURI parses a SPIFFE (or any) URI for use as a URI SAN, failing the test
-// on a parse error.
+// SPIFFEURI parses raw into a *url.URL for use as a SPIFFE URI SAN — the cell-
+// identity use case this package serves — failing the test on a parse error.
+// It does NOT validate SPIFFE-ID format: raw is passed verbatim to url.Parse,
+// so any parseable URI is accepted and the caller owns the scheme.
 func SPIFFEURI(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)
@@ -190,10 +203,17 @@ func (l Leaf) WriteFiles(t *testing.T, dir string, ca *CA) (certFile, keyFile, c
 	certFile = filepath.Join(dir, "cert.pem")
 	keyFile = filepath.Join(dir, "key.pem")
 	caFile = filepath.Join(dir, "ca.pem")
-	for path, data := range map[string][]byte{certFile: l.CertPEM, keyFile: l.KeyPEM, caFile: ca.CertPEM} {
-		if err := os.WriteFile(path, data, pemFileMode); err != nil {
-			t.Fatalf("tlsutiltest: write %s: %v", path, err)
-		}
-	}
+	// Fixed order; key owner-only (0o600), cert + CA public (0o644).
+	writeFile(t, certFile, l.CertPEM, certFileMode)
+	writeFile(t, keyFile, l.KeyPEM, keyFileMode)
+	writeFile(t, caFile, ca.CertPEM, certFileMode)
 	return certFile, keyFile, caFile
+}
+
+// writeFile writes data to path with mode, failing the test on error.
+func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, data, mode); err != nil {
+		t.Fatalf("tlsutiltest: write %s: %v", path, err)
+	}
 }
