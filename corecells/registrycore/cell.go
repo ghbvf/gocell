@@ -15,7 +15,9 @@
 // follow-up composition issue: the cellmodule + corebundle composition (PG
 // topology, real cursor key via cellsecrets with postgres fail-closed, PDP
 // baseline grant) and activation-time declaration persistence. RLS-safe scoped
-// reads are #2392; audit/events are US8. registrycore never imports a sibling cell.
+// reads are wired (#2392): registryread.List runs through scopedread.Do so the PG
+// serving role reads under SET LOCAL app.tenant_id; audit/events are US8.
+// registrycore never imports a sibling cell.
 package registrycore
 
 import (
@@ -187,7 +189,7 @@ func (c *RegistryCore) initInternal(_ context.Context, reg cell.Registrar) error
 	if err != nil {
 		return fmt.Errorf("registrycore: build registrywrite service: %w", err)
 	}
-	readSvc, err := registryread.NewService(store, codec, runMode, nil)
+	readSvc, err := registryread.NewService(store, txMgr, codec, runMode, nil)
 	if err != nil {
 		return fmt.Errorf("registrycore: build registryread service: %w", err)
 	}

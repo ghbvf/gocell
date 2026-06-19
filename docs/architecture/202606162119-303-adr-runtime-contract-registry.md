@@ -174,6 +174,27 @@ governance gate（#2234）的一部分，并随命名空间/ceiling 校验（#22
   sub-issue 补偿指针（该设计文档撰写时 sub-issue 尚未登记）。
 - 本 ADR 不推翻任何既有已 Accepted 的 ADR；与 `202606131142-1423` 互为引用、方向一致。
 
+## Amendment 2026-06-19 — #2392 scopedread funnel + #2386 RLS/append-only 测试硬化
+
+US5（#2236）落地 PG 持久化 store + 两张表的 FORCE ROW LEVEL SECURITY（migration 066）；US6（#2237）
+把 submit/list service 接到该 store。本 amendment 闭合**持久化层**的两条威胁（控制面威胁矩阵 T1–T10 之外、
+US5/US6 引入的新面），并同步重评其 AI-robust 评级。两项一并落地（合一 PR）：#2392 接读路径 funnel、#2386
+补动态 RLS 测试 + 代码层 no-delete archtest。
+
+| # | 威胁 | 补偿措施 | AI-robust 评级 | 落地 |
+|---|------|---------|---------------|------|
+| T11 | **跨租户读泄漏**：registryread 在受限 serving role（NOBYPASSRLS）下若不设 `app.tenant_id` GUC，FORCE RLS 静默回 0 行；裸 pool 读绕过 tenant 谓词 | 读路径恒经 `corecells/registrycore/internal/scopedread`（`tenant.WithScope`+`RunInTx` 注入 `SET LOCAL app.tenant_id`），registrycore 内 `tenant.WithScope` 唯一生产 caller，纳入 `TENANT-TXSCOPE-WRITE-CALLER-01` allowlist；镜像 configcore scopedread | **funnel = Hard/Hard**（下游 go/types Uses 解析 + 上游 sealed unexported scopeKey）。**「reads-only-via-scopedread」= WithScope-funnel-Hard + RLS-runtime-fail-closed**（与 configcore 同构，**非**独立编译期 Hard——诚实标注）。`registry_repo.go resolveRead` 的 pool fallback 为 superuser/integration/mem-bootstrap **bounded 残留**（与 configcore `session.resolve` 逐字相同；production 由 funnel 保证恒有 ambient tx），write 路径经 `resolveWrite` fail-fast（`ErrAdapterPGNoTx`） | #2392 |
+| T12 | **历史篡改 / append-only 侵蚀**：代码层 `DELETE`/`TRUNCATE contract_registration_events`（lifecycle 真相源被删，重建断裂） | **主守卫**：migration 066 `REVOKE UPDATE, DELETE ON contract_registration_events FROM gocell_app`（DB 引擎层，serving role 结构性不可删，镜像 058）。**纵深**：archtest `REGISTRATION-EVENT-NO-DELETE-01`（SQL-literal scan + anti-vacuity + RED/GREEN fixture，捕获 owner/superuser 上下文字面量删除，REVOKE 够不着的盲区） | **Hard 主守卫（migration 066 REVOKE，已在位）+ Medium archtest 纵深**（literal-scan 天花板，同 `PROJECTION-EVENT-JOURNAL-NO-DELETE-01`；盲区 = 运行时拼接表名 / 反射 / .sql 文件） | #2386 |
+
+T11 的动态 RLS 效果（USING 隔离 + WITH CHECK 拒绝）由 `adapters/postgres/rls_force_integration_test.go` 新增
+`contract_registrations` 用例验证——走生产 `tenant.WithScope`+`RunInTx` GUC 注入路径（scopedread 实际依赖的路径），
+与既有 `contract_registrations_rls_integration_test.go`（真实 `gocell_app` serving role + 原始 `SET LOCAL` 维度）
+**互补保留**、非平行冗余。schema_guard `expectedRLSTables` 已含两表（静态 policy 形态），本次补**动态实效**。
+
+**载体边界（charter §载体选择）**：T11/T12 的符号、盲区、Hard 化路径权威源 = 对应 archtest godoc（`TENANT-TXSCOPE-WRITE-CALLER-01`
+/ `REGISTRATION-EVENT-NO-DELETE-01`）+ 本 ADR 威胁矩阵。**不**在 `.claude/rules/gocell/tenancy.md` 登记 scopedread
+实例（configcore scopedread 亦未在 rule 文件登记；rule 只承载约束、不维护落地实例清单）。
+
 ## 验收信号（epic 级，本 ADR 锁定，下游交付）
 
 - 外部 cell（进程外）submit 一个 event 契约 → 自动 conformance 通过 → admin approve → 框架

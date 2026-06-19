@@ -15,6 +15,10 @@ func (s *Service) validateRequired() error {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"registryread.NewService: store required")
 	}
+	if validation.IsNilInterface(s.txRunner) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"registryread: TxRunner required (RLS reads run in a tenant-scoped tx)")
+	}
 	if s.codec == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"registryread.NewService: codec required")

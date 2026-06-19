@@ -1,6 +1,6 @@
 id: registryread
 belongsToCell: registrycore
-consistencyLevel: L0
+consistencyLevel: L1
 lifecycle: asset
 contractUsages:
   - contract: http.registry.contract.list.v1

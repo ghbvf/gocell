@@ -158,6 +158,84 @@ func TestRLSForce_PoolNoTenantLeak(t *testing.T) {
 	assert.Equal(t, "", setting, "app.tenant_id must not leak across pooled connections")
 }
 
+// scopedInsertRegistration inserts a contract_registrations row under tenant tid's
+// RLS scope via the production TxManager SET LOCAL path (the same GUC injection
+// scopedread.Do uses in registryread, #2392). Only the NOT NULL columns without a
+// migration-066 DEFAULT are supplied (payload_schema/approver default to empty
+// strings); created_at/updated_at are set to now(). These RLS tests assert isolation, not
+// schema completeness.
+func scopedInsertRegistration(t *testing.T, tm *TxManager, tid tenant.TenantID, id, kind, submitter, state string) error {
+	t.Helper()
+	return tm.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
+		require.True(t, ok, "ambient tx must be present")
+		_, err := tx.Exec(ctx,
+			`INSERT INTO contract_registrations (tenant_id, id, kind, submitter, state, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, now(), now())`,
+			string(tid), id, kind, submitter, state)
+		return err
+	})
+}
+
+// scopedCountRegistrations counts contract_registrations rows VISIBLE under tenant
+// tid's RLS scope. The WHERE clause deliberately omits tenant_id — RLS supplies the
+// tenant predicate, so this measures DB-enforced isolation through the production
+// TxManager GUC-injection path (#2392), complementing the raw-SET-LOCAL serving-role
+// coverage in contract_registrations_rls_integration_test.go.
+func scopedCountRegistrations(t *testing.T, tm *TxManager, tid tenant.TenantID) int {
+	t.Helper()
+	var n int
+	err := tm.RunInTx(tenant.WithScope(context.Background(), tid), func(ctx context.Context) error {
+		tx, ok := persistence.TxFromContext[pgx.Tx](ctx)
+		require.True(t, ok, "ambient tx must be present")
+		return tx.QueryRow(ctx, `SELECT count(*) FROM contract_registrations`).Scan(&n)
+	})
+	require.NoError(t, err)
+	return n
+}
+
+// TestRLSForce_ContractRegistrations_CrossTenantIsolation proves the migration-066
+// tenant_isolation USING predicate actually isolates contract_registrations rows
+// across tenants under the restricted role + production TxManager scope path (the
+// dynamic RLS effect, #2386 — distinct from schema_guard's static policy-shape check).
+func TestRLSForce_ContractRegistrations_CrossTenantIsolation(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	tm := NewTxManager(app)
+
+	require.NoError(t, scopedInsertRegistration(t, tm, rlsTenantA, "reg-iso-a", "http", "cell-a", "submitted"))
+
+	assert.Equal(t, 1, scopedCountRegistrations(t, tm, rlsTenantA),
+		"tenant A must see its own registration row")
+	assert.Equal(t, 0, scopedCountRegistrations(t, tm, rlsTenantB),
+		"tenant B must NOT see tenant A's registration (RLS USING isolation)")
+}
+
+// TestRLSForce_ContractRegistrations_InsertWithCheckRejectsCrossTenant proves the
+// migration-066 WITH CHECK predicate rejects a cross-tenant write (scope=A, row
+// claims tenant B) with SQLSTATE 42501 under the restricted serving role.
+func TestRLSForce_ContractRegistrations_InsertWithCheckRejectsCrossTenant(t *testing.T) {
+	dsn := sharedPG.CloneDSN(t)
+	admin := openPerTestPool(t, dsn)
+	app := restrictedAppPool(t, dsn, admin)
+	tm := NewTxManager(app)
+
+	// Scope = A, but the row claims tenant_id = B → WITH CHECK must reject.
+	err := tm.RunInTx(tenant.WithScope(context.Background(), rlsTenantA), func(ctx context.Context) error {
+		tx, _ := persistence.TxFromContext[pgx.Tx](ctx)
+		_, e := tx.Exec(ctx,
+			`INSERT INTO contract_registrations (tenant_id, id, kind, submitter, state, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, now(), now())`,
+			string(rlsTenantB), "reg-wc", "http", "cell-b", "submitted")
+		return e
+	})
+	require.Error(t, err, "writing a registration for another tenant must be rejected by WITH CHECK")
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "42501", pgErr.Code, "expected row-level-security WITH CHECK violation (SQLSTATE 42501)")
+}
+
 func TestRLSForce_AppRoleNotBypassRLS(t *testing.T) {
 	dsn := sharedPG.CloneDSN(t)
 	admin := openPerTestPool(t, dsn)
