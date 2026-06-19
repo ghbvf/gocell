@@ -767,10 +767,16 @@ func buildTopologyGroupsData(topo metadata.TopologyMeta, brokerRoles map[string]
 //   - only amqp-transported events; a registered event with an EMPTY transports
 //     set fails generation closed (the fail-open hazard documented on
 //     collectBrokerCells — explicit `transports: []` is malformed metadata).
-//   - the publisher/subscriber must resolve to a cell in a declared group; an
-//     external actor, the _framework sentinel publisher, or a cell outside this
-//     assembly's groups resolves to no group via CellGroup and is skipped (those
-//     have no deployment placement the topology can govern).
+//   - a SUBSCRIBER outside any declared group (external actor, or a cell not in
+//     this assembly) resolves to no group via CellGroup and is skipped — it has no
+//     in-assembly process placement the topology can govern.
+//   - a PUBLISHER outside any group (the _framework sentinel, an external actor, or
+//     empty) is FAIL-CLOSED when the event also has a grouped cell subscriber: its
+//     cross-process broker requirement is underivable from the group graph, and
+//     silently skipping would be fail-open (the gate would permit an in-memory bus
+//     and drop the event across the boundary). With NO grouped subscriber it is a
+//     safe skip (nothing is delivered cross-process). See
+//     addCrossProcessBrokerEventRoles.
 func (g *Generator) collectCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta) (map[string]struct{}, error) {
 	roles := make(map[string]struct{})
 	if len(asm.Topology.Groups) < 2 {
@@ -788,12 +794,17 @@ func (g *Generator) collectCrossProcessBrokerEventRoles(asm *metadata.AssemblyMe
 
 // addCrossProcessBrokerEventRoles marks (into roles) the deployment-group roles on
 // both sides of every cross-process edge of event contract c — i.e. the publisher
-// and subscriber roles whenever the two fall in different groups. It returns a
-// fail-closed error if c is an active event with an EMPTY transports set (the
-// fail-open hazard documented on collectCrossProcessBrokerEventRoles). Non-event,
-// non-active, non-amqp, or placement-unresolvable contracts are skipped (no-op).
-// Extracted to keep collectCrossProcessBrokerEventRoles within the cognitive-
-// complexity budget.
+// and subscriber roles whenever the two fall in different groups. It fails closed
+// (error) for two fail-open hazards: (1) an active event with an EMPTY transports
+// set; (2) an active amqp event whose publisher has no group placement (the
+// _framework sentinel, an external actor, or empty) yet has a grouped cell
+// subscriber — its cross-process broker requirement is underivable from the group
+// graph, so silently skipping would let the gate permit an in-memory bus and drop
+// the event across the boundary (model the publisher's serving placement or keep
+// the contract lifecycle: draft). Non-event, non-active, and non-amqp contracts are
+// skipped (no-op), as is an unresolvable publisher with NO grouped subscriber
+// (nothing is delivered cross-process within this assembly). Extracted to keep
+// collectCrossProcessBrokerEventRoles within the cognitive-complexity budget.
 func addCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta, c *metadata.ContractMeta, roles map[string]struct{}) error {
 	if cellvocab.ContractLifecycle(c.Lifecycle) != cellvocab.ContractLifecycleActive {
 		return nil
@@ -808,6 +819,24 @@ func addCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta, c *metadata.Con
 	}
 	pubGroup, ok := metadata.CellGroup(asm, c.Endpoints.Publisher)
 	if c.Endpoints.Publisher == "" || !ok {
+		// Fail-CLOSED (not silent skip), #2196 F1: an active amqp event whose
+		// publisher has no deployment-group placement — the _framework sentinel, an
+		// external actor, or an empty publisher — cannot have its cross-process
+		// broker requirement derived from the group graph. If it has a grouped cell
+		// subscriber, that subscriber's process WOULD receive the event across a
+		// boundary and needs a real broker; returning no roles here is fail-OPEN
+		// (the gate would then permit an in-memory bus and drop the event cross-
+		// process). Reject until the publisher's serving placement is modeled (or
+		// the contract stays lifecycle: draft). NO grouped subscriber → nothing is
+		// delivered cross-process within this assembly, so it is safe to skip.
+		if hasGroupedSubscriber(asm, c) {
+			return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"active amqp event publisher has no deployment-group placement but a "+
+					"grouped cell subscriber: cross-process broker requirement is underivable; "+
+					"model the publisher's serving placement or keep the contract lifecycle: draft",
+				errcode.WithInternal(errcode.InternalAttr("contract", c.ID)),
+				errcode.WithInternal(errcode.InternalAttr("publisher", c.Endpoints.Publisher)))
+		}
 		return nil
 	}
 	for _, sub := range c.Endpoints.Subscribers {
@@ -819,6 +848,19 @@ func addCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta, c *metadata.Con
 		roles[subGroup.Role] = struct{}{}
 	}
 	return nil
+}
+
+// hasGroupedSubscriber reports whether event contract c has at least one
+// subscriber that resolves to a declared deployment group. Used by
+// addCrossProcessBrokerEventRoles to decide whether an unresolvable-publisher
+// event poses a real cross-process delivery (and thus broker) requirement.
+func hasGroupedSubscriber(asm *metadata.AssemblyMeta, c *metadata.ContractMeta) bool {
+	for _, sub := range c.Endpoints.Subscribers {
+		if _, ok := metadata.CellGroup(asm, sub); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new

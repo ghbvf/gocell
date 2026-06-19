@@ -528,8 +528,11 @@ func TestPhase0_OmittedDeploymentTopology_AllColocated(t *testing.T) {
 // HasRemoteCells predicate
 // ---------------------------------------------------------------------------
 
-// TestDeploymentTopologyHasRemoteCells verifies the HasRemoteCells predicate
-// used by the phase0 broker-mandatory gate (validateSplitTopologyBroker).
+// TestDeploymentTopologyHasRemoteCells verifies the HasRemoteCells predicate —
+// the generic "is this a split deployment?" signal consumed by the split-mTLS
+// gates and celltransport wiring. It is NOT the broker-mandatory trigger: since
+// #2196 that gate keys off the precise RequiresBrokerForCrossProcessEvents
+// signal (covered by its own test below).
 func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 	cases := []struct {
 		name string

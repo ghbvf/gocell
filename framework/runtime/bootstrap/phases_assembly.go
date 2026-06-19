@@ -231,9 +231,15 @@ func deployTopoSortedKeys(m map[string]struct{}) string {
 // bootstrap.TopologyGroup by `gocell generate`, projected per-role by
 // SpecForRole, and sealed into the DeploymentTopology — one funnel, no second
 // wiring to forget. A sync-only split (remote cells but only CellTransport/HTTP
-// contracts) reports false and is correctly allowed an in-memory bus. This
-// replaces #2196 blind-spot ① and (with TOPO-13 removed) is the SOLE
-// broker-mandatory enforcement point.
+// contracts) reports false, so this gate permits an in-memory bus (it does not
+// force one — what gets constructed is eventtransport.Resolve's call, below).
+// This replaces #2196 blind-spot ① and (with TOPO-13 removed) is the sole
+// TOPOLOGY-DERIVED (cross-process-event) broker-mandatory enforcement point. The
+// postgres storage-durability broker requirement is ORTHOGONAL: on postgres,
+// eventtransport.Resolve always provisions a real broker for the durable outbox
+// relay regardless of cross-process events, so on a correctly-wired postgres
+// process IsRealBroker is structurally satisfied and this gate does real
+// broker-rejection work only for demo storage.
 //
 // The "is it a real cross-process broker?" decision is the sealed
 // EventTransportKind fact (#2211): cellmodules/eventtransport.Resolve mints

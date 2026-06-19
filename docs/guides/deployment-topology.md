@@ -175,10 +175,16 @@ When cells are split across processes, the following infrastructure is required:
   single-sourced from the assembly topology + contractUsages, emitted onto
   `generatedTopologyGroups()` and sealed at phase0 — NOT the coarse `HasRemoteCells`
   proxy: a **sync-only split** (remote cells, only CellTransport/HTTP contracts) needs
-  no broker and is allowed an in-memory bus. The former static `gocell validate` rule
-  TOPO-13 was removed in #2196 (it could not see the runtime-injected broker and so
-  over-constrained legal broker-backed splits); the runtime gate is now the sole
-  broker-mandatory enforcement point. Since #2211 the "is it a real broker?" decision
+  no *cross-process* broker — on **demo** topology the in-memory bus is permitted. The
+  former static `gocell validate` rule TOPO-13 was removed in #2196 (it could not see the
+  runtime-injected broker and so over-constrained legal broker-backed splits); the runtime
+  gate is now the sole **topology-derived (cross-process-event)** broker-mandatory
+  enforcement point. The **postgres storage-durability** broker requirement is orthogonal
+  and independent: on postgres, `eventtransport.Resolve` always provisions a real broker
+  for the durable outbox relay (keyed off `generatedBrokerCells()`), regardless of
+  cross-process events — so on a correctly-wired postgres process the gate's
+  `IsRealBroker()` check is structurally satisfied, and the gate does real broker-rejection
+  work only for demo storage. Since #2211 the "is it a real broker?" decision
   is the sealed `EventTransportKind` (minted only by `eventtransport.Resolve`, threaded
   via `bootstrap.WithEventTransportKind`): the gate checks `IsRealBroker()`, and an
   **unset** kind — e.g. a composition root that declared cross-process events but

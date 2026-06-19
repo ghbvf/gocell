@@ -327,11 +327,12 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 	extra := metadata.TopologyGroup{Role: "extra", Cells: []string{"configcore"}, Endpoint: "extra.svc:9000"}
 
 	cases := []struct {
-		name      string
-		groups    []metadata.TopologyGroup
-		contracts map[string]*metadata.ContractMeta
-		wantRoles []string
-		wantErr   bool
+		name       string
+		groups     []metadata.TopologyGroup
+		contracts  map[string]*metadata.ContractMeta
+		wantRoles  []string
+		wantErr    bool
+		wantErrMsg string // lowercase substring the fail-closed message must name
 	}{
 		{
 			name:      "empty topology → none (no process boundary)",
@@ -373,14 +374,32 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore")},
 		},
 		{
-			name:      "external-actor publisher (not a cell) → none",
-			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "externalsystem", "auditcore")},
+			// Fail-OPEN closed (#2196 F1): an unresolvable publisher (external actor)
+			// with a grouped cell subscriber needs a broker to receive cross-boundary;
+			// silently returning no roles would let the gate permit an in-memory bus.
+			name:       "external-actor publisher + grouped subscriber → fail-closed",
+			groups:     []metadata.TopologyGroup{core, edge},
+			contracts:  map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "externalsystem", "auditcore")},
+			wantErr:    true,
+			wantErrMsg: "placement",
 		},
 		{
-			name:      "_framework sentinel publisher → none (not in any group)",
+			// Fail-OPEN closed (#2196 F1): the _framework sentinel publisher has no
+			// deployment-group placement; with a grouped cell subscriber the broker
+			// requirement is underivable → reject until placement is modeled.
+			name:       "_framework sentinel publisher + grouped subscriber → fail-closed",
+			groups:     []metadata.TopologyGroup{core, edge},
+			contracts:  map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "_framework", "auditcore")},
+			wantErr:    true,
+			wantErrMsg: "placement",
+		},
+		{
+			// Negative control for the F1 guard: an unresolvable publisher with NO
+			// grouped subscriber delivers nothing cross-process within this assembly,
+			// so it is safe to skip (no error, no roles) — anti-vacuity for the guard.
+			name:      "_framework publisher, only external subscriber → none (safe skip)",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "_framework", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "_framework", "externalsystem")},
 		},
 		{
 			name:      "external subscriber skipped, cell subscriber counts",
@@ -413,10 +432,11 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 			wantRoles: []string{"core", "edge", "extra"},
 		},
 		{
-			name:      "registered event with empty transports → fail-closed error",
-			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", []string{}, "accesscore", "auditcore")},
-			wantErr:   true,
+			name:       "registered event with empty transports → fail-closed error",
+			groups:     []metadata.TopologyGroup{core, edge},
+			contracts:  map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", []string{}, "accesscore", "auditcore")},
+			wantErr:    true,
+			wantErrMsg: "transports",
 		},
 	}
 
@@ -430,7 +450,7 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 				var ec *ecErr.Error
 				require.True(t, errors.As(err, &ec), "error must be errcode.Error, got %T", err)
 				assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
-				assert.Contains(t, strings.ToLower(ec.Message), "transports", "error must name the empty-transports cause")
+				assert.Contains(t, strings.ToLower(ec.Message), tc.wantErrMsg, "fail-closed message must name the cause")
 				return
 			}
 			require.NoError(t, err)

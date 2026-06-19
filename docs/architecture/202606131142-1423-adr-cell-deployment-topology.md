@@ -250,7 +250,8 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   > bus」；② 静态闸 TOPO-13 看不到运行时注入的 broker，对合法 broker-backed split **永远** fail-closed。
   >
   > **决策**：① 两盲区同 PR 闭环；② **删除静态闸 TOPO-13**（含 const/rule/注册/inventory/test 全族），由精确化后的
-  > 运行时闸作**唯一执行点**——拒绝新增 `transport.eventBroker` schema 声明（会重引入 #2365 `collectBrokerCells`
+  > 运行时闸作**拓扑维（跨进程事件）唯一执行点**（postgres 存储的 durable-broker 要求由 `eventtransport.Resolve`
+  > 正交、独立强制——见下「重评分级」，非本闸职责）——拒绝新增 `transport.eventBroker` schema 声明（会重引入 #2365 `collectBrokerCells`
   > godoc 明确规避的「remember-to-declare」反模式；对标 k8s/cert-manager：就绪校验交运行时）。
   >
   > **信号载体升级（Medium → Hard）**：运行时闸触发从 `HasRemoteCells()` 粗代理改为 sealed
@@ -270,7 +271,9 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   > 信号 vs 注入的 bus 实例），bus 是运行时注入实例、type system 不可表达，§214-219 的 Hard 不可达结论**不变**；
   > ② 但**信号正确性**从「粗运行时代理（Medium）」升级为 **Hard**（codegen 派生 + golden 字节冻结 + `--verify`）；
   > ③ fail-closed 由「split + 信号未注入 → fail-fast 兜底（Medium crutch）」改为**结构性**（sealed 必构建字段，
-  > 故删除该 crutch）。**单一 codegen 派生事实 → 单一 gate，消除原双闸两套近似逻辑的漂移面**（落地 issue「重构」
+  > 故删除该 crutch）。**单一 codegen 派生事实 → 拓扑维单一 gate**（收敛原 TOPO-13 + 运行时两闸对「split 是否真有
+  > 跨进程 event」的判定；postgres storage-durability broker 要求是既有、正交的另一关注点——由
+  > `eventtransport.Resolve` 按 storage backend 强制，不在此收敛内）**，消除原双闸两套近似逻辑的漂移面**（落地 issue「重构」
   > 种子的 single-fact 意图）。符号/盲区见 `bootstrap.validateSplitTopologyBroker` /
   > `DeploymentTopology.RequiresBrokerForCrossProcessEvents` / `assembly.collectCrossProcessBrokerEventRoles` godoc。
 - **进程内跨 cell Go 直传 = 0 + gRPC 盲区收口 → Medium archtest。** 金丝雀
@@ -568,7 +571,8 @@ TLS 1.3 + SPIFFE-ID cross-bind，2026-06-17，见 §#2263 Amendment——该 ame
   独立可合并 PR 不挂失败测试；TDD RED→GREEN 落各 feature PR 内）。
 - **PR-1（✅ 已落地 #2278）**：`topology.groups` schema（取代 colocated/remote authoring，原地删 `TopologyMeta.{Colocated,Remote}`
   / `TopologyRemoteEntry` / `ClassifyCell` / `CellLocation`）+ 重写 `ValidateTopologyStructure`（穷尽+互斥分区 + 新 `CellGroup`/
-  `SameGroup` 助手）+ governance TOPO-10/11/13/14 改消费 groups + catalog 导出 wire DTO 改 groups + codegen
+  `SameGroup` 助手——按 #2278 当时状态记；`SameGroup` 后由 #2196 删为 dead code）+ governance TOPO-10/11/13/14 改消费 groups
+  （`TOPO-13` 后由 #2196 删除全族，见上文 §#2196 Amendment）+ catalog 导出 wire DTO 改 groups + codegen
   `generatedTopologyGroups()` + 字节 golden（Hard golden + Medium validate）。运行期最小桥 `bootstrap.SpecForRole(groups, "")`
   = 全 colocated monolith（role 选择留 PR-2）。
 - **PR-2**：role 选择器 + `NewForRole` 子集挂载 + `MOUNTED-EQUALS-COLOCATED` 守卫（Medium）。
