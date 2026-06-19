@@ -198,7 +198,8 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 }
 
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
-// When provided, the rate limiter is placed after observability and before auth.
+// When provided, the rate limiter is placed after observability and before
+// BodyLimit/auth.
 //
 // Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
 // rejected by NewForListener so the rate limiter is never silently absent.
@@ -264,10 +265,10 @@ func WithIdempotencyMetrics(obs idemhttp.MetricsObserver) Option {
 }
 
 // WithAuthMiddleware enables authentication middleware with an explicitly
-// injected verifier. The middleware is placed in the mux chain after any
-// rate-limiter/circuit-breaker and before BodyLimit. Public endpoints declared
-// via auth.Mount with Public:true inside cell RouteGroups bypass JWT
-// verification; FinalizeAuth compiles them into the router's auth predicates.
+// injected verifier. The middleware is placed in the mux chain after BodyLimit
+// and listener-level default middleware. Public endpoints declared via
+// auth.Mount with Public:true inside cell RouteGroups bypass JWT verification;
+// FinalizeAuth compiles them into the router's auth predicates.
 //
 // In the per-listener model this option is most commonly used for the
 // PrimaryListener router. InternalListener routers use auth.NewAuthServiceToken
@@ -387,8 +388,9 @@ func WithSuppressNoAuthVerifierWarn() Option {
 }
 
 // WithDefaultMiddleware appends middleware functions to the router's default
-// middleware chain. These are installed AFTER the early-responder layer and
-// BEFORE the per-router protections (rate-limiter, circuit-breaker, auth).
+// middleware chain. These are installed AFTER BodyLimit and BEFORE JWT auth /
+// idempotency. Rate-limit and circuit-breaker guards still run before
+// BodyLimit.
 //
 // Bootstrap uses this to install the listener-level auth middleware derived
 // from the ListenerAuth chain (e.g. mTLS peer-cert check, ServiceToken HMAC
@@ -401,8 +403,8 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 
 // Router wraps a single *http.ServeMux root for ONE physical listener.
 // The observability middleware chain is baked in at construction time, and
-// the listener's default Policy is applied as an inner layer before any
-// cell routes are registered.
+// listener-level default middleware is applied as an inner layer after
+// request-size protection and before JWT auth / cell routes.
 //
 // Bootstrap creates one Router per declared listener (primary/internal/health)
 // via NewForListener. The old shared-root multiplexer design has been replaced
@@ -452,10 +454,10 @@ type Router struct {
 	cellIDClosedSet             map[string]struct{}
 	clientErrorLogSamplingEvery int
 	trustedProxies              []string
-	// defaultMiddleware are installed AFTER early-responders and BEFORE
-	// rate-limiter / circuit-breaker / auth. Bootstrap populates this by
-	// converting the listener's AuthPlan chain (mTLS, ServiceToken, etc.)
-	// via applyListenerAuthChain then passing them with WithDefaultMiddleware.
+	// defaultMiddleware are installed AFTER BodyLimit and BEFORE JWT auth /
+	// idempotency. Bootstrap populates this by converting the listener's AuthPlan
+	// chain (mTLS, ServiceToken, etc.) via applyListenerAuthChain then passing
+	// them with WithDefaultMiddleware.
 	defaultMiddleware []func(http.Handler) http.Handler
 
 	// FinalizeAuth state
@@ -570,8 +572,8 @@ func New(clk clock.Clock, opts ...Option) (*Router, error) {
 // The middleware chain is:
 //
 //	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
-//	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
-//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [Idempotency] → handlers
+//	→ Recovery → SecurityHeaders → [earlyResponders] → [RateLimit] → [CircuitBreaker]
+//	→ BodyLimit → [defaultMiddleware] → [Auth] → [Idempotency] → handlers
 //
 // ref: go-kratos/kratos app.go WithServer + errgroup (adopted)
 // ref: net/http.ServeMux (one ServeMux per listener)
@@ -626,7 +628,7 @@ func NewForListener(clk clock.Clock, ref kcell.ListenerRef, opts ...Option) (*Ro
 //
 // r.patternRecorderMiddleware installs the *patternRecorder and injects the
 // router's route resolver so all observability layers see a consistent route
-// label even on short-circuit reject paths (auth, rate limit, 405).
+// label even on short-circuit reject paths (auth, rate limit, body limit, 405).
 // patternRecordingMux fills the recorder by asking ServeMux.Handler for the
 // matched pattern before dispatching the leaf handler.
 //
@@ -673,15 +675,15 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 }
 
 // buildMux wires the full middleware chain onto r.mux. Observability is baked
-// in first; then defaultMiddleware (from WithDefaultMiddleware, e.g. mTLS /
-// ServiceToken guards derived from the ListenerAuth chain) is applied; then
-// the protection chain (RL/CB/Auth/BodyLimit) wraps the handlers.
+// in first; early responders remain the first policy short-circuit; then the
+// protection chain applies rate-limit/circuit-breaker/body-limit before any
+// listener-level or JWT auth middleware.
 //
 // Chain order (outer to inner):
 //
 //	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
-//	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
-//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [Idempotency] → handlers
+//	→ Recovery → SecurityHeaders → [earlyResponders] → [RateLimit] → [CircuitBreaker]
+//	→ BodyLimit → [defaultMiddleware] → [Auth] → [Idempotency] → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	// Lazy public predicate so Tracing/RequestID honor public routes declared
 	// later via auth.Mount / FinalizeAuth.
@@ -732,15 +734,6 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		r.use(earlyResponderMiddleware(er))
 	}
 
-	// --- Default middleware layer (listener-level auth guards from AuthPlan chain) ---
-	// Bootstrap populates r.defaultMiddleware via WithDefaultMiddleware after
-	// converting the ListenerAuth chain (mTLS, ServiceToken, etc.) through
-	// applyListenerAuthChain. Applied AFTER early-responders so framework
-	// isolation contracts fire before the auth gate.
-	if len(r.defaultMiddleware) > 0 {
-		r.use(r.defaultMiddleware...)
-	}
-
 	// --- Protection chain (per-router options) ---
 	if r.rateLimiter != nil {
 		r.use(middleware.RateLimit(r.rateLimiter))
@@ -752,10 +745,19 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		}
 		r.use(cb)
 	}
+	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector, r.cellIDClosedSet))
+
+	// --- Default middleware layer (listener-level auth guards from AuthPlan chain) ---
+	// Bootstrap populates r.defaultMiddleware via WithDefaultMiddleware after
+	// converting the ListenerAuth chain (mTLS, ServiceToken, etc.) through
+	// applyListenerAuthChain. Applied AFTER BodyLimit so unauthenticated oversized
+	// bodies are rejected before any listener-level auth parses request metadata.
+	if len(r.defaultMiddleware) > 0 {
+		r.use(r.defaultMiddleware...)
+	}
 	if r.authVerifier != nil {
 		r.use(auth.AuthMiddleware(r.clock, r.authVerifier, r.buildAuthOpts()...))
 	}
-	r.use(middleware.BodyLimit(r.bodyLimit, r.metricsCollector, r.cellIDClosedSet))
 	if r.idempotencyStore != nil {
 		// lazyIdempotencyExempt reads the compiled exempt matcher lazily so
 		// FinalizeAuth (which runs AFTER buildMux) can compile the set from
