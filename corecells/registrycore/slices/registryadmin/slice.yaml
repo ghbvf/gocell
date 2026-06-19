@@ -1,0 +1,21 @@
+id: registryadmin
+belongsToCell: registrycore
+consistencyLevel: L1
+lifecycle: asset
+contractUsages:
+  - contract: http.registry.contract.approve.v1
+    role: serve
+  - contract: http.registry.contract.reject.v1
+    role: serve
+  - contract: http.registry.contract.retire.v1
+    role: serve
+verify:
+  unit:
+    - unit.registryadmin.service
+  contract:
+    - contract.http.registry.contract.approve.v1.serve
+    - contract.http.registry.contract.reject.v1.serve
+    - contract.http.registry.contract.retire.v1.serve
+  waivers: []
+allowedFiles:
+  - corecells/registrycore/slices/registryadmin/**

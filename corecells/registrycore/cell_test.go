@@ -49,17 +49,17 @@ func TestNew_Identity(t *testing.T) {
 }
 
 // TestInitInternal_WiresHandlers pins that the hand-written init hook constructs
-// both slice handlers the generated route group references.
+// all three slice handlers the generated route group references.
 func TestInitInternal_WiresHandlers(t *testing.T) {
 	c := newCell()
 	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
 	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
-	if c.writeHandler == nil || c.readHandler == nil {
+	if c.writeHandler == nil || c.readHandler == nil || c.adminHandler == nil {
 		t.Fatal("slice handlers nil after initInternal — generated route group would nil-deref")
 	}
-	// Both slices must be registered into the BaseCell inventory (OwnedSlices),
+	// All slices must be registered into the BaseCell inventory (OwnedSlices),
 	// mirroring configcore/auditcore/accesscore — declared slice set ↔ runtime
 	// inventory stay in sync.
 	owned := c.OwnedSlices()
@@ -67,8 +67,8 @@ func TestInitInternal_WiresHandlers(t *testing.T) {
 	for _, s := range owned {
 		ids[s.ID()] = true
 	}
-	if len(owned) != 2 || !ids["registrywrite"] || !ids["registryread"] {
-		t.Fatalf("OwnedSlices() = %d %v, want 2 (registrywrite + registryread)", len(owned), ids)
+	if len(owned) != 3 || !ids["registrywrite"] || !ids["registryread"] || !ids["registryadmin"] {
+		t.Fatalf("OwnedSlices() = %d %v, want 3 (registrywrite + registryread + registryadmin)", len(owned), ids)
 	}
 }
 

@@ -126,6 +126,34 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermRoleRead().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// registrycore admin-approval baseline (303-US7 #2238): approve/reject/retire are
+	// admin lifecycle actions over runtime contract registrations. Same action-scoped
+	// + role-conditioned shape as the config/policy/user coarse grants above — the
+	// approval authority lives HERE as an ABAC condition, never as a handler role
+	// literal (tenancy.md §"ABAC authz 接线"). registry:submit/read are NOT granted
+	// here: their baseline grant is deferred to corebundle composition (US6 #2235);
+	// migrating their gate to the resolver path (this PR) did not change that.
+	{
+		ID:         "baseline-registry-approve-admin",
+		Name:       "Baseline: allow admin/super-admin to approve contract registrations",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermRegistryApprove().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-registry-reject-admin",
+		Name:       "Baseline: allow admin/super-admin to reject contract registrations",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermRegistryReject().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-registry-retire-admin",
+		Name:       "Baseline: allow admin/super-admin to retire contract registrations",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermRegistryRetire().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
 	// Identity-ownership baseline rules (#1977 Batch B): subject.sub == resource.id
 	// grants owner-scoped permissions (user:read, user:write, role:read) to the
 	// owning subject. resource.id is the canonicalized path param forwarded by

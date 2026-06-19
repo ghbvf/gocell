@@ -270,17 +270,22 @@ var permSessionVerify = newPermission("session:verify", scopeCoarse)
 // immutable to external packages — reassigning a func is a compile error.
 func PermSessionVerify() Permission { return permSessionVerify }
 
-// registrycore permissions (303-US4, #2235). The runtime contract registry
-// (registrycore) gates its submit/list HTTP boundary by permission, not a role
-// literal (tenancy.md §"ABAC authz 接线"). Same resource:action convention +
-// accessor-func-over-private-singleton shape as the corecells perms (reassigning
-// a func is a compile error → Hard immutability). The PDP baseline grant lands
-// when registrycore is composed into corebundle (US6 — #2235 defers cellmodule +
-// corebundle wiring until US5's durable store); until then these gate the slice
-// handlers and drive the contract-test 403 boundary via a mock Authorizer.
+// registrycore permissions (303-US4 #2235 submit/read; 303-US7 #2238 approve/
+// reject/retire). The runtime contract registry (registrycore) gates its HTTP
+// boundary by permission, not a role literal (tenancy.md §"ABAC authz 接线"):
+// admin approval (approve/reject/retire) is expressed as a permission whose PDP
+// baseline grant is role-conditioned (admin/super-admin), NOT a handler-side
+// HasRole check. Same resource:action convention + accessor-func-over-private-
+// singleton shape as the corecells perms (reassigning a func is a compile error
+// → Hard immutability). The PDP baseline grant for approve/reject/retire lands in
+// accesscore builtinBaselineRules (admin-conditioned); submit/read baseline grant
+// is still deferred to corebundle composition (US6 — #2235).
 var (
-	permRegistrySubmit = newPermission("registry:submit", scopeCoarse)
-	permRegistryRead   = newPermission("registry:read", scopeCoarse)
+	permRegistrySubmit  = newPermission("registry:submit", scopeCoarse)
+	permRegistryRead    = newPermission("registry:read", scopeCoarse)
+	permRegistryApprove = newPermission("registry:approve", scopeCoarse)
+	permRegistryReject  = newPermission("registry:reject", scopeCoarse)
+	permRegistryRetire  = newPermission("registry:retire", scopeCoarse)
 )
 
 // PermRegistrySubmit authorizes submitting a runtime contract registration
@@ -296,6 +301,27 @@ func PermRegistrySubmit() Permission { return permRegistrySubmit }
 // It is an accessor function (not an exported var) so the registry value is
 // immutable to external packages — reassigning a func is a compile error.
 func PermRegistryRead() Permission { return permRegistryRead }
+
+// PermRegistryApprove authorizes an admin approving a pending-approval contract
+// registration (registryadmin slice: POST /api/v1/registry/contracts/{id}/approve).
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermRegistryApprove() Permission { return permRegistryApprove }
+
+// PermRegistryReject authorizes an admin rejecting a contract registration
+// (registryadmin slice: POST /api/v1/registry/contracts/{id}/reject).
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermRegistryReject() Permission { return permRegistryReject }
+
+// PermRegistryRetire authorizes an admin retiring an active contract registration
+// (registryadmin slice: POST /api/v1/registry/contracts/{id}/retire).
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermRegistryRetire() Permission { return permRegistryRetire }
 
 // examples/iotdevice permissions (PR-10d #1894). The iotdevice example owns its
 // own lightweight PDP (cells/devicecell/authorizer.go) whose baseline grants
@@ -393,6 +419,9 @@ var allPermissions = []Permission{
 	permSessionVerify,
 	permRegistrySubmit,
 	permRegistryRead,
+	permRegistryApprove,
+	permRegistryReject,
+	permRegistryRetire,
 	permDeviceCommand,
 	permDeviceConsume,
 	permDeviceRead,

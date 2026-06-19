@@ -39,7 +39,6 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	list "github.com/ghbvf/gocell/generated/contracts/http/registry/contract/list/v1"
 )
 
@@ -222,9 +221,13 @@ type Handler struct {
 	h *list.Handler
 }
 
-// NewHandler builds the route handler with the registry:read permission policy.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{h: list.NewHandler(svc, auth.RequirePermission(authz.PermRegistryRead()))}
+// NewHandler builds the route handler. Authorization is contract-derived
+// (#2205, 303-US7 migration): the cell-level authz.MethodPolicyResolver is built
+// by cellgen from endpoints.http.permission (registry:read) and injected by the
+// composition root, replacing the previously hand-wired
+// auth.RequirePermission(authz.PermRegistryRead()) policy.
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
+	return &Handler{h: list.NewHandler(svc, resolver)}
 }
 
 // RegisterRoutes mounts the contract on mux via the generated handler.

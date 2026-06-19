@@ -26,6 +26,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
+	"github.com/ghbvf/gocell/corecells/registrycore/slices/registryadmin"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registryread"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registrywrite"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -90,6 +91,8 @@ type RegistryCore struct {
 	writeHandler *registrywrite.Handler
 	// +slice:route:slice=registryread,subPath=/contracts
 	readHandler *registryread.Handler
+	// +slice:route:slice=registryadmin,subPath=/contracts
+	adminHandler *registryadmin.Handler
 }
 
 // New constructs the registrycore cell. clk is the positional clock dependency
@@ -193,8 +196,17 @@ func (c *RegistryCore) initInternal(_ context.Context, reg cell.Registrar) error
 	if err != nil {
 		return fmt.Errorf("registrycore: build registryread service: %w", err)
 	}
-	c.writeHandler = registrywrite.NewHandler(writeSvc)
-	c.readHandler = registryread.NewHandler(readSvc)
+	adminSvc, err := registryadmin.NewService(store, registryadmin.WithTxManager(txMgr))
+	if err != nil {
+		return fmt.Errorf("registrycore: build registryadmin service: %w", err)
+	}
+	// cellHTTPResolver is the cellgen-built authz.MethodPolicyResolver (cell_gen.go),
+	// derived from every served contract's endpoints.http.permission overlay; it is
+	// the composition-root injection point that replaces the previously hand-wired
+	// auth.RequirePermission policies (303-US7 migration off the modeless ledger).
+	c.writeHandler = registrywrite.NewHandler(writeSvc, cellHTTPResolver)
+	c.readHandler = registryread.NewHandler(readSvc, cellHTTPResolver)
+	c.adminHandler = registryadmin.NewHandler(adminSvc, cellHTTPResolver)
 
 	// Register the slices into the BaseCell inventory (OwnedSlices), mirroring
 	// configcore/auditcore/accesscore: the generated slice_gen.go SliceMetadata()
@@ -202,6 +214,7 @@ func (c *RegistryCore) initInternal(_ context.Context, reg cell.Registrar) error
 	// slice set and the cell's runtime inventory stay in sync.
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(registrywrite.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(registryread.SliceMetadata()))
+	c.AddSlice(cell.MustNewBaseSliceFromMeta(registryadmin.SliceMetadata()))
 
 	// Register the in-mem repo readiness probe via the cellgen-generated typed
 	// funnel (PROBENAME-SEALED-FUNNEL-01). mem.Registry.RepoReady always returns

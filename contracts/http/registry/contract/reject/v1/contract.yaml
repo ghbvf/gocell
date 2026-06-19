@@ -1,0 +1,45 @@
+id: http.registry.contract.reject.v1
+kind: http
+ownerCell: registrycore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: registrycore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/registry/contracts/{id}/reject
+    permission: registry:reject
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — path parameter id is malformed (blank/whitespace; the registration id is an opaque dotted contract id, not a UUID), or the advance input fails validation (ERR_VALIDATION_FAILED)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the registry:reject permission (the built-in PDP baseline grants it to the admin and super-admin roles; rejection authority is permission-based, not a handler role literal), or the principal carries no tenant."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — no contract registration with the given id is visible to the caller's tenant (ERR_REGISTRATION_NOT_FOUND)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — the registration is not in a state from which reject is legal (reject requires probing or pending-approval); ERR_REGISTRATION_INVALID_TRANSITION."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
