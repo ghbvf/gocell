@@ -13,6 +13,14 @@ import (
 )
 
 // --- Request → domain converters ---
+//
+// Rule.Action (#1979) is a plain pass-through here (item.Action → abac.Rule.Action
+// in createRuleItemToDomain / updateRuleItemToDomain, and r.Action → wire in every
+// polRulesTo*Wire below). The "allow rules must declare a non-empty Action" rule is
+// NOT enforced in this converter — it is the domain validator's job (abac.Rule.Validate,
+// invoked downstream in service.go), keeping the domain the single source of structural
+// truth (same split as the condition RHS, #1977). So an empty-Action allow round-trips
+// faithfully here and is rejected later with 422.
 
 // createRulesFromRequest converts a create request's rules to domain []abac.Rule.
 // Returns KindInvalid/ErrValidationFailed on any unrecognized enum code.

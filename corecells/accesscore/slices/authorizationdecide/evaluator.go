@@ -83,6 +83,15 @@ func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action 
 // matching permit's id into *firstPermitID for decision attribution), and returns
 // (true, Deny) on the first matching Deny (forbid-wins early exit). It returns
 // (false, {}) when the rule does not fire (gate miss or unknown effect).
+//
+// #1979 placement note (security-critical — do not "simplify"): the empty-Action
+// fail-closed for Allow lives INSIDE the EffectAllow branch, NOT in the shared
+// action gate above. It must not be hoisted: the action gate is crossed by
+// empty-Action Deny rules too, and an empty-Action Deny is a legitimate deny-all
+// (forbid-wins over every action). Rejecting empty Action at the gate would break
+// deny-all. The asymmetry is the point — empty Action is a wildcard for Deny,
+// inert for Allow. (Regression-guarded behaviorally: TestEvaluate_ActionTargeting's
+// "untargeted deny … still forbid-wins" + "empty Action allow is inert" cases.)
 func applyRule(
 	rule abac.Rule, r attributeResolver, action string, permits *[]authz.Obligations, firstPermitID *string,
 ) (done bool, dec authz.Decision) {

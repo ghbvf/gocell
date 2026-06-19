@@ -61,6 +61,17 @@ func TestContract_PolicyCreateV1_Serve(t *testing.T) {
 	h.ServeHTTP(wAll, withHandlerAdmin(reqAll))
 	require.Equal(t, http.StatusUnprocessableEntity, wAll.Code, "rowScope=all must be 422: %s", wAll.Body.String())
 	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wAll.Body.Bytes())
+
+	// #1979: an allow rule with NO action key is structurally valid JSON (action is
+	// schema-optional) but rejected by the domain validator → 422 through the full
+	// HTTP path (raw JSON → schema validator → converter → service → errmap).
+	emptyActBody := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow"}]}`
+	wEmpty := httptest.NewRecorder()
+	reqEmpty := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(emptyActBody))
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(wEmpty, withHandlerAdmin(reqEmpty))
+	require.Equal(t, http.StatusUnprocessableEntity, wEmpty.Code, "allow rule with empty action must be 422: %s", wEmpty.Body.String())
+	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wEmpty.Body.Bytes())
 }
 
 // TestContract_PolicyCreateV1_CrossAttrFanout exercises the eq_attr / rhsSource /
@@ -193,6 +204,15 @@ func TestContract_PolicyUpdateV1_Serve(t *testing.T) {
 	h.ServeHTTP(w422, withHandlerAdmin(req422))
 	require.Equal(t, http.StatusUnprocessableEntity, w422.Code, "rowScope=all must be 422: %s", w422.Body.String())
 	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, w422.Body.Bytes())
+
+	// #1979: an allow rule with NO action key → 422 through the full update HTTP path.
+	emptyActBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow"}],"expectedVersion":1}`
+	wEmpty := httptest.NewRecorder()
+	reqEmpty := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(emptyActBody))
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(wEmpty, withHandlerAdmin(reqEmpty))
+	require.Equal(t, http.StatusUnprocessableEntity, wEmpty.Code, "allow rule with empty action must be 422: %s", wEmpty.Body.String())
+	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wEmpty.Body.Bytes())
 }
 
 func TestContract_PolicyDeleteV1_Serve(t *testing.T) {

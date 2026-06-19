@@ -36,7 +36,11 @@ func TestRule_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid rule with zero conditions (allowed)",
+			// Deny is the reason this is valid: a deny rule with zero conditions
+			// AND empty Action is a legitimate deny-all. The same shape with
+			// EffectAllow would be rejected (#1979 — see "allow rule with empty
+			// Action rejected" below).
+			name: "deny rule with zero conditions and empty Action is valid (deny-all)",
 			rule: abac.Rule{
 				ID:         "rule-no-cond",
 				Name:       "Unrestricted",
