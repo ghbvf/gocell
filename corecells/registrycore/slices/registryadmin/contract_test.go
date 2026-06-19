@@ -250,6 +250,34 @@ func TestContractApproveServe_Forbidden(t *testing.T) {
 	}
 }
 
+// TestContractApproveServe_NoTenant: an authenticated admin whose request carries
+// NO tenant (passes the PDP gate, which checks principal+authorizer not tenant, but
+// fails tenant.FromContext inside the service) ⇒ 403, fail-closed before the
+// transition (doTransition errTenant branch; ErrAuthForbidden → 403).
+func TestContractApproveServe_NoTenant(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), approveContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+	seedTo(t, store, registry.StatePendingApproval())
+
+	// admin principal + allow PDP, but deliberately no ctxkeys.WithTenantID.
+	ctx := auth.WithAuthorizer(
+		auth.WithPrincipal(context.Background(), &auth.Principal{
+			Kind: auth.PrincipalUser, Subject: "admin-1", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
+		}),
+		allowAuthorizer(),
+	)
+	rec := postAdmin(t, newAdminMux(t, store), ctx, approvePath(seedID), `{}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (no tenant); body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+
+	// State untouched: tenant fail-closed before the transition.
+	if got, ok, _ := store.Get(context.Background(), testTenant, seedID); !ok || got.State != registry.StatePendingApproval() {
+		t.Fatalf("state after no-tenant deny changed: ok=%v state=%s", ok, got.State)
+	}
+}
+
 // TestContractApproveServe_NotFound: approving an unknown id ⇒ 404.
 func TestContractApproveServe_NotFound(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), approveContractID)
