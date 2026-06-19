@@ -107,6 +107,11 @@ type LeafOptions struct {
 	DNSNames []string
 	// IPs are IP SANs.
 	IPs []net.IP
+	// Subject is the leaf's X.509 subject (CommonName, Organization, …). The
+	// zero value yields CommonName "tlsutiltest-leaf"; set it to preserve a
+	// test's specific cert-subject assertions (CN / Organization). When set with
+	// an empty CommonName, the default CommonName is still filled in.
+	Subject pkix.Name
 	// EKU is the ExtKeyUsage set; when nil it defaults to BOTH ServerAuth and
 	// ClientAuth — a dual-purpose leaf usable as server or client, the shape the
 	// original per-file helpers used. Set it explicitly to narrow the usage.
@@ -147,9 +152,13 @@ func (ca *CA) IssueLeaf(t *testing.T, opts LeafOptions) Leaf {
 		notAfter = time.Now().Add(defaultLeafValidity)
 	}
 
+	subject := opts.Subject
+	if subject.CommonName == "" {
+		subject.CommonName = "tlsutiltest-leaf"
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(ca.serial.Add(1)),
-		Subject:      pkix.Name{CommonName: "tlsutiltest-leaf"},
+		Subject:      subject,
 		NotBefore:    time.Now().Add(-certBackdate),
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -197,7 +206,8 @@ func SPIFFEURI(t *testing.T, raw string) *url.URL {
 }
 
 // WriteFiles writes the leaf cert, leaf key, and CA cert as PEM files under dir
-// (0o600) and returns their paths — for consumers configured by file path.
+// (leaf key 0o600; leaf cert and CA cert 0o644) and returns their paths — for
+// consumers configured by file path. ca must be the issuer of l.
 func (l Leaf) WriteFiles(t *testing.T, dir string, ca *CA) (certFile, keyFile, caFile string) {
 	t.Helper()
 	certFile = filepath.Join(dir, "cert.pem")
@@ -210,10 +220,16 @@ func (l Leaf) WriteFiles(t *testing.T, dir string, ca *CA) (certFile, keyFile, c
 	return certFile, keyFile, caFile
 }
 
-// writeFile writes data to path with mode, failing the test on error.
+// writeFile writes data to path with mode, failing the test on error. It Chmods
+// after writing because os.WriteFile leaves an EXISTING file's mode unchanged
+// (it only truncates) — without the Chmod a pre-existing wide-mode key.pem would
+// keep its permissions and leak the private key.
 func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
 	t.Helper()
 	if err := os.WriteFile(path, data, mode); err != nil {
 		t.Fatalf("tlsutiltest: write %s: %v", path, err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("tlsutiltest: chmod %s: %v", path, err)
 	}
 }

@@ -19,11 +19,14 @@
 //     EKU, SAN — is sensitive to mTLS correctness, so a bug in one copy is
 //     invisible to the others; centralizing the mint makes the shape a single
 //     source and this funnel keeps it centralized.
-//   - framework/runtime/certsigning, framework/runtime/certlifecycle — the
-//     CSR→certificate issuance pipeline tests. They fabricate certificates as
-//     system-under-test INPUT (the cert is what the signing/lifecycle code
-//     consumes), not reusable cell-identity fixtures, so routing them through
-//     tlsutiltest would be circular. Allowlisted with this rationale.
+//   - framework/runtime/certsigning/request_test.go,
+//     framework/runtime/certlifecycle/testsupport_test.go — the CSR→certificate
+//     issuance pipeline tests. They fabricate certificates as system-under-test
+//     INPUT (the cert is what the signing/lifecycle code consumes), not reusable
+//     cell-identity fixtures, so routing them through tlsutiltest would be
+//     circular. These are sanctioned as EXACT FILES (not whole package): the
+//     production code in those packages does not mint, so a whole-package
+//     allowlist would fail-open a future production CreateCertificate (#2414 F1).
 //   - adapters/softca — the production soft-CA implementation. It is the real
 //     certificate authority (not test material); the scan covers production
 //     packages too, so it is allowlisted here.
@@ -110,16 +113,25 @@ const (
 // #1565 split normalization in newPackageRel/stripFrameworkPrefix), so framework
 // packages appear as "runtime/…" here, NOT "framework/runtime/…". Non-framework
 // modules (adapters/, cellmodules/, tools/) are not stripped.
+// tlsTestMaterialSanctionedDirs are WHOLE-PACKAGE minters: every file under them
+// may call x509.CreateCertificate because minting is the package's purpose.
 var tlsTestMaterialSanctionedDirs = []string{
 	// framework module: Pass.Rel strips the leading "framework/" (#1565), so
 	// these appear as "runtime/…", NOT "framework/runtime/…".
 	"runtime/http/tlsutil/tlsutiltest/", // the sanctioned test mTLS-material minter (#2287)
-	"runtime/certsigning/",              // CSR→cert pipeline test: cert is SUT input, not a fixture
-	"runtime/certlifecycle/",            // cert renewal/lifecycle test: cert is SUT input, not a fixture
 	// non-framework modules: rel path is module-prefixed as-is (no strip).
-	"adapters/softca/", // production soft-CA implementation (the real authority, not test material)
+	"adapters/softca/", // production soft-CA implementation (the real authority, mints across files)
 	// NOTE: tlsutil/ itself (client_test/server_test) is deliberately NOT here —
 	// those callers were migrated to tlsutiltest and must route through it.
+}
+
+// tlsTestMaterialSanctionedFiles are EXACT files (not whole package): only the
+// CSR→cert pipeline TEST files fabricate a cert as system-under-test input. The
+// production code in those packages does NOT mint, so a whole-package prefix
+// would fail-open a future production x509.CreateCertificate there (#2414 F1).
+var tlsTestMaterialSanctionedFiles = []string{
+	"runtime/certsigning/request_test.go",       // cert-signing pipeline test: cert is SUT input
+	"runtime/certlifecycle/testsupport_test.go", // cert-lifecycle pipeline test: cert is SUT input
 }
 
 // CheckTLSTestMaterialFunnel enforces TLS-TEST-MATERIAL-FUNNEL-01 over the whole
@@ -186,11 +198,17 @@ func tlsTestMaterialCallViolation(p *Pass, rel string, call *ast.CallExpr) (Diag
 }
 
 // isTLSTestMaterialSanctioned reports whether the workspace-relative file path
-// rel is under one of the sanctioned directories. Pure function for unit
-// testability (TestIsTLSTestMaterialSanctioned).
+// rel is under a sanctioned whole-package directory OR is one of the sanctioned
+// exact files (the CSR-pipeline test files). Pure function for unit testability
+// (TestIsTLSTestMaterialSanctioned).
 func isTLSTestMaterialSanctioned(rel string) bool {
 	for _, dir := range tlsTestMaterialSanctionedDirs {
 		if strings.HasPrefix(rel, dir) {
+			return true
+		}
+	}
+	for _, f := range tlsTestMaterialSanctionedFiles {
+		if rel == f {
 			return true
 		}
 	}

@@ -241,6 +241,7 @@ func TestMTLS_IntegrationRoundTripViaHTTPTestServer(t *testing.T) {
 		URIs:     []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/ns/edge/sa/integ-client")},
 		DNSNames: []string{"integ-client.example.com"},
 		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Subject:  pkix.Name{CommonName: "integ-client", Organization: []string{"acme"}},
 	})
 
 	caPool, err := tlsutil.NewClientCAPool(ca.CertPEM)
@@ -279,7 +280,8 @@ func TestMTLS_IntegrationRoundTripViaHTTPTestServer(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, seenOK)
-	assert.Equal(t, "tlsutiltest-leaf", seenIdentity.Subject.CommonName)
+	assert.Equal(t, "integ-client", seenIdentity.Subject.CommonName)
+	assert.Equal(t, []string{"acme"}, seenIdentity.Subject.Organization)
 	assert.Equal(t, []string{"integ-client.example.com"}, seenIdentity.DNSNames)
 	require.Len(t, seenIdentity.URIs, 1)
 	assert.Equal(t, "spiffe://example.org/ns/edge/sa/integ-client", seenIdentity.URIs[0].String())

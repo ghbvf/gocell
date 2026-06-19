@@ -64,6 +64,11 @@ func TestIsTLSTestMaterialSanctioned(t *testing.T) {
 		{name: "softca production", rel: "adapters/softca/ca.go", want: true},
 		{name: "tlsutil (non-test-helper) is NOT sanctioned", rel: "runtime/http/tlsutil/client_test.go", want: false},
 		{name: "name-prefix sibling is NOT sanctioned", rel: "runtime/certsigningfoo/x_test.go", want: false},
+		// F1 negative controls: certsigning/certlifecycle are sanctioned as EXACT
+		// files, NOT whole package — production code there must NOT be exempt.
+		{name: "certsigning PRODUCTION file is NOT sanctioned", rel: "runtime/certsigning/request.go", want: false},
+		{name: "certlifecycle PRODUCTION file is NOT sanctioned", rel: "runtime/certlifecycle/manager.go", want: false},
+		{name: "certsigning OTHER test file is NOT sanctioned (exact-file only)", rel: "runtime/certsigning/signer_test.go", want: false},
 		{name: "arbitrary cell test is NOT sanctioned", rel: "cellmodules/celltls/celltls_test.go", want: false},
 		{name: "the RED fixture is NOT sanctioned", rel: "tools/archtest/internal/tlsmaterialfixture/redfixture.go", want: false},
 		{name: "empty path", rel: "", want: false},

@@ -3,9 +3,11 @@ package tlsutiltest_test
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -144,6 +146,47 @@ func TestNewCA_DistinctCertsAcrossInstances(t *testing.T) {
 	b := tlsutiltest.NewCA(t)
 	if a.Cert.Equal(b.Cert) {
 		t.Fatal("independent CAs must yield distinct certs")
+	}
+}
+
+func TestIssueLeaf_SubjectPassthrough(t *testing.T) {
+	t.Parallel()
+	ca := tlsutiltest.NewCA(t)
+	// An explicit Subject (CN + Organization) must be preserved verbatim.
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		Subject: pkix.Name{CommonName: "integ-client", Organization: []string{"acme"}},
+	})
+	if leaf.Cert.Subject.CommonName != "integ-client" {
+		t.Errorf("CommonName = %q, want integ-client", leaf.Cert.Subject.CommonName)
+	}
+	if !slices.Contains(leaf.Cert.Subject.Organization, "acme") {
+		t.Errorf("Organization = %v, want to contain acme", leaf.Cert.Subject.Organization)
+	}
+	// Zero-value Subject defaults the CommonName.
+	def := ca.IssueLeaf(t, tlsutiltest.LeafOptions{})
+	if def.Cert.Subject.CommonName != "tlsutiltest-leaf" {
+		t.Errorf("default CommonName = %q, want tlsutiltest-leaf", def.Cert.Subject.CommonName)
+	}
+}
+
+func TestLeaf_WriteFilesTightensPreexistingKeyMode(t *testing.T) {
+	t.Parallel()
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{})
+	dir := t.TempDir()
+	// Pre-create key.pem with a wide mode. os.WriteFile alone would leave the
+	// existing mode (it only truncates); WriteFiles must tighten it to 0600.
+	stalePath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("pre-create key.pem: %v", err)
+	}
+	_, keyFile, _ := leaf.WriteFiles(t, dir, ca)
+	info, err := os.Stat(keyFile)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("WriteFiles must tighten pre-existing key.pem to 0600, got %o", got)
 	}
 }
 
