@@ -174,22 +174,35 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	return u
 }
 
-func TestFromURIs(t *testing.T) {
+// TestCellSetFromURIs covers the #2297 allow-set extractor: a certificate's URI
+// SANs yield the FULL set of distinct cell SPIFFE ids (a multi-cell workload
+// cert), all sharing one trust domain. A cert bridging two trust domains is
+// rejected; non-cell spiffe URIs are ignored; duplicates collapse.
+func TestCellSetFromURIs(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		uris    []*url.URL
-		wantOK  bool
-		wantErr bool
-		wantCel string
+		name      string
+		uris      []*url.URL
+		wantErr   bool
+		wantTD    string
+		wantCells []string // expected members
 	}{
-		{name: "nil", uris: nil, wantOK: false},
-		{name: "no spiffe", uris: []*url.URL{mustURL(t, "https://example.org/foo")}, wantOK: false},
+		{name: "nil -> empty set", uris: nil},
+		{name: "no spiffe -> empty set", uris: []*url.URL{mustURL(t, "https://example.org/foo")}},
 		{
-			name:    "one cell id",
-			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
-			wantOK:  true,
-			wantCel: "accesscore",
+			name:      "single cell id",
+			uris:      []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore"},
+		},
+		{
+			name: "multiple distinct cell ids (same trust domain) -> full set",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+			},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore", "configcore"},
 		},
 		{
 			name: "cell id alongside non-cell spiffe (ignored)",
@@ -197,40 +210,77 @@ func TestFromURIs(t *testing.T) {
 				mustURL(t, "spiffe://example.org/ns/edge/sa/wl-1"),
 				mustURL(t, "spiffe://example.org/cell/configcore"),
 			},
-			wantOK:  true,
-			wantCel: "configcore",
+			wantTD:    "example.org",
+			wantCells: []string{"configcore"},
 		},
 		{
-			name: "two distinct cell ids -> ambiguous error",
+			name: "duplicate identical cell ids collapse",
 			uris: []*url.URL{
 				mustURL(t, "spiffe://example.org/cell/accesscore"),
-				mustURL(t, "spiffe://example.org/cell/configcore"),
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+			},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore"},
+		},
+		{
+			name: "mixed trust domains -> error (a cert must not bridge trust domains)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://other.org/cell/configcore"),
 			},
 			wantErr: true,
-		},
-		{
-			name: "two identical cell ids -> ok",
-			uris: []*url.URL{
-				mustURL(t, "spiffe://example.org/cell/accesscore"),
-				mustURL(t, "spiffe://example.org/cell/accesscore"),
-			},
-			wantOK:  true,
-			wantCel: "accesscore",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok, err := spiffeid.FromURIs(tc.uris)
+			set, err := spiffeid.CellSetFromURIs(tc.uris)
 			if tc.wantErr {
-				require.Error(t, err, "FromURIs = (%v,%v,nil), want error", got, ok)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tc.wantOK, ok, "FromURIs ok")
-			if ok {
-				require.Equal(t, tc.wantCel, got.Cell(), "FromURIs cell")
+			require.Equal(t, len(tc.wantCells), set.Len(), "set cardinality")
+			if len(tc.wantCells) == 0 {
+				require.True(t, set.IsEmpty())
+				return
+			}
+			require.False(t, set.IsEmpty())
+			require.Equal(t, tc.wantTD, set.TrustDomain())
+			for _, c := range tc.wantCells {
+				id, err := spiffeid.ForCell(tc.wantTD, c)
+				require.NoError(t, err)
+				require.True(t, set.Contains(id), "set must contain %s", id.String())
 			}
 		})
 	}
+}
+
+// TestCellSetContains exercises the sole membership predicate (the go-spiffe
+// AuthorizeMemberOf analog): trust domain + cell must both match, the zero CellID
+// is never a member, and the empty set contains nothing.
+func TestCellSetContains(t *testing.T) {
+	t.Parallel()
+	set, err := spiffeid.CellSetFromURIs([]*url.URL{
+		mustURL(t, "spiffe://example.org/cell/accesscore"),
+		mustURL(t, "spiffe://example.org/cell/configcore"),
+	})
+	require.NoError(t, err)
+
+	member, _ := spiffeid.ForCell("example.org", "accesscore")
+	require.True(t, set.Contains(member), "a member cell must be Contains-true")
+
+	nonMember, _ := spiffeid.ForCell("example.org", "auditcore")
+	require.False(t, set.Contains(nonMember), "a non-member cell must be Contains-false")
+
+	wrongTD, _ := spiffeid.ForCell("other.org", "accesscore")
+	require.False(t, set.Contains(wrongTD), "same cell name in a different trust domain must not match")
+
+	require.False(t, set.Contains(spiffeid.CellID{}), "zero CellID must never be a member")
+
+	var empty spiffeid.CellSet
+	require.True(t, empty.IsEmpty())
+	require.Equal(t, 0, empty.Len())
+	require.Equal(t, "", empty.TrustDomain())
+	require.False(t, empty.Contains(member), "the empty set contains nothing")
 }

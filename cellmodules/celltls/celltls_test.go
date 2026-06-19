@@ -108,19 +108,78 @@ func TestInternalListenerSecurity(t *testing.T) {
 	})
 }
 
-// TestResolve_SharedMTLSEndpoint_FailsClosed: material configured + two remote
-// cells sharing one non-loopback endpoint → fail-closed (#2263 F1: split mTLS is
-// one cell per process; a shared mTLS endpoint cannot present a per-cell cert).
-func TestResolve_SharedMTLSEndpoint_FailsClosed(t *testing.T) {
+// writeCellMaterialFor generates a CA + a single workload leaf whose URI SANs are
+// the given cells' SPIFFE ids (a multi-cell workload cert, #2297) in trust domain
+// example.org, writes cert/key/ca PEM files into a temp dir and returns their paths.
+func writeCellMaterialFor(t *testing.T, cells ...string) (certFile, keyFile, caFile string) {
+	t.Helper()
+	ca := tlsutiltest.NewCA(t)
+	uris := make([]*url.URL, 0, len(cells))
+	for _, c := range cells {
+		uris = append(uris, tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/"+c))
+	}
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{URIs: uris})
+	return leaf.WriteFiles(t, t.TempDir(), ca)
+}
+
+// topoColocated builds an explicit topology declaring the given colocated (local)
+// cells + remotes — exercises the #2297 startup cert↔colocated exact-match check.
+func topoColocated(t *testing.T, colocated []string, remotes ...bootstrap.RemoteCellEndpoint) bootstrap.DeploymentTopology {
+	t.Helper()
+	dt, err := bootstrap.NewDeploymentTopology(bootstrap.DeploymentTopologySpec{Colocated: colocated, Remote: remotes})
+	require.NoError(t, err)
+	return dt
+}
+
+// TestResolve_MultiCellSharedEndpoint_Succeeds: #2297 lifts the one-cell-per-process
+// limit (former #2263 F1 fail-closed guard is gone). A process hosting multiple
+// cells presents one workload cert carrying every hosted cell's SPIFFE id, and the
+// shared-endpoint topology resolves successfully.
+func TestResolve_MultiCellSharedEndpoint_Succeeds(t *testing.T) {
 	t.Parallel()
-	certFile, keyFile, caFile := writeCellMaterial(t)
+	certFile, keyFile, caFile := writeCellMaterialFor(t, "accesscore", "configcore")
 	cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: "example.org"}
-	shared := topo(t,
-		bootstrap.RemoteCellEndpoint{CellID: "configcore", Endpoint: "https://shared.svc:8443"},
+	// This process hosts accesscore + configcore; auditcore is remote.
+	topo := topoColocated(t, []string{"accesscore", "configcore"},
 		bootstrap.RemoteCellEndpoint{CellID: "auditcore", Endpoint: "https://shared.svc:8443"},
 	)
-	_, err := celltls.Resolve(shared, cfg)
-	assert.Error(t, err, "mTLS + two cells at the same non-loopback endpoint must fail closed (one cell per process)")
+	deps, err := celltls.Resolve(topo, cfg)
+	require.NoError(t, err, "a workload cert covering both hosted cells must resolve (one cell per process is lifted)")
+	assert.False(t, deps.ClientIdentity.IsZero())
+	assert.NotNil(t, deps.ServerTLS)
+}
+
+// TestResolve_CertColocatedExactMatch covers the #2297 startup fail-fast: the local
+// workload cert's cell-SAN set must EXACTLY equal the cells this process hosts
+// (least privilege) — neither missing a hosted cell nor carrying an extra one.
+func TestResolve_CertColocatedExactMatch(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		certCells []string
+		colocated []string
+		wantErr   bool
+	}{
+		{name: "exact match single", certCells: []string{"accesscore"}, colocated: []string{"accesscore"}},
+		{name: "exact match multi", certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore", "configcore"}},
+		{name: "cert missing a hosted cell -> fail", certCells: []string{"accesscore"}, colocated: []string{"accesscore", "configcore"}, wantErr: true},
+		{name: "cert carries an unhosted extra cell -> fail", certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			certFile, keyFile, caFile := writeCellMaterialFor(t, tc.certCells...)
+			cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: "example.org"}
+			topo := topoColocated(t, tc.colocated,
+				bootstrap.RemoteCellEndpoint{CellID: "auditcore", Endpoint: "https://audit.svc:8443"})
+			_, err := celltls.Resolve(topo, cfg)
+			if tc.wantErr {
+				assert.Error(t, err, "cert cell-SAN set must exactly match the hosted (colocated) cells")
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
 }
 
 func TestResolve_ErrorPaths(t *testing.T) {

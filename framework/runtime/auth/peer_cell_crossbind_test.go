@@ -95,28 +95,71 @@ func TestPeerCellCrossBindMiddleware(t *testing.T) {
 	}
 }
 
-// TestPeerCellCrossBindMiddleware_AmbiguousCert covers the distinct "two cell
-// SPIFFE IDs" branch (spiffeid.FromURIs error) — a possibly-tampered/multi-identity
-// cert must fail closed (403), separate from the no-cell-id path.
-func TestPeerCellCrossBindMiddleware_AmbiguousCert(t *testing.T) {
+// TestPeerCellCrossBindMiddleware_MultiCellWorkloadCert covers the #2297 allow-set
+// model: a peer presenting a MULTI-cell workload cert is authorized by MEMBERSHIP
+// — the service-token caller cell must be IN the cert's cell set (replacing the old
+// single-identity Equal, which 403'd any multi-SAN cert as "ambiguous"). A caller
+// that is a member passes; a non-member 403s; a cert bridging two trust domains
+// 403s.
+func TestPeerCellCrossBindMiddleware_MultiCellWorkloadCert(t *testing.T) {
 	t.Parallel()
-	a, err := url.Parse("spiffe://example.org/cell/accesscore")
-	require.NoError(t, err)
-	b, err := url.Parse("spiffe://example.org/cell/configcore")
-	require.NoError(t, err)
 
-	r := httptest.NewRequest(http.MethodGet, "/internal/v1/config/k", nil)
-	ctx := ctxkeys.WithPeerIdentity(r.Context(), ctxkeys.PeerIdentity{URIs: []*url.URL{a, b}})
-	ctx = WithPrincipal(ctx, &Principal{Kind: PrincipalService, CallerCellID: "accesscore"})
-	r = r.WithContext(ctx)
+	multiSAN := func(t *testing.T, uris ...string) ctxkeys.PeerIdentity {
+		t.Helper()
+		us := make([]*url.URL, 0, len(uris))
+		for _, raw := range uris {
+			u, err := url.Parse(raw)
+			require.NoError(t, err)
+			us = append(us, u)
+		}
+		return ctxkeys.PeerIdentity{URIs: us}
+	}
 
-	nextCalled := false
-	h := PeerCellCrossBindMiddleware("example.org")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		nextCalled = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
-	assert.Equal(t, http.StatusForbidden, rec.Code, "ambiguous (two distinct cell SPIFFE ids) must 403")
-	assert.False(t, nextCalled)
+	tests := []struct {
+		name       string
+		uris       []string
+		callerCell string
+		wantStatus int
+		wantNext   bool
+	}{
+		{
+			name:       "caller is a member of the multi-cell cert -> 200",
+			uris:       []string{"spiffe://example.org/cell/accesscore", "spiffe://example.org/cell/auditcore"},
+			callerCell: "auditcore",
+			wantStatus: http.StatusOK,
+			wantNext:   true,
+		},
+		{
+			name:       "caller is NOT a member -> 403",
+			uris:       []string{"spiffe://example.org/cell/accesscore", "spiffe://example.org/cell/auditcore"},
+			callerCell: "configcore",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "cert bridges two trust domains -> 403",
+			uris:       []string{"spiffe://example.org/cell/accesscore", "spiffe://other.org/cell/auditcore"},
+			callerCell: "accesscore",
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodGet, "/internal/v1/config/k", nil)
+			ctx := ctxkeys.WithPeerIdentity(r.Context(), multiSAN(t, tc.uris...))
+			ctx = WithPrincipal(ctx, &Principal{Kind: PrincipalService, CallerCellID: tc.callerCell})
+			r = r.WithContext(ctx)
+
+			nextCalled := false
+			h := PeerCellCrossBindMiddleware("example.org")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				nextCalled = true
+				w.WriteHeader(http.StatusOK)
+			}))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			assert.Equal(t, tc.wantNext, nextCalled, "next handler invocation")
+		})
+	}
 }

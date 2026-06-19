@@ -256,3 +256,69 @@ func TestRemoteMTLS_CrossBindMismatch(t *testing.T) {
 		t.Errorf("status = %d, want 403 (cross-bind cert↔caller mismatch)", resp.StatusCode)
 	}
 }
+
+// TestRemoteMTLS_MultiCellWorkloadCert_Happy: #2297 allow-set membership, end-to-end.
+// The SERVER process hosts configcore+auditcore and presents ONE workload cert
+// carrying BOTH cell SPIFFE ids; the client dials configcore and its
+// VerifyConnection accepts the server by MEMBERSHIP (configcore ∈ {configcore,
+// auditcore}). The CLIENT process hosts accesscore+billingcore and presents ONE
+// workload cert with both; it signs the token as caller=billingcore and the
+// server's cross-bind accepts it by membership (billingcore ∈ client cert set) → 200.
+func TestRemoteMTLS_MultiCellWorkloadCert_Happy(t *testing.T) {
+	t.Parallel()
+	ca := tlsutiltest.NewCA(t)
+	ring := mustRing(t)
+	ns := mustNonceStore(t)
+	tid := mustTenantID(t)
+
+	// Server workload cert covering both hosted cells {configcore, auditcore}.
+	serverLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, "configcore"), cellSPIFFEURI(t, "auditcore")},
+	})
+	serverCfg, err := tlsutil.NewServerMTLSConfig(serverLeaf.CertPEM, serverLeaf.KeyPEM, newMTLSClientCAPool(t, ca))
+	if err != nil {
+		t.Fatalf("NewServerMTLSConfig: %v", err)
+	}
+	biz := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"data":{"ok":true}}`)
+	})
+	guarded := middleware.MTLS()(
+		auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(ns))(
+			auth.PeerCellCrossBindMiddleware(mtlsTrustDomain)(biz),
+		),
+	)
+	srv := httptest.NewUnstartedServer(guarded)
+	srv.TLS = serverCfg
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	// Client workload cert covering both hosted cells {accesscore, billingcore};
+	// dials configcore (so VerifyConnection authorizes the server as configcore).
+	clientLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, "accesscore"), cellSPIFFEURI(t, "billingcore")},
+	})
+	expected, err := spiffeid.ForCell(mtlsTrustDomain, "configcore")
+	if err != nil {
+		t.Fatalf("ForCell: %v", err)
+	}
+	clientCfg, err := tlsutil.NewClientMTLSConfig(clientLeaf.CertPEM, clientLeaf.KeyPEM, ca.Pool, expected)
+	if err != nil {
+		t.Fatalf("NewClientMTLSConfig: %v", err)
+	}
+	tr := transportFromTLSConfig(srv.URL, clientCfg)
+
+	// Token caller = billingcore, a member of the client's workload cert set.
+	req := unsignedReq(t, http.MethodGet, "http://ignored/internal/v1/config/x")
+	if err := auth.SignInternalRequest(context.Background(), ring, "billingcore", req, tid, clock.Real()); err != nil {
+		t.Fatalf("SignInternalRequest: %v", err)
+	}
+	resp, err := tr.DoContract(context.Background(), "http.config.internal.get.v1", req)
+	if err != nil {
+		t.Fatalf("DoContract: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 (multi-cell workload cert, membership both directions)", resp.StatusCode)
+	}
+}

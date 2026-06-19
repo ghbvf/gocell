@@ -201,25 +201,53 @@ func TestVerifyConnection(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	// F9.1: exercises the spiffeid.FromURIs err != nil branch in verifyPeerCellIdentity.
-	// A leaf that presents TWO distinct cell SPIFFE URIs is ambiguous — VerifyConnection
-	// must reject it regardless of whether either URI matches the expected peer.
-	t.Run("reject: ambiguous cell SPIFFE id (two distinct cell URIs)", func(t *testing.T) {
+	// #2297 allow-set membership: a peer presenting a MULTI-cell workload cert is
+	// authorized by set membership — the expected target cell must be IN the cert's
+	// cell set (not the old single-identity Equal, which rejected any multi-SAN cert
+	// as "ambiguous").
+	t.Run("accept: multi-SAN workload cert, expected target is a member", func(t *testing.T) {
 		t.Parallel()
-		ambiguousCA := tlsutiltest.NewCA(t)
-		ambiguous := ambiguousCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+		multiCA := tlsutiltest.NewCA(t)
+		multi := multiCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{
+				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore"),
+				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/auditcore"),
+			},
+			EKU: bothAuth(),
+		})
+		cfg := build(multiCA.Pool, expected) // expected = configcore, a member
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{multi.Cert}})
+		assert.NoError(t, err, "configcore ∈ {configcore, auditcore} must verify")
+	})
+
+	t.Run("reject: multi-SAN workload cert, expected target NOT a member", func(t *testing.T) {
+		t.Parallel()
+		multiCA := tlsutiltest.NewCA(t)
+		multi := multiCA.IssueLeaf(t, tlsutiltest.LeafOptions{
 			URIs: []*url.URL{
 				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore"),
 				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/auditcore"),
 			},
 			EKU: bothAuth(),
 		})
-		// Use the outer `expected` (configcore) as the expected peer identity: the
-		// ambiguity check fires before the identity comparison, so the expected peer
-		// does not matter for the error path.
-		cfg := build(ambiguousCA.Pool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{ambiguous.Cert}})
-		assert.Error(t, err, "ambiguous SPIFFE id must be rejected")
+		cfg := build(multiCA.Pool, expected) // expected = configcore, NOT in the set
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{multi.Cert}})
+		assert.Error(t, err, "configcore ∉ {accesscore, auditcore} must reject")
+	})
+
+	t.Run("reject: cert with cell ids from two trust domains", func(t *testing.T) {
+		t.Parallel()
+		mixedCA := tlsutiltest.NewCA(t)
+		mixed := mixedCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{
+				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore"),
+				tlsutiltest.SPIFFEURI(t, "spiffe://other.org/cell/configcore"),
+			},
+			EKU: bothAuth(),
+		})
+		cfg := build(mixedCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{mixed.Cert}})
+		assert.Error(t, err, "a cert bridging two trust domains must be rejected")
 	})
 }
 
