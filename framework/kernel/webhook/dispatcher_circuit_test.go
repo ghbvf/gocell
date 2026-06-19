@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,11 +15,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/framework/kernel/circuitbreaker"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
 )
 
 // defaultCB is a test-local shorthand for the default circuit breaker settings,
@@ -309,6 +314,37 @@ func TestCircuitGate_EmptyKeyStillBreaks(t *testing.T) {
 	require.NotNil(t, done, "a working breaker returns a non-nil done callback")
 	assert.NotPanics(t, func() { done(nil) })
 	assert.Equal(t, 1, g.size(), "an empty key still registers a real breaker, not fail-open")
+}
+
+// TestCircuitGate_FailOpenLogsKeyContext verifies the defensive fail-open branch
+// stays diagnosable without logging raw endpoint path/query data.
+func TestCircuitGate_FailOpenLogsKeyContext(t *testing.T) {
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	g := newCircuitGate(clockmock.New(time.Unix(0, 0)), DefaultCircuitBreakerSettings())
+	g.newBreaker = func(circuitbreaker.Config, clock.Clock) (*circuitbreaker.Breaker, error) {
+		return nil, errors.New("synthetic breaker construction failure")
+	}
+	key := newCircuitEndpointKey("tenant-a", "https://hooks.example.test/tenant-a/hook?token=secret")
+
+	allow, done := g.Allow(key)
+	assert.True(t, allow, "breaker construction failure must fail open")
+	require.NotNil(t, done, "fail-open path still returns a no-op done callback")
+	assert.NotPanics(t, func() { done(nil) })
+
+	entry := sloghelper.FindLogEntry(buf.String(), "webhook: circuit breaker construction failed")
+	require.NotNil(t, entry, "expected fail-open construction error log, logs:\n%s", buf.String())
+	assert.Equal(t, "ERROR", entry["level"])
+	assert.Equal(t, "tenant-a", entry["tenant"])
+	assert.Equal(t, key.logName(), entry["endpoint"])
+	assert.Equal(t, "synthetic breaker construction failure", entry["error"])
+
+	logs := buf.String()
+	assert.NotContains(t, logs, "warning", "warning must not be used as a pseudo-field")
+	assert.NotContains(t, logs, "/tenant-a/hook", "raw endpoint path must not be logged")
+	assert.NotContains(t, logs, "token=", "raw endpoint query must not be logged")
+	assert.NotContains(t, logs, "secret", "raw endpoint query value must not be logged")
 }
 
 // TestCircuitEndpointKey_LogNameSafeAndDistinct verifies the breaker log label
