@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ghbvf/gocell/tools/archtest/scoperules"
 	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
@@ -52,22 +53,15 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		seen[r.ID] = true
 	}
 
-	// wantRuleIDs is the adjudicated standard set — it must match StandardCellRules
-	// exactly. A new entry must be a rule portable to external Cell repos (it
-	// reasons about platform-API usage, not GoCell's own package layout) — see
-	// external.go's StandardCellRules godoc, which also documents the rules
-	// deliberately NOT registered because they are gocell-internal-layout.
-	wantRuleIDs := map[string]bool{
-		rulePanicRegistered01:                    true,
-		ruleErrcodeKindLiteral01:                 true,
-		ruleMessageConstLiteral01:                true,
-		ruleExportedErrorNew01:                   true,
-		ruleScaffoldDerivedForceOverwrite01:      true,
-		ruleOutboxReconstructionCaller01:         true,
-		ruleProjectionApplyHookFunnel01:          true,
-		ruleOutboxHandleResultFactoryPreferred01: true,
-		sagaCompensatePureRuleID:                 true,
-		ruleProdMainWiringNoopReject01:           true,
+	// wantRuleIDs is the adjudicated standard set, derived from the single source
+	// scoperules.FrameworkRuleIDs (#2331). StandardCellRules() itself iterates that
+	// same leaf, so this assertion proves the derivation kept membership intact and
+	// no rule was paired with a nil Run. Adding/dropping a framework rule is a
+	// single-line edit to scoperules.FrameworkRuleIDs; the runner (gocell verify
+	// archtest --scope=framework) reads the identical leaf, so the two cannot drift.
+	wantRuleIDs := make(map[string]bool, len(scoperules.FrameworkRuleIDs))
+	for _, id := range scoperules.FrameworkRuleIDs {
+		wantRuleIDs[id] = true
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
