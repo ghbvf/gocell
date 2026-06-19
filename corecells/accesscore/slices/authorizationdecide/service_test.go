@@ -668,7 +668,7 @@ func TestMergeObligations(t *testing.T) {
 		// sourced in framework/pkg/tenant, not re-enumerated here.
 		{"pair tenant+self → self", []authz.Obligations{obl(ten, "a"), obl(self, "b")}, self, []string{"a", "b"}},
 		{"pair device+all → device", []authz.Obligations{obl(dev, "x"), obl(all, "y")}, dev, []string{"x", "y"}},
-		{"three ordered → self", []authz.Obligations{obl(all), obl(ten), obl(self)}, self, nil},
+		{"three ordered → self (scope+fields)", []authz.Obligations{obl(all, "a"), obl(ten, "b"), obl(self, "c")}, self, []string{"a", "b", "c"}},
 		{"three reordered → self (order-independent)", []authz.Obligations{obl(self), obl(all), obl(ten)}, self, nil},
 
 		// same-value folds.
@@ -710,10 +710,14 @@ func TestMergeObligations(t *testing.T) {
 //
 // It pairs with the enumerated wantScope/wantFields above: the property catches
 // under-tightening (the security failure), the enumerated values catch over- or
-// wrong-tightening (a correctness failure the property alone cannot see).
+// wrong-tightening (a correctness failure the property alone cannot see). For an
+// empty/nil `in` the property is a vacuous no-op — that case's correctness rests
+// entirely on the caller's wantScope/wantFields.
 func assertObligationsOnlyTighten(t *testing.T, merged authz.Obligations, in []authz.Obligations) {
 	t.Helper()
 	for _, o := range in {
+		// Skip zero-scope inputs: 0 is "no row constraint" (the fold seed), so
+		// "merged no wider than 0" is vacuously true and carries no signal.
 		if o.RowScope != 0 {
 			// Narrowing an already-narrowest scope by any input is a no-op; if
 			// merged were wider than o, Narrower would return o instead.
