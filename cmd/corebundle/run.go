@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
@@ -120,51 +121,16 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		}
 		opts = append(opts, bootstrap.WithPrimaryAuthorizer(authorizer))
 
-		// gRPC listener (PR-11 #1154 — first platform-cell gRPC service): accesscore
-		// serves grpc.auth.session.verify.v1 on cell.PrimaryListener (cell_gen.go
-		// reg.GRPCService), so a gRPC listener with that ref MUST be wired or bootstrap
-		// phase7b fails fast (checkOrphanGRPCServices). It is always-on: the cell
-		// registers the service unconditionally, so there is no per-slice toggle — only
-		// the listen address is env-configurable (grpc.go). The interceptor PDP gate
-		// uses the SAME authorizer as HTTP; with a real metrics provider it lands gRPC
-		// PDP-decision metrics at HTTP parity (#2008 F8). cell.PrimaryListener is shared
-		// by the HTTP and gRPC listeners as a ROLE (ref); they are independent sockets
-		// in separate bootstrap namespaces, not one socket serving both protocols.
-		grpcCollector, gcErr := obmetrics.NewGRPCProviderCollector(compShared.MetricsProvider, obmetrics.ProviderCollectorConfig{})
-		if gcErr != nil {
-			return nil, fmt.Errorf("build grpc metrics collector: %w", gcErr)
+		// Serving options: the mandatory gRPC listener + framework-owned HTTP serving
+		// (deviceserving + device-identity EST enroll/renew/cacerts) + the device-mTLS
+		// renew listener. Grouped in buildServingOptions to keep this closure within
+		// the cognitive-complexity budget; the same lazy PDP feeds HTTP, gRPC, and the
+		// cert path.
+		servingOpts, servErr := buildServingOptions(ctx, compShared, asm.CellIDs(), authorizer)
+		if servErr != nil {
+			return nil, servErr
 		}
-		grpcAddr := grpclistener.AddrFromEnv()
-		grpcServer, gsErr := grpclistener.ServerFromEnv(
-			durabilityModeForTopology(compShared.Topology),
-			grpcAddr,
-			interceptor.Deps{
-				Verifier:        compShared.JWTVerifier,
-				Clock:           compShared.Clock,
-				Collector:       grpcCollector,
-				Authorizer:      authorizer,
-				MetricsProvider: compShared.MetricsProvider,
-				CellIDClosedSet: asm.CellIDs(),
-			},
-		)
-		if gsErr != nil {
-			return nil, fmt.Errorf("build grpc server: %w", gsErr)
-		}
-		// Framework-owned HTTP serving (ownerCell: _framework, ADR 202606130635-1939).
-		// corebundle is the platform assembly that serves the neutral device contracts
-		// declared in assemblies/corebundle/assembly.yaml frameworkContracts. The
-		// must-serve expectation rides on the assembly (buildAssembly above received
-		// generatedFrameworkServedContracts()); bootstrap (phase0 validateFrameworkServing)
-		// fail-fasts if a declared framework contract has no wired RouteGroup OR if this
-		// option is omitted entirely — the DEAD-CONTRACT analog for framework serving
-		// (#2348 review F1). http.devicestate.v1 reports honest "unknown" presence until
-		// an MDM presence backend is wired (#2037).
-		opts = append(opts,
-			bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
-			bootstrap.WithFrameworkHTTPServing(
-				[]bootstrap.FrameworkServedRoute{deviceserving.NewService(compShared.Clock).Route()},
-			),
-		)
+		opts = append(opts, servingOpts...)
 		return opts, nil
 	}
 
@@ -183,6 +149,69 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 
 	handedToBootstrap = true
 	return app.Run(ctx)
+}
+
+// buildServingOptions builds the mandatory gRPC listener + framework-owned HTTP
+// serving (deviceserving + device-identity EST enroll/renew/cacerts) + the
+// device-mTLS renew listener options for the corebundle assembly. It is factored
+// out of runCorebundle's runtime-options closure to keep that closure within the
+// cognitive-complexity budget; the SAME lazy PDP (authorizer) feeds HTTP, gRPC,
+// and the cert path.
+//
+// gRPC (PR-11 #1154): accesscore serves grpc.auth.session.verify.v1 on
+// cell.PrimaryListener unconditionally, so a gRPC listener with that ref MUST be
+// wired or bootstrap phase7b fail-fasts (checkOrphanGRPCServices). The interceptor
+// PDP gate uses the SAME authorizer as HTTP (#2008 F8). cell.PrimaryListener is a
+// shared ROLE; the HTTP and gRPC listeners are independent sockets.
+//
+// Framework HTTP serving (ownerCell: _framework, ADR 202606130635-1939): the
+// must-serve expectation rides on the assembly (generatedFrameworkServedContracts);
+// bootstrap phase0 validateFrameworkServing fail-fasts on an unwired declared
+// framework contract or an omitted option (#2348 review F1 / #2037 / PR-8b #1904).
+func buildServingOptions(
+	ctx context.Context,
+	compShared *composition.SharedDeps,
+	cellIDClosedSet []string,
+	authorizer auth.Authorizer,
+) ([]bootstrap.Option, error) {
+	deviceRoutes, deviceMTLSOpt, err := deviceIdentityServingOptions(
+		ctx, compShared.Clock, compShared.Topology, compShared.JWTVerifier, authorizer,
+		deviceMTLSAddrFromEnv(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("device-identity serving wiring: %w", err)
+	}
+
+	grpcCollector, err := obmetrics.NewGRPCProviderCollector(compShared.MetricsProvider, obmetrics.ProviderCollectorConfig{})
+	if err != nil {
+		return nil, fmt.Errorf("build grpc metrics collector: %w", err)
+	}
+	grpcAddr := grpclistener.AddrFromEnv()
+	grpcServer, err := grpclistener.ServerFromEnv(
+		durabilityModeForTopology(compShared.Topology),
+		grpcAddr,
+		interceptor.Deps{
+			Verifier:        compShared.JWTVerifier,
+			Clock:           compShared.Clock,
+			Collector:       grpcCollector,
+			Authorizer:      authorizer,
+			MetricsProvider: compShared.MetricsProvider,
+			CellIDClosedSet: cellIDClosedSet,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build grpc server: %w", err)
+	}
+
+	frameworkRoutes := append(
+		[]bootstrap.FrameworkServedRoute{deviceserving.NewService(compShared.Clock).Route()},
+		deviceRoutes...,
+	)
+	return []bootstrap.Option{
+		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
+		bootstrap.WithFrameworkHTTPServing(frameworkRoutes),
+		deviceMTLSOpt,
+	}, nil
 }
 
 // releaseUnhandedResources closes the assembly's shared infrastructure (postgres

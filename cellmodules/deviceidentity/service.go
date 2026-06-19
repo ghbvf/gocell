@@ -407,48 +407,48 @@ func deviceIdentityFromPeer(peer ctxkeys.PeerIdentity) (tenantStr, deviceID stri
 // The pipeline takes a signErrFactory to construct the correct variant without
 // the pipeline itself importing both generated packages' response types.
 type signErrFactory interface {
-	badRequest(msg string) error
-	unprocessable(msg string) error
-	forbidden(msg string) error
-	unavailable(msg string) error
+	badRequest(e *errcode.Error) error
+	unprocessable(e *errcode.Error) error
+	forbidden(e *errcode.Error) error
+	unavailable(e *errcode.Error) error
 }
 
 // enrollErrFactory builds enrollTypedErr values.
 type enrollErrFactory struct{}
 
-func (enrollErrFactory) badRequest(msg string) error {
-	return enrollTypedErr{enroll.Enroll400ErrorResponse{Body: *errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msg)}}
+func (enrollErrFactory) badRequest(e *errcode.Error) error {
+	return enrollTypedErr{enroll.Enroll400ErrorResponse{Body: *e}}
 }
 
-func (enrollErrFactory) unprocessable(msg string) error {
-	return enrollTypedErr{enroll.Enroll422ErrorResponse{Body: *errcode.New(errcode.KindUnprocessable, errcode.ErrValidationFailed, msg)}}
+func (enrollErrFactory) unprocessable(e *errcode.Error) error {
+	return enrollTypedErr{enroll.Enroll422ErrorResponse{Body: *e}}
 }
 
-func (enrollErrFactory) forbidden(msg string) error {
-	return enrollTypedErr{enroll.Enroll403ErrorResponse{Body: *errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msg)}}
+func (enrollErrFactory) forbidden(e *errcode.Error) error {
+	return enrollTypedErr{enroll.Enroll403ErrorResponse{Body: *e}}
 }
 
-func (enrollErrFactory) unavailable(msg string) error {
-	return enrollTypedErr{enroll.Enroll503ErrorResponse{Body: *errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, msg)}}
+func (enrollErrFactory) unavailable(e *errcode.Error) error {
+	return enrollTypedErr{enroll.Enroll503ErrorResponse{Body: *e}}
 }
 
 // renewErrFactory builds renewTypedErr values.
 type renewErrFactory struct{}
 
-func (renewErrFactory) badRequest(msg string) error {
-	return renewTypedErr{renew.Renew400ErrorResponse{Body: *errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msg)}}
+func (renewErrFactory) badRequest(e *errcode.Error) error {
+	return renewTypedErr{renew.Renew400ErrorResponse{Body: *e}}
 }
 
-func (renewErrFactory) unprocessable(msg string) error {
-	return renewTypedErr{renew.Renew422ErrorResponse{Body: *errcode.New(errcode.KindUnprocessable, errcode.ErrValidationFailed, msg)}}
+func (renewErrFactory) unprocessable(e *errcode.Error) error {
+	return renewTypedErr{renew.Renew422ErrorResponse{Body: *e}}
 }
 
-func (renewErrFactory) forbidden(msg string) error {
-	return renewTypedErr{renew.Renew403ErrorResponse{Body: *errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msg)}}
+func (renewErrFactory) forbidden(e *errcode.Error) error {
+	return renewTypedErr{renew.Renew403ErrorResponse{Body: *e}}
 }
 
-func (renewErrFactory) unavailable(msg string) error {
-	return renewTypedErr{renew.Renew503ErrorResponse{Body: *errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, msg)}}
+func (renewErrFactory) unavailable(e *errcode.Error) error {
+	return renewTypedErr{renew.Renew503ErrorResponse{Body: *e}}
 }
 
 // signIdentity is the shared EST signing pipeline for both Enroll and Renew.
@@ -473,19 +473,19 @@ func (s *Service) signIdentity(
 	// (a) Build scope
 	scope, err := buildScope(tenantID, s.issuerID, deviceIDStr)
 	if err != nil {
-		return certsigning.IssuedCert{}, fac.badRequest("invalid cert scope")
+		return certsigning.IssuedCert{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid cert scope"))
 	}
 
 	// (b) Build subject (commonName = deviceID)
 	subject, err := certsigning.NewDeviceSubject(tenantID, scope.Device(), deviceIDStr)
 	if err != nil {
-		return certsigning.IssuedCert{}, fac.badRequest("invalid device subject")
+		return certsigning.IssuedCert{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid device subject"))
 	}
 
 	// (c) Build enrollment claim
 	claim, err := certsigning.NewEnrollmentClaim(scope, subject)
 	if err != nil {
-		return certsigning.IssuedCert{}, fac.badRequest("invalid enrollment claim")
+		return certsigning.IssuedCert{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid enrollment claim"))
 	}
 
 	// (d) Authorize
@@ -497,7 +497,7 @@ func (s *Service) signIdentity(
 	// (e) Decode CSR
 	csrDER, decErr := base64.StdEncoding.DecodeString(csrB64)
 	if decErr != nil {
-		return certsigning.IssuedCert{}, fac.badRequest("csr is not valid base64")
+		return certsigning.IssuedCert{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "csr is not valid base64"))
 	}
 
 	// (f) Build SANs (email rejected early; device-self SAN prepended)
@@ -521,7 +521,7 @@ func (s *Service) signIdentity(
 	// (i) Build CertRequest
 	certReq, err := certsigning.NewCertRequest(scope, subject, csrDER, sans, ku, ttl)
 	if err != nil {
-		return certsigning.IssuedCert{}, fac.badRequest("invalid cert request")
+		return certsigning.IssuedCert{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid cert request"))
 	}
 
 	// (j+k) Authorize the request (SAN subset + TTL ≤ MaxTTL) and sign.
@@ -537,12 +537,14 @@ func (s *Service) authorizeGrant(
 	grant, err := s.authorizer.AuthorizeEnroll(ctx, claim)
 	if err != nil {
 		if errKindIs(err, errcode.KindUnavailable) {
-			return certsigning.SignConstraints{}, fac.unavailable("authorization service unavailable")
+			return certsigning.SignConstraints{}, fac.unavailable(
+				errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "authorization service unavailable"))
 		}
 		return certsigning.SignConstraints{}, err // framework 5xx
 	}
 	if !grant.Granted() {
-		return certsigning.SignConstraints{}, fac.forbidden("enrollment not authorized")
+		return certsigning.SignConstraints{}, fac.forbidden(
+			errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "enrollment not authorized"))
 	}
 	return grant, nil
 }
@@ -557,14 +559,17 @@ func (s *Service) authorizeAndSign(
 	authReq, err := certsigning.NewAuthorizedCertRequest(certReq, grant)
 	if err != nil {
 		if errCodeIs(err, errcode.ErrCertConstraintViolation) {
-			return certsigning.IssuedCert{}, fac.unprocessable("cert request exceeds signing constraints")
+			return certsigning.IssuedCert{}, fac.unprocessable(
+				errcode.New(errcode.KindUnprocessable, errcode.ErrValidationFailed, "cert request exceeds signing constraints"))
 		}
-		return certsigning.IssuedCert{}, fac.forbidden("enrollment not authorized")
+		return certsigning.IssuedCert{}, fac.forbidden(
+			errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "enrollment not authorized"))
 	}
 	issued, err := s.signer.Sign(ctx, authReq)
 	if err != nil {
 		if errKindIs(err, errcode.KindUnavailable) {
-			return certsigning.IssuedCert{}, fac.unavailable("signing service unavailable")
+			return certsigning.IssuedCert{}, fac.unavailable(
+				errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "signing service unavailable"))
 		}
 		return certsigning.IssuedCert{}, err // framework 5xx
 	}
@@ -592,14 +597,15 @@ func buildSANs(
 	fac signErrFactory, scope certsigning.CertScope, dnsNames, ipStrs, uriStrs, emailAddrs []string,
 ) (certsigning.SubjectAltNames, error) {
 	if len(emailAddrs) > 0 {
-		return certsigning.SubjectAltNames{}, fac.unprocessable("email SANs are not supported")
+		return certsigning.SubjectAltNames{}, fac.unprocessable(
+			errcode.New(errcode.KindUnprocessable, errcode.ErrValidationFailed, "email SANs are not supported"))
 	}
 
 	uris := []*url.URL{certsigning.DeviceURISAN(scope)}
 	for _, uStr := range uriStrs {
 		u, err := url.Parse(uStr)
 		if err != nil {
-			return certsigning.SubjectAltNames{}, fac.badRequest("invalid URI SAN")
+			return certsigning.SubjectAltNames{}, fac.badRequest(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid URI SAN"))
 		}
 		uris = append(uris, u)
 	}
@@ -608,14 +614,16 @@ func buildSANs(
 	for _, ipStr := range ipStrs {
 		ip := net.ParseIP(ipStr)
 		if ip == nil {
-			return certsigning.SubjectAltNames{}, fac.badRequest("invalid IP address SAN")
+			return certsigning.SubjectAltNames{}, fac.badRequest(
+				errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid IP address SAN"))
 		}
 		ips = append(ips, ip)
 	}
 
 	sans, err := certsigning.NewSubjectAltNames(dnsNames, ips, uris)
 	if err != nil {
-		return certsigning.SubjectAltNames{}, fac.badRequest("invalid subject alt names")
+		return certsigning.SubjectAltNames{}, fac.badRequest(
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid subject alt names"))
 	}
 	return sans, nil
 }
@@ -626,7 +634,8 @@ func buildUsages(fac signErrFactory, usages []string) (certsigning.KeyUsages, er
 	if len(usages) == 0 {
 		ku, err := certsigning.NewKeyUsages(x509.KeyUsageDigitalSignature, x509.ExtKeyUsageClientAuth)
 		if err != nil {
-			return certsigning.KeyUsages{}, fac.badRequest("default key usages invalid")
+			return certsigning.KeyUsages{}, fac.badRequest(
+				errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "default key usages invalid"))
 		}
 		return ku, nil
 	}
@@ -648,7 +657,9 @@ func mapUsages(fac signErrFactory, usages []string) (certsigning.KeyUsages, erro
 		case "server auth":
 			extKeyUsages = append(extKeyUsages, x509.ExtKeyUsageServerAuth)
 		default:
-			return certsigning.KeyUsages{}, fac.unprocessable("unsupported key usage: " + u)
+			return certsigning.KeyUsages{}, fac.unprocessable(
+				errcode.New(errcode.KindUnprocessable, errcode.ErrValidationFailed, "unsupported key usage",
+					errcode.WithDetails(errcode.PublicString("keyUsage", u))))
 		}
 	}
 	if keyUsage == 0 {
@@ -658,7 +669,8 @@ func mapUsages(fac signErrFactory, usages []string) (certsigning.KeyUsages, erro
 	}
 	ku, err := certsigning.NewKeyUsages(keyUsage, extKeyUsages...)
 	if err != nil {
-		return certsigning.KeyUsages{}, fac.badRequest("key usages invalid")
+		return certsigning.KeyUsages{}, fac.badRequest(
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key usages invalid"))
 	}
 	return ku, nil
 }
@@ -671,7 +683,8 @@ func parseTTL(fac signErrFactory, requestedDuration string, maxTTL time.Duration
 	}
 	ttl, err := time.ParseDuration(requestedDuration)
 	if err != nil {
-		return 0, fac.badRequest("invalid requestedDuration: must be a valid Go duration string")
+		return 0, fac.badRequest(
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid requestedDuration: must be a valid Go duration string"))
 	}
 	if ttl <= 0 || ttl > maxTTL {
 		return maxTTL, nil

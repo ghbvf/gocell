@@ -123,6 +123,27 @@ func buildBootstrapFromShared(
 		metricsHandler := buildMetricsHandler(shared.MetricsToken, locals.registry)
 		opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
 
+		// Device-identity EST serving mirrors production runCorebundle (PR-8b #1904):
+		// the assembly's frameworkContracts now includes enroll/renew/cacerts, so the
+		// harness MUST wire those routes + the device-mTLS (renew) listener or phase0
+		// validateFrameworkServing fail-fasts. The PDP is the same lazyAuthorizer the
+		// production path resolves; the device-mTLS listener binds an ephemeral
+		// loopback port ("127.0.0.1:0") so parallel test binaries never collide.
+		authorizer, err := bootstrap.AuthorizerFromCells(cells)
+		if err != nil {
+			return nil, err
+		}
+		deviceRoutes, deviceMTLSOpt, diErr := deviceIdentityServingOptions(
+			ctx, shared.Clock, shared.Topology, shared.JWTVerifier, authorizer, "127.0.0.1:0",
+		)
+		if diErr != nil {
+			return nil, diErr
+		}
+		frameworkRoutes := append(
+			[]bootstrap.FrameworkServedRoute{deviceserving.NewService(shared.Clock).Route()},
+			deviceRoutes...,
+		)
+
 		// Primary listener (JWT policy resolved from assembly, F3 round-3 collapse) +
 		// the mandatory gRPC listener — accesscore registers grpc.auth.session.verify.v1
 		// unconditionally (PR-11 #1154), so a gRPC listener must be wired or bootstrap
@@ -140,9 +161,8 @@ func buildBootstrapFromShared(
 			// must-serve set, so this option MUST wire the matching routes or phase0
 			// validateFrameworkServing fail-fasts. Keeping the test harness in lockstep
 			// with production wiring is the #2348 review F2 fix (omit → caught here).
-			bootstrap.WithFrameworkHTTPServing(
-				[]bootstrap.FrameworkServedRoute{deviceserving.NewService(shared.Clock).Route()},
-			),
+			bootstrap.WithFrameworkHTTPServing(frameworkRoutes),
+			deviceMTLSOpt,
 		)
 		opts = append(opts, extra...)
 		return opts, nil

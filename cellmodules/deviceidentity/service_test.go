@@ -37,6 +37,9 @@ const (
 	testIssuerID  = "ca-root"
 	testEnrollAud = "gocell-est"
 	testGrantTTL  = 2 * time.Hour
+	// testParseUnderTTL is a requested duration comfortably under testGrantTTL,
+	// used by TestParseTTL's "valid under maxTTL" case.
+	testParseUnderTTL = 30 * time.Minute
 )
 
 // ─── test helpers ────────────────────────────────────────────────────────────
@@ -805,7 +808,7 @@ func TestErrCodeIs(t *testing.T) {
 func TestParseTTL(t *testing.T) {
 	t.Parallel()
 	fac := enrollErrFactory{}
-	maxTTL := 2 * time.Hour
+	maxTTL := testGrantTTL
 
 	tests := []struct {
 		name    string
@@ -814,7 +817,7 @@ func TestParseTTL(t *testing.T) {
 		wantErr bool
 	}{
 		{"empty uses maxTTL", "", maxTTL, false},
-		{"valid under maxTTL", "30m", 30 * time.Minute, false},
+		{"valid under maxTTL", "30m", testParseUnderTTL, false},
 		{"exceeds maxTTL clamped", "24h", maxTTL, false},
 		{"zero clamped to maxTTL", "0s", maxTTL, false},
 		{"negative clamped to maxTTL", "-1h", maxTTL, false},

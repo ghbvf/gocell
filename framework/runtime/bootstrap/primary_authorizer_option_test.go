@@ -82,6 +82,32 @@ func newFakeAuthorizerCell(id string, a auth.Authorizer) *fakeAuthorizerCell {
 
 func (f *fakeAuthorizerCell) Authorizer() auth.Authorizer { return f.authorizer }
 
+// subjectAwareAuthorizer satisfies BOTH auth.Authorizer and
+// auth.SubjectAuthorizer, modeling the real ABAC engine (accesscore
+// authorizationdecide.Service). It records the explicit subject it was handed so
+// AuthorizeAs delegation can be asserted.
+type subjectAwareAuthorizer struct {
+	gotSubject auth.SubjectDescriptor
+	gotAction  string
+	asCalls    atomic.Int64
+}
+
+func (s *subjectAwareAuthorizer) Authorize(_ context.Context, _, _, _ string) (authz.Decision, error) {
+	return authz.Decision{}, nil
+}
+
+func (s *subjectAwareAuthorizer) AuthorizeAs(_ context.Context, subject auth.SubjectDescriptor, _, action string) (authz.Decision, error) {
+	s.asCalls.Add(1)
+	s.gotSubject = subject
+	s.gotAction = action
+	return authz.Allow(authz.Obligations{})
+}
+
+var (
+	_ auth.Authorizer        = (*subjectAwareAuthorizer)(nil)
+	_ auth.SubjectAuthorizer = (*subjectAwareAuthorizer)(nil)
+)
+
 // fakeNonAuthorizerCell is a plain cell that does NOT satisfy authorizerProvider.
 type fakeNonAuthorizerCell struct{ cell.Cell }
 
@@ -353,4 +379,76 @@ func TestPrimaryAuthorizerOption_NilAuthorizerFromProvider(t *testing.T) {
 	assert.Equal(t, errcode.ErrServiceUnavailable, ec.Code)
 	assert.Contains(t, ec.Message, "nil Authorizer",
 		"error message must identify the nil Authorizer to help operators diagnose the cell init state")
+}
+
+// ---------------------------------------------------------------------------
+// lazyAuthorizer SubjectAuthorizer (AuthorizeAs) tests — explicit-subject reuse
+// seam wired into the cert-signing path (#1904 batch G). The single
+// lazyAuthorizer instance serves BOTH Authorize (HTTP/gRPC) and AuthorizeAs
+// (cert-signing) from one resolved PDP.
+// ---------------------------------------------------------------------------
+
+// TestLazyAuthorizer_AuthorizeAs_DelegatesToSubjectAuthorizer verifies that when
+// the resolved PDP implements SubjectAuthorizer, lazyAuthorizer.AuthorizeAs
+// forwards the explicit SubjectDescriptor + action and returns its Decision.
+func TestLazyAuthorizer_AuthorizeAs_DelegatesToSubjectAuthorizer(t *testing.T) {
+	t.Parallel()
+	pdp := &subjectAwareAuthorizer{}
+	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", pdp)}
+
+	desc, err := auth.NewDeviceSubjectDescriptor(
+		"11111111-1111-1111-1111-111111111111",
+		"device-1",
+	)
+	require.NoError(t, err)
+
+	dec, err := lazy.AuthorizeAs(context.Background(), desc, "device-1", "device:enroll")
+	require.NoError(t, err)
+	assert.True(t, dec.IsAllow(), "AuthorizeAs must return the delegated Allow decision")
+	assert.Equal(t, int64(1), pdp.asCalls.Load(), "AuthorizeAs must delegate exactly once")
+	assert.Equal(t, "device:enroll", pdp.gotAction, "the action must be forwarded unchanged")
+	assert.Equal(t, desc, pdp.gotSubject, "the explicit SubjectDescriptor must be forwarded unchanged")
+}
+
+// TestLazyAuthorizer_AuthorizeAs_FailsClosedWhenNotSubjectAuthorizer verifies
+// that when the resolved PDP is an Authorizer that does NOT implement
+// SubjectAuthorizer, AuthorizeAs denies (zero Decision) with a KindUnavailable
+// errcode — the explicit-subject path must never widen access on a wiring defect.
+func TestLazyAuthorizer_AuthorizeAs_FailsClosedWhenNotSubjectAuthorizer(t *testing.T) {
+	t.Parallel()
+	// fakeAuthorizer implements Authorizer only (no AuthorizeAs).
+	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", fakeAuthorizer{})}
+
+	desc, err := auth.NewDeviceSubjectDescriptor(
+		"11111111-1111-1111-1111-111111111111",
+		"device-1",
+	)
+	require.NoError(t, err)
+
+	dec, authErr := lazy.AuthorizeAs(context.Background(), desc, "device-1", "device:enroll")
+	require.Error(t, authErr, "AuthorizeAs must fail closed when the PDP is not a SubjectAuthorizer")
+	assert.False(t, dec.IsAllow(), "the returned Decision must be non-Allow on the error path")
+	var ec *errcode.Error
+	require.True(t, errors.As(authErr, &ec))
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+		"not-a-SubjectAuthorizer error must be KindUnavailable so callers map it to 503")
+}
+
+// TestLazyAuthorizer_AuthorizeAs_FailsClosedOnNilProvider verifies the nil-after-Init
+// guard also covers the AuthorizeAs path.
+func TestLazyAuthorizer_AuthorizeAs_FailsClosedOnNilProvider(t *testing.T) {
+	t.Parallel()
+	lazy := &lazyAuthorizer{provider: newFakeAuthorizerCell("accesscore", nil)}
+
+	desc, err := auth.NewDeviceSubjectDescriptor(
+		"11111111-1111-1111-1111-111111111111",
+		"device-1",
+	)
+	require.NoError(t, err)
+
+	_, authErr := lazy.AuthorizeAs(context.Background(), desc, "device-1", "device:enroll")
+	require.Error(t, authErr, "AuthorizeAs must fail closed when provider returns nil Authorizer")
+	var ec *errcode.Error
+	require.True(t, errors.As(authErr, &ec))
+	assert.Equal(t, errcode.KindUnavailable, ec.Kind)
 }

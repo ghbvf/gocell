@@ -30,6 +30,11 @@ type authorizerProvider interface {
 // when the provider returns nil after Init. Required by MESSAGE-CONST-LITERAL-01.
 const msgLazyAuthorizerNilProvider = "authorization provider returned nil Authorizer after Init"
 
+// msgLazyAuthorizerNotSubjectAuthorizer is the const message for the fail-closed
+// guard when the resolved Authorizer does not also implement the explicit-subject
+// SubjectAuthorizer interface (AuthorizeAs). Required by MESSAGE-CONST-LITERAL-01.
+const msgLazyAuthorizerNotSubjectAuthorizer = "authorization provider does not implement SubjectAuthorizer (explicit-subject AuthorizeAs)"
+
 // lazyAuthorizer is an auth.Authorizer that wraps an authorizerProvider and
 // defers the actual Authorizer() lookup until ResolveAuthorizer (bootstrap
 // startup) or the first Authorize call. This is necessary because the cell's
@@ -49,7 +54,10 @@ type lazyAuthorizer struct {
 	resolved atomic.Pointer[auth.Authorizer]
 }
 
-var _ auth.Authorizer = (*lazyAuthorizer)(nil)
+var (
+	_ auth.Authorizer        = (*lazyAuthorizer)(nil)
+	_ auth.SubjectAuthorizer = (*lazyAuthorizer)(nil)
+)
 
 // ResolveAuthorizer eagerly resolves the provider's Authorizer and caches it.
 // Bootstrap calls it once at router build (after all cell Init has run, so
@@ -76,8 +84,56 @@ func (l *lazyAuthorizer) ResolveAuthorizer() error {
 
 // Authorize implements auth.Authorizer.
 func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, action string) (authz.Decision, error) {
+	a, err := l.currentAuthorizer()
+	if err != nil {
+		return authz.Decision{}, err
+	}
+	return a.Authorize(ctx, subject, resource, action)
+}
+
+// AuthorizeAs implements auth.SubjectAuthorizer by delegating to the resolved
+// PDP's explicit-subject path. The same lazyAuthorizer instance therefore serves
+// the HTTP/gRPC ambient-principal gate (Authorize) AND the non-HTTP cert-signing
+// reuse seam (AuthorizeAs), resolving and caching the single PDP exactly once.
+// This is the ONLY composition-root path that reaches AuthorizeAs: the cert
+// adapter (certsigning/pdpauthz) is handed this value, never a forged subject —
+// the AUTHZ-AUTHORIZE-AS-CALLER-FUNNEL-01 archtest allowlists this package's
+// delegation alongside pdpauthz.
+//
+// Fail-closed: if the resolved Authorizer does not also implement
+// SubjectAuthorizer the call denies (zero Decision) with KindUnavailable rather
+// than silently allowing — the explicit-subject path must never widen access.
+func (l *lazyAuthorizer) AuthorizeAs(ctx context.Context, subject auth.SubjectDescriptor, resource, action string) (authz.Decision, error) {
+	a, err := l.currentAuthorizer()
+	if err != nil {
+		return authz.Decision{}, err
+	}
+	sa, ok := a.(auth.SubjectAuthorizer)
+	if !ok {
+		// The PDP cell exposes an Authorizer that lacks AuthorizeAs — a wiring
+		// defect (only the ABAC engine implements SubjectAuthorizer). Log at Error
+		// with the %T detail server-side (never on wire) and fail closed.
+		slog.Error(
+			msgLazyAuthorizerNotSubjectAuthorizer,
+			slog.String("provider_type", authorizerProviderTypeName(l.provider)),
+		)
+		return authz.Decision{}, errcode.New(
+			errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			msgLazyAuthorizerNotSubjectAuthorizer,
+			errcode.WithInternal(errcode.InternalAttr("provider_type", authorizerProviderTypeName(l.provider))),
+		)
+	}
+	return sa.AuthorizeAs(ctx, subject, resource, action)
+}
+
+// currentAuthorizer returns the resolved Authorizer from the cache, or resolves
+// it from the provider on first use (caching the result). It returns a
+// fail-closed KindUnavailable error when the provider yields nil after Init.
+// Shared by Authorize and AuthorizeAs so the resolve/cache/nil-guard logic lives
+// in one place.
+func (l *lazyAuthorizer) currentAuthorizer() (auth.Authorizer, error) {
 	if ptr := l.resolved.Load(); ptr != nil {
-		return (*ptr).Authorize(ctx, subject, resource, action)
+		return *ptr, nil
 	}
 	a := l.provider.Authorizer()
 	if a == nil {
@@ -88,14 +144,14 @@ func (l *lazyAuthorizer) Authorize(ctx context.Context, subject, resource, actio
 			msgLazyAuthorizerNilProvider,
 			slog.String("provider_type", authorizerProviderTypeName(l.provider)),
 		)
-		return authz.Decision{}, errcode.New(
+		return nil, errcode.New(
 			errcode.KindUnavailable, errcode.ErrServiceUnavailable,
 			msgLazyAuthorizerNilProvider,
 			errcode.WithInternal(errcode.InternalAttr("provider_type", authorizerProviderTypeName(l.provider))),
 		)
 	}
 	l.resolved.Store(&a)
-	return a.Authorize(ctx, subject, resource, action)
+	return a, nil
 }
 
 // authorizerProviderTypeName returns the %T string of p for diagnostic use in
