@@ -41,6 +41,7 @@ func makeTestPolicy(policyID string, tid tenant.TenantID) *abac.Policy {
 				ID:     "rule-1",
 				Name:   "Allow Eng",
 				Effect: authz.EffectAllow,
+				Action: []string{"user:read"}, // #1979: allow rules must declare a non-empty Action
 				Conditions: []abac.Condition{
 					{
 						Source:   abac.SourceSubject,

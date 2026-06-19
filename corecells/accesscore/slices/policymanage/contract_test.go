@@ -24,7 +24,7 @@ import (
 // policy id from the 201 response. Fails the test on any non-201.
 func postCreatePolicy(t *testing.T, h http.Handler, name string) string {
 	t.Helper()
-	body := `{"name":"` + name + `","rules":[{"id":"r1","name":"Allow all","effect":"allow"}]}`
+	body := `{"name":"` + name + `","rules":[{"id":"r1","name":"Allow all","effect":"allow","action":["audit:read"]}]}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/policies", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -46,7 +46,7 @@ func TestContract_PolicyCreateV1_Serve(t *testing.T) {
 	h := setupPolicyHandler(t)
 
 	// Happy path → 201, response validates against the contract schema.
-	body := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow"}]}`
+	body := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"]}]}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -54,13 +54,24 @@ func TestContract_PolicyCreateV1_Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, w)
 
 	// rowScope=all is valid wire vocabulary but rejected by policy authoring → 422.
-	allBody := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow","obligations":{"rowScope":"all"}}]}`
+	allBody := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"],"obligations":{"rowScope":"all"}}]}`
 	wAll := httptest.NewRecorder()
 	reqAll := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(allBody))
 	reqAll.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(wAll, withHandlerAdmin(reqAll))
 	require.Equal(t, http.StatusUnprocessableEntity, wAll.Code, "rowScope=all must be 422: %s", wAll.Body.String())
 	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wAll.Body.Bytes())
+
+	// #1979: an allow rule with NO action key is structurally valid JSON (action is
+	// schema-optional) but rejected by the domain validator → 422 through the full
+	// HTTP path (raw JSON → schema validator → converter → service → errmap).
+	emptyActBody := `{"name":"P","rules":[{"id":"r1","name":"N","effect":"allow"}]}`
+	wEmpty := httptest.NewRecorder()
+	reqEmpty := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(emptyActBody))
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(wEmpty, withHandlerAdmin(reqEmpty))
+	require.Equal(t, http.StatusUnprocessableEntity, wEmpty.Code, "allow rule with empty action must be 422: %s", wEmpty.Body.String())
+	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wEmpty.Body.Bytes())
 }
 
 // TestContract_PolicyCreateV1_CrossAttrFanout exercises the eq_attr / rhsSource /
@@ -87,7 +98,7 @@ func TestContract_PolicyCreateV1_CrossAttrFanout(t *testing.T) {
 	// Happy path: eq_attr + rhsSource/rhsKey + no values → 201, response validates
 	// against the contract schema AND preserves the RHS fields.
 	t.Run("eq_attr_happy_201_rhs_preserved", func(t *testing.T) {
-		body := `{"name":"CrossAttr","rules":[{"id":"r1","name":"Self ownership","effect":"allow",` +
+		body := `{"name":"CrossAttr","rules":[{"id":"r1","name":"Self ownership","effect":"allow","action":["audit:read"],` +
 			`"conditions":[{"source":"subject","key":"sub","operator":"eq_attr","rhsSource":"resource","rhsKey":"id"}]}]}`
 		w := serve(t, body)
 		require.Equal(t, http.StatusCreated, w.Code, "eq_attr create must be 201: %s", w.Body.String())
@@ -126,7 +137,7 @@ func TestContract_PolicyCreateV1_CrossAttrFanout(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := `{"name":"Bad","rules":[{"id":"r1","name":"Bad","effect":"allow","conditions":[` + tc.cond + `]}]}`
+			body := `{"name":"Bad","rules":[{"id":"r1","name":"Bad","effect":"allow","action":["audit:read"],"conditions":[` + tc.cond + `]}]}`
 			w := serve(t, body)
 			require.Equal(t, http.StatusBadRequest, w.Code, "malformed condition must be 400 (schema layer): %s", w.Body.String())
 			c.ValidateErrorResponse(t, http.StatusBadRequest, w.Body.Bytes())
@@ -168,7 +179,7 @@ func TestContract_PolicyUpdateV1_Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", id, 1)
 
 	// 200 validates.
-	updBody := `{"name":"Updated","rules":[{"id":"r1","name":"N","effect":"allow"}],"expectedVersion":1}`
+	updBody := `{"name":"Updated","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"]}],"expectedVersion":1}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(updBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -176,7 +187,7 @@ func TestContract_PolicyUpdateV1_Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, w)
 
 	// Wrong expectedVersion → 409 error envelope.
-	conflictBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow"}],"expectedVersion":99}`
+	conflictBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"]}],"expectedVersion":99}`
 	w409 := httptest.NewRecorder()
 	req409 := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(conflictBody))
 	req409.Header.Set("Content-Type", "application/json")
@@ -185,13 +196,23 @@ func TestContract_PolicyUpdateV1_Serve(t *testing.T) {
 	c.ValidateErrorResponse(t, http.StatusConflict, w409.Body.Bytes())
 
 	// rowScope=all → 422 (converter rejects before the version check).
-	allBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow","obligations":{"rowScope":"all"}}],"expectedVersion":1}`
+	allBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow","action":["audit:read"],` +
+		`"obligations":{"rowScope":"all"}}],"expectedVersion":1}`
 	w422 := httptest.NewRecorder()
 	req422 := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(allBody))
 	req422.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(w422, withHandlerAdmin(req422))
 	require.Equal(t, http.StatusUnprocessableEntity, w422.Code, "rowScope=all must be 422: %s", w422.Body.String())
 	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, w422.Body.Bytes())
+
+	// #1979: an allow rule with NO action key → 422 through the full update HTTP path.
+	emptyActBody := `{"name":"X","rules":[{"id":"r1","name":"N","effect":"allow"}],"expectedVersion":1}`
+	wEmpty := httptest.NewRecorder()
+	reqEmpty := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(emptyActBody))
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(wEmpty, withHandlerAdmin(reqEmpty))
+	require.Equal(t, http.StatusUnprocessableEntity, wEmpty.Code, "allow rule with empty action must be 422: %s", wEmpty.Body.String())
+	c.ValidateErrorResponse(t, http.StatusUnprocessableEntity, wEmpty.Body.Bytes())
 }
 
 func TestContract_PolicyDeleteV1_Serve(t *testing.T) {

@@ -45,8 +45,14 @@ func policyWith(id string, rules ...abac.Rule) *abac.Policy {
 	return &abac.Policy{ID: id, TenantID: testTenantID, Name: id, Rules: rules}
 }
 
+// permitRule builds an Allow rule scoped to the canonical test action "read" —
+// the action every Authorize/evaluate call in this package queries. Since #1979,
+// an Allow rule MUST declare a non-empty Action (an empty-Action allow no longer
+// matches every action), so this helper bakes that single action; tests exercise
+// the condition/obligation dimensions, not action targeting (see
+// permitRuleWithAction for explicit multi-action targeting tests).
 func permitRule(id string, obl authz.Obligations, conds ...abac.Condition) abac.Rule {
-	return abac.Rule{ID: id, Name: id, Effect: authz.EffectAllow, Conditions: conds, Obligations: obl}
+	return abac.Rule{ID: id, Name: id, Effect: authz.EffectAllow, Action: []string{"read"}, Conditions: conds, Obligations: obl}
 }
 
 func forbidRule(id string, conds ...abac.Condition) abac.Rule {
@@ -414,6 +420,64 @@ func TestAuthorize_StoreDown_DeniesUnavailable(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.KindUnavailable, ecErr.Kind, "store failure → KindUnavailable (503)")
+}
+
+// staticPolicyRepo returns a fixed policy set from ListByTenant verbatim,
+// simulating policies reconstructed from durable storage (i.e. already past the PG
+// scanPolicy stored-read profile) WITHOUT re-running write-side validation. It is
+// the only way to inject a legacy empty-Action allow rule into the service: the
+// mem repo's Create runs the authoring Policy.Validate and would reject it.
+type staticPolicyRepo struct{ policies []*abac.Policy }
+
+func (staticPolicyRepo) Create(context.Context, tenant.TenantID, *abac.Policy) (*abac.Policy, error) {
+	panic("staticPolicyRepo: Create not used")
+}
+
+func (staticPolicyRepo) Update(context.Context, tenant.TenantID, string, int, *abac.Policy) (*abac.Policy, error) {
+	panic("staticPolicyRepo: Update not used")
+}
+
+func (staticPolicyRepo) Delete(context.Context, tenant.TenantID, string, int) (*abac.Policy, error) {
+	panic("staticPolicyRepo: Delete not used")
+}
+
+func (staticPolicyRepo) GetByID(context.Context, tenant.TenantID, string) (*abac.Policy, error) {
+	panic("staticPolicyRepo: GetByID not used")
+}
+
+func (r staticPolicyRepo) ListByTenant(context.Context, tenant.TenantID) ([]*abac.Policy, error) {
+	return r.policies, nil
+}
+
+func (staticPolicyRepo) RepoReady(context.Context) error { return nil }
+
+// TestAuthorize_LegacyEmptyActionAllow_StoredRowInertNot503 is the #2409 F1
+// end-to-end regression on the SERVICE half: once the PG stored-read profile lets a
+// legacy empty-Action allow row through scanPolicy (proven by
+// TestScanPolicy_LegacyEmptyActionAllow_StoredReadTolerant), the service must NOT
+// 503 on it and must treat the rule as inert — the rest of the tenant's policy set
+// still evaluates normally. Before the fix that row never reached here: scanPolicy's
+// authoring re-validation turned ListByTenant into an ErrPGSchemaShape → the service
+// wrapped it as KindUnavailable (503) for the whole tenant.
+func TestAuthorize_LegacyEmptyActionAllow_StoredRowInertNot503(t *testing.T) {
+	legacyAllow := abac.Rule{ID: "legacy", Name: "untargeted allow", Effect: authz.EffectAllow} // empty Action
+
+	t.Run("lone legacy allow is inert (no grant) and does not 503", func(t *testing.T) {
+		eng := newEngine(t, staticPolicyRepo{policies: []*abac.Policy{policyWith("p1", legacyAllow)}},
+			clockmock.New(fixedClockTime))
+		dec, err := eng.Authorize(reqCtx(userPrincipal(map[string]string{"department": "eng"})), "usr-1", "/x", "read")
+		require.NoError(t, err, "a legacy empty-Action allow row must not fail the read (no KindUnavailable/503)")
+		assert.False(t, dec.IsAllow(), "an empty-Action allow is inert — it must never grant")
+	})
+
+	t.Run("rest of policy still evaluates: a scoped permit alongside the legacy row grants", func(t *testing.T) {
+		scoped := permitRule("scoped", authz.Obligations{}, cond(abac.SourceSubject, "department", abac.OpEquals, "eng"))
+		eng := newEngine(t, staticPolicyRepo{policies: []*abac.Policy{policyWith("p1", legacyAllow, scoped)}},
+			clockmock.New(fixedClockTime))
+		dec, err := eng.Authorize(reqCtx(userPrincipal(map[string]string{"department": "eng"})), "usr-1", "/x", "read")
+		require.NoError(t, err)
+		assert.True(t, dec.IsAllow(), "the action-scoped permit must still grant; the legacy row neither blocks nor 503s the read")
+	})
 }
 
 func TestAuthorize_NoTenant_Denies(t *testing.T) {

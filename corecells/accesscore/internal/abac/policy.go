@@ -91,14 +91,40 @@ func (p *Policy) Clone() *Policy {
 	return &c
 }
 
-// Validate returns an error if the Policy is structurally invalid:
+// Validate is the AUTHORING validation profile, used on every WRITE path
+// (Create / Update in the in-memory + PG repos, tenant policy authoring). It runs
+// the shared structural checks and validates each Rule with the authoring profile
+// (Rule.Validate), so the #1979 non-empty-Action-for-Allow invariant is enforced
+// at write time (→ 422).
+//
 //   - ID must be non-empty.
 //   - TenantID must pass tenant.TenantID.Validate() (non-empty canonical UUID).
 //   - Name must be non-empty.
 //   - Rules must contain at least one Rule.
-//   - Each Rule must pass Rule.Validate().
+//   - Each Rule must pass Rule.Validate() (authoring profile).
 //   - Rule IDs must be unique within the Policy.
 func (p *Policy) Validate() error {
+	return p.validate(Rule.Validate)
+}
+
+// ValidateStored is the STORED-READ validation profile, used by the repository to
+// defensively re-validate a Policy reconstructed from durable storage (PG
+// scanPolicy). It runs the same shared structural checks but validates each Rule
+// with the legacy-tolerant stored-read profile (Rule.ValidateStored) — so a
+// persisted empty-Action Allow row (valid before #1979; rendered inert by the
+// evaluator) is NOT re-rejected as a storage-shape error, which would 503 the
+// whole tenant PDP for one legacy row (#2409 F1). Corrupt / forward-incompatible
+// rows (unknown enum codes are caught in decode; empty ID/Name, bad Effect,
+// duplicate rule IDs here) still fail-closed.
+func (p *Policy) ValidateStored() error {
+	return p.validate(Rule.ValidateStored)
+}
+
+// validate runs the structural checks shared by both profiles, delegating per-rule
+// validation to validateRule (Rule.Validate for authoring, Rule.ValidateStored for
+// stored-read). The two public entries differ ONLY in that method value, keeping
+// the policy-level invariants single-sourced.
+func (p *Policy) validate(validateRule func(Rule) error) error {
 	if p.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: policy ID must not be empty")
 	}
@@ -113,7 +139,7 @@ func (p *Policy) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(p.Rules))
 	for _, rule := range p.Rules {
-		if err := rule.Validate(); err != nil {
+		if err := validateRule(rule); err != nil {
 			return err
 		}
 		if _, dup := seen[rule.ID]; dup {

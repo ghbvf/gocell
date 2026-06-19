@@ -25,6 +25,16 @@
       "maxLength": 5,
       "description": "Authorization verdict. Valid values: allow, deny. Deny-overrides: any deny wins over all allows."
     },
+    "action": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "$comment": "Action target set (#1979). Non-empty restricts the rule to requests whose action (permission name, e.g. audit:read) is in the set; empty/absent = untargeted. REQUIRED non-empty for allow rules — enforced at the domain layer (abac.Rule.Validate → 422), NOT via `minItems: 1` here: the requirement is conditional on `effect` (deny rules legitimately carry an empty/absent action = deny-all) and JSON Schema cannot express 'minItems 1 only when effect==allow' against the length-guarded effect field, so the domain validator is the single source of structural truth (same split as the condition RHS, #1977). In responses, omitempty means the key is ABSENT for deny rules with no target (deny-all); allow rules always echo a non-empty action.",
+      "description": "Permission names this rule targets (e.g. [\"audit:read\"]). MUST be non-empty for allow rules: an allow rule must name which route gate(s) it widens, otherwise one blank allow could blow open the route gate for every permission. Empty or absent is allowed only for deny rules (deny-all)."
+    },
     "conditions": {
       "type": "array",
       "description": "All conditions are AND-combined. Empty or absent means unconditional (rule always applies).",

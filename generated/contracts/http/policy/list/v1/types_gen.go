@@ -68,6 +68,7 @@ type ResponseDataItemRulesItem struct {
 	ID          string                                     `json:"id"`
 	Name        string                                     `json:"name"`
 	Effect      string                                     `json:"effect"`
+	Action      []string                                   `json:"action,omitempty"`
 	Conditions  []*ResponseDataItemRulesItemConditionsItem `json:"conditions,omitempty"`
 	Obligations *ResponseDataItemRulesItemObligations      `json:"obligations,omitempty"`
 }

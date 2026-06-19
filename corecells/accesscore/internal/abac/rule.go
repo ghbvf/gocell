@@ -35,24 +35,84 @@ type Rule struct {
 	Effect authz.Effect
 	// Conditions are AND-combined predicates. Zero conditions = unconditional match.
 	Conditions []Condition
-	// Action, when non-empty, restricts this rule to requests whose action is in
-	// the set (e.g. {"audit:read"}). EMPTY = untargeted: the rule applies to every
-	// action (preserving the pre-PR-10 evaluate-all semantics of existing
-	// tenant-authored policies). This is the first-class action target that
-	// condition.go deliberately deferred under YAGNI — PR-10 is the "real need".
+	// Action restricts this rule to requests whose action is in the set (e.g.
+	// {"audit:read"}). For an Allow rule it MUST be non-empty (#1979): an allow
+	// must name which route gate(s) it widens, otherwise one blank allow (empty
+	// Action + empty Conditions) would unconditionally permit every action and
+	// blow open the route gate for all permissions. Empty Action is valid ONLY for
+	// a Deny rule, where it means deny-all (forbid-wins over every action). The
+	// non-empty-for-Allow invariant is enforced by Validate (write side → 422) and,
+	// in depth, by the evaluator's read-side fail-closed (an empty-Action Allow
+	// that slips past validation is treated as not-applicable and never grants).
 	Action []string
 	// Obligations are mandatory PEP actions on an Allow decision.
 	// See Obligations.Validate() for the zero-value semantics.
 	Obligations authz.Obligations
 }
 
-// Validate returns an error if the Rule is structurally invalid:
-//   - ID must be non-empty.
+// Validate is the AUTHORING validation profile: it enforces the stored-read
+// structural-integrity checks (validateStructural) PLUS the write-side-only
+// invariants a caller must satisfy when authoring or mutating a rule. Use it on
+// every WRITE path (Create / Update, tenant policy authoring, in-memory + PG
+// repos). The single authoring-only delta today is the #1979 non-empty-Action
+// rule for an Allow effect.
+//
+//   - structural integrity (see validateStructural): ID non-empty + not reserved,
+//     Name non-empty, valid Effect, valid Conditions, valid Obligations.
+//   - authoring-only: an Allow rule must declare at least one Action (#1979);
+//     empty Action is valid only for a Deny rule (deny-all).
+//
+// Read paths MUST use ValidateStored, not Validate: empty-Action Allow is an
+// authoring mistake to reject on write (422), but a persisted such row is benign
+// — the evaluator renders it inert (never grants), so re-rejecting it on read
+// would 503 the whole tenant PDP for one legacy row (#2409 F1).
+func (r Rule) Validate() error {
+	if err := r.validateStructural(); err != nil {
+		return err
+	}
+	// #1979 (authoring-only): an Allow rule must name at least one Action. An
+	// empty-Action Allow combined with empty Conditions unconditionally permits
+	// every action — a single such tenant rule would blow open the route gate for
+	// all permissions. Deny is exempt: an untargeted deny is a legitimate deny-all
+	// (forbid-wins). This is NOT a storage-integrity check, so it lives here in the
+	// authoring profile and is deliberately absent from ValidateStored.
+	if r.Effect == authz.EffectAllow && len(r.Action) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"abac: allow rule must declare at least one Action")
+	}
+	return nil
+}
+
+// ValidateStored is the STORED-READ validation profile: structural-integrity only,
+// legacy-tolerant. It is the defensive re-validation a repository applies to a row
+// reconstructed from durable storage (PG scanPolicy), guarding against corrupt or
+// forward-incompatible rows WITHOUT re-applying authoring-only invariants. The set
+// of checks is exactly validateStructural — so ValidateStored ⊆ Validate (a row
+// that passes authoring also passes stored-read), and adding a genuine integrity
+// check to validateStructural strengthens both profiles, while an authoring-only
+// invariant added to Validate's delta never leaks onto the read path.
+//
+// Why empty-Action Allow is NOT rejected here: such a row is benign at read time —
+// the evaluator's applyRule treats an empty-Action Allow as not-applicable (never
+// grants), so it cannot widen access. Rejecting it would convert a single legacy
+// persisted row into a tenant-wide PDP 503 (#2409 F1).
+func (r Rule) ValidateStored() error {
+	return r.validateStructural()
+}
+
+// validateStructural holds the storage-integrity checks shared by both validation
+// profiles (Validate / ValidateStored). A violation here means the rule is
+// genuinely malformed (not merely authored against a write-side policy), so both
+// the write path and the read path must reject it.
+//
+//   - ID must be non-empty and must not use the reserved '_' prefix (framework
+//     decision-attribution sentinels; a stored row spoofing it would make
+//     matched_rule_id attribution ambiguous, so this stays strict on read too).
 //   - Name must be non-empty.
 //   - Effect must be a valid authz.Effect.
 //   - Each Condition (if any) must pass Condition.Validate().
 //   - Obligations must pass Obligations.Validate().
-func (r Rule) Validate() error {
+func (r Rule) validateStructural() error {
 	if r.ID == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "abac: rule ID must not be empty")
 	}

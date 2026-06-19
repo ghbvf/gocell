@@ -27,10 +27,15 @@ const (
 // sentinel for default-deny / invalid-obligations. The id is for observability
 // only — it does NOT affect the verdict.
 //
-// A rule is considered only when its action gate passes: len(rule.Action)==0 (the
-// rule is untargeted and applies to every action, preserving pre-PR-10 semantics)
-// OR slices.Contains(rule.Action, action). The existing matchAllConditions gate
-// must also hold. Both checks must pass for a rule to fire.
+// A rule is considered only when its action gate passes. A Deny rule with
+// len(rule.Action)==0 is untargeted and applies to every action (a legitimate
+// deny-all); otherwise it fires only when slices.Contains(rule.Action, action).
+// For an Allow rule an empty Action is NOT a wildcard: it is treated as
+// not-applicable and never grants (#1979 read-side fail-closed — Rule.Validate
+// already rejects empty-Action Allow on the write path, so this only catches a
+// rule that slipped past validation, e.g. a legacy persisted policy). The
+// existing matchAllConditions gate must also hold. Both checks must pass for a
+// rule to fire.
 //
 // This is the SOLE construction site of authz.Allow / authz.Deny in the whole
 // repository (caller-allowlist AUTHZ-DECISION-ALLOW-DENY-CALLER-01, the Hard
@@ -78,6 +83,15 @@ func (s *Service) evaluate(policies []*abac.Policy, r attributeResolver, action 
 // matching permit's id into *firstPermitID for decision attribution), and returns
 // (true, Deny) on the first matching Deny (forbid-wins early exit). It returns
 // (false, {}) when the rule does not fire (gate miss or unknown effect).
+//
+// #1979 placement note (security-critical — do not "simplify"): the empty-Action
+// fail-closed for Allow lives INSIDE the EffectAllow branch, NOT in the shared
+// action gate above. It must not be hoisted: the action gate is crossed by
+// empty-Action Deny rules too, and an empty-Action Deny is a legitimate deny-all
+// (forbid-wins over every action). Rejecting empty Action at the gate would break
+// deny-all. The asymmetry is the point — empty Action is a wildcard for Deny,
+// inert for Allow. (Regression-guarded behaviorally: TestEvaluate_ActionTargeting's
+// "untargeted deny … still forbid-wins" + "empty Action allow is inert" cases.)
 func applyRule(
 	rule abac.Rule, r attributeResolver, action string, permits *[]authz.Obligations, firstPermitID *string,
 ) (done bool, dec authz.Decision) {
@@ -90,8 +104,17 @@ func applyRule(
 	switch rule.Effect {
 	case authz.EffectDeny:
 		// forbid-wins: a single matching deny is final (XACML §7.16 / Cedar).
+		// An untargeted (empty Action) deny is a legitimate deny-all and reaches
+		// here for every action via the action gate above.
 		return true, authz.Deny("authorization-decide: denied by policy (forbid-wins)")
 	case authz.EffectAllow:
+		// #1979 read-side fail-closed: an empty-Action Allow is NOT a wildcard.
+		// Rule.Validate rejects it on the write path; this defends against a
+		// legacy/persisted Allow that slipped past validation — treat it as
+		// not-applicable so a blank allow can never blow open the route gate.
+		if len(rule.Action) == 0 {
+			return false, authz.Decision{}
+		}
 		*permits = append(*permits, rule.Obligations)
 		if *firstPermitID == "" {
 			*firstPermitID = rule.ID

@@ -15,6 +15,7 @@ export interface RequestRulesItem {
   id: string;
   name: string;
   effect: string;
+  action?: string[];
   conditions?: RequestRulesItemConditionsItem[];
   obligations?: RequestRulesItemObligations;
 }
@@ -52,6 +53,7 @@ export interface ResponseDataRulesItem {
   id: string;
   name: string;
   effect: string;
+  action?: string[];
   conditions?: ResponseDataRulesItemConditionsItem[];
   obligations?: ResponseDataRulesItemObligations;
 }
