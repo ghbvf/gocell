@@ -124,7 +124,7 @@ func TestApplyFilters_NoFilters(t *testing.T) {
 	root := t.TempDir()
 	discovered := []string{"TestA", "TestB", "TestC"}
 	req := Request{WorkspaceRoot: root}
-	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
 	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	assert.Equal(t, discovered, got)
@@ -135,7 +135,7 @@ func TestApplyFilters_WithShard(t *testing.T) {
 	root := t.TempDir()
 	discovered := []string{"TestA", "TestB", "TestC", "TestD"}
 	req := Request{WorkspaceRoot: root, Shard: Shard{Index: 0, Total: 2}}
-	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
 	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	// shard 0 of 2: NR=2 (B), NR=4 (D) → TestB, TestD
@@ -160,7 +160,7 @@ func TestLayerB(t *testing.T) {}
 
 	discovered := []string{"TestLayerA", "TestLayerB", "TestOther"}
 	req := Request{WorkspaceRoot: root, Rule: "LAYER-05"}
-	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
 	got, err := e.applyFilters(t.Context(), req, discovered)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"TestLayerA", "TestLayerB"}, got)
@@ -183,7 +183,7 @@ func TestFoo(t *testing.T) {}
 
 	discovered := []string{"TestFoo"}
 	req := Request{WorkspaceRoot: root, Rule: "NONEXISTENT-99"}
-	e := engine{exec: defaultExec, changed: changedArchtestFiles}
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
 	_, err := e.applyFilters(t.Context(), req, discovered)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown rule")
@@ -233,27 +233,6 @@ func TestCheckGOWORK_Off(t *testing.T) {
 	err := checkGOWORK()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOWORK")
-}
-
-// TestIntersect verifies intersection preserves a's order and elements in b.
-func TestIntersect(t *testing.T) {
-	a := []string{"TestA", "TestB", "TestC", "TestD"}
-	b := []string{"TestB", "TestD", "TestE"}
-	got := intersect(a, b)
-	assert.Equal(t, []string{"TestB", "TestD"}, got)
-}
-
-// TestIntersect_EmptyB returns empty slice.
-func TestIntersect_EmptyB(t *testing.T) {
-	a := []string{"TestA", "TestB"}
-	got := intersect(a, nil)
-	assert.Empty(t, got)
-}
-
-// TestIntersect_EmptyA returns empty slice.
-func TestIntersect_EmptyA(t *testing.T) {
-	got := intersect(nil, []string{"TestA"})
-	assert.Empty(t, got)
 }
 
 // TestHasFailures reports true when a fail result is present.
