@@ -272,7 +272,7 @@ Registering a device reactively enqueues a `bootstrap` command for it through th
 framework `runtime/command` async command bus (#1698) — no manual "send a command"
 step. The flow: `POST /devices` publishes a `device-registered` event → the
 in-process `devicebootstrap` subscriber reacts and emits a
-`command.devicecommand.enqueue.v1` async command → the outbox relay dispatches it
+`command.remotecommand.v1` async command → the outbox relay dispatches it
 in-process (Claimer-deduped) → a `bootstrap` command lands in the device's queue,
 observable on the normal dequeue endpoint with `status: pending`.
 
@@ -308,7 +308,7 @@ counterpart to the event-reactive bootstrap producer above.
 
 Flow: each interval the loop scans the `devices` table for certificates whose
 `NotAfter` is within the renewal threshold → for each, the generated
-`cmdenqueue.EmitAsync` wrapper emits a `command.devicecommand.enqueue.v1` entry
+`cmdremote.EmitAsync` wrapper emits a `command.remotecommand.v1` entry
 with `commandType: rotate-cert` →
 the outbox relay dispatches it in-process → a `rotate-cert` command lands in the
 device's queue, dequeued like any other command.

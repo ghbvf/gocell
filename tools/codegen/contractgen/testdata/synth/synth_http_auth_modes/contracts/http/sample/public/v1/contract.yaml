@@ -12,6 +12,7 @@ endpoints:
     successStatus: 201
     auth:
       public: true
+      reason: "test fixture — exercises the public (NoAuth) codegen shape"
     noContent: false
     responses:
       400:

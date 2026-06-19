@@ -39,13 +39,23 @@ type Shard struct {
 
 // Request is the input to Run and ListTests.
 type Request struct {
-	WorkspaceRoot string // repo root; cwd for `go test`; from cmd/gocell findRoot()
-	Scope         Scope  // default ScopeWorkspace
-	Rule          string // optional INVARIANT rule ID, e.g. "LAYER-05"
-	Changed       bool   // optional: select only changed archtest test files
-	Shard         Shard  // optional shard selection
-	TestJSONOut   string // optional file: write the raw `go test -json` event lines
-	Timeout       string // `go test -timeout` value; default "5m" when empty
+	// WorkspaceRoot is the repo root used as cwd for `go test` (from cmd/gocell findRoot()).
+	// It is the subprocess-runner counterpart of tools/archtest.RuntimeScopeConfig.WorkspaceRoot()
+	// — when the child `go test` process resolves its own in-process RuntimeScopeConfig, it
+	// derives the workspace root from go.work discovery (WorkspaceRoot() is the result).
+	// A future --scope flag (#2331) will allow callers to supply an explicit root here instead
+	// of relying on process-cwd discovery inside the child.
+	WorkspaceRoot string
+	// Scope selects the test suite to run. Only [ScopeWorkspace] is supported today.
+	// The in-process counterpart resolved by the child subprocess is
+	// tools/archtest.RuntimeScopeConfig, which captures the full scope context
+	// (workspace root, target module path, framework/platform paths, scan dirs).
+	Scope       Scope  // default ScopeWorkspace
+	Rule        string // optional INVARIANT rule ID, e.g. "LAYER-05"
+	Changed     bool   // optional: select only changed archtest test files
+	Shard       Shard  // optional shard selection
+	TestJSONOut string // optional file: write the raw `go test -json` event lines
+	Timeout     string // `go test -timeout` value; default "5m" when empty
 }
 
 // TestResult holds the outcome of a single test function.

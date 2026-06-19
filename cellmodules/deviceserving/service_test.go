@@ -120,17 +120,22 @@ func TestDevicestate_OK(t *testing.T) {
 			State      string  `json:"state"`
 			ObservedAt string  `json:"observedAt"`
 			TenantID   *string `json:"tenantId"`
+			LastSeenAt *string `json:"lastSeenAt"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
 	assert.Equal(t, "dev-1", env.Data.DeviceID)
 	assert.Equal(t, "unknown", env.Data.State)
 	assert.Equal(t, fixedNow.Format(time.RFC3339), env.Data.ObservedAt)
-	// tenantId is present (full column set, #2359) but JSON null — the honest
-	// "no device→tenant binding" value, never a misleading empty string (#2394 review F1).
+	// tenantId and lastSeenAt are present (full column set, #2359) but JSON null —
+	// the honest "no binding / no presence backend" value, never a misleading empty
+	// string (#2394 review F1; #2351 review F2 added the lastSeenAt symmetry).
 	assert.True(t, strings.Contains(rec.Body.String(), `"tenantId":null`),
 		"tenantId must serialize as null (honest no-binding), got body=%s", rec.Body.String())
 	assert.Nil(t, env.Data.TenantID, "tenantId must decode as nil (null), not empty string")
+	assert.True(t, strings.Contains(rec.Body.String(), `"lastSeenAt":null`),
+		"lastSeenAt must serialize as null (no presence backend), got body=%s", rec.Body.String())
+	assert.Nil(t, env.Data.LastSeenAt, "lastSeenAt must decode as nil (null)")
 }
 
 // TestDevicestate_GateForwardsDeviceIDAsResource is the #2348 F3 evidence: the

@@ -370,7 +370,7 @@
                   "permission": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "ABAC action this route's PDP gate requires (e.g. config:read), #2205 — the HTTP sibling of endpoints.grpc.methods[].permission. cellgen derives a cell-level contractID→permission resolver from it and the generated handler resolves through authz.MethodPolicyResolver (runtime/auth.RequirePermissionForContract), replacing slice hand-wiring of auth.RequirePermission(authz.PermX()). Must be a member of the closed authz registry (governance validates membership via authz.IsKnownPermissionString). Mutually exclusive with auth.public/bootstrap/clientsOnly/serviceOwned (those modes have no RequirePermission gate); may accompany a standard route or a passwordResetExempt route. Optional during the #2205 migration (sparse overlay); PR-13 makes it mandatory for standard routes."
+                    "description": "ABAC action this route's PDP gate requires (e.g. config:read), #2205 — the HTTP sibling of endpoints.grpc.methods[].permission. cellgen derives a cell-level contractID→permission resolver from it and the generated handler resolves through authz.MethodPolicyResolver (runtime/auth.RequirePermissionForContract), replacing slice hand-wiring of auth.RequirePermission(authz.PermX()). Must be a member of the closed authz registry (governance validates membership via authz.IsKnownPermissionString). Mutually exclusive with auth.public/bootstrap/clientsOnly/serviceOwned (those modes have no RequirePermission gate); may accompany a standard route or a passwordResetExempt route. #2020: a standard route (no opt-out flag) MUST declare this permission — a modeless route is rejected at codegen (metadata.ClassifyHTTPAuthMode) unless its contract id is on the frozen migration ledger draining via #2355/#2358."
                   },
                   "auth": {
                     "type": "object",
@@ -411,6 +411,11 @@
                           "minimum": 100,
                           "maximum": 599
                         }
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Documents WHY this route opts out of the ABAC default (#2020). REQUIRED (non-empty) when any opt-out flag (public/serviceOwned/bootstrap/clientsOnly) is set, forbidden otherwise — the required/forbidden coupling is enforced by the cellgen completeness gate (Hard) and governance FMT-42 (Medium), not here, to keep the auth bool-mutex matrix at 2^5. This schema only pins the field shape (non-empty string)."
                       }
                     },
                     "allOf": [

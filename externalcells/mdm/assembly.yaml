@@ -1,0 +1,6 @@
+id: mdm
+cells:
+  - enrollcell
+owner:
+  team: mdm
+  role: maintainer

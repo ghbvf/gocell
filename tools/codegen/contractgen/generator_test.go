@@ -29,7 +29,8 @@ func TestArtifactsForKind(t *testing.T) {
 		kind  string
 		files []string
 	}{
-		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		// client_gen.go is the matrix's per-contract-gated http artifact (shouldEmitClient, #2093).
+		{"http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go", "client_gen.go"}},
 		{"event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"}},
 		{"command", []string{"types_gen.go", "command_gen.go"}}, // no iface_gen.go by design
 		{"projection", []string{"types_gen.go", "iface_gen.go"}},
@@ -46,6 +47,49 @@ func TestArtifactsForKind(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.files) {
 				t.Errorf("artifactsForKind(%q) files = %v, want %v", tc.kind, got, tc.files)
+			}
+		})
+	}
+}
+
+// TestArtifactsForContract pins the per-contract gate that narrows the by-kind
+// matrix (#2093): client_gen.go is emitted ONLY when shouldEmitClient holds
+// (http + non-empty Endpoint.Clients). This is the integration of the matrix +
+// shouldEmitClient that generateOneContract / RenderContractArtifacts both call —
+// a regression decoupling the filter from shouldEmitClient is caught here, not
+// only by the bool-level TestShouldEmitClient.
+func TestArtifactsForContract(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec *ContractGenSpec
+		want []string
+	}{
+		{
+			"http with clients → includes client_gen.go",
+			&ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{Clients: []string{"accesscore"}}},
+			[]string{"types_gen.go", "iface_gen.go", "handler_gen.go", "client_gen.go"},
+		},
+		{
+			"http without clients → no client_gen.go",
+			&ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{}},
+			[]string{"types_gen.go", "iface_gen.go", "handler_gen.go"},
+		},
+		{
+			"event → no client_gen.go regardless",
+			&ContractGenSpec{Kind: "event", Endpoint: &httpEndpointSpec{Clients: []string{"x"}}},
+			[]string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go", "projection_gen.go"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got []string
+			for _, a := range artifactsForContract(tc.spec) {
+				got = append(got, a.file)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("artifactsForContract files = %v, want %v", got, tc.want)
 			}
 		})
 	}

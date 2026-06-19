@@ -24,9 +24,11 @@ per-cell URL（`GOCELL_<CELLID>_AMQP_URL`，CELLID 大写，缺省回退 `GOCELL
 发布或消费事件。凭据由 broker operator 外部配置（非 framework 派生，无 HKDF/派生层，原因：AMQP broker
 用户是外部对象，不存在 framework 可控的 master key）。
 
-**当前可运行边界（非目标态）**：distinct per-cell URL 尚不可启用——egress-only fail-closed（运行期 per-cell
-隔离 blocked-by #2366/#2341），故当前唯一可运行配置是所有 cell 用同一 URL（共享同一 AMQP 凭据）。当前**已生效**
-的控制 = distinct-URL fail-closed + 凭据 non-leak（由 `AMQP-URL-REDACTION-FUNNEL-01` Medium typed AST funnel 守），
+**当前可运行边界（非目标态）**：distinct per-cell broker URL 尚不可启用——broker 侧 egress-only fail-closed（运行期
+per-cell broker 隔离 blocked-by #2366，ingress N-router），故当前唯一可运行配置是所有 cell 用同一 URL（共享同一 AMQP
+凭据）。注：per-cell DB 池/relay fan-out 已由 **#2341 独立落地**（distinct DSN → N keyed pool/relay 实例），但不解除
+broker 的 distinct-URL fail-closed（DB 与 broker 资源不对称，二者不再 in-lockstep 解除）。当前**已生效**
+的控制 = distinct broker-URL fail-closed + 凭据 non-leak（由 `AMQP-URL-REDACTION-FUNNEL-01` Medium typed AST funnel 守），
 **非** live per-cell 凭据隔离。权威语义见 `cellmodules/eventtransport/doc.go` 与 ADR `202606131500-1940`。
 
 ## 复用层选型（claimer / nonce，topology-gated）

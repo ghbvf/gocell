@@ -97,8 +97,6 @@ const (
 //   - subscribe CU handler field empty
 //   - subscribe CU references a contract not declared in project
 //   - fieldIndex missing entry for subscribing slice
-//
-//nolint:funlen // pipeline of independent build steps; each step is ≤10 lines; extraction adds more lines than it removes
 func BuildCellSpec(
 	p *metadata.ProjectMeta,
 	cellID string,
@@ -160,43 +158,96 @@ func BuildCellSpec(
 
 	spec.RouteGroups = buildRouteGroupsFromBundle(bundle.Routes, listenerOrder, listenerPrefix)
 
+	if err := buildSliceDerivedSpecs(p, cellID, fieldIndex, spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
+// buildSliceDerivedSpecs populates the slice-derived sections of spec (subscriptions,
+// webhooks, projections, grpc services, HTTP permission resolver) and runs the #2020
+// HTTP AuthZ-mode completeness gate. Extracted from BuildCellSpec to keep that function
+// within the cognitive-complexity budget.
+func buildSliceDerivedSpecs(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex, spec *CellGenSpec) error {
 	subs, err := buildSubscriptionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Subscriptions = subs
 
 	receivers, err := buildWebhookReceiversFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookReceivers = receivers
 
 	dispatches, err := buildWebhookDispatchesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookDispatches = dispatches
 
 	projections, err := buildProjectionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Projections = projections
 
 	grpcServices, err := buildGrpcServicesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.GrpcServices = grpcServices
 
 	httpPerms, err := buildHTTPMethodPermissions(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.HTTPMethodPermissions = httpPerms
 
-	return spec, nil
+	return validateHTTPAuthModeCompleteness(p, cellID)
+}
+
+// validateHTTPAuthModeCompleteness is the per-cell SERVE-scoped defense arm of the #2020
+// mandatory-AuthZ-mode gate, run during BuildCellSpec over this cell's slice serve usages.
+// The UNBYPASSABLE Hard core is contractgen.buildHTTPSpec (every rendered contract, any
+// entry point); this serve-scan reuses the same metadata.ClassifyHTTPAuthMode oracle so a
+// cell build also fails closed early. Both mirror the gRPC #2008 completeness pre-pass.
+//
+// Failing here makes the violation unrepresentable in generated code: a standard route
+// that silently forgot its authz mode cannot ship (dead-default fail-closed).
+func validateHTTPAuthModeCompleteness(p *metadata.ProjectMeta, cellID string) error {
+	prefix := cellID + "/"
+	for key, s := range p.Slices {
+		if s == nil || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := checkSliceServeAuthModes(p, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSliceServeAuthModes runs the #2020 mode gate over one slice's serve
+// contractUsages via the shared metadata.ClassifyHTTPAuthMode oracle (same judgment as
+// contractgen's comprehensive gate + governance FMT-42). Scope filtering (active/codegen/
+// http) and ledger exemption live in the classifier, which returns HTTPAuthModeOK for a
+// nil contract — so the c.ID dereference below only runs on a real violation.
+func checkSliceServeAuthModes(p *metadata.ProjectMeta, s *metadata.SliceMeta) error {
+	for _, cu := range s.ContractUsages {
+		if cu.Role != roleServe {
+			continue
+		}
+		c := p.Contracts[cu.Contract]
+		if v := metadata.ClassifyHTTPAuthMode(c); v != metadata.HTTPAuthModeOK {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build http: "+v.Message(),
+				errcode.WithDetails(errcode.PublicString("contract", c.ID)))
+		}
+	}
+	return nil
 }
 
 // BuildSliceSpec returns the rendering input for slice.tmpl. Every slice in

@@ -98,6 +98,9 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	if err != nil {
 		return err
 	}
+	if err := metadata.ValidateProjectHTTPAuthModes(project); err != nil {
+		return err
+	}
 	res, err := spec.Generate(root, project, dryRun, verify, only, modulePath)
 	if err != nil {
 		return err
@@ -208,6 +211,9 @@ func runCodegenVerifyInPlace[R CodegenResult](
 	if err != nil {
 		return err
 	}
+	if err := metadata.ValidateProjectHTTPAuthModes(project); err != nil {
+		return err
+	}
 	res, err := spec.Generate(root, project, false, true, "", modulePath)
 	if err != nil {
 		return err
@@ -233,6 +239,9 @@ func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root, moduleP
 		project, perr := parseProject(workdir)
 		if perr != nil {
 			return perr
+		}
+		if verr := metadata.ValidateProjectHTTPAuthModes(project); verr != nil {
+			return verr
 		}
 		_, gerr := spec.Generate(workdir, project, false, false, "", modulePath)
 		return gerr

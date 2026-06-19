@@ -19,6 +19,7 @@ endpoints:
     auth:
       serviceOwned: true
       passwordResetExempt: true
+      reason: "test fixture — exercises the serviceOwned codegen shape"
     noContent: true
     responses:
       400:

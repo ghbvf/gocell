@@ -15,13 +15,15 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	list "github.com/ghbvf/gocell/generated/contracts/http/registry/contract/list/v1"
 )
 
 // Service implements the generated list.Service over the shared in-mem
 // ContractRegistrar the cell injects. It is read-only: it gathers registrations,
-// applies cursor pagination, and projects them to the wire DTO.
+// applies cursor pagination, and routes each row through the column-masking
+// funnel (identity mask today; FR-016) to the wire.
 type Service struct {
 	registrar *registry.ContractRegistrar `gocell:"required"`
 }
@@ -77,20 +79,26 @@ func (s *Service) List(_ context.Context, req *list.Request) (list.ListResponseO
 	}
 	page := ids[start:end]
 
-	items := make([]*list.ResponseDataItem, 0, len(page))
+	rows := make([]map[string]any, 0, len(page))
 	for _, id := range page {
 		reg, ok := s.registrar.Get(id)
 		if !ok {
 			continue // concurrently removed; skip (registrar is the source of truth)
 		}
-		items = append(items, toListItem(reg))
+		rows = append(rows, toListItem(reg).ToMap())
+	}
+	// identity projection — masking obligation source becomes the ABAC Decision
+	// later; routes resource data through the column-masking funnel (FR-016).
+	data, err := projection.NewProjectionList(authz.IdentityFieldMask(), rows)
+	if err != nil {
+		return nil, err
 	}
 
 	nextCursor := ""
 	if hasMore && len(page) > 0 {
 		nextCursor = page[len(page)-1]
 	}
-	return list.List200JSONResponse{Data: items, NextCursor: nextCursor, HasMore: hasMore}, nil
+	return list.List200JSONResponse{Data: data, NextCursor: nextCursor, HasMore: hasMore}, nil
 }
 
 // toListItem projects a ContractRegistration onto the generated wire DTO. State is
