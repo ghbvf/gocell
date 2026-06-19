@@ -43,12 +43,10 @@ type ResponseDataBuild struct {
 
 // ResponseDataRuntime is a generated DTO for contract http.admin.system.v1.
 type ResponseDataRuntime struct {
-	UptimeSeconds    int64   `json:"uptimeSeconds"`
-	Goroutines       int64   `json:"goroutines"`
-	MemoryMB         float64 `json:"memoryMB"`
-	MemoryAllocBytes int64   `json:"memoryAllocBytes"`
-	GcPauseTotalNs   int64   `json:"gcPauseTotalNs"`
-	CPUPercent       float64 `json:"cpuPercent"`
+	UptimeSeconds    int64 `json:"uptimeSeconds"`
+	Goroutines       int64 `json:"goroutines"`
+	MemoryAllocBytes int64 `json:"memoryAllocBytes"`
+	GcPauseTotalNs   int64 `json:"gcPauseTotalNs"`
 }
 
 // ResponseDataAssembly is a generated DTO for contract http.admin.system.v1.
@@ -59,9 +57,21 @@ type ResponseDataAssembly struct {
 
 // ResponseDataEnvironment is a generated DTO for contract http.admin.system.v1.
 type ResponseDataEnvironment struct {
-	Env           string `json:"env"`
-	Containerized bool   `json:"containerized"`
+	Env           ResponseDataEnvironmentEnv `json:"env"`
+	Containerized bool                       `json:"containerized"`
 }
+
+// ResponseDataEnvironmentEnv enumerates the closed value-set of the env field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type ResponseDataEnvironmentEnv string
+
+const (
+	ResponseDataEnvironmentEnvDev     ResponseDataEnvironmentEnv = "dev"
+	ResponseDataEnvironmentEnvStaging ResponseDataEnvironmentEnv = "staging"
+	ResponseDataEnvironmentEnvProd    ResponseDataEnvironmentEnv = "prod"
+	ResponseDataEnvironmentEnvUnknown ResponseDataEnvironmentEnv = "unknown"
+)
 
 // ResponseDataDeployment is a generated DTO for contract http.admin.system.v1.
 type ResponseDataDeployment struct {

@@ -30,10 +30,8 @@ export interface ResponseDataBuild {
 export interface ResponseDataRuntime {
   uptimeSeconds: number;
   goroutines: number;
-  memoryMB: number;
   memoryAllocBytes: number;
   gcPauseTotalNs: number;
-  cpuPercent: number;
 }
 
 export interface ResponseDataAssembly {
@@ -42,9 +40,12 @@ export interface ResponseDataAssembly {
 }
 
 export interface ResponseDataEnvironment {
-  env: string;
+  env: ResponseDataEnvironmentEnv;
   containerized: boolean;
 }
+
+/** ResponseDataEnvironmentEnv enumerates the closed value-set for the env field. */
+export type ResponseDataEnvironmentEnv = 'dev' | 'staging' | 'prod' | 'unknown';
 
 export interface ResponseDataDeployment {
   available: boolean;

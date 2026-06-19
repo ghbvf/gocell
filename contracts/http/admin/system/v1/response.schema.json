@@ -59,10 +59,8 @@
           "required": [
             "uptimeSeconds",
             "goroutines",
-            "memoryMB",
             "memoryAllocBytes",
-            "gcPauseTotalNs",
-            "cpuPercent"
+            "gcPauseTotalNs"
           ],
           "properties": {
             "uptimeSeconds": {
@@ -72,19 +70,12 @@
             "goroutines": {
               "type": "integer"
             },
-            "memoryMB": {
-              "type": "number",
-              "description": "runtime.MemStats.Alloc converted to MiB and rounded to one decimal place."
-            },
             "memoryAllocBytes": {
-              "type": "integer"
+              "type": "integer",
+              "description": "runtime.MemStats.Alloc in bytes. Presentation layers own MB/MiB formatting."
             },
             "gcPauseTotalNs": {
               "type": "integer"
-            },
-            "cpuPercent": {
-              "type": "number",
-              "description": "-1 in this version; process CPU requires asynchronous sampling and is not computed synchronously in the handler."
             }
           }
         },
@@ -116,6 +107,7 @@
           "properties": {
             "env": {
               "type": "string",
+              "enum": ["dev", "staging", "prod", "unknown"],
               "description": "Sanitized deployment environment. One of: dev | staging | prod | unknown."
             },
             "containerized": {

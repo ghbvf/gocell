@@ -33,11 +33,8 @@ func TestSystemView_Report(t *testing.T) {
 	if rep.Runtime.Goroutines <= 0 {
 		t.Fatalf("goroutines = %d, want > 0", rep.Runtime.Goroutines)
 	}
-	if rep.Runtime.MemoryAllocBytes <= 0 || rep.Runtime.MemoryMB <= 0 {
+	if rep.Runtime.MemoryAllocBytes <= 0 {
 		t.Fatalf("memory not populated: %+v", rep.Runtime)
-	}
-	if rep.Runtime.CPUPercent != -1 {
-		t.Fatalf("cpuPercent = %v, want -1 sentinel", rep.Runtime.CPUPercent)
 	}
 	if rep.Environment.Env != EnvProd {
 		t.Fatalf("env = %q, want prod", rep.Environment.Env)

@@ -52,17 +52,15 @@ func toResponseData(rep sysinfo.Report) *system.ResponseData {
 		Runtime: &system.ResponseDataRuntime{
 			UptimeSeconds:    rep.Runtime.UptimeSeconds,
 			Goroutines:       rep.Runtime.Goroutines,
-			MemoryMB:         rep.Runtime.MemoryMB,
 			MemoryAllocBytes: rep.Runtime.MemoryAllocBytes,
 			GcPauseTotalNs:   rep.Runtime.GCPauseTotalNs,
-			CPUPercent:       rep.Runtime.CPUPercent,
 		},
 		Assembly: &system.ResponseDataAssembly{
 			Name:  rep.Assembly.Name,
 			Cells: cloneStrings(rep.Assembly.Cells),
 		},
 		Environment: &system.ResponseDataEnvironment{
-			Env:           rep.Environment.Env,
+			Env:           system.ResponseDataEnvironmentEnv(sysinfo.NormalizeEnv(rep.Environment.Env)),
 			Containerized: rep.Environment.Containerized,
 		},
 		Deployment: &system.ResponseDataDeployment{

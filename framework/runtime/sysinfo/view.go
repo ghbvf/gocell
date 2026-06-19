@@ -34,10 +34,8 @@ type BuildInfo struct {
 type RuntimeInfo struct {
 	UptimeSeconds    int64
 	Goroutines       int64
-	MemoryMB         float64
 	MemoryAllocBytes int64
 	GCPauseTotalNs   int64
-	CPUPercent       float64
 }
 
 // AssemblyInfo is the non-sensitive assembly identity snapshot.
@@ -204,10 +202,8 @@ func runtimeSnapshot(clk clock.Clock, start time.Time) RuntimeInfo {
 	return RuntimeInfo{
 		UptimeSeconds:    uptime,
 		Goroutines:       int64(runtime.NumGoroutine()),
-		MemoryMB:         math.Round((float64(ms.Alloc)/1024/1024)*10) / 10,
 		MemoryAllocBytes: saturatingInt64(ms.Alloc),
 		GCPauseTotalNs:   saturatingInt64(ms.PauseTotalNs),
-		CPUPercent:       -1,
 	}
 }
 

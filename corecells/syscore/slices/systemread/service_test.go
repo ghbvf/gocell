@@ -22,11 +22,11 @@ func sampleSystemReport() sysinfo.Report {
 			BuildDate: "2026-06-19T00:00:00Z", GoVersion: "go1.25.0", Dirty: false,
 		},
 		Runtime: sysinfo.RuntimeInfo{
-			UptimeSeconds: 34200, Goroutines: 142, MemoryMB: 87.4,
-			MemoryAllocBytes: 91750400, GCPauseTotalNs: 12450000, CPUPercent: -1,
+			UptimeSeconds: 34200, Goroutines: 142,
+			MemoryAllocBytes: 91750400, GCPauseTotalNs: 12450000,
 		},
 		Assembly:    sysinfo.AssemblyInfo{Name: "corebundle", Cells: []string{"accesscore", "syscore"}},
-		Environment: sysinfo.EnvironmentInfo{Env: sysinfo.EnvDev, Containerized: true},
+		Environment: sysinfo.EnvironmentInfo{Env: "qa", Containerized: true},
 		Deployment:  sysinfo.DeploymentInfo{Available: true, LastDeployedAt: &last, Source: "env"},
 	}
 }
@@ -49,17 +49,24 @@ func TestService_System_OK(t *testing.T) {
 	if ok.Data.Build.Version != "v0.3.1" || ok.Data.Build.Commit != "8c3a4b9" {
 		t.Fatalf("build projection wrong: %+v", ok.Data.Build)
 	}
-	if ok.Data.Runtime.UptimeSeconds != 34200 || ok.Data.Runtime.CPUPercent != -1 {
+	if ok.Data.Runtime.UptimeSeconds != 34200 || ok.Data.Runtime.MemoryAllocBytes != 91750400 {
 		t.Fatalf("runtime projection wrong: %+v", ok.Data.Runtime)
 	}
 	if got := ok.Data.Assembly.Cells; len(got) != 2 || got[0] != "accesscore" || got[1] != "syscore" {
 		t.Fatalf("assembly cells = %+v", got)
 	}
-	if ok.Data.Environment.Env != sysinfo.EnvDev || !ok.Data.Environment.Containerized {
+	if ok.Data.Environment.Env != system.ResponseDataEnvironmentEnvUnknown || !ok.Data.Environment.Containerized {
 		t.Fatalf("environment projection wrong: %+v", ok.Data.Environment)
 	}
 	if ok.Data.Deployment.LastDeployedAt == nil || *ok.Data.Deployment.LastDeployedAt != "2026-06-19T09:00:00Z" {
 		t.Fatalf("deployment projection wrong: %+v", ok.Data.Deployment)
+	}
+	body, err := json.Marshal(ok.Data.Runtime)
+	if err != nil {
+		t.Fatalf("marshal runtime: %v", err)
+	}
+	if strings.Contains(string(body), "cpuPercent") || strings.Contains(string(body), "memoryMB") {
+		t.Fatalf("runtime wire must not expose unavailable/display-only metrics: %s", body)
 	}
 }
 
