@@ -239,7 +239,40 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   > 使 in-mem 总线在生产 root **import 层不可表达**（Hard 端到端）。分层评级随之细化：sealed 构造 Hard、
   > minter-单调用方结构性 Medium（跨模块 `framework`↔`cellmodules`，`internal/` 不可桥接 → 无低成本 Hard
   > 路径，不立升级 issue）、闸运行时比较仍 Medium。「拓扑 × bus 类型 type system 不可表达」在 bus-realness
-  > 维度被 sealed-kind 收紧；「split 是否真有跨进程 *event*」（vs sync-only-remote 粗代理）仍属 US7 #1967。
+  > 维度被 sealed-kind 收紧；「split 是否真有跨进程 *event*」（vs sync-only-remote 粗代理）由 **#2196 闭合**
+  > （静态闸 TOPO-13 删除 + 信号 codegen 派生升 Hard，见下文 §#2196 Amendment）。
+
+  > **Amendment 2026-06-19（#2196，broker-mandatory 双闸精化 → 单运行时闸 + codegen 派生 Hard 信号）**：
+  > #1965 的「双闸」（静态 `gocell validate` TOPO-13 + 启动期 phase0 `validateSplitTopologyBroker`）当年
+  > 有意选粗粒度/结构-only 实现，留两处文档化 over-constrain 盲区，曾被 interim `TOPO-12`（blanket 禁
+  > `topology.remote`）production-shadow。`TOPO-12` 在 US5 #1966 移除后两盲区 production-reachable：① 运行时闸
+  > 以 `HasRemoteCells()`（**任何** remote cell）为触发，误拒「split + 仅 sync(CellTransport/HTTP) + in-memory
+  > bus」；② 静态闸 TOPO-13 看不到运行时注入的 broker，对合法 broker-backed split **永远** fail-closed。
+  >
+  > **决策**：① 两盲区同 PR 闭环；② **删除静态闸 TOPO-13**（含 const/rule/注册/inventory/test 全族），由精确化后的
+  > 运行时闸作**唯一执行点**——拒绝新增 `transport.eventBroker` schema 声明（会重引入 #2365 `collectBrokerCells`
+  > godoc 明确规避的「remember-to-declare」反模式；对标 k8s/cert-manager：就绪校验交运行时）。
+  >
+  > **信号载体升级（Medium → Hard）**：运行时闸触发从 `HasRemoteCells()` 粗代理改为 sealed
+  > `DeploymentTopology.RequiresBrokerForCrossProcessEvents()`。该信号 **codegen 期派生**
+  > （`assembly.collectCrossProcessBrokerEventRoles`：存在一条 `lifecycle:active` + amqp-transported event contract，
+  > 其 publisher cell 与某 subscriber cell 分属不同 group ⟺ 两端 group 标记需 broker），**embed 进既有 topology
+  > 漏斗**：`generatedTopologyGroups()` golden 字节冻结 + CI `--verify` 漂移红（**Hard**，同 #2037/#2365 漏斗）→
+  > `SpecForRole` 按 `GOCELL_CELL_ROLE` 投影 per-role bool → phase0 封进 sealed `DeploymentTopology`
+  > （field-freeze `DEPLOYMENT-TOPOLOGY-SEALED-FIELD-FROZEN-01`，加字段即 golden 签名变更，**Hard**）。**无第二条
+  > 接线可遗忘**——bool 随既有 `SpecForRole(generatedTopologyGroups(),role)` → `WithDeploymentTopology` 同行，
+  > composition root 零改动，fail-closed 是**结构性**的（sealed 字段必随 phase0 构建）。
+  >
+  > **盲区修复**：① sync-only split（per-role 信号 false）→ in-memory bus **放行**；② broker-backed split →
+  > `gocell validate` 干净（无静态 broker 闸）+ 运行时闸按真实 sealed-kind broker 精确 fail-fast。
+  >
+  > **重评分级**：①「broker 是否就位」的 gate **本体**仍 **Medium 永久天花板**——它比较两个运行时值（codegen 派生
+  > 信号 vs 注入的 bus 实例），bus 是运行时注入实例、type system 不可表达，§214-219 的 Hard 不可达结论**不变**；
+  > ② 但**信号正确性**从「粗运行时代理（Medium）」升级为 **Hard**（codegen 派生 + golden 字节冻结 + `--verify`）；
+  > ③ fail-closed 由「split + 信号未注入 → fail-fast 兜底（Medium crutch）」改为**结构性**（sealed 必构建字段，
+  > 故删除该 crutch）。**单一 codegen 派生事实 → 单一 gate，消除原双闸两套近似逻辑的漂移面**（落地 issue「重构」
+  > 种子的 single-fact 意图）。符号/盲区见 `bootstrap.validateSplitTopologyBroker` /
+  > `DeploymentTopology.RequiresBrokerForCrossProcessEvents` / `assembly.collectCrossProcessBrokerEventRoles` godoc。
 - **进程内跨 cell Go 直传 = 0 + gRPC 盲区收口 → Medium archtest。** 金丝雀
   `ModuleExports.BootstrapLedgerStore` 已删（PR #1467），archtest 收口直传=0 + 覆盖 #1752 引入的
   gRPC cross-cell 盲区。typed AST scan 即足，无低成本 Hard 化路径。→ US8 #1961。
@@ -294,7 +327,8 @@ US5（#1966）落地 sync 跨进程：`transport.Resolver`（cellID→endpoint�
 （wiring 层裸构造 `transport.NewRemoteHTTP` ban，调用级 AST 扫描，Medium，仿 `REPLAYDEPS-INMEM-FUNNEL-01`）——transport 选型
 经 `cellmodules/celltransport.Resolve`（topology-gated，`eventtransport`/`replaydeps`/`sagaprojectiondeps` 的第 4 sibling）。
 **interim 门移除**：TOPO-12（governance）+ `metadata.CheckRemotePlacementSupported`（codegen）已删，`topology.remote` 现过
-`gocell validate` + codegen；TOPO-13（split + in-memory bus → reject）随之 production-reachable，成为真门。**集成测试**为单进程
+`gocell validate` + codegen；TOPO-13（split + in-memory bus → reject）随之 production-reachable，成为真门（**后由 #2196
+删除：盲区精化后并入唯一的运行时闸 + codegen 派生信号，见 §#2196 Amendment**）。**集成测试**为单进程
 真实 TCP loopback（覆盖 sign→TCP→verify→handler→response + connection refused/timeout/5xx/401/403/resolver-miss 全分支）；
 真双进程端到端属 US7 journey 验收，非本 issue。
 
