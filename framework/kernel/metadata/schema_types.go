@@ -67,16 +67,25 @@ type HTTPTransportMeta struct {
 	// So Permission is the required ABAC declaration for any standard route not on the
 	// ledger; opt-out routes use an auth flag + reason instead.
 	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
-	// Resource names the HTTP path parameter whose value identifies the
-	// owner-scoped resource for the PDP ownership check (e.g. "id" for
-	// /api/v1/access/users/{id}), #2355 — the HTTP sibling of
-	// endpoints.grpc.methods[].resource. When set, the generated handler builds the
-	// route gate via auth.RequirePermissionForResource(<param>, perm) instead of the
-	// coarse auth.RequirePermission(perm), forwarding the canonicalized path-param
-	// value to Authorizer.Authorize as the resource argument so the identity-ownership
-	// baseline (subject.sub == resource.id) can fire. REQUIRES permission (an owner
-	// gate still needs an action); MUTUALLY EXCLUSIVE with selfScoped and with the
-	// no-gate opt-out modes (public/bootstrap/clientsOnly/serviceOwned).
+	// Resource is the NAME of the HTTP path parameter (not its runtime value)
+	// whose value identifies the owner-scoped resource for the PDP ownership check,
+	// e.g. "id" for the path template /api/v1/access/users/{id}. The value MUST be
+	// a key declared in endpoints.http.pathParams — a name not present in pathParams
+	// is rejected by governance FMT-42 because the gate can never extract the param.
+	//
+	// Use Resource for owner routes that operate on a resource identified by a path
+	// parameter (e.g. GET /users/{id} — the caller must own user "id"). Omit Resource
+	// for admin routes that operate on any resource without a scoped path parameter
+	// (e.g. POST /users — coarse permission, no ownership check).
+	//
+	// #2355 — the HTTP sibling of endpoints.grpc.methods[].resource. When set, the
+	// generated handler builds the route gate via
+	// auth.RequirePermissionForResource(<param>, perm) instead of the coarse
+	// auth.RequirePermission(perm), forwarding the canonicalized path-param value to
+	// Authorizer.Authorize as the resource argument so the identity-ownership baseline
+	// (subject.sub == resource.id) can fire. REQUIRES permission (an owner gate still
+	// needs an action); MUTUALLY EXCLUSIVE with selfScoped and with the no-gate opt-out
+	// modes (public/bootstrap/clientsOnly/serviceOwned).
 	//
 	// DELIBERATE divergence from gRPC FMT-41: presence is NOT derivable from the
 	// permission's owner-scoped-ness. The same action (e.g. user:write) gates BOTH

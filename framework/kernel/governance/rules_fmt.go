@@ -1246,6 +1246,21 @@ func (v *Validator) validateFMT42ResourceShape(c *metadata.ContractMeta, h *meta
 			"keep exactly one: endpoints.http.resource for a path-param-owned resource, or selfScoped for the caller's own subject",
 		))
 	}
+	// Resource must reference a declared path parameter: a typo in the resource value
+	// (e.g. "userId" when the path template declares "{id}") silently produces a gate
+	// that can never match. pathParams is non-nil only when the author declared it;
+	// an empty map or nil means no path params are declared, so a non-empty resource
+	// cannot be valid in that case either.
+	if h.Resource != "" {
+		if _, ok := h.PathParams[h.Resource]; !ok {
+			results = append(results, v.newError(
+				codeFMT42, IssueInvalid, file, fieldEndpointsHTTPResource,
+				fmt.Sprintf("http contract %q endpoints.http.resource %q is not declared in endpoints.http.pathParams", c.ID, h.Resource),
+				"endpoints.http.resource must name a path parameter declared in endpoints.http.pathParams; "+
+					"check the path template for the correct placeholder name",
+			))
+		}
+	}
 	return results
 }
 

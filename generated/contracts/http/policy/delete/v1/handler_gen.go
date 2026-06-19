@@ -43,6 +43,11 @@ type Handler struct {
 // interceptor's resolver + resource lookup, replacing a hand-wired
 // auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
 // construction (composition root must inject the cell resolver).
+// Note: the same permission can serve both an owner route (with resource) and an
+// admin route (without resource); the PDP ownership baseline (subject.sub ==
+// resource.id) is only triggered when the resource id is forwarded to the PDP
+// via RequirePermissionForResource — coarse RequirePermission routes do not carry
+// a resource argument and therefore do not invoke the ownership rule.
 func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
 	if resolver == nil {
 		// B-class assertion: argument-contract violation. errcode.Assertion routes

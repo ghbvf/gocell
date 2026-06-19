@@ -197,3 +197,88 @@ func TestRequirePermissionForContract_NilResolver_Panics(t *testing.T) {
 		_ = RequirePermissionForContract(coarseSpec("http.config.get.v1"), typedNil)
 	}, "typed-nil resolver must fail-fast (IsNilInterface), not slip to a bare nil-deref")
 }
+
+// TestRequirePermissionForContract_ResourceAndSelfScoped_Panics: spec.Resource and
+// spec.SelfScoped are mutually exclusive (schema + FMT-42 + ContractSpec.Validate).
+// Reaching RequirePermissionForContract with both set means codegen drifted from the
+// schema source — the defense-in-depth guard must fail fast before choosing either branch.
+func TestRequirePermissionForContract_ResourceAndSelfScoped_Panics(t *testing.T) {
+	r := NewStaticMethodPolicyResolver(map[string]string{"http.auth.user.get.v1": "user:read"})
+	conflictSpec := contractspec.ContractSpec{
+		ID:         "http.auth.user.get.v1",
+		Resource:   "id",
+		SelfScoped: true,
+	}
+	assert.Panics(t, func() {
+		_ = RequirePermissionForContract(conflictSpec, r)
+	}, "Resource+SelfScoped together must fail-fast (mutually exclusive; codegen drift guard)")
+}
+
+// TestRequirePermissionForContract_WithResource_EmptyParam_FailClosed: an empty path
+// param is forwarded as "" to the PDP (ownership rule subject.sub == resource.id cannot
+// fire because resource.id is not found). Per tenancy.md: "empty or non-canonical
+// path-param does not equal self". Must not panic; must forward gotResource=="".
+func TestRequirePermissionForContract_WithResource_EmptyParam_FailClosed(t *testing.T) {
+	r := NewStaticMethodPolicyResolver(map[string]string{"http.auth.user.get.v1": "user:read"})
+	p := &Principal{Kind: PrincipalUser, Subject: "11111111-1111-1111-1111-111111111111", Roles: []string{"user"}}
+	cap := &captureAuthorizer{allowed: false} // deny-capable: will return deny for resource=""
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/", nil)
+	req.SetPathValue("id", "") // empty param
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), cap))
+
+	spec := contractspec.ContractSpec{ID: "http.auth.user.get.v1", Resource: "id"}
+	err := RequirePermissionForContract(spec, r)(req)
+
+	// Must not panic; empty param forwarded as ""; ownership rule cannot fire → deny.
+	assert.Equal(t, "", cap.gotResource,
+		"empty path param must be forwarded as \"\" to PDP (ownership rule cannot fire)")
+	require.Error(t, err, "empty path param must not result in an implicit allow")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"empty path param with deny-capable authorizer must return 403 (fail-closed)")
+}
+
+// TestRequirePermissionForContract_WithResource_Deny: owner-scoped spec with a deny
+// authorizer must return KindPermissionDenied (403). Validates that the resource-
+// forwarding branch is fail-closed on PDP deny, same as the coarse gate.
+func TestRequirePermissionForContract_WithResource_Deny(t *testing.T) {
+	r := NewStaticMethodPolicyResolver(map[string]string{"http.auth.user.get.v1": "user:read"})
+	resourceID := "22222222-2222-2222-2222-222222222222"
+	p := &Principal{Kind: PrincipalUser, Subject: "11111111-1111-1111-1111-111111111111", Roles: []string{"user"}}
+	deny := &mockAuthorizer{allowed: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+resourceID, nil)
+	req.SetPathValue("id", resourceID)
+	req = req.WithContext(WithAuthorizer(WithPrincipal(req.Context(), p), deny))
+
+	spec := contractspec.ContractSpec{ID: "http.auth.user.get.v1", Resource: "id"}
+	err := RequirePermissionForContract(spec, r)(req)
+
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"owner-scoped gate with PDP deny must return 403 (KindPermissionDenied)")
+}
+
+// TestRequirePermissionForContract_SelfScoped_NoAuthorizer_FailClosed: self-scoped spec
+// with no Authorizer wired must return KindPermissionDenied (403). The PDP-not-wired
+// guard fires identically for all three gate shapes; self-scoped is not exempt.
+func TestRequirePermissionForContract_SelfScoped_NoAuthorizer_FailClosed(t *testing.T) {
+	r := NewStaticMethodPolicyResolver(map[string]string{"http.auth.decide.v1": "access:decide"})
+	p := &Principal{Kind: PrincipalUser, Subject: "33333333-3333-3333-3333-333333333333", Roles: []string{"user"}}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/decide", nil)
+	req = req.WithContext(WithPrincipal(req.Context(), p)) // no Authorizer wired
+
+	spec := contractspec.ContractSpec{ID: "http.auth.decide.v1", SelfScoped: true}
+	err := RequirePermissionForContract(spec, r)(req)
+
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.KindPermissionDenied, ec.Kind,
+		"self-scoped gate with unwired PDP must fail-closed (403)")
+}

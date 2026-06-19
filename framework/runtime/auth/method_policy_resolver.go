@@ -73,6 +73,14 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 // ownership resource come from: contract metadata (resolver + ContractSpec) instead of a
 // hand-wired authz.PermX() + RequirePermissionForResource("id", …) literal in slice code.
 //
+// Owner vs admin with the same permission: the same permission (e.g. user:write) may be
+// shared by an owner-scoped route (operating on a single resource, declares spec.Resource)
+// and an admin route (operating on any resource, omits spec.Resource → coarse gate).
+// resource is a per-route authz choice, not derived from the permission itself. An admin
+// route does NOT need a different permission just because it skips the path-param — it
+// simply does not forward a resource id to the PDP, so the baseline ownership rule
+// (subject.sub == resource.id) does not fire. See ADR 202606201500-2355.
+//
 // It is the HTTP sibling of the gRPC interceptor's PermissionResolver + resource-field
 // lookup (#2205/#2355): both transports source the route/method permission AND the
 // owner-scoped resource shape through contract metadata, unifying the two onto one
@@ -113,6 +121,17 @@ func RequirePermissionForContract(spec contractspec.ContractSpec, resolver authz
 			errcode.Assertion("RequirePermissionForContract: contract %q has no permission mapping in the cell "+
 				"MethodPolicyResolver (codegen drift — the contract must declare endpoints.http.permission and "+
 				"cellgen must enroll it; regenerate via gocell generate cell)", spec.ID)))
+	}
+	// Defense-in-depth: Resource and SelfScoped are mutually exclusive by contract
+	// schema + FMT-42 + ContractSpec.Validate. Reaching here with both set means
+	// generated code diverged from the schema source — fail fast before choosing a
+	// branch that would silently forward the wrong resource shape to the PDP.
+	// Same style as the nil-resolver / unmapped-permission panics above.
+	if spec.Resource != "" && spec.SelfScoped {
+		panic(panicregister.Approved("http-permission-resource-selfscoped-mutex",
+			errcode.Assertion("RequirePermissionForContract: contract %q sets both Resource and SelfScoped "+
+				"(mutually exclusive); ContractSpec.Validate + schema + FMT-42 should have rejected this — "+
+				"codegen drift", spec.ID)))
 	}
 	switch {
 	case spec.Resource != "":

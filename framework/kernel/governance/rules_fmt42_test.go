@@ -297,15 +297,47 @@ func TestFMT42_OwnerScopedPermissionWithoutResource_OK(t *testing.T) {
 }
 
 // TestFMT42_ResourceWithPermission_OK: a well-formed owner-scoped route (resource + a
-// registered action) is accepted (#2355).
+// registered action + matching pathParams entry) is accepted (#2355).
 func TestFMT42_ResourceWithPermission_OK(t *testing.T) {
 	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
 		h.Permission = "user:read"
 		h.Resource = "id"
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string"}}
 	})
 	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
 	if len(errs) != 0 {
-		t.Fatalf("FMT-42: resource + permission must be OK, got %d error(s): %+v", len(errs), errs)
+		t.Fatalf("FMT-42: resource + permission + matching pathParams must be OK, got %d error(s): %+v", len(errs), errs)
+	}
+}
+
+// TestFMT42_ResourceNotInPathParams_Error: endpoints.http.resource naming a path
+// parameter that is not declared in endpoints.http.pathParams is rejected (#2355 F6).
+func TestFMT42_ResourceNotInPathParams_Error(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "userId" // typo — path uses {id}, not {userId}
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string"}}
+	})
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: resource not in pathParams must error, got none")
+	}
+}
+
+// TestFMT42_ResourceInPathParams_OK: endpoints.http.resource naming a declared
+// pathParams key is accepted — the canonical owner-scoped shape (#2355).
+func TestFMT42_ResourceInPathParams_OK(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "id"
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string", Format: "uuid"}}
+	})
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) != 0 {
+		t.Fatalf("FMT-42: resource matching pathParams key must pass, got %d error(s): %+v", len(errs), errs)
 	}
 }
 

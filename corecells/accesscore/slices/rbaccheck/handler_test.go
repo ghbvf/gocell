@@ -240,6 +240,18 @@ func TestHandler(t *testing.T) {
 			roles:      []string{"admin"},
 			wantStatus: http.StatusForbidden,
 		},
+		// Owner-scoped check-role route: no Authorizer → 403 fail-closed.
+		// RequirePermissionForResource cannot consult the PDP without a wired
+		// Authorizer; the gate fails closed regardless of whether the subject
+		// matches the path param (this is the owner-scoped contract-derived gate
+		// per ADR 202606201500-2355).
+		{
+			name:       "GET /{userID}/{roleName} owner-scoped no Authorizer fail-closed 403",
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
+			subject:    testutil.TestID("user-1"),
+			roles:      nil,
+			wantStatus: http.StatusForbidden,
+		},
 		// Non-self, PDP deny: viewer reading another user → 403.
 		{
 			name:       "GET /{userID} different user PDP deny returns 403",

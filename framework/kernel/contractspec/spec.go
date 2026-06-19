@@ -125,6 +125,13 @@ func (s ContractSpec) Validate() error {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: %s kind must not carry a GRPC block", s.ID, s.Kind)
 	}
 
+	// Resource and SelfScoped are HTTP-only fields: reject them here for every
+	// non-HTTP kind (event, command, projection, webhook, grpc, saga) in one
+	// guard so the per-kind validators do not each duplicate the check.
+	if s.Kind != cellvocab.ContractHTTP && (s.Resource != "" || s.SelfScoped) {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: %s kind must not carry http Resource/SelfScoped", s.ID, s.Kind)
+	}
+
 	switch s.Kind {
 	case cellvocab.ContractHTTP:
 		return s.validateHTTP()
@@ -160,8 +167,9 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
 	if s.Resource != "" && s.SelfScoped {
-		return fmt.Errorf("contractspec.ContractSpec[%s]: Resource and SelfScoped are mutually exclusive "+
-			"(owner-scoped path-param resource vs self-scoped subject)", s.ID)
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Resource and SelfScoped are mutually exclusive: "+
+			"use Resource (path param name) for routes with a path parameter, "+
+			"or SelfScoped for routes where the caller is the resource (no path param, e.g. /decide)", s.ID)
 	}
 	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) ||
 		s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
@@ -191,9 +199,7 @@ func (s ContractSpec) validateEvent() error {
 	if s.Method != "" || s.Path != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
-	if s.Resource != "" || s.SelfScoped {
-		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry http Resource/SelfScoped", s.ID)
-	}
+	// Resource/SelfScoped rejection is handled by the kind-agnostic guard in Validate().
 	return nil
 }
 
@@ -214,9 +220,7 @@ func (s ContractSpec) validateGRPC() error {
 	if s.Method != "" || s.Path != "" || s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Method/Path or event Topic", s.ID)
 	}
-	if s.Resource != "" || s.SelfScoped {
-		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Resource/SelfScoped", s.ID)
-	}
+	// Resource/SelfScoped rejection is handled by the kind-agnostic guard in Validate().
 	return nil
 }
 

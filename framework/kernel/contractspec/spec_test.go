@@ -351,6 +351,22 @@ func TestContractSpec_OwnerSelfScoped_Validate(t *testing.T) {
 			ID: "grpc.a.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
 			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Proto: "contracts/grpc/a/v1/a.proto"}, Resource: "id",
 		}, true},
+		{"grpc must not carry SelfScoped", contractspec.ContractSpec{
+			ID: "grpc.a.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Proto: "contracts/grpc/a/v1/a.proto"}, SelfScoped: true,
+		}, true},
+		{"command must not carry Resource", contractspec.ContractSpec{
+			ID: "command.a.v1", Kind: cellvocab.ContractCommand, Transport: "internal", Resource: "id",
+		}, true},
+		{"projection must not carry Resource", contractspec.ContractSpec{
+			ID: "projection.a.v1", Kind: cellvocab.ContractProjection, Transport: "internal", Resource: "id",
+		}, true},
+		{"webhook must not carry Resource", contractspec.ContractSpec{
+			ID: "webhook.a.v1", Kind: cellvocab.ContractWebhook, Transport: "internal", Resource: "id",
+		}, true},
+		{"saga must not carry Resource", contractspec.ContractSpec{
+			ID: "saga.a.v1", Kind: cellvocab.ContractSaga, Transport: "internal", Resource: "id",
+		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
