@@ -118,6 +118,18 @@ const corecellsImportPrefix = PlatformModulePath + "/" + PlatformCellsDir
 // & e2e build-tag-gated files exempt).
 func TestCORECELLS_CROSS_CELL_IMPORT_BAN_01(t *testing.T) {
 	root := findModuleRoot(t)
+
+	// Anti-vacuity: the gate is only meaningful if the DERIVED cell set is non-empty.
+	// PLATFORM-CELL-SCAN-COVERAGE-01 guards that corecells stays in the file-walk
+	// scope, but NOT that corecellsCellSet finds any cell — that is a separate
+	// os.ReadDir + cell.yaml stat path. If every corecells/<cell>/cell.yaml ever
+	// vanished, corecellsCrossCellImportFindings would return vacuously empty and
+	// assert.Empty below would pass while guarding nothing. Pin the precondition here.
+	cells, err := corecellsCellSet(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, cells,
+		"anti-vacuity: no corecells/<cell>/cell.yaml found — the cross-cell scan would pass vacuously")
+
 	findings, err := corecellsCrossCellImportFindings(root)
 	require.NoError(t, err)
 	assert.Empty(t, findings,
@@ -246,6 +258,12 @@ func corecellsFirstSegmentIfCell(rest string, cells map[string]bool) string {
 // generated, corecells/internal shared infra (both as target and as owner), the
 // corecells module root, and a clean cross-cell-free file (reverse self-check). It
 // is the anti-vacuity proof that the scanner is non-vacuous.
+//
+// The synthetic tree uses a representative 3-cell subset (accesscore / auditcore /
+// configcore). The detector is cell-name-agnostic — it keys on cell.yaml-derived
+// membership (corecellsCellSet), not a hardcoded list — so the other real cells
+// (registrycore / syscore / …) are covered identically by the real-tree gate above
+// (TestCORECELLS_CROSS_CELL_IMPORT_BAN_01), not re-enumerated here.
 func TestCORECELLS_CROSS_CELL_IMPORT_BAN_01_FixtureMetaTest(t *testing.T) {
 	t.Parallel()
 

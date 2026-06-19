@@ -83,9 +83,7 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   PDP ownership 规则豁免门禁）。
 - Authorizer 经 composition root `bootstrap.WithPrimaryAuthorizer` 注入 primary listener
   request ctx（唯一 `auth.WithAuthorizer` 上游 + `AuthorizerFromContext`/`RequirePermission`
-  下游）。Cell 不 import 兄弟 cell 的 Authorizer（由 archtest `CORECELLS-CROSS-CELL-IMPORT-BAN-01`
-  守，Medium typed import scan、PR-merge 拦截；已泛化为通用跨 cell 包 ban，非仅 Authorizer，#1981）；
-  强依赖缺失 fail-fast；可解析的 Authorizer
+  下游）。Cell 不 import 兄弟 cell 的 Authorizer；强依赖缺失 fail-fast；可解析的 Authorizer
   在 bootstrap router build（Init 后、serve 前）经 `ResolveAuthorizer` 预解析，nil provider
   在启动期 fail-fast 而非首请求才暴露。
 - PDP fail-closed：缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny。内置 baseline
