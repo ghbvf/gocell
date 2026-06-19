@@ -10,7 +10,9 @@
 | Debug | 本地诊断，生产默认关闭 |
 
 日志使用 `slog` 和结构化字段。禁止 Debug dump 完整请求、响应或 payload。
-错误日志必须带 request、tenant、cell、correlation 等可定位字段，敏感值必须先清洗。
+错误日志必须带与当前上下文匹配的结构化定位字段，敏感值必须先清洗。
+request、tenant、cell、correlation 在对应上下文存在时必须透传；启动期、
+全局错误和工具路径使用 service、component、operation、error 等可定位字段。
 
 ## Redaction
 
