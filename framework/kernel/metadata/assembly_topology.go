@@ -48,24 +48,6 @@ func CellGroup(asm *AssemblyMeta, cellID string) (TopologyGroup, bool) {
 	return TopologyGroup{}, false
 }
 
-// SameGroup reports whether cells a and b are hosted in the same process within
-// asm's topology — i.e. they share a deployment group (same Role).
-//
-// Empty topology (no groups) => all cells co-located => true. If either cell is
-// not assigned to any declared group, returns false (fail-closed: co-location
-// cannot be proven).
-func SameGroup(asm *AssemblyMeta, a, b string) bool {
-	if len(asm.Topology.Groups) == 0 {
-		return true // all-colocated default
-	}
-	ga, oka := CellGroup(asm, a)
-	gb, okb := CellGroup(asm, b)
-	if !oka || !okb {
-		return false
-	}
-	return ga.Role == gb.Role
-}
-
 // Error message constants — MESSAGE-CONST-LITERAL-01 compliance.
 const (
 	errMsgTopoEmptyRole       = "topology: group role must be non-empty"

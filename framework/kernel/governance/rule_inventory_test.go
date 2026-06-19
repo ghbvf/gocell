@@ -189,10 +189,10 @@ func goldenRuleIDs() []string {
 		// TOPO-10: assembly topology structural validation (mutual exclusion,
 		// exhaustiveness, endpoint syntax).
 		// TOPO-11: per-assembly contract-provider reachability gate.
-		// TOPO-13: broker-mandatory static gate (Epic #1423 US3, permanent,
-		// production-reachable since TOPO-12 was removed in US5 #1966).
+		// TOPO-13 REMOVED (#2196): broker-mandatory check is now a codegen-derived
+		// fact enforced solely by the bootstrap runtime gate (validateSplitTopologyBroker).
 		// TOPO-14: split-topology mTLS endpoint gate (#2263, non-loopback → https).
-		"TOPO-10", "TOPO-11", "TOPO-13", "TOPO-14",
+		"TOPO-10", "TOPO-11", "TOPO-14",
 
 		// VERIFY — verification closure (rules_verify.go)
 		"VERIFY-01", "VERIFY-02", "VERIFY-03",
