@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -181,6 +182,83 @@ func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"/api/v1/* without JWT must return 401 on PrimaryListener router")
+}
+
+func TestPerListener_PrimaryRouter_BodyLimitRejectsBeforeAuth(t *testing.T) {
+	verifier := &dualMuxMockVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	rtr, err := NewForListener(
+		clock.Real(), kcell.PrimaryListener,
+		WithBodyLimit(4),
+		WithAuthMiddleware(verifier),
+	)
+	require.NoError(t, err)
+
+	rtr.Handle("POST /api/v1/protected", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run when body limit rejects")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/protected", strings.NewReader("too-large"))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.ContentLength = int64(len("too-large"))
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, int64(0), verifier.called.Load(), "BodyLimit must reject before JWT auth verifies the bearer token")
+}
+
+func TestPerListener_InternalRouter_BodyLimitRejectsBeforeDefaultMiddleware(t *testing.T) {
+	var defaultAuthCalls atomic.Int64
+	rtr, err := NewForListener(
+		clock.Real(), kcell.InternalListener,
+		WithBodyLimit(4),
+		WithDefaultMiddleware(countingMW(&defaultAuthCalls)),
+	)
+	require.NoError(t, err)
+
+	rtr.Handle("POST /internal/v1/protected", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run when body limit rejects")
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/protected", strings.NewReader("too-large"))
+	req.ContentLength = int64(len("too-large"))
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, int64(0), defaultAuthCalls.Load(), "BodyLimit must reject before listener-level auth/default middleware")
+}
+
+func TestPerListener_PrimaryRouter_PublicRoute_BodyLimitStillApplies(t *testing.T) {
+	verifier := &dualMuxMockVerifier{
+		claims: kauth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	rtr, err := NewForListener(
+		clock.Real(), kcell.PrimaryListener,
+		WithBodyLimit(4),
+		WithAuthMiddleware(verifier),
+	)
+	require.NoError(t, err)
+
+	rtr.Handle("POST /api/v1/public", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("handler must not run when body limit rejects")
+	}))
+	require.NoError(t, rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: http.MethodPost,
+		Path:   "/api/v1/public",
+		Public: true,
+	}))
+	require.NoError(t, rtr.FinalizeAuth())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/public", strings.NewReader("too-large"))
+	req.ContentLength = int64(len("too-large"))
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, int64(0), verifier.called.Load(), "public auth bypass must not bypass BodyLimit")
 }
 
 // TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted verifies that a
