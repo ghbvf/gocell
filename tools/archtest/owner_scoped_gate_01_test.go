@@ -2,14 +2,24 @@
 
 // INVARIANT: OWNER-SCOPED-GATE-EXACT-SET-01
 //
-// OWNER-SCOPED-GATE-EXACT-SET-01 freezes the set of owner-scoped route gates in
-// accesscore, the iotdevice/todoorder examples (the latter added by PR-10d
-// #1894, which migrated their auth.SelfOr gates to RequirePermissionForResource),
-// AND the composition-root cellmodules/deviceserving framework-owned devicestate
-// gate (#2351 — the first owner-scoped gate frozen outside corecells/examples).
+// OWNER-SCOPED-GATE-EXACT-SET-01 freezes the set of owner-scoped route gates. It has
+// TWO arms (split by enforcement mechanism, #2355):
+//
+//   - TestOwnerScopedGate_ContractDerived_01 (metadata) — accesscore's identitymanage/
+//     rbaccheck/authorizationdecide gates migrated to CONTRACT-DERIVED authz: declared in
+//     contract.yaml endpoints.http.{resource,selfScoped} and rendered into the generated
+//     handler_gen.go contractSpec via the single RequirePermissionForContract funnel
+//     (golden-locked Hard). Frozen against ownerScopedGateContractDerivedSet.
+//   - TestOwnerScopedGate_ExactSet_01 (scan) — the STILL-hand-wired gates: the
+//     iotdevice/todoorder examples (PR-10d #1894, auth.SelfOr → RequirePermissionForResource)
+//     AND the composition-root cellmodules/deviceserving framework-owned devicestate gate
+//     (#2351). Frozen against ownerScopedGateExpectedSet. As these migrate (#2355 续波) they
+//     move to the contract-derived arm.
+//
 // An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
-// one of the two sanctioned owner-scoped gate shapes:
+// one of the two sanctioned owner-scoped gate shapes (hand-wired, scan arm) or declare
+// the equivalent endpoints.http.{resource,selfScoped} overlay (contract-derived arm):
 //
 //	auth.RequirePermissionForResource("<pathParam>", authz.Perm*())  // resource = path param
 //	auth.RequirePermissionForSelf(authz.Perm*())                     // resource = caller's own subject (#1863)
@@ -29,16 +39,22 @@
 // (or, with a permissive policy, widens). A regression drops the endpoint's triple
 // from the collected set → exact-set mismatch → CI fails.
 //
-// # AI-robust grade: Medium
+// # AI-robust grade: per arm
 //
-// Downstream Medium: type-aware CallExpr scan via ResolvePackageRef (alias/dot-import
-// safe) collects every RequirePermissionForResource(strlit, authz.Perm*()) triple in
-// the two guarded handler files and asserts the collected set EQUALS the frozen set.
-// NOT Hard: nothing in the type system forces an owner endpoint to choose
-// RequirePermissionForResource over RequirePermission (both type-check); only this
-// scan rejects the wrong choice. Hard-ification end state: contract.yaml declares the
-// owner-scoped gate → cellgen-derived gate + golden (Hard 范本 "codegen funnel + golden"),
-// the same end state tracked for PERMISSION-BASED-AUTHZ-01 (PR-13).
+// Contract-derived arm (accesscore, #2355): the gate behavior is 100% derived from the
+// generated contractSpec.{Resource,SelfScoped} via the single RequirePermissionForContract
+// funnel — codegen funnel + byte golden = HARD (the Hard 范本 "codegen funnel + golden",
+// the end state long tracked for PERMISSION-BASED-AUTHZ-01 / PR-13, now realized for
+// accesscore). TestOwnerScopedGate_ContractDerived_01 is the MEDIUM reverse-check that the
+// metadata declarations (which contracts are owner/self-scoped) stay frozen.
+//
+// Scan arm (still-hand-wired examples + deviceserving): MEDIUM — type-aware CallExpr scan
+// via ResolvePackageRef (alias/dot-import safe) collects every
+// RequirePermissionForResource(strlit, authz.Perm*()) / RequirePermissionForSelf triple in
+// the guarded handler files and asserts the collected set EQUALS the frozen set. NOT Hard:
+// nothing in the type system forces an owner endpoint to choose RequirePermissionForResource
+// over RequirePermission (both type-check); only this scan rejects the wrong choice. These
+// migrate to the contract-derived (Hard) arm as #2355 续波 lands.
 //
 // # Anti-vacuity
 //
@@ -47,13 +63,10 @@
 // triples. Two built-in discriminators make it non-vacuous without a ban-style reverse
 // fixture:
 //
-//   - identitymanage/handler.go contains BOTH auth.RequirePermission(authz.PermUserWrite())
-//     (admin gate, line ~267) AND auth.RequirePermissionForResource("id", authz.PermUserWrite())
-//     (owner gate). The scan collects ONLY the RequirePermissionForResource triple; if it
-//     over-collected plain RequirePermission, an UNEXPECTED triple would break the exact set.
-//     The example handlers carry the same discriminator: ordercell/cell.go and
+//   - The example handlers carry the discriminator (#2355: accesscore's identitymanage,
+//     formerly the canonical example, migrated off the scan): ordercell/cell.go and
 //     devicecell/cell.go each hold plain RequirePermission gates (create/list, device:list)
-//     alongside the owner gates, so over-collection there would also surface as UNEXPECTED.
+//     alongside the owner gates, so over-collection would surface as an UNEXPECTED triple.
 //   - If the typed scan silently failed to resolve any callsite, the collected set would be
 //     empty and every frozen triple would report MISSING → fail.
 //
@@ -67,13 +80,21 @@
 //   - Guards gate CONSTRUCTION, not route→gate WIRING: a correctly-constructed gate that
 //     is never mounted (or mounted on the wrong handler) is not caught here — the
 //     contract serve tests + e2e cover wiring.
-//   - Only the named handler files are scanned (accesscore identitymanage/rbaccheck/
-//     authorizationdecide + examples ordercell/cell.go, devicecell/cell.go,
-//     devicecommand/handler.go + the composition-root cellmodules/deviceserving/service.go,
-//     #2351); a NEW owner-scoped endpoint in a new file must be added to
-//     ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple check
-//     forces this consciously for the already-guarded files). A RequirePermissionForSelf
-//     callsite in an unlisted file is likewise not frozen.
+//   - Scan arm: only the named hand-wired handler files are scanned (examples
+//     ordercell/cell.go, devicecell/cell.go, devicecommand/handler.go + the composition-root
+//     cellmodules/deviceserving/service.go, #2351); a NEW hand-wired owner-scoped endpoint in
+//     a new file must be added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the
+//     UNEXPECTED-triple check forces this consciously for the already-guarded files). A
+//     RequirePermissionForSelf callsite in an unlisted file is likewise not frozen. The
+//     contract-derived arm has no such file-list blind spot — it scans ALL project metadata.
+//   - Contract-derived arm: guards that a contract KEEPS its resource/selfScoped overlay
+//     (and which param/permission), but — like the FMT-42 DELIBERATE non-port of gRPC FMT-41
+//     — it CANNOT tell whether a brand-NEW route SHOULD be owner-scoped: the same action
+//     (e.g. user:write) gates both owner routes (with resource) and admin routes (without),
+//     so owner-vs-admin intent on a new route is a per-route authoring choice with no machine
+//     enforcement (irreducible, see ADR 202606201500-2355). This frozen set catches
+//     regressions on KNOWN routes; new-route intent relies on the contract 403 description +
+//     ownership serve test + review.
 //   - Scan SCOPE vs handler-key ASYMMETRY (#2351): the scan now loads all of
 //     ./cellmodules/... but ownerScopedGateHandlerKey only recognizes deviceserving/service.go;
 //     an owner gate added in ANY OTHER cellmodules file resolves handler="" and is SILENTLY
@@ -105,24 +126,24 @@ const authzImportPath = PlatformFrameworkModulePath + "/pkg/authz"
 // changing its path param or permission, must update this set in the same change —
 // otherwise the exact-set compare fails. See the file godoc for the invariant.
 var ownerScopedGateExpectedSet = map[string]struct{}{
-	"identitymanage|id|PermUserRead":  {},
-	"identitymanage|id|PermUserWrite": {},
-	"rbaccheck|userID|PermRoleRead":   {},
+	// NOTE (#2355): accesscore (identitymanage/rbaccheck/authorizationdecide) MIGRATED
+	// off hand-wired gates to contract-derived authz — their owner/self-scoped shape is
+	// now declared in contract.yaml endpoints.http.{resource,selfScoped} and rendered into
+	// the generated handler_gen.go contractSpec via the single RequirePermissionForContract
+	// funnel (golden-locked Hard). They are guarded by the metadata-derived
+	// TestOwnerScopedGate_ContractDerived_01 below, NOT by this scan. This scan now covers
+	// only the STILL-hand-wired gates (examples + deviceserving); as those migrate (#2355
+	// 续波) they move to the contract-derived frozen set.
+	//
 	// examples (PR-10d #1894): the iotdevice + todoorder owner-scoped gates that
 	// PR-10d migrated from auth.SelfOr to auth.RequirePermissionForResource. Frozen
 	// here so a regression back to a plain RequirePermission (which forwards
 	// r.URL.Path, not the canonical resource id, breaking the ownership rule) drops
-	// the triple → exact-set mismatch → CI red, identical to the accesscore guard.
+	// the triple → exact-set mismatch → CI red.
 	"todoorder-order|id|PermOrderRead":   {},
 	"todoorder-order|id|PermOrderUpdate": {},
 	"iotdevice-device|id|PermDeviceRead": {},
 	"devicecommand|id|PermDeviceConsume": {},
-	// #1863: the PDP self-introspection gate. RequirePermissionForSelf has no path
-	// param (the caller's own subject is the resource), so the param slot is the
-	// literal "self". A regression to plain auth.RequirePermission would forward
-	// r.URL.Path instead of the subject, breaking the access:decide self rule → this
-	// triple goes MISSING → CI red.
-	"authorizationdecide|self|PermAccessDecide": {},
 	// #2351: the framework-owned http.devicestate.v1 serving gate lives in the
 	// composition-root layer (cellmodules/deviceserving/service.go), not a cell handler —
 	// the first owner-scoped gate frozen outside corecells/examples (scan scope widened to
@@ -133,18 +154,34 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	"deviceserving|id|PermDeviceRead": {},
 }
 
+// ownerScopedGateContractDerivedSet is the FROZEN set of accesscore owner-scoped /
+// self-scoped HTTP gates that migrated to contract-derived authz (#2355), keyed
+// "<contractID>|<param-or-self>|<action>" where param is the endpoints.http.resource
+// path-param name (owner-scoped) or the literal "self" (endpoints.http.selfScoped), and
+// action is the endpoints.http.permission string. The live set derived from project
+// metadata MUST equal this exactly (TestOwnerScopedGate_ContractDerived_01): dropping a
+// contract's resource/selfScoped overlay (re-coarsening its gate) shrinks the live set →
+// MISSING → CI red; adding/changing one without updating this set → UNEXPECTED → CI red.
+// The gate behavior itself is golden-locked at codegen (the contractSpec literal); this is
+// the Medium reverse-check that the metadata declarations stay frozen.
+var ownerScopedGateContractDerivedSet = map[string]struct{}{
+	"http.auth.user.get.v1|id|user:read":              {},
+	"http.auth.user.update.v1|id|user:write":          {},
+	"http.auth.user.patch.v1|id|user:write":           {},
+	"http.auth.user.change-password.v1|id|user:write": {},
+	"http.auth.role.list.v1|userID|role:read":         {},
+	"http.auth.role.check.v1|userID|role:read":        {},
+	"http.auth.decide.v1|self|access:decide":          {},
+}
+
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
 // or "" if the file is not one of the owner-scoped handlers under guard.
 func ownerScopedGateHandlerKey(rel string) string {
 	switch {
-	case strings.HasSuffix(rel, "slices/identitymanage/handler.go"):
-		return "identitymanage"
-	case strings.HasSuffix(rel, "slices/rbaccheck/handler.go"):
-		return "rbaccheck"
-	// #1863: the authorizationdecide HTTP surface gates on RequirePermissionForSelf
-	// (access:decide), the self-resource owner-scoped gate variant.
-	case strings.HasSuffix(rel, "slices/authorizationdecide/handler.go"):
-		return "authorizationdecide"
+	// NOTE (#2355): accesscore identitymanage/rbaccheck/authorizationdecide migrated to
+	// contract-derived authz — no longer hand-wired, so no longer scanned here (guarded by
+	// TestOwnerScopedGate_ContractDerived_01 via project metadata instead).
+	//
 	// examples (PR-10d #1894). todoorder get+confirm owner gates both live in
 	// ordercell/cell.go — one handler key, the two triples differ by permission
 	// (PermOrderRead/PermOrderUpdate). iotdevice's status owner gate lives in
@@ -281,6 +318,75 @@ func TestOwnerScopedGate_ExactSet_01(t *testing.T) {
 			diags = append(diags, Diagnostic{
 				Message: "UNEXPECTED owner-scoped gate " + k + " — a new/changed owner endpoint must be added " +
 					"to ownerScopedGateExpectedSet (the frozen set) in the same change (" + ruleOwnerScopedGateExactSet01 + ")",
+			})
+		}
+	}
+	Report(t, ruleOwnerScopedGateExactSet01, diags)
+}
+
+// TestOwnerScopedGate_ContractDerived_01 is the #2355 contract-derived arm of
+// OWNER-SCOPED-GATE-EXACT-SET-01: accesscore's owner/self-scoped gates are no longer
+// hand-wired but declared in contract.yaml endpoints.http.{resource,selfScoped} and
+// rendered into the generated handler_gen.go contractSpec via the single
+// RequirePermissionForContract funnel (golden-locked Hard). This test freezes the live
+// set of metadata-declared owner/self-scoped gates against
+// ownerScopedGateContractDerivedSet — so dropping a contract's resource/selfScoped overlay
+// (re-coarsening the gate) shrinks the live set → MISSING, and adding/changing one →
+// UNEXPECTED. The gate behavior is golden-locked at codegen (Hard); this is the Medium
+// reverse-check that the metadata declarations stay frozen.
+func TestOwnerScopedGate_ContractDerived_01(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	project := mustParseProjectContracts(t, root)
+
+	httpCount := 0
+	collected := map[string]struct{}{}
+	for _, c := range project.Contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		httpCount++
+		if c.Lifecycle != "active" || !c.Codegen {
+			continue
+		}
+		h := c.Endpoints.HTTP
+		if h == nil {
+			continue
+		}
+		switch {
+		case h.Resource != "":
+			collected[c.ID+"|"+h.Resource+"|"+h.Permission] = struct{}{}
+		case h.SelfScoped:
+			collected[c.ID+"|self|"+h.Permission] = struct{}{}
+		}
+	}
+	// Anti-vacuity: the loader must see the project's HTTP contracts AND at least the
+	// frozen owner/self gates, else the exact-set compare would pass against an empty set.
+	// The frozen set spans BOTH resource (owner) and selfScoped (self) shapes, so a loader
+	// that parsed only one would report the other MISSING — a built-in discriminator.
+	if httpCount == 0 {
+		t.Fatal("anti-vacuity: parsed zero http contracts — project loader misconfigured")
+	}
+	if len(collected) == 0 {
+		t.Fatal("anti-vacuity: parsed zero contract-derived owner/self-scoped gates — overlay loader misconfigured")
+	}
+
+	var diags []Diagnostic
+	for k := range ownerScopedGateContractDerivedSet {
+		if _, ok := collected[k]; !ok {
+			diags = append(diags, Diagnostic{
+				Message: "MISSING contract-derived owner/self-scoped gate " + k + " — a contract dropped its " +
+					"endpoints.http.{resource,selfScoped} overlay (re-coarsening the gate) or changed its param/permission; " +
+					"ownership would no longer be PDP-decided (" + ruleOwnerScopedGateExactSet01 + ")",
+			})
+		}
+	}
+	for k := range collected {
+		if _, ok := ownerScopedGateContractDerivedSet[k]; !ok {
+			diags = append(diags, Diagnostic{
+				Message: "UNEXPECTED contract-derived owner/self-scoped gate " + k + " — a new/changed owner contract " +
+					"must be added to ownerScopedGateContractDerivedSet (the frozen set) in the same change (" +
+					ruleOwnerScopedGateExactSet01 + ")",
 			})
 		}
 	}
