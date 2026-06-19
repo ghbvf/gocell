@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -424,5 +425,77 @@ func TestList_CursorStateBinding(t *testing.T) {
 	var ce *errcode.Error
 	if !errors.As(err, &ce) || ce.Code != errcode.ErrCursorInvalid {
 		t.Errorf("cross-state cursor replay: got error %v, want ErrCursorInvalid", err)
+	}
+}
+
+// txMarkerKey tags a context inside spyTxRunner.RunInTx so the store can prove
+// its read executed on the ambient-transaction context, not the outer ctx.
+type txMarkerKey struct{}
+
+// spyTxRunner is a persistence.TxRunner that records each RunInTx call and
+// injects txMarkerKey into the context it passes to fn. Wrapped via
+// persistence.WrapForCell (the sealed CellTxManager funnel, allowed from
+// _test.go), it stands in for the real TxManager whose RunInTx writes SET LOCAL
+// app.tenant_id — here we only need to observe that the read runs inside it.
+type spyTxRunner struct {
+	runInTxCalls int
+}
+
+func (s *spyTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	s.runInTxCalls++
+	return fn(context.WithValue(ctx, txMarkerKey{}, true))
+}
+
+// spyReadStore wraps a real ports.Registry and records, on each List, whether
+// the context it received carries the spyTxRunner tx marker. Embedding the real
+// store keeps Create (seeding) and the other methods intact; only List is spied.
+type spyReadStore struct {
+	ports.Registry
+	listCalls       int
+	listSawTxMarker bool
+}
+
+func (s *spyReadStore) List(
+	ctx context.Context, t tenant.TenantID, params query.ListParams, filter ports.ListFilter,
+) ([]registry.ContractRegistration, error) {
+	s.listCalls++
+	s.listSawTxMarker = ctx.Value(txMarkerKey{}) != nil
+	return s.Registry.List(ctx, t, params, filter)
+}
+
+// TestList_RunsInScopedTx is the behavioral counterpart to the
+// TENANT-RLS-READ-CALLER-01 archtest (#2392 review F1): the static guard pins
+// WHICH file may reference the RLS read methods; this proves the read actually
+// runs inside the tenant-scoped tx (scopedread.Do → RunInTx). Without it, the PG
+// serving role's FORCE RLS would fail-close any List to 0 rows. We assert
+// store.List ran exactly once on the tx-derived context (RunInTx was entered and
+// the read executed on its context, not the outer ctx).
+func TestList_RunsInScopedTx(t *testing.T) {
+	ctx := tenantCtx(testTenantStr)
+	tnt, _ := tenant.ParseTenantID(testTenantStr)
+
+	backing := newMemStore(t)
+	seedStore(ctx, t, backing, tnt, "x1")
+	store := &spyReadStore{Registry: backing}
+	spyTx := &spyTxRunner{}
+
+	svc, err := NewService(store, persistence.WrapForCell(spyTx), mustCodec(t), query.RunModeDemo, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := svc.List(ctx, &list.Request{}); err != nil {
+		t.Fatalf("List: unexpected error %v", err)
+	}
+
+	if spyTx.runInTxCalls != 1 {
+		t.Errorf("RunInTx called %d times, want exactly 1 (List must run inside scopedread.Do)", spyTx.runInTxCalls)
+	}
+	if store.listCalls != 1 {
+		t.Errorf("store.List called %d times, want exactly 1", store.listCalls)
+	}
+	if !store.listSawTxMarker {
+		t.Error("store.List ran on the outer context, not the ambient-tx context — the RLS read bypassed RunInTx, " +
+			"which under PG FORCE RLS would fail-close to 0 rows")
 	}
 }
