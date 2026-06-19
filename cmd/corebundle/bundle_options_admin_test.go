@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
+	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 )
 
 // TestOperatorAdminOptions verifies the operator control-plane wiring at the FINAL
@@ -59,30 +61,38 @@ func TestDefaultRuntimeOptions_OperatorAdminFinalAssembly(t *testing.T) {
 	asm := assembly.New(clock.Real(), assembly.Config{ID: "test-operator-admin", DurabilityMode: outbox.DurabilityDemo})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
-	optionCount := func() (int, error) {
-		opts, err := defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
-		return len(opts), err
+	build := func() ([]bootstrap.Option, error) {
+		return defaultRuntimeOptions(shared, locals, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared, locals))
 	}
 
-	// Baseline: no operator credentials → admin plane disabled, no admin options.
+	// Baseline: no operator credentials → admin plane disabled. The final assembly
+	// must NOT register an AdminListener.
 	t.Setenv(operatorAdminUsernameEnv, "")
 	t.Setenv(operatorAdminPasswordEnv, "")
-	base, err := optionCount()
+	baseOpts, err := build()
 	require.NoError(t, err)
+	baseB := newBootstrapFromOptions(shared.Clock, baseOpts)
+	assert.NotContains(t, baseB.ConfiguredListeners(), cell.AdminListener,
+		"no operator credentials must leave the AdminListener unregistered in the final assembly")
 
-	// Both credentials present → defaultRuntimeOptions must append EXACTLY the
-	// AdminListener + the audit chain verify endpoint (the coupled pair).
+	// Both credentials present → defaultRuntimeOptions must register the AdminListener
+	// (IDENTITY assertion: a dropped/bypassed `opts = append(opts, adminOpts...)` or a
+	// rewiring that omits the AdminListener turns this red) AND add exactly 2 options
+	// (AdminListener + audit chain verify endpoint — delta as defense-in-depth).
 	t.Setenv(operatorAdminUsernameEnv, "ops")
 	t.Setenv(operatorAdminPasswordEnv, "s3cret-operator-pw")
 	t.Setenv(adminHTTPAddrEnv, "127.0.0.1:19092")
-	withAdmin, err := optionCount()
+	adminOpts, err := build()
 	require.NoError(t, err)
-	assert.Equal(t, base+2, withAdmin,
-		"operator credentials must add exactly the AdminListener + audit chain verify endpoint through defaultRuntimeOptions (final assembly)")
+	adminB := newBootstrapFromOptions(shared.Clock, adminOpts)
+	assert.Contains(t, adminB.ConfiguredListeners(), cell.AdminListener,
+		"operator credentials must register cell.AdminListener through defaultRuntimeOptions (final assembly)")
+	assert.Len(t, adminOpts, len(baseOpts)+2,
+		"operator credentials add exactly the AdminListener + audit chain verify endpoint (delta defense-in-depth)")
 
 	// Half-configured credentials must fail the WHOLE assembly (fail-fast propagates),
 	// not silently skip the admin plane.
 	t.Setenv(operatorAdminPasswordEnv, "")
-	_, err = optionCount()
+	_, err = build()
 	require.Error(t, err, "half-configured operator credentials must fail defaultRuntimeOptions")
 }
