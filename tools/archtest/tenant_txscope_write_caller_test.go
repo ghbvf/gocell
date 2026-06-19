@@ -112,6 +112,11 @@ var tenantTxScopeAllowlist = map[string]struct{}{
 	"corecells/configcore/internal/scopedread/scopedread.go": {},
 	"corecells/accesscore/internal/scopedtx/scopedtx.go":     {},
 	"runtime/audit/ledger/storetest/suite.go":                {},
+	// #2392 (registrycore read scoping): registryread.List runs under FORCE RLS
+	// (migration 066); the single registrycore read-scoping helper scopes each read
+	// in a tenant tx so the PG serving role sees SET LOCAL app.tenant_id. Mirrors the
+	// configcore scopedread funnel above (the only WithScope callsite in registrycore).
+	"corecells/registrycore/internal/scopedread/scopedread.go": {},
 	// auditcoretest.BuildAuditcoreChain returns a tenant-scoped ctx so that
 	// Tail/Verify read-back targets the per-tenant chain its entries land in
 	// (#1618). Same test-support precedent as storetest/suite.go (non-_test.go

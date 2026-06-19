@@ -9,7 +9,8 @@
 // non-shipping: *_test.go (the canonical Go test convention), every
 // **/conformance.go (driver-conformance suites that exercise an adapter
 // under test), and every file under a recognized test-helper package
-// (locktest, outboxtest, storetest, healthtest, contracttest, commandtest).
+// (locktest, outboxtest, storetest, healthtest, contracttest, commandtest,
+// tlsutiltest).
 //
 // "Production code" is the strict complement within the gate scope: any
 // file under a top-level Go directory (cmd/, kernel/, runtime/, adapters/,
@@ -60,6 +61,7 @@ var testHelperSubpaths = []string{
 	"/accesscoretest/",
 	"/configcoretest/",
 	"/idempotencytest/",
+	"/tlsutiltest/",
 }
 
 // IsTestCode reports whether the given module-relative path is test code

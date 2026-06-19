@@ -51,14 +51,10 @@ package archtest
 
 import (
 	"go/ast"
-	"go/types"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 // INVARIANT: ROLEREPO-CONFORMANCE-ENROLLMENT-01
@@ -76,98 +72,13 @@ func TestRoleRepoConformanceEnrollment(t *testing.T) {
 		checkRepoConformanceEnrollment(t, roleRepoConformanceSpec(), ConfigForExternalCell{BuildTags: FlatNonDefaultTags()}))
 }
 
-// TestRoleRepoConformanceEnrollment_REDFixture verifies that the enrollment
-// detection logic flags an implementation when the owning package is not in the
-// enrolledPkgs set. This exercises the core of the enrollment check without
-// requiring a standalone fixture module (ports.RoleRepository lives in an
-// internal package, making cross-module fixture modules impossible).
-//
-// Strategy: collect the real implSet and enrolledPkgs from the production tree,
-// then simulate a "missing enrollment" by removing one impl's pkg from enrolled.
-// Assert that exactly that impl is reported as a violation.
+// TestRoleRepoConformanceEnrollment_REDFixture proves the enrollment detector is
+// non-vacuous for RoleRepository: removing one impl's package from the enrolled
+// set must flag exactly that package. The shared body lives in
+// runRepoEnrollmentREDFixture (repo_conformance_enrollment_helpers_test.go).
 func TestRoleRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based fixture test in -short mode")
-	}
-
-	root := findModuleRoot(t)
-
-	// ─── Load production iface + impls ─────────────────────────────────────
-	prodPatterns := prodscan.Patterns(root)
-	// corecells is a separate go module, so prodscan.Patterns's root-relative
-	// ./... does not cross the module boundary into it — the explicit
-	// ./corecells/... is required to load the iface + impls in one packages.Load.
-	ifacePatterns := append([]string{"./corecells/..."}, prodPatterns...)
-
-	var roleRepoIface *types.Interface
-	var implPkgs []*types.Package
-
-	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, ifacePatterns),
-		func(p *Pass) []Diagnostic {
-			if p.Pkg == nil {
-				return nil
-			}
-			if p.Pkg.Path() == repoPortsPkg {
-				if obj := p.Pkg.Scope().Lookup(roleRepoIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if iface, ok := named.Underlying().(*types.Interface); ok {
-							roleRepoIface = iface.Complete()
-						}
-					}
-				}
-				return nil
-			}
-			implPkgs = append(implPkgs, p.Pkg)
-			return nil
-		})
-
-	require.NotNil(t, roleRepoIface, "REDFixture: could not resolve RoleRepository interface")
-
-	implSet := make(map[string]bool)
-	implPkgSet := make(map[string]bool)
-	for _, pkg := range implPkgs {
-		if pkg != nil {
-			collectImplsFromScope(pkg, roleRepoIface, true, implSet, implPkgSet)
-		}
-	}
-	require.NotEmpty(t, implSet, "REDFixture: implSet must not be empty (need at least one impl)")
-
-	// Pick the first impl key and derive its pkg path.
-	var targetImplKey string
-	for k := range implSet {
-		targetImplKey = k
-		break
-	}
-	dotIdx := strings.LastIndex(targetImplKey, ".")
-	require.Greater(t, dotIdx, 0, "REDFixture: malformed impl key %q", targetImplKey)
-	targetPkg := targetImplKey[:dotIdx]
-
-	// Simulate missing enrollment: enrolledPkgs contains all impls EXCEPT targetPkg.
-	enrolledPkgs := make(map[string]bool)
-	for pkg := range implPkgSet {
-		if pkg != targetPkg {
-			enrolledPkgs[pkg] = true
-		}
-	}
-
-	// Run the real flagging logic with the simulated enrolled set.
-	diags := flagUnenrolledByPkg(implSet, enrolledPkgs,
-		func(implKey, _ string) string { return implKey + " not enrolled" })
-
-	assert.GreaterOrEqual(t, len(diags), 1,
-		"REDFixture: removing pkg %q from enrolledPkgs must produce at least 1 violation, got 0", targetPkg)
-
-	// Extra: confirm at least one diagnostic targets the removed pkg.
-	var foundTarget bool
-	for _, d := range diags {
-		if strings.HasPrefix(d.Rel, targetPkg) {
-			foundTarget = true
-			break
-		}
-	}
-	assert.True(t, foundTarget,
-		"REDFixture: expected at least one diagnostic with Rel prefix %q, got %v", targetPkg, diags)
+	runRepoEnrollmentREDFixture(t, repoPortsPkg, roleRepoIfaceName)
 }
 
 // TestRoleRepoConformanceEnrollment_ReverseBlindSpot_NoReflectImpl (blind spot B1)

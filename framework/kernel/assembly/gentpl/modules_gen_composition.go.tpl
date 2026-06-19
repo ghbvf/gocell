@@ -6,11 +6,6 @@ import (
 {{- range .ModuleImports}}
 	{{.}}
 {{- end}}
-{{- if .Capabilities}}
-	"github.com/ghbvf/gocell/framework/runtime/capability"
-{{- end}}
-	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
-	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 func generatedCellModules() []composition.CellModule {
@@ -71,6 +66,28 @@ func generatedPostgresCells() []string {
 {{- if .PostgresCells}}
 	return []string{
 {{- range .PostgresCells}}
+		{{printf "%q" .}},
+{{- end}}
+	}
+{{- else}}
+	return nil
+{{- end}}
+}
+
+// generatedBrokerCells is the sorted list of cell IDs that produce or consume at
+// least one broker-transported (amqp) contract, derived from the assembly cells'
+// slice.yaml contractUsages (the referenced contract's resolved Transports include
+// amqp) — NOT from cell.yaml `requires` nor a role subset. Single-sourced; consumed
+// by the composition root's per-cell broker URL resolution (cmd/corebundle
+// shared_deps → eventtransport.Resolve), replacing the former reuse of
+// generatedPostgresCells (#2365). A DB-only cell with no amqp contract is correctly
+// excluded; a cell that gains an amqp contract auto-enrolls on the next
+// `gocell generate assembly`, and `--verify` red-flags stale output. ALWAYS emitted
+// (nil when no broker cells) so the composition root can call it unconditionally.
+func generatedBrokerCells() []string {
+{{- if .BrokerCells}}
+	return []string{
+{{- range .BrokerCells}}
 		{{printf "%q" .}},
 {{- end}}
 	}

@@ -1,15 +1,10 @@
 package mqtt
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"math/big"
 	"testing"
 	"time"
 
@@ -18,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 )
 
 // configNegTimeout is used in validation tests that assert negative ConnectTimeout
@@ -550,29 +546,6 @@ func TestNewConfig_DefensivelyClonesTLS(t *testing.T) {
 		"MinVersion must not reflect caller mutation after construction")
 }
 
-// newTestCACert returns a minimal self-signed CA certificate for the cert-pool
-// defensive-copy test. serial distinguishes certs so x509.CertPool.Equal can
-// tell two pools apart.
-func newTestCACert(t *testing.T, serial int64) *x509.Certificate {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(serial),
-		Subject:               pkix.Name{CommonName: "mqtt-test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	require.NoError(t, err)
-	cert, err := x509.ParseCertificate(der)
-	require.NoError(t, err)
-	return cert
-}
-
 // TestNewConfig_DefensivelyClonesTLSPools verifies that post-construction
 // mutation of the caller's RootCAs / ClientCAs *x509.CertPool cannot widen the
 // sealed Config's trust roots. tls.Config.Clone copies the pools by pointer, so
@@ -581,7 +554,7 @@ func newTestCACert(t *testing.T, serial int64) *x509.Certificate {
 // Config trusts — beyond the trust roots validateBrokers verified.
 func TestNewConfig_DefensivelyClonesTLSPools(t *testing.T) {
 	t.Parallel()
-	ca1 := newTestCACert(t, 1)
+	ca1 := tlsutiltest.NewCA(t).Cert
 	rootPool := x509.NewCertPool()
 	rootPool.AddCert(ca1)
 	clientPool := x509.NewCertPool()
@@ -600,7 +573,7 @@ func TestNewConfig_DefensivelyClonesTLSPools(t *testing.T) {
 	pristine.AddCert(ca1)
 
 	// Mutate the caller's pools after construction.
-	ca2 := newTestCACert(t, 2)
+	ca2 := tlsutiltest.NewCA(t).Cert
 	rootPool.AddCert(ca2)
 	clientPool.AddCert(ca2)
 

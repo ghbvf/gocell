@@ -51,10 +51,12 @@ func NewRegistry(pool *pgxpool.Pool, clk clock.Clock) *Registry {
 // FORCE ROW LEVEL SECURITY policy is active.  In a production PG tenant-scoped
 // read the GUC app.tenant_id MUST be set via TxManager.RunInTx before any query
 // touches contract_registrations; without it the restricted serving role returns
-// 0 rows under FORCE RLS — the read fail-closes silently (no error, no data
-// leak, but also no correct tenant data).  See #2392 (scopedread wiring) for the
-// planned funnel that will make ambient-tx mandatory on the read path and
-// eliminate the pool fallback for tenant-scoped reads.
+// 0 rows under FORCE RLS — the read fail-closes silently (no error, no data leak,
+// but also no correct tenant data).  The bound read service guarantees the ambient
+// tx by routing every read through registrycore/internal/scopedread (#2392), so in
+// production this branch always returns the ambient tx; the pool fallback survives
+// only for the superuser/integration/mem-bootstrap callers above — matching
+// configcore session.resolve (read = pool fallback; resolveWrite = fail-fast).
 func (r *Registry) resolveRead(ctx context.Context) DBTX {
 	if r.session != nil {
 		return r.session.resolve(ctx)

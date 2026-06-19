@@ -42,15 +42,15 @@ composition root（corebundle + ssobff）复用同一包，不各自接线 in-me
 路径限定两 root）守卫。bus / claimer / nonce 三 funnel 合起来确保 composition root 内每个 in-memory
 单 pod 原语只经 sealed resolver 可达。权威语义见 `cellmodules/replaydeps/doc.go`。
 
-## saga 投影资源选型（journal / checkpoint / locker，topology-gated）
+## saga 投影资源选型（journal / checkpoint / dead-letter / locker，topology-gated）
 
 saga-journal CQRS 投影消费者的运行依赖经 `cellmodules/sagaprojectiondeps.Resolve(ctx, clk, topo, cfg)`
 按 `Topology` 单源选型（eventtransport / replaydeps 的第 3 个 sibling resolver）：saga journal（与
-Coordinator 共用，再以 `journal.GlobalReader` 喂投影）+ `projection.OwnerCheckpointStore` + 投影
-`TxRunner` + 每投影 leader `distlock.Locker`：
+Coordinator 共用，再以 `journal.GlobalReader` 喂投影）+ `projection.OwnerCheckpointStore` +
+`projection.DeadLetterStore`（poison-event sink，#2110）+ 投影 `TxRunner` + 每投影 leader `distlock.Locker`：
 
-- demo/memory → `MemJournal` + `MemOwnerCheckpointStore` + in-process locker + `DemoTxRunner`。
-- postgres → PG `PGJournal` + PG `ProjectionCheckpointStore` + PG `TxManager`；单 pod in-process
+- demo/memory → `MemJournal` + `MemOwnerCheckpointStore` + `MemDeadLetterStore` + in-process locker + `DemoTxRunner`。
+- postgres → PG `PGJournal` + PG `ProjectionCheckpointStore` + PG `SagaProjectionDeadLetterStore` + PG `TxManager`；单 pod in-process
   locker，real multi-pod → Redis-backed locker。PG pool / Redis client 由 composition root 注入
   （root 已持 pool 跑 migration，避免开第二个 pool）。
 - fail-closed：postgres 缺 pool / multi-pod 缺 Redis → 启动期报错，**不静默降级**回 in-memory

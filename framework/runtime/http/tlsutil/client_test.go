@@ -1,14 +1,8 @@
 package tlsutil
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
-	"math/big"
 	"net/url"
 	"testing"
 	"time"
@@ -17,79 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 )
 
-// testRootCAValidity is the validity window for test root CA certs (TEST-TIME-LITERAL-01:
-// site-specific test deadline as a file-local const, not an inline literal).
-const testRootCAValidity = 2 * time.Hour
-
-// cellChain holds a self-signed root + a cell leaf carrying a SPIFFE URI SAN.
-type cellChain struct {
-	rootCertPEM []byte
-	rootPool    *x509.CertPool
-	leafCertPEM []byte
-	leafKeyPEM  []byte
-	leaf        *x509.Certificate
-}
-
-// genCellChain builds a root CA and a leaf whose URI SANs are `uris`, signed by
-// the root, with the given ExtKeyUsages and validity window. ECDSA P-256.
-func genCellChain(t *testing.T, uris []*url.URL, eku []x509.ExtKeyUsage, notAfter time.Time) cellChain {
-	t.Helper()
-
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-root"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(testRootCAValidity),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	rootCert, err := x509.ParseCertificate(rootDER)
-	require.NoError(t, err)
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "test-cell"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     notAfter,
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  eku,
-		URIs:         uris,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, rootCert, &leafKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	leaf, err := x509.ParseCertificate(leafDER)
-	require.NoError(t, err)
-
-	leafKeyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
-	require.NoError(t, err)
-
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(rootCert)
-
-	return cellChain{
-		rootCertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}),
-		rootPool:    rootPool,
-		leafCertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}),
-		leafKeyPEM:  pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER}),
-		leaf:        leaf,
-	}
-}
-
-func mustURI(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	require.NoError(t, err)
-	return u
-}
+// expiredLeafOffset is the offset used to produce an already-expired leaf cert
+// (TEST-TIME-LITERAL-01: site-specific test deadline as a file-local const, not an inline literal).
+const expiredLeafOffset = -time.Minute
 
 func bothAuth() []x509.ExtKeyUsage {
 	return []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
@@ -104,11 +31,13 @@ func mustCellID(t *testing.T, td, cell string) spiffeid.CellID {
 
 func TestNewClientMTLSConfig_PinsFailClosedDefaults(t *testing.T) {
 	t.Parallel()
-	ch := genCellChain(t,
-		[]*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")},
-		bothAuth(), time.Now().Add(time.Hour))
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+		EKU:  bothAuth(),
+	})
 
-	cfg, err := NewClientMTLSConfig(ch.leafCertPEM, ch.leafKeyPEM, ch.rootPool, mustCellID(t, "example.org", "configcore"))
+	cfg, err := NewClientMTLSConfig(leaf.CertPEM, leaf.KeyPEM, ca.Pool, mustCellID(t, "example.org", "configcore"))
 	require.NoError(t, err)
 	assert.Equal(t, uint16(tls.VersionTLS13), cfg.MinVersion, "MinVersion must be pinned to TLS 1.3")
 	assert.True(t, cfg.InsecureSkipVerify, "InsecureSkipVerify must be true (hostname check replaced by SPIFFE-ID verify)")
@@ -118,10 +47,16 @@ func TestNewClientMTLSConfig_PinsFailClosedDefaults(t *testing.T) {
 
 func TestNewClientMTLSConfig_ErrorPaths(t *testing.T) {
 	t.Parallel()
-	ch := genCellChain(t,
-		[]*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")},
-		bothAuth(), time.Now().Add(time.Hour))
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+		EKU:  bothAuth(),
+	})
 	id := mustCellID(t, "example.org", "configcore")
+
+	// A mismatched key: issue a second leaf from the same CA so we have a valid PEM
+	// key that doesn't correspond to leaf.CertPEM.
+	otherLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{EKU: bothAuth()})
 
 	tests := []struct {
 		name    string
@@ -131,15 +66,15 @@ func TestNewClientMTLSConfig_ErrorPaths(t *testing.T) {
 		peer    spiffeid.CellID
 		wantErr bool
 	}{
-		{name: "ok", cert: ch.leafCertPEM, key: ch.leafKeyPEM, pool: ch.rootPool, peer: id, wantErr: false},
-		{name: "empty cert", cert: nil, key: ch.leafKeyPEM, pool: ch.rootPool, peer: id, wantErr: true},
-		{name: "empty key", cert: ch.leafCertPEM, key: nil, pool: ch.rootPool, peer: id, wantErr: true},
-		{name: "nil rootCAs", cert: ch.leafCertPEM, key: ch.leafKeyPEM, pool: nil, peer: id, wantErr: true},
-		{name: "zero expected peer id", cert: ch.leafCertPEM, key: ch.leafKeyPEM, pool: ch.rootPool, peer: spiffeid.CellID{}, wantErr: true},
+		{name: "ok", cert: leaf.CertPEM, key: leaf.KeyPEM, pool: ca.Pool, peer: id, wantErr: false},
+		{name: "empty cert", cert: nil, key: leaf.KeyPEM, pool: ca.Pool, peer: id, wantErr: true},
+		{name: "empty key", cert: leaf.CertPEM, key: nil, pool: ca.Pool, peer: id, wantErr: true},
+		{name: "nil rootCAs", cert: leaf.CertPEM, key: leaf.KeyPEM, pool: nil, peer: id, wantErr: true},
+		{name: "zero expected peer id", cert: leaf.CertPEM, key: leaf.KeyPEM, pool: ca.Pool, peer: spiffeid.CellID{}, wantErr: true},
 		{
-			name: "mismatched cert/key", cert: ch.leafCertPEM,
-			key:  genCellChain(t, nil, bothAuth(), time.Now().Add(time.Hour)).leafKeyPEM,
-			pool: ch.rootPool, peer: id, wantErr: true,
+			name: "mismatched cert/key", cert: leaf.CertPEM,
+			key:  otherLeaf.KeyPEM,
+			pool: ca.Pool, peer: id, wantErr: true,
 		},
 	}
 	for _, tc := range tests {
@@ -164,59 +99,68 @@ func TestVerifyConnection(t *testing.T) {
 
 	// Build the config once against a server peer whose cert chains to `serverCA`
 	// and asserts identity == expected.
-	server := genCellChain(t,
-		[]*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")},
-		bothAuth(), time.Now().Add(time.Hour))
+	serverCA := tlsutiltest.NewCA(t)
+	server := serverCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+		EKU:  bothAuth(),
+	})
 	// A client cert/key just to satisfy the config builder; not used by verify.
-	client := genCellChain(t,
-		[]*url.URL{mustURI(t, "spiffe://example.org/cell/accesscore")},
-		bothAuth(), time.Now().Add(time.Hour))
+	clientCA := tlsutiltest.NewCA(t)
+	client := clientCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore")},
+		EKU:  bothAuth(),
+	})
 
 	build := func(peerCAPool *x509.CertPool, peer spiffeid.CellID) *tls.Config {
-		cfg, err := NewClientMTLSConfig(client.leafCertPEM, client.leafKeyPEM, peerCAPool, peer)
+		cfg, err := NewClientMTLSConfig(client.CertPEM, client.KeyPEM, peerCAPool, peer)
 		require.NoError(t, err)
 		return cfg
 	}
 
 	t.Run("valid: chained + matching SPIFFE id", func(t *testing.T) {
 		t.Parallel()
-		cfg := build(server.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{server.leaf}})
+		cfg := build(serverCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{server.Cert}})
 		assert.NoError(t, err)
 	})
 
 	t.Run("reject: no peer certificate", func(t *testing.T) {
 		t.Parallel()
-		cfg := build(server.rootPool, expected)
+		cfg := build(serverCA.Pool, expected)
 		err := cfg.VerifyConnection(tls.ConnectionState{})
 		assert.Error(t, err)
 	})
 
 	t.Run("reject: wrong cell SPIFFE id", func(t *testing.T) {
 		t.Parallel()
-		wrong := genCellChain(t,
-			[]*url.URL{mustURI(t, "spiffe://example.org/cell/auditcore")},
-			bothAuth(), time.Now().Add(time.Hour))
-		cfg := build(wrong.rootPool, expected) // expects configcore, peer is auditcore
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{wrong.leaf}})
+		wrongCA := tlsutiltest.NewCA(t)
+		wrong := wrongCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/auditcore")},
+			EKU:  bothAuth(),
+		})
+		cfg := build(wrongCA.Pool, expected) // expects configcore, peer is auditcore
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{wrong.Cert}})
 		assert.Error(t, err)
 	})
 
 	t.Run("reject: wrong trust domain", func(t *testing.T) {
 		t.Parallel()
-		other := genCellChain(t,
-			[]*url.URL{mustURI(t, "spiffe://other.org/cell/configcore")},
-			bothAuth(), time.Now().Add(time.Hour))
-		cfg := build(other.rootPool, expected) // expects example.org, peer is other.org
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{other.leaf}})
+		otherCA := tlsutiltest.NewCA(t)
+		other := otherCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://other.org/cell/configcore")},
+			EKU:  bothAuth(),
+		})
+		cfg := build(otherCA.Pool, expected) // expects example.org, peer is other.org
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{other.Cert}})
 		assert.Error(t, err)
 	})
 
 	t.Run("reject: no SPIFFE SAN", func(t *testing.T) {
 		t.Parallel()
-		bare := genCellChain(t, nil, bothAuth(), time.Now().Add(time.Hour))
-		cfg := build(bare.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{bare.leaf}})
+		bareCA := tlsutiltest.NewCA(t)
+		bare := bareCA.IssueLeaf(t, tlsutiltest.LeafOptions{EKU: bothAuth()})
+		cfg := build(bareCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{bare.Cert}})
 		assert.Error(t, err)
 	})
 
@@ -224,29 +168,36 @@ func TestVerifyConnection(t *testing.T) {
 		t.Parallel()
 		// Verify against an unrelated CA pool: chain build must fail even though
 		// the SPIFFE id matches — proves we are NOT fail-open on chain.
-		unrelated := genCellChain(t, nil, bothAuth(), time.Now().Add(time.Hour))
-		cfg := build(unrelated.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{server.leaf}})
+		unrelatedCA := tlsutiltest.NewCA(t)
+		unrelated := unrelatedCA.IssueLeaf(t, tlsutiltest.LeafOptions{EKU: bothAuth()})
+		_ = unrelated
+		cfg := build(unrelatedCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{server.Cert}})
 		assert.Error(t, err)
 	})
 
 	t.Run("reject: expired leaf", func(t *testing.T) {
 		t.Parallel()
-		expired := genCellChain(t,
-			[]*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")},
-			bothAuth(), time.Now().Add(-time.Minute))
-		cfg := build(expired.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{expired.leaf}})
+		expiredCA := tlsutiltest.NewCA(t)
+		expired := expiredCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs:     []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+			EKU:      bothAuth(),
+			NotAfter: time.Now().Add(expiredLeafOffset),
+		})
+		cfg := build(expiredCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{expired.Cert}})
 		assert.Error(t, err)
 	})
 
 	t.Run("reject: peer lacks ServerAuth EKU", func(t *testing.T) {
 		t.Parallel()
-		clientOnly := genCellChain(t,
-			[]*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")},
-			[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, time.Now().Add(time.Hour))
-		cfg := build(clientOnly.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{clientOnly.leaf}})
+		clientOnlyCA := tlsutiltest.NewCA(t)
+		clientOnly := clientOnlyCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+			EKU:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		})
+		cfg := build(clientOnlyCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{clientOnly.Cert}})
 		assert.Error(t, err)
 	})
 
@@ -255,26 +206,30 @@ func TestVerifyConnection(t *testing.T) {
 	// must reject it regardless of whether either URI matches the expected peer.
 	t.Run("reject: ambiguous cell SPIFFE id (two distinct cell URIs)", func(t *testing.T) {
 		t.Parallel()
-		ambiguous := genCellChain(t,
-			[]*url.URL{
-				mustURI(t, "spiffe://example.org/cell/accesscore"),
-				mustURI(t, "spiffe://example.org/cell/auditcore"),
+		ambiguousCA := tlsutiltest.NewCA(t)
+		ambiguous := ambiguousCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{
+				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore"),
+				tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/auditcore"),
 			},
-			bothAuth(), time.Now().Add(time.Hour))
+			EKU: bothAuth(),
+		})
 		// Use the outer `expected` (configcore) as the expected peer identity: the
 		// ambiguity check fires before the identity comparison, so the expected peer
 		// does not matter for the error path.
-		cfg := build(ambiguous.rootPool, expected)
-		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{ambiguous.leaf}})
+		cfg := build(ambiguousCA.Pool, expected)
+		err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{ambiguous.Cert}})
 		assert.Error(t, err, "ambiguous SPIFFE id must be rejected")
 	})
 }
 
 func TestClientIdentity(t *testing.T) {
 	t.Parallel()
-	ch := genCellChain(t,
-		[]*url.URL{mustURI(t, "spiffe://example.org/cell/accesscore")},
-		bothAuth(), time.Now().Add(time.Hour))
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore")},
+		EKU:  bothAuth(),
+	})
 
 	t.Run("zero value IsZero", func(t *testing.T) {
 		t.Parallel()
@@ -286,7 +241,7 @@ func TestClientIdentity(t *testing.T) {
 
 	t.Run("constructed + ConfigForPeer binds expected id", func(t *testing.T) {
 		t.Parallel()
-		ci, err := NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, ch.rootPool, "example.org")
+		ci, err := NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, ca.Pool, "example.org")
 		require.NoError(t, err)
 		assert.False(t, ci.IsZero())
 
@@ -295,31 +250,39 @@ func TestClientIdentity(t *testing.T) {
 		require.NotNil(t, cfg.VerifyConnection)
 
 		// The minted config must accept a configcore peer and reject an auditcore peer.
-		good := genCellChain(t, []*url.URL{mustURI(t, "spiffe://example.org/cell/configcore")}, bothAuth(), time.Now().Add(time.Hour))
+		goodCA := tlsutiltest.NewCA(t)
+		good := goodCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/configcore")},
+			EKU:  bothAuth(),
+		})
 		// Re-issue the good peer under the SAME root as ci so the chain verifies.
-		ciSameRoot, err := NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, good.rootPool, "example.org")
+		ciSameRoot, err := NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, goodCA.Pool, "example.org")
 		require.NoError(t, err)
 		cfg2, err := ciSameRoot.ConfigForPeer("configcore")
 		require.NoError(t, err)
-		assert.NoError(t, cfg2.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{good.leaf}}))
+		assert.NoError(t, cfg2.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{good.Cert}}))
 
-		bad := genCellChain(t, []*url.URL{mustURI(t, "spiffe://example.org/cell/auditcore")}, bothAuth(), time.Now().Add(time.Hour))
-		ciBadRoot, err := NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, bad.rootPool, "example.org")
+		badCA := tlsutiltest.NewCA(t)
+		bad := badCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+			URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/auditcore")},
+			EKU:  bothAuth(),
+		})
+		ciBadRoot, err := NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, badCA.Pool, "example.org")
 		require.NoError(t, err)
 		cfg3, err := ciBadRoot.ConfigForPeer("configcore")
 		require.NoError(t, err)
-		assert.Error(t, cfg3.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{bad.leaf}}))
+		assert.Error(t, cfg3.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{bad.Cert}}))
 	})
 
 	t.Run("error paths", func(t *testing.T) {
 		t.Parallel()
-		_, err := NewClientIdentity(nil, ch.leafKeyPEM, ch.rootPool, "example.org")
+		_, err := NewClientIdentity(nil, leaf.KeyPEM, ca.Pool, "example.org")
 		assert.Error(t, err, "empty cert")
-		_, err = NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, nil, "example.org")
+		_, err = NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, nil, "example.org")
 		assert.Error(t, err, "nil rootCAs")
-		_, err = NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, ch.rootPool, "")
+		_, err = NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, ca.Pool, "")
 		assert.Error(t, err, "empty trust domain")
-		_, err = NewClientIdentity(ch.leafCertPEM, ch.leafKeyPEM, ch.rootPool, "Example.ORG")
+		_, err = NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, ca.Pool, "Example.ORG")
 		assert.Error(t, err, "invalid (uppercase) trust domain")
 	})
 }

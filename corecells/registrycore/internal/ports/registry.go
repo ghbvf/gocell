@@ -47,19 +47,23 @@ type ListFilter struct {
 // truth — implementations validate via registry.Transition(from, to) and MUST NOT
 // re-encode the state machine.
 //
-// # Read scoping under RLS (caller obligation; #2236 review F1)
+// # Read scoping under RLS (caller obligation; #2236 review F1, wired #2392)
 //
 // The PG tables carry FORCE ROW LEVEL SECURITY (migration 066). Under the restricted
 // serving role (NOBYPASSRLS) the tenant_isolation policy fail-closes any access whose
 // app.tenant_id GUC is unset — an UNSCOPED read returns 0 rows and an unscoped write
 // is rejected (proven by TestContractRegistrations_RLS_TenantIsolation_ServingRole).
 // The GUC is injected (SET LOCAL) only inside TxManager.RunInTx. Writes already require
-// an ambient tx; the read methods (Get/List/History) therefore impose the same caller
-// obligation: run them within a tenant-scoped tx (tenant.WithScope(ctx, t) + RunInTx),
-// the way the bound service wires reads through a scopedread funnel à la
-// configcore/internal/scopedread. The typed tenant param is the primary isolation;
-// RLS is the DB-Hard backstop the caller must keep effective by scoping reads. That
-// service-side funnel is wired in US6 (#2237) — tracked separately.
+// an ambient tx; the read methods (Get/List/History) impose the same caller obligation:
+// run them within a tenant-scoped tx (tenant.WithScope(ctx, t) + RunInTx). The bound
+// read service satisfies it through the registrycore/internal/scopedread funnel (#2392),
+// the sole production caller of tenant.WithScope in registrycore (pinned by
+// TENANT-TXSCOPE-WRITE-CALLER-01), mirroring configcore/internal/scopedread. Today List
+// is the only read with a production caller; Get/History carry the same obligation on any
+// future caller. The funnel guards the tenant.WithScope writer, NOT each repo-read
+// callsite — a read that bypasses scopedread is not a compile error, it fail-closes to 0
+// rows under RLS (no leak, but no correct data). The typed tenant param is the primary
+// isolation; RLS is the DB-Hard backstop the caller keeps effective by scoping reads.
 type Registry interface {
 	// Create records a new submission in the submitted state plus its initial
 	// migration event (From = zero sentinel, To = submitted), atomically, scoped to

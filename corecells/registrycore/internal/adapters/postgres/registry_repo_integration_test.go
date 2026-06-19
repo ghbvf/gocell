@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
@@ -27,7 +28,8 @@ var (
 func mustTenant(s string) tenant.TenantID {
 	t, err := tenant.ParseTenantID(s)
 	if err != nil {
-		panic("mustTenant: " + err.Error())
+		panic(panicregister.Approved("registry-integration-test-tenant-id",
+			errcode.Assertion("mustTenant: invalid tenant id %q: %v", s, err)))
 	}
 	return t
 }

@@ -1,5 +1,11 @@
 package auth
 
+// RoleAdmin and RoleSuperAdmin are the platform-reserved role constants. Their
+// values are the single source of truth for every role-string comparison
+// (ABAC baseline conditions, RowVisibility derivation, device-principal checks);
+// drift away from this file is detected by archtest
+// BASELINE-ROLE-STRING-SINGLE-SOURCE-01 (#1915).
+
 // RoleAdmin is the canonical role name for administrative privilege.
 const RoleAdmin = "admin"
 

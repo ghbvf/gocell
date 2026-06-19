@@ -16,103 +16,39 @@ package transport_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"io"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/http/middleware"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
 const mtlsTrustDomain = "example.org"
 
-// testMTLSCAValidity is the validity window for the test CA/leaf certs
-// (TEST-TIME-LITERAL-01: site-specific test deadline as a const, not inline).
-const testMTLSCAValidity = 2 * time.Hour
-
-// mtlsCA holds a self-signed CA and the pool that verifies certs it signs.
-type mtlsCA struct {
-	cert   *x509.Certificate
-	key    *ecdsa.PrivateKey
-	pemPEM []byte
-	pool   *x509.CertPool
+// cellSPIFFEURI returns the SPIFFE URI for a cell in the test trust domain.
+func cellSPIFFEURI(t *testing.T, cell string) *url.URL {
+	t.Helper()
+	return tlsutiltest.SPIFFEURI(t, "spiffe://"+mtlsTrustDomain+"/cell/"+cell)
 }
 
-func newMTLSCA(t *testing.T) mtlsCA {
+// newMTLSClientCAPool parses the CA cert and returns a pool for use as server ClientCAs.
+func newMTLSClientCAPool(t *testing.T, ca *tlsutiltest.CA) *x509.CertPool {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	p, err := tlsutil.NewClientCAPool(ca.CertPEM)
 	if err != nil {
-		t.Fatalf("CA key: %v", err)
+		t.Fatalf("NewClientCAPool: %v", err)
 	}
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "mtls-test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(testMTLSCAValidity),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("CA cert: %v", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatalf("parse CA: %v", err)
-	}
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	pool := x509.NewCertPool()
-	pool.AddCert(cert)
-	return mtlsCA{cert: cert, key: key, pemPEM: caPEM, pool: pool}
-}
-
-// issueCellLeaf signs a leaf cert for cell (URI SAN spiffe://example.org/cell/<cell>,
-// both ServerAuth + ClientAuth EKUs) and returns its PEM cert/key.
-func (ca mtlsCA) issueCellLeaf(t *testing.T, cell string) (certPEM, keyPEM []byte) {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("leaf key: %v", err)
-	}
-	uri, err := url.Parse("spiffe://" + mtlsTrustDomain + "/cell/" + cell)
-	if err != nil {
-		t.Fatalf("spiffe uri: %v", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: cell},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		URIs:         []*url.URL{uri},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatalf("leaf cert: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	return p
 }
 
 // startMTLSServer starts an httptest TLS server for cell "configcore" behind the
@@ -120,10 +56,12 @@ func (ca mtlsCA) issueCellLeaf(t *testing.T, cell string) (certPEM, keyPEM []byt
 // (caller principal) → PeerCellCrossBindMiddleware (cert↔caller bind) → biz 200.
 // RequireCallerCell is intentionally omitted so the cross-bind is the sole
 // caller-cell check under test.
-func startMTLSServer(t *testing.T, ca mtlsCA, ring *auth.HMACKeyRing, ns auth.NonceStore) *httptest.Server {
+func startMTLSServer(t *testing.T, ca *tlsutiltest.CA, ring *auth.HMACKeyRing, ns auth.NonceStore) *httptest.Server {
 	t.Helper()
-	serverCertPEM, serverKeyPEM := ca.issueCellLeaf(t, "configcore")
-	serverCfg, err := tlsutil.NewServerMTLSConfig(serverCertPEM, serverKeyPEM, ca.pool)
+	serverLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, "configcore")},
+	})
+	serverCfg, err := tlsutil.NewServerMTLSConfig(serverLeaf.CertPEM, serverLeaf.KeyPEM, newMTLSClientCAPool(t, ca))
 	if err != nil {
 		t.Fatalf("NewServerMTLSConfig: %v", err)
 	}
@@ -147,14 +85,16 @@ func startMTLSServer(t *testing.T, ca mtlsCA, ring *auth.HMACKeyRing, ns auth.No
 
 // mtlsClientTransport builds a RemoteHTTPTransport whose http.Client presents the
 // given client cell cert and authorizes the server as expectedPeerCell (SPIFFE).
-func mtlsClientTransport(t *testing.T, ca mtlsCA, clientCell, expectedPeerCell, serverURL string) *transport.RemoteHTTPTransport {
+func mtlsClientTransport(t *testing.T, ca *tlsutiltest.CA, clientCell, expectedPeerCell, serverURL string) *transport.RemoteHTTPTransport {
 	t.Helper()
-	clientCertPEM, clientKeyPEM := ca.issueCellLeaf(t, clientCell)
+	clientLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, clientCell)},
+	})
 	expected, err := spiffeid.ForCell(mtlsTrustDomain, expectedPeerCell)
 	if err != nil {
 		t.Fatalf("ForCell: %v", err)
 	}
-	clientCfg, err := tlsutil.NewClientMTLSConfig(clientCertPEM, clientKeyPEM, ca.pool, expected)
+	clientCfg, err := tlsutil.NewClientMTLSConfig(clientLeaf.CertPEM, clientLeaf.KeyPEM, ca.Pool, expected)
 	if err != nil {
 		t.Fatalf("NewClientMTLSConfig: %v", err)
 	}
@@ -175,14 +115,16 @@ func transportFromTLSConfig(serverURL string, clientCfg *tls.Config) *transport.
 // clientConfigFor builds a SPIFFE-verifying client *tls.Config (via tlsutil, so
 // no bare InsecureSkipVerify in this test file) presenting the given cell's cert
 // issued by `ca`, authorizing the server as configcore.
-func clientConfigFor(t *testing.T, ca mtlsCA, clientCell string) *tls.Config {
+func clientConfigFor(t *testing.T, ca *tlsutiltest.CA, clientCell string) *tls.Config {
 	t.Helper()
-	certPEM, keyPEM := ca.issueCellLeaf(t, clientCell)
+	clientLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, clientCell)},
+	})
 	expected, err := spiffeid.ForCell(mtlsTrustDomain, "configcore")
 	if err != nil {
 		t.Fatalf("ForCell: %v", err)
 	}
-	cfg, err := tlsutil.NewClientMTLSConfig(certPEM, keyPEM, ca.pool, expected)
+	cfg, err := tlsutil.NewClientMTLSConfig(clientLeaf.CertPEM, clientLeaf.KeyPEM, ca.Pool, expected)
 	if err != nil {
 		t.Fatalf("NewClientMTLSConfig: %v", err)
 	}
@@ -195,7 +137,7 @@ func clientConfigFor(t *testing.T, ca mtlsCA, clientCell string) *tls.Config {
 // handler never runs (DoContract returns a transport error). (F5)
 func TestRemoteMTLS_NoClientCert_ServerRejects(t *testing.T) {
 	t.Parallel()
-	ca := newMTLSCA(t)
+	ca := tlsutiltest.NewCA(t)
 	srv := startMTLSServer(t, ca, mustRing(t), mustNonceStore(t))
 
 	cfg := clientConfigFor(t, ca, "accesscore")
@@ -215,18 +157,20 @@ func TestRemoteMTLS_NoClientCert_ServerRejects(t *testing.T) {
 // only failure cause is the server-side client-cert CA enforcement. (F5)
 func TestRemoteMTLS_WrongCAClientCert_ServerRejects(t *testing.T) {
 	t.Parallel()
-	serverCA := newMTLSCA(t)
+	serverCA := tlsutiltest.NewCA(t)
 	srv := startMTLSServer(t, serverCA, mustRing(t), mustNonceStore(t))
 
-	wrongCA := newMTLSCA(t) // independent CA, not in the server's ClientCAs
-	wrongCertPEM, wrongKeyPEM := wrongCA.issueCellLeaf(t, "accesscore")
+	wrongCA := tlsutiltest.NewCA(t) // independent CA, not in the server's ClientCAs
+	wrongLeaf := wrongCA.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{cellSPIFFEURI(t, "accesscore")},
+	})
 	expected, err := spiffeid.ForCell(mtlsTrustDomain, "configcore")
 	if err != nil {
 		t.Fatalf("ForCell: %v", err)
 	}
 	// RootCAs = serverCA so the client still verifies the trusted server; the
 	// client cert is wrongCA-signed so the server's ClientCAs rejects it.
-	cfg, err := tlsutil.NewClientMTLSConfig(wrongCertPEM, wrongKeyPEM, serverCA.pool, expected)
+	cfg, err := tlsutil.NewClientMTLSConfig(wrongLeaf.CertPEM, wrongLeaf.KeyPEM, serverCA.Pool, expected)
 	if err != nil {
 		t.Fatalf("NewClientMTLSConfig: %v", err)
 	}
@@ -242,7 +186,7 @@ func TestRemoteMTLS_WrongCAClientCert_ServerRejects(t *testing.T) {
 // accesscore. Full handshake + SPIFFE verify + cross-bind all pass → 200.
 func TestRemoteMTLS_Happy(t *testing.T) {
 	t.Parallel()
-	ca := newMTLSCA(t)
+	ca := tlsutiltest.NewCA(t)
 	ring := mustRing(t)
 	ns := mustNonceStore(t)
 	tid := mustTenantID(t)
@@ -266,7 +210,7 @@ func TestRemoteMTLS_Happy(t *testing.T) {
 // VerifyConnection rejects the handshake → DoContract returns a transport error.
 func TestRemoteMTLS_ServerSPIFFEMismatch(t *testing.T) {
 	t.Parallel()
-	ca := newMTLSCA(t)
+	ca := tlsutiltest.NewCA(t)
 	ring := mustRing(t)
 	ns := mustNonceStore(t)
 	tid := mustTenantID(t)
@@ -289,7 +233,7 @@ func TestRemoteMTLS_ServerSPIFFEMismatch(t *testing.T) {
 // mismatch → 403.
 func TestRemoteMTLS_CrossBindMismatch(t *testing.T) {
 	t.Parallel()
-	ca := newMTLSCA(t)
+	ca := tlsutiltest.NewCA(t)
 	ring := mustRing(t)
 	ns := mustNonceStore(t)
 	tid := mustTenantID(t)

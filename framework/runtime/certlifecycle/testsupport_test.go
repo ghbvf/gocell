@@ -84,6 +84,10 @@ func (s *fakeSigner) Sign(_ context.Context, req cs.AuthorizedCertRequest) (cs.I
 		NotBefore:    s.notBefore,
 		NotAfter:     s.notAfter,
 	}
+	// x509.CreateCertificate here is intentional and sanctioned by
+	// TLS-TEST-MATERIAL-FUNNEL-01: this is the cert-issuance pipeline under test,
+	// so the cert is system-under-test input, not a reusable cell-identity
+	// fixture — do NOT migrate to tlsutiltest (that would be circular).
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &s.key.PublicKey, s.key)
 	if err != nil {
 		return cs.IssuedCert{}, fmt.Errorf("fake sign: create cert: %w", err)

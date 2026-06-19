@@ -47,23 +47,41 @@ import (
 //
 //	*_repo_conformance_enrollment.go detector files) ────────────────────────
 const (
-	rulePolicyRepoConformanceEnrollment01 = "POLICYREPO-CONFORMANCE-ENROLLMENT-01"
-	ruleRoleRepoConformanceEnrollment01   = "ROLEREPO-CONFORMANCE-ENROLLMENT-01"
-	ruleUserRepoConformanceEnrollment01   = "USERREPO-CONFORMANCE-ENROLLMENT-01"
+	rulePolicyRepoConformanceEnrollment01   = "POLICYREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleRoleRepoConformanceEnrollment01     = "ROLEREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleUserRepoConformanceEnrollment01     = "USERREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleRegistryRepoConformanceEnrollment01 = "REGISTRY-CONFORMANCE-ENROLLMENT-01"
 
-	// repoConformancePkg is the shared ports/conformance package: all three
-	// repo conformance suites (RunPolicyRepoConformance / RunRoleRepoConformance /
-	// RunUserRepoConformance) live here.
+	// repoPortsPkg / repoConformancePkg are the accesscore ports + shared
+	// ports/conformance packages: the three accesscore repo conformance suites
+	// (RunPolicyRepoConformance / RunRoleRepoConformance / RunUserRepoConformance)
+	// live in repoConformancePkg. registrycore (#2388) is a SECOND cell with its
+	// own ports + conformance packages, so each repoConformanceSpec carries its
+	// own portsPkg/conformancePkg rather than the check body hardcoding the
+	// accesscore pair.
 	repoPortsPkg       = PlatformCellsModulePath + "/accesscore/internal/ports"
 	repoConformancePkg = PlatformCellsModulePath + "/accesscore/internal/ports/conformance"
 
-	policyRepoIfaceName = "PolicyRepository"
-	roleRepoIfaceName   = "RoleRepository"
-	userRepoIfaceName   = "UserRepository"
+	registryPortsPkg       = PlatformCellsModulePath + "/registrycore/internal/ports"
+	registryConformancePkg = PlatformCellsModulePath + "/registrycore/internal/ports/conformance"
 
-	policyConformanceFunc = "RunPolicyRepoConformance"
-	roleConformanceFunc   = "RunRoleRepoConformance"
-	userConformanceFunc   = "RunUserRepoConformance"
+	// registryMemPkg / registryPGPkg are the two ports.Registry implementation
+	// packages the registry spec pins via expectedImplPkgs (#2388 review F4): the
+	// rule must collect BOTH, else dropping one (e.g. a load-pattern gap losing the
+	// PG package) would leave the guard enforcing only mem enrollment — vacuous-green
+	// for the missing impl. The zero-impl guard alone cannot catch that.
+	registryMemPkg = PlatformCellsModulePath + "/registrycore/internal/mem"
+	registryPGPkg  = PlatformCellsModulePath + "/registrycore/internal/adapters/postgres"
+
+	policyRepoIfaceName   = "PolicyRepository"
+	roleRepoIfaceName     = "RoleRepository"
+	userRepoIfaceName     = "UserRepository"
+	registryRepoIfaceName = "Registry"
+
+	policyConformanceFunc   = "RunPolicyRepoConformance"
+	roleConformanceFunc     = "RunRoleRepoConformance"
+	userConformanceFunc     = "RunUserRepoConformance"
+	registryConformanceFunc = "RunRegistryConformance"
 )
 
 // enrollPass captures, during the single Tests=true load, the per-package data the
@@ -307,19 +325,30 @@ func flagUnenrolledByImplKey(
 
 // ─── repo family ────────────────────────────────────────────────────────────
 
-// repoConformanceSpec parameterizes the three ports.*Repository enrollment rules.
+// repoConformanceSpec parameterizes the ports.*Repository / ports.Registry
+// enrollment rules. portsPkg / conformancePkg are per-member (accesscore and
+// registrycore are distinct cells with their own ports + conformance packages).
 type repoConformanceSpec struct {
 	ruleID          string
+	portsPkg        string // import path of the interface's ports package
+	conformancePkg  string // import path of the package holding conformanceFunc
 	ifaceName       string
 	conformanceFunc string
 	humanIface      string // e.g. "ports.PolicyRepository" for messages
 	emptyImplHint   string // e.g. "Expect at least mem.PolicyRepository."
 	callSuffix      string // factory-arg shape shown in the remediation message
+	// expectedImplPkgs, when non-empty, are impl package paths the rule MUST collect
+	// (anti-vacuity beyond the zero-impl guard): if any is absent from the collected
+	// impl set the check fails loud, so a load-pattern gap that drops one impl (e.g.
+	// the PG package) cannot leave the rule silently enforcing only the survivors.
+	expectedImplPkgs []string
 }
 
 func policyRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          rulePolicyRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       policyRepoIfaceName,
 		conformanceFunc: policyConformanceFunc,
 		humanIface:      "ports.PolicyRepository",
@@ -331,6 +360,8 @@ func policyRepoConformanceSpec() repoConformanceSpec {
 func roleRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          ruleRoleRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       roleRepoIfaceName,
 		conformanceFunc: roleConformanceFunc,
 		humanIface:      "ports.RoleRepository",
@@ -342,6 +373,8 @@ func roleRepoConformanceSpec() repoConformanceSpec {
 func userRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          ruleUserRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       userRepoIfaceName,
 		conformanceFunc: userConformanceFunc,
 		humanIface:      "ports.UserRepository",
@@ -350,11 +383,51 @@ func userRepoConformanceSpec() repoConformanceSpec {
 	}
 }
 
+// registryRepoConformanceSpec is the registrycore member (#2388): ports.Registry
+// has mem + PG implementations that must both enroll in conformance.RunRegistryConformance.
+// Blind-spot catalog (including the intentional B1 reverse-guard omission) is in the
+// TestRegistryRepoConformanceEnrollment godoc.
+func registryRepoConformanceSpec() repoConformanceSpec {
+	return repoConformanceSpec{
+		ruleID:           ruleRegistryRepoConformanceEnrollment01,
+		portsPkg:         registryPortsPkg,
+		conformancePkg:   registryConformancePkg,
+		ifaceName:        registryRepoIfaceName,
+		conformanceFunc:  registryConformanceFunc,
+		humanIface:       "ports.Registry",
+		emptyImplHint:    "Expect at least mem.Registry and postgres.Registry.",
+		callSuffix:       "(t, factory)",
+		expectedImplPkgs: []string{registryMemPkg, registryPGPkg},
+	}
+}
+
 // repoConformanceLoadPatterns is the iface∪scan pattern set for the repo family.
 // corecells is a separate go module, so prodscan.Patterns's root-relative ./...
 // does not cross into it — ./corecells/... is required to load the iface + impls.
 func repoConformanceLoadPatterns(root string) []string {
 	return append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
+}
+
+// missingExpectedImplPkgs returns the expectedImplPkgs absent from implSet (keys
+// are "pkgPath.TypeName"). Empty expectedImplPkgs disables the check (returns nil).
+// Used by the expected-impl anti-vacuity guard (#2388 F4).
+func missingExpectedImplPkgs(expectedImplPkgs []string, implSet map[string]bool) []string {
+	if len(expectedImplPkgs) == 0 {
+		return nil
+	}
+	present := map[string]bool{}
+	for implKey := range implSet {
+		if dot := strings.LastIndex(implKey, "."); dot > 0 {
+			present[implKey[:dot]] = true
+		}
+	}
+	var missing []string
+	for _, pkg := range expectedImplPkgs {
+		if !present[pkg] {
+			missing = append(missing, pkg)
+		}
+	}
+	return missing
 }
 
 // checkRepoConformanceEnrollment is the shared body for the three ports.*Repository
@@ -366,24 +439,38 @@ func checkRepoConformanceEnrollment(t *testing.T, spec repoConformanceSpec, cfg 
 
 	iface, implSet, passes := loadConformanceEnrollmentImpls(
 		t, repoConformanceLoadPatterns(root), cfg.BuildTags,
-		repoPortsPkg, spec.ifaceName, true /*exportedOnly*/, false /*collectFromIfacePkg*/)
+		spec.portsPkg, spec.ifaceName, true /*exportedOnly*/, false /*collectFromIfacePkg*/)
 
 	if iface == nil {
-		return []Diagnostic{{Rel: repoPortsPkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.portsPkg, Message: fmt.Sprintf(
 			"%s: failed to resolve %s interface; check import path %s",
-			spec.ruleID, spec.humanIface, repoPortsPkg)}}
+			spec.ruleID, spec.humanIface, spec.portsPkg)}}
 	}
 	if len(implSet) == 0 {
-		return []Diagnostic{{Rel: repoPortsPkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.portsPkg, Message: fmt.Sprintf(
 			"%s: zero %s implementations collected — likely a type-universe regression "+
 				"(iface and impls must share one packages.Load). %s",
 			spec.ruleID, spec.ifaceName, spec.emptyImplHint)}}
+	}
+	// Anti-vacuity beyond the zero-impl guard (#2388 F4): every pinned impl package
+	// must be among the collected impls, else the rule would silently enforce only
+	// the survivors (e.g. a load-pattern gap dropping the PG package leaves mem the
+	// sole guarded impl — vacuous-green for PG).
+	if missing := missingExpectedImplPkgs(spec.expectedImplPkgs, implSet); len(missing) > 0 {
+		var diags []Diagnostic
+		for _, pkg := range missing {
+			diags = append(diags, Diagnostic{Rel: spec.portsPkg, Message: fmt.Sprintf(
+				"%s: expected impl package %q not among the collected %s implementations — "+
+					"the rule would be vacuous-green for it (type-universe regression or load-pattern gap). %s",
+				spec.ruleID, pkg, spec.ifaceName, spec.emptyImplHint)})
+		}
+		return diags
 	}
 
 	enrolledPkgs := map[string]bool{}
 	for _, pd := range passes {
 		for _, f := range pd.testFiles {
-			if hasConformanceCallTo(f, pd.info, repoConformancePkg, spec.conformanceFunc) {
+			if hasConformanceCallTo(f, pd.info, spec.conformancePkg, spec.conformanceFunc) {
 				enrolledPkgs[canonicalPkgPath(pd.pkgPath)] = true
 			}
 		}

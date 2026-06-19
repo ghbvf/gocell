@@ -52,7 +52,7 @@ type Request struct {
 	// (workspace root, target module path, framework/platform paths, scan dirs).
 	Scope       Scope  // default ScopeWorkspace
 	Rule        string // optional INVARIANT rule ID, e.g. "LAYER-05"
-	Changed     bool   // optional: select only changed archtest test files
+	Changed     bool   // optional: select only rules a changed file could affect (#1877)
 	Shard       Shard  // optional shard selection
 	TestJSONOut string // optional file: write the raw `go test -json` event lines
 	Timeout     string // `go test -timeout` value; default "5m" when empty

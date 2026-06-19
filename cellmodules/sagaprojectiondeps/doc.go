@@ -2,7 +2,8 @@
 // saga-journal projection runtime dependencies a composition root wires into
 // bootstrap: the saga journal (shared with the saga Coordinator and re-exposed as
 // the projection's journal.GlobalReader), the projection OwnerCheckpointStore,
-// the per-projection leader distlock.Locker, and the projection TxRunner.
+// the projection DeadLetterStore (poison-event sink, #2110), the per-projection
+// leader distlock.Locker, and the projection TxRunner.
 //
 // It is the saga-projection sibling of cellmodules/eventtransport.Resolve (event
 // transport) and cellmodules/replaydeps.Resolve (consumer claimer + service-token
@@ -14,12 +15,14 @@
 //	demo / memory topology:
 //	  Journal      = journal.MemJournal (also the GlobalReader)
 //	  OwnerStore   = projection.MemOwnerCheckpointStore
+//	  DeadLetters  = projection.MemDeadLetterStore
 //	  Locker       = distlock over an in-process Driver (single pod, no contention)
 //	  TxRunner     = outbox.DemoTxRunner (pass-through)
 //
 //	postgres topology:
 //	  Journal      = adapters/postgres/saga.PGJournal (durable; also GlobalReader)
 //	  OwnerStore   = adapters/postgres.ProjectionCheckpointStore (fenced CAS)
+//	  DeadLetters  = adapters/postgres.SagaProjectionDeadLetterStore (ambient-tx)
 //	  TxRunner     = adapters/postgres.TxManager
 //	  Locker       = in-process (single pod) OR Redis-backed (multi pod) — see below
 //

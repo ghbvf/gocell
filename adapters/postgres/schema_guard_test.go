@@ -117,8 +117,11 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// contract registry store, #2236 303-US5): both tenant-scoped under
 	// tenant_isolation; the history table has UPDATE/DELETE revoked from gocell_app
 	// (append-only). Registered in expectedRLSTables (verifyRLS).
-	assert.Equal(t, int64(66), v,
-		"expected version should be exactly 66 (current migration max — 066_create_contract_registrations)")
+	// 067 creates saga_projection_dead_letters (saga-journal Tailer poison-event sink,
+	// #2110): framework-internal, NO tenant_id / NO RLS (like projection_checkpoints 045
+	// / projection_events 058); UPDATE/DELETE revoked from gocell_app (append-only).
+	assert.Equal(t, int64(67), v,
+		"expected version should be exactly 67 (current migration max — 067_create_saga_projection_dead_letters)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

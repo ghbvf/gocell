@@ -2,7 +2,6 @@ package contractgen
 
 import (
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -321,18 +320,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 	// server contract is buf's generated pb.<Svc>Server (#1688) — neither has a
 	// per-contract contractgen package.
 	if spec.Kind == "webhook" || spec.Kind == "grpc" {
-		slog.Debug("contractgen: contract emits zero artifacts by design; wiring derives via cellgen / buf",
-			"contractID", contractID, "kind", spec.Kind)
 		return nil
-	}
-
-	// For kind=projection, types_gen.go + iface_gen.go IS the complete product by
-	// design: NewProjectionRequest is generated on the event-contract side, and
-	// cellgen derives reg.RegisterProjection from event-subscribe CUs.
-	if spec.Kind == "projection" {
-		slog.Debug("contractgen: projection contract emits types/iface only by design; "+
-			"NewProjectionRequest is generated on the event-contract side",
-			"contractID", contractID)
 	}
 
 	// Per-artifact emit, driven by the kind × artifact matrix. The applicable-kind
@@ -423,8 +411,6 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 	// server contract is buf's generated pb.<Svc>Server (#1688) — neither has a
 	// per-contract contractgen package.
 	if spec.Kind == "webhook" || spec.Kind == "grpc" {
-		slog.Debug("contractgen: contract emits zero artifacts by design; wiring derives via cellgen / buf",
-			"contractID", contractID, "kind", spec.Kind)
 		return nil, nil
 	}
 
