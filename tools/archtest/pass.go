@@ -146,7 +146,7 @@ type RunScope interface {
 type astRunScope struct{ fs Scope }
 
 // typedRunScope dispatches [Run] in typed mode loading patterns from the main
-// module root (resolved via findModuleRoot).
+// module root (resolved via [defaultScopeConfig]).
 type typedRunScope struct {
 	opts     TypedOpts
 	patterns []string
@@ -284,14 +284,14 @@ func Run(t testing.TB, scope RunScope, rule Rule) []Diagnostic {
 	case astRunScope:
 		return runAST(t, s.fs, rule)
 	case typedRunScope:
-		return runTypedWithRoot(t, findModuleRoot(t), s.opts, s.patterns, rule)
+		return runTypedWithRoot(t, defaultScopeConfig(t).WorkspaceRoot(), s.opts, s.patterns, rule)
 	case dirRunScope:
 		if !filepath.IsAbs(s.dir) {
 			t.Fatalf("archtest.Run: StandaloneModule requires an absolute module root, got %q", s.dir)
 		}
 		return runStandaloneModuleWithRoot(t, s.dir, s.opts, s.patterns, rule)
 	case fixtureRunScope:
-		return runTypedWithRoot(t, findModuleRoot(t), TypedOpts{
+		return runTypedWithRoot(t, defaultScopeConfig(t).WorkspaceRoot(), TypedOpts{
 			Tests: s.opts.Tests,
 			Tags:  []string{fixtureBuildTag},
 		}, s.patterns, rule)
@@ -329,7 +329,7 @@ func runAST(t testing.TB, fs Scope, rule Rule) []Diagnostic {
 
 // runProduction executes rule in typed mode over the main module's production
 // package set ONLY (every <module>/generated/ package excluded). It resolves
-// the module root via [findModuleRoot], reads the module path from go.mod, and
+// the module root via [defaultScopeConfig], reads the module path from go.mod, and
 // delegates to [typeseval.LoadProductionPackages]; rule is invoked with one
 // Pass per production package (same dedup/ordering as the other typed scopes).
 //
@@ -340,7 +340,7 @@ func runAST(t testing.TB, fs Scope, rule Rule) []Diagnostic {
 //
 // ref: golang.org/x/tools/go/analysis Pass.Files driver-controlled scope
 func runProduction(t testing.TB, opts TypedOpts, rule Rule) []Diagnostic {
-	root := findModuleRoot(t)
+	root := defaultScopeConfig(t).WorkspaceRoot()
 	modules := findWorkspaceModules(t, root)
 	resolver, err := typeseval.LoadProductionPackages(root, modules, opts.Tests, opts.Tags)
 	if err != nil {
@@ -414,7 +414,7 @@ func collectASTFiles(t testing.TB, scope Scope) (
 //
 // Precondition: root must be a non-empty absolute path. The caller is
 // responsible for this guarantee — the [Typed] / [Fixture] dispatch satisfies
-// it via findModuleRoot, and the [StandaloneModule] dispatch satisfies it via
+// it via [defaultScopeConfig], and the [StandaloneModule] dispatch satisfies it via
 // the filepath.IsAbs guard. No runtime check is performed here to avoid
 // duplicating caller-side enforcement.
 //
