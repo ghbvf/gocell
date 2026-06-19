@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 const (
@@ -115,8 +115,8 @@ func assertBootstrapCommandEmitted(t *testing.T, rec *outboxtest.Recorder) {
 		t.Fatalf("emitted %d entries, want 1", len(entries))
 	}
 	got := entries[0]
-	if got.RoutingTopic() != string(cmdenqueue.DispatchID) {
-		t.Errorf("RoutingTopic = %q, want %q", got.RoutingTopic(), cmdenqueue.DispatchID)
+	if got.RoutingTopic() != string(cmdremote.DispatchID) {
+		t.Errorf("RoutingTopic = %q, want %q", got.RoutingTopic(), cmdremote.DispatchID)
 	}
 	if got.AggregateID() != testDeviceID {
 		t.Errorf("AggregateID = %q, want %q", got.AggregateID(), testDeviceID)
@@ -125,7 +125,7 @@ func assertBootstrapCommandEmitted(t *testing.T, rec *outboxtest.Recorder) {
 		t.Errorf("command_id metadata = %q, want source entry ID %q", cid, testEntryID)
 	}
 
-	var req cmdenqueue.Request
+	var req cmdremote.Request
 	if err := json.Unmarshal(got.Payload(), &req); err != nil {
 		t.Fatalf("decode emitted command payload: %v", err)
 	}

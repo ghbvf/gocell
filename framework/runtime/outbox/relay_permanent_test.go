@@ -51,8 +51,8 @@ func newPermanentTestRelay(store Store) *Relay {
 
 func permanentTestResult(id string, attempts int, err error) publishResult {
 	entry, scanErr := kout.EntryScan{
-		ID: id, EventType: "command.devicecommand.enqueue.v1",
-		Topic: "command.devicecommand.enqueue.v1", Payload: []byte(`{}`),
+		ID: id, EventType: "command.x.v1",
+		Topic: "command.x.v1", Payload: []byte(`{}`),
 		CreatedAt: time.Now(), OccurredAt: time.Now(),
 	}.ToEntry()
 	if scanErr != nil {

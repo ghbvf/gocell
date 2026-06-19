@@ -65,6 +65,8 @@ func buildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		PanicReasonClientsOnlySchemaCompileFailed:  kebab + "-clients-only-schema-compile-failed",
 		PanicReasonServiceOwnedSchemaCompileFailed: kebab + "-service-owned-schema-compile-failed",
 		PanicReasonStandardSchemaCompileFailed:     kebab + "-standard-schema-compile-failed",
+		PanicReasonClientTransportNil:              kebab + "-client-transport-nil",
+		PanicReasonClientRingNil:                   kebab + "-client-ring-nil",
 	}
 
 	// Fail closed on empty transports before any kind-specific template can
@@ -160,6 +162,48 @@ func validateCommandLevel(contractID, level string) error {
 	return nil
 }
 
+// tenantRequestHeader is the one request header a generated cross-cell client
+// already conveys: auth.SignInternalRequest sets X-Tenant-ID from the tn argument
+// (and folds it into the service-token MAC). Any OTHER declared request header is
+// not sent by client.tmpl, so validateGeneratedClientEncodable rejects it.
+const tenantRequestHeader = "X-Tenant-ID"
+
+// validateGeneratedClientEncodable rejects an internal contract that declares
+// endpoints.clients (so generator.shouldEmitClient emits a cross-cell client) but
+// whose request/response shape client.tmpl cannot faithfully encode. It is the
+// codegen funnel that keeps "a client was generated" ⟹ "the client sends the full
+// declared request and decodes the declared success" honest:
+//
+//   - NoContent (204): the client.tmpl success path always decodes a body — a 204
+//     success has none, and a 204 contract may not even generate a Response type,
+//     so the generated client would be uncompilable / always-EOF.
+//   - a custom request header other than the tenant header: the client sends path,
+//     query, and body, and the tenant header travels via SignInternalRequest (from
+//     the tn argument); any other declared header would be silently dropped.
+//
+// Fail loud at codegen rather than emit a wrong client. None of the current
+// internal+clients contracts trip either arm; if one is introduced, give it an
+// encodable shape (a real success body / drop or encode the custom header) or
+// remove it from endpoints.clients.
+func validateGeneratedClientEncodable(contractID string, ep *httpEndpointSpec) error {
+	if len(ep.Clients) == 0 {
+		return nil
+	}
+	if ep.NoContent {
+		return fmt.Errorf("contractgen build: %q declares endpoints.clients (a generated cross-cell client) "+
+			"but is NoContent (204) — the generated client cannot decode a bodyless success; give it a response "+
+			"body or remove endpoints.clients", contractID)
+	}
+	for _, h := range ep.HeaderParams {
+		if !strings.EqualFold(h.Name, tenantRequestHeader) {
+			return fmt.Errorf("contractgen build: %q declares endpoints.clients (a generated cross-cell client) "+
+				"plus request header %q — the client only conveys the tenant header (via the signed token); a custom "+
+				"request header would be silently dropped (encode it in client.tmpl or remove the header)", contractID, h.Name)
+		}
+	}
+	return nil
+}
+
 func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.ContractMeta, contractDir string) error {
 	http := contract.Endpoints.HTTP
 	if http == nil {
@@ -175,6 +219,17 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	if viols := metadata.ValidateHTTPHeaders(http.Headers); len(viols) > 0 {
 		return fmt.Errorf("contractgen build: contract %q invalid endpoints.http.headers: %s",
 			contract.ID, viols[0].Message)
+	}
+
+	// #2020 mandatory-AuthZ-mode Hard gate at the UNBYPASSABLE object-render core: every
+	// contract rendered by any path — gocell generate, gocell verify codegen-*, verify
+	// generated (generatedverify), cellgen stage_render, or a direct RenderContractArtifacts
+	// caller — flows through buildHTTPSpec, so a modeless / mis-reasoned route cannot be
+	// generated regardless of entry point (mirrors the sibling ValidateHTTPHeaders gate above
+	// and k8s apiextensions object-level validation). Shares metadata.ClassifyHTTPAuthMode with
+	// cellgen's serve-scan + governance FMT-42 (one oracle).
+	if v := metadata.ClassifyHTTPAuthMode(contract); v != metadata.HTTPAuthModeOK {
+		return fmt.Errorf("contractgen build: contract %q %s", contract.ID, v.Message())
 	}
 
 	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
@@ -201,6 +256,19 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// Endpoint are built (it needs both); a no-op when the marker is unset, so
 	// non-projection contracts are byte-identical.
 	if err := applyResponseProjection(spec); err != nil {
+		return err
+	}
+
+	// Derive the generated cross-cell client's decode target (#2093). Runs after
+	// applyResponseProjection because it reads the (rewritten) Response `data`
+	// field's resource-item DTO for projection contracts. No-op for
+	// non-projection contracts (the client decodes into Response directly).
+	deriveClientDecode(spec)
+
+	// Fail loud (not silent wrong code) when a contract declares endpoints.clients
+	// (generator shouldEmitClient emits a cross-cell client) but its shape is not
+	// faithfully encodable by client.tmpl. See validateGeneratedClientEncodable.
+	if err := validateGeneratedClientEncodable(contract.ID, endpointSpec); err != nil {
 		return err
 	}
 
@@ -426,6 +494,34 @@ func applyResponseProjection(spec *ContractGenSpec) error {
 	}
 	spec.DTOs[itemIdx].EmitToMap = true
 	return nil
+}
+
+// deriveClientDecode sets Endpoint.ClientDecodeDTO/List for the generated
+// cross-cell contract client (#2093). For responseProjection contracts the
+// server-side Response.Data is the SEALED projection.ResourceProjection carrier
+// (no UnmarshalJSON), so a client cannot decode the wire body into Response; it
+// decodes the success {data: ...} envelope into the resource-item DTO instead.
+// The item DTO name + list-ness come from the Response `data` field (the same
+// field applyResponseProjection rewrote — ItemDTO/IsList are preserved). For
+// non-projection contracts this is a no-op: ClientDecodeDTO stays empty and the
+// client decodes straight into the directly-unmarshalable Response. Must run
+// after applyResponseProjection.
+func deriveClientDecode(spec *ContractGenSpec) {
+	if spec.Endpoint == nil || !spec.Endpoint.ResponseProjection {
+		return
+	}
+	respIdx := indexOfDTO(spec.DTOs, "Response")
+	if respIdx < 0 {
+		return
+	}
+	for i := range spec.DTOs[respIdx].Fields {
+		f := &spec.DTOs[respIdx].Fields[i]
+		if f.Name == "Data" && f.ItemDTO != "" {
+			spec.Endpoint.ClientDecodeDTO = f.ItemDTO
+			spec.Endpoint.ClientDecodeList = f.IsList
+			return
+		}
+	}
 }
 
 // requireProjectionItemFullColumnSet enforces the #2359 schema truth-source closure:

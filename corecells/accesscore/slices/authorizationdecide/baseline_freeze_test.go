@@ -3,16 +3,22 @@ package authorizationdecide
 // INVARIANT: BASELINE-OWNER-RULE-TENANT-FREEZE-01
 //
 // BASELINE-OWNER-RULE-TENANT-FREEZE-01 freezes the baseline grant surface of the
-// owner-scoped actions (user:read, user:write, role:read) so that tenant can never become
+// owner-scoped actions (user:read, user:write, role:read, access:decide, device:read —
+// authoritative set: ownerScopedBaselineSelfRules) so that tenant can never become
 // an owner-grant factor. It enforces two complementary properties:
 //
 //  1. Each owner-scoped SELF rule (baseline-user-read-self, baseline-user-write-self,
-//     baseline-role-read-self) is an EffectAllow rule granting EXACTLY its one action and
-//     carrying EXACTLY the ownership condition subject.sub == resource.id (Source=SourceSubject,
-//     Key="sub", Operator=OpEqualsAttr, RHSSource=SourceResource, RHSKey="id", no static Values).
+//     baseline-role-read-self, baseline-access-decide-self, baseline-device-read-self) is an
+//     EffectAllow rule granting EXACTLY its one action and carrying EXACTLY its registered
+//     frozen condition list (ownerScopedBaselineSelfRules). Two sanctioned owner shapes exist
+//     (#2400 F1): kind-agnostic identity-ownership [subject.sub == resource.id]
+//     (Source=SourceSubject, Key="sub", Operator=OpEqualsAttr, RHSSource=SourceResource,
+//     RHSKey="id", no static Values) for the user/role/access self rules; and device-self
+//     [subject.kind == "device", subject.sub == resource.id] for device:read — the kind
+//     qualifier makes device-self stricter (a non-device principal whose id matches is denied).
 //  2. The CLOSED SET of EffectAllow rules granting each owner-scoped action is EXACTLY two —
-//     the one frozen owner rule (self access) and the one admin rule (subject.roles ∈
-//     {admin, super-admin}) — and nothing else.
+//     the one frozen owner rule (self access, matching that action's registered owner shape)
+//     and the one admin rule (subject.roles ∈ {admin, super-admin}) — and nothing else.
 //
 // # Threat closed — the real owner→tenant widening vectors
 //
@@ -87,10 +93,11 @@ import (
 	runtimeauth "github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
-// frozenOwnerCondition is the single authoritative ownership condition shape —
-// subject.sub == resource.id — that every owner-scoped baseline ALLOW rule must carry,
-// and ONLY that. Spelled independently of subjectIsResource() so a drift in that helper
-// is caught, not tracked. See the file godoc.
+// frozenOwnerCondition is the id-equality ownership condition — subject.sub == resource.id —
+// that every owner-scoped baseline ALLOW rule carries: standalone for the kind-agnostic
+// user/role/access self rules, and as the SECOND condition of the device-self shape (after
+// frozenDeviceKindCondition, #2400 F1). Spelled independently of subjectIsResource() so a
+// drift in that helper is caught, not tracked. See the file godoc.
 var frozenOwnerCondition = abac.Condition{
 	Source:    abac.SourceSubject,
 	Key:       "sub",
@@ -111,15 +118,39 @@ var frozenAdminCondition = abac.Condition{
 	Values:   []string{runtimeauth.RoleAdmin, runtimeauth.RoleSuperAdmin},
 }
 
-// ownerScopedBaselineSelfRules maps each owner-scoped SELF rule ID to the single action it
-// must grant. The freeze asserts each named rule is EffectAllow, grants EXACTLY that one
-// action (no broadening), and carries EXACTLY the frozen owner condition. Its values are
-// also the closed set of owner-scoped actions whose entire allow surface is frozen.
-var ownerScopedBaselineSelfRules = map[string]string{
-	"baseline-user-read-self":     authz.PermUserRead().String(),
-	"baseline-user-write-self":    authz.PermUserWrite().String(),
-	"baseline-role-read-self":     authz.PermRoleRead().String(),
-	"baseline-access-decide-self": authz.PermAccessDecide().String(),
+// frozenDeviceKindCondition is the device-principal qualifier — subject.kind == "device" —
+// that the device-self owner shape ANDs in front of frozenOwnerCondition (#2400 F1). Spelled
+// independently of deviceSelfOwnership() (same drift-catch rationale). It is what makes
+// device-self stricter than the kind-agnostic user/role self rules: a normal user whose
+// subject id equals a device id does not satisfy it. The "device" literal mirrors
+// runtimeauth.PrincipalDevice.String().
+var frozenDeviceKindCondition = abac.Condition{
+	Source:   abac.SourceSubject,
+	Key:      "kind",
+	Operator: abac.OpEquals,
+	Values:   []string{runtimeauth.PrincipalDevice.String()},
+}
+
+// ownerSelfRuleSpec pins an owner-scoped SELF rule's exact frozen shape: the single action
+// it must grant and the EXACT ORDERED condition list it must carry. Two sanctioned owner
+// shapes exist (#2400 F1): kind-agnostic identity-ownership [sub==id] (user/role/access self
+// rules) and device-self [kind==device, sub==id] (device:read). The freeze compares the real
+// rule against this exact list, so a replaced/added/removed/reordered condition is drift.
+type ownerSelfRuleSpec struct {
+	action     string
+	conditions []abac.Condition
+}
+
+// ownerScopedBaselineSelfRules maps each owner-scoped SELF rule ID to its frozen spec. The
+// freeze asserts each named rule is EffectAllow, grants EXACTLY its action (no broadening),
+// and carries EXACTLY its frozen condition list. The action values are also the closed set of
+// owner-scoped actions whose entire allow surface is frozen to {1 owner, 1 admin}.
+var ownerScopedBaselineSelfRules = map[string]ownerSelfRuleSpec{
+	"baseline-user-read-self":     {authz.PermUserRead().String(), []abac.Condition{frozenOwnerCondition}},
+	"baseline-user-write-self":    {authz.PermUserWrite().String(), []abac.Condition{frozenOwnerCondition}},
+	"baseline-role-read-self":     {authz.PermRoleRead().String(), []abac.Condition{frozenOwnerCondition}},
+	"baseline-access-decide-self": {authz.PermAccessDecide().String(), []abac.Condition{frozenOwnerCondition}},
+	"baseline-device-read-self":   {authz.PermDeviceRead().String(), []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition}},
 }
 
 // conditionMatches reports field-by-field equality of two abac.Conditions, including the
@@ -132,6 +163,21 @@ func conditionMatches(got, want abac.Condition) bool {
 	}
 	for i := range got.Values {
 		if got.Values[i] != want.Values[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// conditionsEqual reports ordered field-by-field equality of two condition lists. ORDER is
+// significant: the device-self shape is exactly [kind==device, sub==id]; a reordered or
+// resized list is drift.
+func conditionsEqual(got, want []abac.Condition) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if !conditionMatches(got[i], want[i]) {
 			return false
 		}
 	}
@@ -155,44 +201,42 @@ func ruleGrantsAction(r abac.Rule, action string) bool {
 	return false
 }
 
-// checkOwnerRuleFrozen returns nil iff r is an EffectAllow rule granting EXACTLY wantAction
-// and carrying EXACTLY the frozen ownership condition. A non-nil error names the deviation.
-func checkOwnerRuleFrozen(r abac.Rule, wantAction string) error {
+// checkOwnerRuleFrozen returns nil iff r is an EffectAllow rule granting EXACTLY spec.action
+// and carrying EXACTLY spec.conditions (the frozen owner shape — kind-agnostic [sub==id] or
+// device-self [kind==device, sub==id]). A non-nil error names the deviation.
+func checkOwnerRuleFrozen(r abac.Rule, spec ownerSelfRuleSpec) error {
 	if r.Effect != authz.EffectAllow {
 		return fmt.Errorf("rule %q: Effect = %v, want EffectAllow — an owner-scoped rule that is not an "+
 			"ALLOW grant (e.g. flipped to Deny) is not the grant shape this invariant freezes", r.ID, r.Effect)
 	}
-	if len(r.Action) != 1 || r.Action[0] != wantAction {
+	if len(r.Action) != 1 || r.Action[0] != spec.action {
 		return fmt.Errorf("rule %q: Action = %v, want exactly [%q] — broadening an owner rule's granted "+
-			"action set widens owner-scoped access to additional permissions", r.ID, r.Action, wantAction)
+			"action set widens owner-scoped access to additional permissions", r.ID, r.Action, spec.action)
 	}
-	if len(r.Conditions) != 1 {
-		return fmt.Errorf("rule %q: got %d conditions, want exactly 1 (the ownership condition) — the frozen "+
-			"grant shape is a single ownership condition; an extra AND-condition is forbidden drift (it would "+
-			"TIGHTEN this rule, not widen — real owner→tenant widening comes from a SEPARATE tenant-matching "+
-			"allow rule, caught by checkOwnerActionSurfaceClosed)", r.ID, len(r.Conditions))
-	}
-	if !conditionMatches(r.Conditions[0], frozenOwnerCondition) {
-		return fmt.Errorf("rule %q: condition = %+v, want %+v (subject.sub == resource.id, no static Values) — "+
-			"replacing the owner condition (e.g. with Key/RHSKey \"tenant_id\", or a static tenant Values set) "+
-			"changes the grant surface from owner-scoped to tenant-scoped", r.ID, r.Conditions[0], frozenOwnerCondition)
+	if !conditionsEqual(r.Conditions, spec.conditions) {
+		return fmt.Errorf("rule %q: conditions = %+v, want EXACTLY %+v — the frozen owner-self shape is exact "+
+			"(kind-agnostic [sub==id], or device-self [kind==device, sub==id]); replacing the owner condition "+
+			"(e.g. with a tenant_id cond), adding/removing/reordering an AND-condition, or dropping the device "+
+			"kind qualifier is forbidden drift (real owner→tenant widening is a SEPARATE allow rule, caught by "+
+			"checkOwnerActionSurfaceClosed)", r.ID, r.Conditions, spec.conditions)
 	}
 	return nil
 }
 
 // checkOwnerActionSurfaceClosed returns nil iff the EffectAllow rules in rules that grant
-// action form EXACTLY the frozen surface: one carrying the frozen owner condition and one
+// action form EXACTLY the frozen surface: one carrying the expected owner condition list
+// (ownerConditions — kind-agnostic [sub==id] or device-self [kind==device, sub==id]) and one
 // carrying the frozen admin condition, and nothing else. A third allow rule on the same
 // action — the primary owner→tenant widening vector, since the PDP ORs allow rules — fails
-// here (its condition matches neither frozen shape → other, or it pushes a count above 1).
-func checkOwnerActionSurfaceClosed(rules []abac.Rule, action string) error {
+// here (its conditions match neither frozen shape → other, or it pushes a count above 1).
+func checkOwnerActionSurfaceClosed(rules []abac.Rule, action string, ownerConditions []abac.Condition) error {
 	var owner, admin, other int
 	for _, r := range rules {
 		if r.Effect != authz.EffectAllow || !ruleGrantsAction(r, action) {
 			continue
 		}
 		switch {
-		case len(r.Conditions) == 1 && conditionMatches(r.Conditions[0], frozenOwnerCondition):
+		case conditionsEqual(r.Conditions, ownerConditions):
 			owner++
 		case len(r.Conditions) == 1 && conditionMatches(r.Conditions[0], frozenAdminCondition):
 			admin++
@@ -220,7 +264,7 @@ func TestBaselineOwnerRuleTenantFreeze_01(t *testing.T) {
 	}
 
 	// Property (1): each named owner self-rule is exactly the frozen grant shape.
-	for id, wantAction := range ownerScopedBaselineSelfRules {
+	for id, spec := range ownerScopedBaselineSelfRules {
 		r, ok := byID[id]
 		if !ok {
 			t.Errorf("BASELINE-OWNER-RULE-TENANT-FREEZE-01: owner self-rule %q not found in "+
@@ -228,14 +272,16 @@ func TestBaselineOwnerRuleTenantFreeze_01(t *testing.T) {
 				"(anti-vacuity: the freeze must inspect every real owner self-rule)", id)
 			continue
 		}
-		if err := checkOwnerRuleFrozen(r, wantAction); err != nil {
+		if err := checkOwnerRuleFrozen(r, spec); err != nil {
 			t.Errorf("BASELINE-OWNER-RULE-TENANT-FREEZE-01: %v", err)
 		}
 	}
 
-	// Property (2): each owner-scoped action's full allow surface is the closed {owner, admin} set.
-	for _, action := range ownerScopedBaselineSelfRules {
-		if err := checkOwnerActionSurfaceClosed(rules, action); err != nil {
+	// Property (2): each owner-scoped action's full allow surface is the closed {owner, admin}
+	// set, where "owner" matches that action's exact frozen condition list (kind-agnostic or
+	// device-self).
+	for _, spec := range ownerScopedBaselineSelfRules {
+		if err := checkOwnerActionSurfaceClosed(rules, spec.action, spec.conditions); err != nil {
 			t.Errorf("BASELINE-OWNER-RULE-TENANT-FREEZE-01: %v", err)
 		}
 	}
@@ -323,16 +369,54 @@ func TestBaselineOwnerRuleTenantFreeze_01_RejectsForbiddenShapes(t *testing.T) {
 			wantErr:    true,
 		},
 	}
+	kindAgnosticSpec := ownerSelfRuleSpec{action: wantAction, conditions: []abac.Condition{frozenOwnerCondition}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkOwnerRuleFrozen(
 				abac.Rule{ID: "synthetic-" + tc.name, Effect: tc.effect, Action: tc.action, Conditions: tc.conditions},
-				wantAction)
+				kindAgnosticSpec)
 			switch {
 			case tc.wantErr && err == nil:
 				t.Errorf("checkOwnerRuleFrozen must REJECT %s — the freeze would be vacuous otherwise", tc.name)
 			case !tc.wantErr && err != nil:
 				t.Errorf("checkOwnerRuleFrozen must ACCEPT the exact frozen ownership shape, got: %v", err)
+			}
+		})
+	}
+
+	// Device-self shape (#2400 F1): the exact frozen shape for device:read is
+	// [kind==device, sub==id]. The kind-agnostic [sub==id] alone must NOT be accepted —
+	// dropping the kind qualifier is the regression this finding closed — and order /
+	// kind value matter. Proves the device-self spec is non-vacuous, distinct from
+	// kind-agnostic.
+	const deviceAction = "device:read"
+	deviceSpec := ownerSelfRuleSpec{
+		action:     deviceAction,
+		conditions: []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition},
+	}
+	deviceTests := []struct {
+		name       string
+		conditions []abac.Condition
+		wantErr    bool
+	}{
+		{"device_self_shape_accepted", []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition}, false},
+		{"device_missing_kind_qualifier_rejected", []abac.Condition{frozenOwnerCondition}, true},
+		{"device_reordered_conditions_rejected", []abac.Condition{frozenOwnerCondition, frozenDeviceKindCondition}, true},
+		{"device_wrong_kind_value_rejected", []abac.Condition{
+			{Source: abac.SourceSubject, Key: "kind", Operator: abac.OpEquals, Values: []string{"user"}},
+			frozenOwnerCondition,
+		}, true},
+	}
+	for _, tc := range deviceTests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkOwnerRuleFrozen(
+				abac.Rule{ID: "synthetic-" + tc.name, Effect: authz.EffectAllow, Action: []string{deviceAction}, Conditions: tc.conditions},
+				deviceSpec)
+			switch {
+			case tc.wantErr && err == nil:
+				t.Errorf("checkOwnerRuleFrozen must REJECT %s — the device-self freeze would be vacuous otherwise", tc.name)
+			case !tc.wantErr && err != nil:
+				t.Errorf("checkOwnerRuleFrozen must ACCEPT the exact device-self shape, got: %v", err)
 			}
 		})
 	}
@@ -461,8 +545,9 @@ func TestBaselineFreeze_SessionVerify_ClosedSet_RejectsExtraAllowRule(t *testing
 // fail.
 func TestBaselineOwnerActionSurface_RejectsExtraAllowRule(t *testing.T) {
 	action := authz.PermUserRead().String()
+	ownerConditions := []abac.Condition{frozenOwnerCondition} // user:read is kind-agnostic
 
-	if err := checkOwnerActionSurfaceClosed(builtinBaselineRules(), action); err != nil {
+	if err := checkOwnerActionSurfaceClosed(builtinBaselineRules(), action, ownerConditions); err != nil {
 		t.Errorf("real baseline must satisfy the closed allow surface for %q: %v", action, err)
 	}
 
@@ -476,9 +561,30 @@ func TestBaselineOwnerActionSurface_RejectsExtraAllowRule(t *testing.T) {
 		}},
 	}
 	widened := append(append([]abac.Rule{}, builtinBaselineRules()...), tenantAllow)
-	if err := checkOwnerActionSurfaceClosed(widened, action); err == nil {
+	if err := checkOwnerActionSurfaceClosed(widened, action, ownerConditions); err == nil {
 		t.Errorf("checkOwnerActionSurfaceClosed must REJECT a baseline with an extra tenant-matching allow "+
 			"rule on %q (the real owner→tenant widening vector) — the closed-set check would be vacuous otherwise",
 			action)
+	}
+
+	// device:read uses the device-self owner shape; a SEPARATE kind-agnostic [sub==id] allow
+	// rule on device:read (e.g. a regression that re-adds the old user-matchable self rule)
+	// is a third shape → rejected. Proves the device-self owner classification is non-vacuous.
+	deviceAction := authz.PermDeviceRead().String()
+	deviceOwnerConditions := []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition}
+	if err := checkOwnerActionSurfaceClosed(builtinBaselineRules(), deviceAction, deviceOwnerConditions); err != nil {
+		t.Errorf("real baseline must satisfy the closed allow surface for %q (device-self): %v", deviceAction, err)
+	}
+	kindAgnosticDeviceAllow := abac.Rule{
+		ID:         "synthetic-kind-agnostic-device-read",
+		Effect:     authz.EffectAllow,
+		Action:     []string{deviceAction},
+		Conditions: []abac.Condition{frozenOwnerCondition},
+	}
+	widenedDevice := append(append([]abac.Rule{}, builtinBaselineRules()...), kindAgnosticDeviceAllow)
+	if err := checkOwnerActionSurfaceClosed(widenedDevice, deviceAction, deviceOwnerConditions); err == nil {
+		t.Errorf("checkOwnerActionSurfaceClosed must REJECT a baseline with an extra kind-agnostic [sub==id] "+
+			"allow rule on %q — it would let a non-device principal whose id matches re-acquire device-self read",
+			deviceAction)
 	}
 }

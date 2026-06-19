@@ -47,6 +47,7 @@ endpoints:
     successStatus: 201
     auth:
       public: true
+      reason: "Authentication entrypoint: the caller has no JWT yet, so login MUST be public."
     idempotency:
       exempt: true
     noContent: false

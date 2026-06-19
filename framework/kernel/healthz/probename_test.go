@@ -221,6 +221,95 @@ func TestRelayInstanceProbeName_InvalidBase(t *testing.T) {
 	}
 }
 
+// TestPoolInstanceProbeName_Valid verifies the per-cell pool probe composer (#2341):
+// a valid serving-pool base + a valid instance id yields "<base>_<instanceID>".
+func TestPoolInstanceProbeName_Valid(t *testing.T) {
+	t.Parallel()
+
+	got, err := PoolInstanceProbeName(ProbeName("postgres_ready"), "accesscore")
+	if err != nil {
+		t.Fatalf("PoolInstanceProbeName unexpected error: %v", err)
+	}
+	if want := ProbeName("postgres_ready_accesscore"); got != want {
+		t.Errorf("PoolInstanceProbeName = %q, want %q", got, want)
+	}
+}
+
+// TestPoolInstanceProbeName_MaxBudget exercises the worst-case composed length:
+// longest pool base "postgres_app_role_restricted_ready" (34) + "_" + a 29-char id
+// = 64 = probeNameMaxLen (the boundary that still composes a valid name).
+func TestPoolInstanceProbeName_MaxBudget(t *testing.T) {
+	t.Parallel()
+
+	id := strings.Repeat("a", 29)
+	got, err := PoolInstanceProbeName(ProbeName("postgres_app_role_restricted_ready"), id)
+	if err != nil {
+		t.Fatalf("PoolInstanceProbeName(longest base, 29-char id) unexpected error: %v", err)
+	}
+	if want := ProbeName("postgres_app_role_restricted_ready_" + id); got != want {
+		t.Errorf("PoolInstanceProbeName(max budget) = %q, want %q", got, want)
+	}
+	if len(string(got)) > probeNameMaxLen {
+		t.Fatalf("composed name %d chars exceeds probeNameMaxLen %d", len(string(got)), probeNameMaxLen)
+	}
+}
+
+// TestPoolInstanceProbeName_OverBudget: a 30-char id on the longest base overflows
+// probeNameMaxLen (64), so NewProbeName fails fast at composition (split pool
+// registration then fails fast — never ships a truncated/duplicate probe name).
+func TestPoolInstanceProbeName_OverBudget(t *testing.T) {
+	t.Parallel()
+
+	id := strings.Repeat("a", 30)
+	if _, err := PoolInstanceProbeName(ProbeName("postgres_app_role_restricted_ready"), id); err == nil {
+		t.Error("PoolInstanceProbeName(longest base, 30-char id) expected over-budget error, got nil")
+	}
+}
+
+// TestPoolInstanceProbeName_Invalid verifies an empty / non-canonical instance id
+// is rejected (the id must be a valid ProbeName segment).
+func TestPoolInstanceProbeName_Invalid(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"empty", ""},
+		{"hyphen", "access-core"},
+		{"uppercase", "AccessCore"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := PoolInstanceProbeName(ProbeName("postgres_ready"), tc.id)
+			if err == nil {
+				t.Errorf("PoolInstanceProbeName(id=%q) expected error, got nil", tc.id)
+			}
+		})
+	}
+}
+
+// TestPoolInstanceProbeName_InvalidBase verifies the closed base allowlist (#2341):
+// only the three postgres serving-pool readiness probes are accepted, so this
+// pool-specific composer cannot mint a misleading pool-shaped name from an arbitrary
+// ProbeName (e.g. a relay base).
+func TestPoolInstanceProbeName_InvalidBase(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range []ProbeName{"outbox_relay_poll", "postgres_indexes_valid", "config_watcher", ""} {
+		if _, err := PoolInstanceProbeName(bad, "accesscore"); err == nil {
+			t.Errorf("PoolInstanceProbeName(base=%q) expected error, got nil", bad)
+		}
+	}
+	for _, ok := range []ProbeName{"postgres_ready", "postgres_indexes_valid_ready", "postgres_app_role_restricted_ready"} {
+		if _, err := PoolInstanceProbeName(ok, "accesscore"); err != nil {
+			t.Errorf("PoolInstanceProbeName(base=%q) unexpected error: %v", ok, err)
+		}
+	}
+}
+
 func TestProjectionStoreReadyProbeName(t *testing.T) {
 	t.Parallel()
 

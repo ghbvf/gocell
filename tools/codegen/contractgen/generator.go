@@ -51,6 +51,7 @@ var contractArtifacts = []artifactDef{
 	{"types.tmpl", "types_gen.go", []string{"http", "event", "command", "projection", "saga"}},
 	{"iface.tmpl", "iface_gen.go", []string{"http", "event", "projection", "saga"}},
 	{"handler.tmpl", "handler_gen.go", []string{"http"}},
+	{clientTemplate, "client_gen.go", []string{"http"}},
 	{"spec.tmpl", "spec_gen.go", []string{"event"}},
 	{"subscription.tmpl", "subscription_gen.go", []string{"event"}},
 	{"projection.tmpl", "projection_gen.go", []string{"event"}},
@@ -58,14 +59,53 @@ var contractArtifacts = []artifactDef{
 	{"command.tmpl", "command_gen.go", []string{"command"}},
 }
 
+// clientTemplate is the template/artifact for the generated cross-cell contract
+// client (#2093). Unlike the other http artifacts (always emitted for http), the
+// client is conditionally emitted per shouldEmitClient — so it sits in the matrix
+// under "http" (it is an http artifact) but is filtered by artifactsForContract.
+const clientTemplate = "client.tmpl"
+
 // artifactsForKind returns the artifacts emitted for a contract kind, in matrix
-// order. An unrecognized kind (including webhook) yields nil.
+// order. An unrecognized kind (including webhook) yields nil. This is the by-KIND
+// superset (e.g. http includes client_gen.go); per-contract gating (the client is
+// emitted only for internal sibling-callable contracts) is applied by
+// artifactsForContract.
 func artifactsForKind(kind string) []artifactDef {
 	var out []artifactDef
 	for _, a := range contractArtifacts {
 		if slices.Contains(a.kinds, kind) {
 			out = append(out, a)
 		}
+	}
+	return out
+}
+
+// shouldEmitClient reports whether a generated cross-cell contract client
+// (client_gen.go) is emitted for this contract (#2093). The gate is internal-path
+// + non-empty endpoints.clients: buildHTTPEndpointSpec only populates
+// Endpoint.Clients for metadata.IsInternalHTTPPath paths, so a non-empty
+// Endpoint.Clients already means "an internal contract whose author declared the
+// sibling cells that may call it" — exactly the set that needs a sealed client.
+// Emitting a client for every http contract (incl. public business endpoints with
+// no sibling caller) would be speculative generality; deriving from the existing
+// caller allowlist keeps the gate to the genuine sibling-callable surface.
+func shouldEmitClient(spec *ContractGenSpec) bool {
+	return spec != nil && spec.Kind == "http" && spec.Endpoint != nil && len(spec.Endpoint.Clients) > 0
+}
+
+// artifactsForContract returns the artifacts emitted for THIS contract: the
+// by-kind matrix set narrowed by per-contract gates (today: the client artifact,
+// emitted only when shouldEmitClient). Shared by generateOneContract and
+// RenderContractArtifacts so the disk-emit and the verify/manifest enumeration
+// agree on the exact file set.
+func artifactsForContract(spec *ContractGenSpec) []artifactDef {
+	emitClient := shouldEmitClient(spec)
+	var out []artifactDef
+	for _, a := range artifactsForKind(spec.Kind) {
+		if a.template == clientTemplate && !emitClient {
+			continue
+		}
+		out = append(out, a)
 	}
 	return out
 }
@@ -299,7 +339,7 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 	// rules (types always; iface except command; handler only http; spec /
 	// subscription / projection only event; saga only saga; command only command)
 	// live in contractArtifacts.
-	for _, a := range artifactsForKind(spec.Kind) {
+	for _, a := range artifactsForContract(spec) {
 		path := filepath.Join(pkgDir, a.file)
 		errPrefix := errPrefixGenerate + "render " + a.word() + " " + contractID
 		if err := renderWriteContract(root, a.template, spec, path, opts, res, errPrefix); err != nil {
@@ -393,7 +433,7 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID, m
 	// Per-artifact emit, driven by the kind × artifact matrix (contractArtifacts);
 	// the applicable-kind rules are shared with generateOneContract.
 	var out []CodegenArtifact
-	for _, a := range artifactsForKind(spec.Kind) {
+	for _, a := range artifactsForContract(spec) {
 		path := filepath.Join(pkgDir, a.file)
 		content, err := codegen.Render(modulePath, codegen.RenderOptions{
 			TemplateName: a.template,

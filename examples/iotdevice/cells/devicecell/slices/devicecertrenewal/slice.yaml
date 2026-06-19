@@ -3,13 +3,13 @@ belongsToCell: devicecell
 consistencyLevel: L4
 lifecycle: experimental
 contractUsages:
-  - contract: command.devicecommand.enqueue.v1
+  - contract: command.remotecommand.v1
     role: invoke
 verify:
   unit:
     - unit.devicecertrenewal.reconciler
   waivers:
-    - contract: command.devicecommand.enqueue.v1
+    - contract: command.remotecommand.v1
       owner: examples
       reason: >-
         invoke is a declaration-only role (no cellgen derivation, no executable

@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 // bootstrapCommandType is the CommandType stamped on the auto-enqueued bootstrap
@@ -35,11 +35,11 @@ type deviceRegisteredEvent struct {
 //
 // emitter is the sealed CellEmitter marker (composition root wraps a raw
 // Emitter); it embeds outbox.Emitter, so it is passed directly to the generated
-// cmdenqueue.EmitAsync wrapper's kout.Emitter parameter. It is an optional
+// cmdremote.EmitAsync wrapper's kout.Emitter parameter. It is an optional
 // dependency (defaults to outbox.DemoCellEmitter), matching the deviceregister
 // slice — no gocell:"required" tag.
 //
-// txRunner wraps the cmdenqueue.EmitAsync emit in a real transaction when the durable
+// txRunner wraps the cmdremote.EmitAsync emit in a real transaction when the durable
 // outbox writer requires one (adapters/postgres.OutboxWriter.Write calls
 // persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
 // is present in ctx). Defaults to outbox.DemoCellTxManager() — a no-op that
@@ -67,7 +67,7 @@ func WithEmitter(e outbox.CellEmitter) Option {
 	}
 }
 
-// WithTxManager sets the CellTxManager used to wrap the cmdenqueue.EmitAsync
+// WithTxManager sets the CellTxManager used to wrap the cmdremote.EmitAsync
 // emit in a transaction. Required for durable mode: the PG outbox writer calls
 // persistence.TxFromContext[pgx.Tx] and returns ErrAdapterPGNoTx when no tx
 // is in ctx. Demo mode and tests use the default outbox.DemoCellTxManager()
@@ -111,7 +111,7 @@ func NewService(clk clock.Clock, opts ...Option) (*Service, error) {
 }
 
 // HandleDeviceRegistered reacts to an event.device-registered.v1 event by
-// emitting a command.devicecommand.enqueue.v1 async command for the new device.
+// emitting a command.remotecommand.v1 async command for the new device.
 //
 // Consumer: cg-devicecell-device-registered
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
@@ -126,7 +126,7 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 			fmt.Errorf("devicebootstrap: unmarshal device-registered: %w", err)))
 	}
 
-	req := cmdenqueue.Request{
+	req := cmdremote.Request{
 		DeviceID:    ev.ID,
 		CommandType: bootstrapCommandType,
 		Payload:     bootstrapPayload,
@@ -141,7 +141,7 @@ func (s *Service) HandleDeviceRegistered(ctx context.Context, entry outbox.Entry
 	// Demo mode uses outbox.DemoCellTxManager() (no-op), which just calls the
 	// closure directly, so behavior is unchanged for tests and demo assemblies.
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		return cmdenqueue.EmitAsync(txCtx, s.clk, s.emitter, ev.ID, entry.ID(), &req)
+		return cmdremote.EmitAsync(txCtx, s.clk, s.emitter, ev.ID, entry.ID(), &req)
 	}); err != nil {
 		s.logger.Error("device-bootstrap: failed to emit enqueue command",
 			slog.String("device_id", ev.ID), slog.String("entry_id", entry.ID()),

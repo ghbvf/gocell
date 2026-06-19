@@ -26,6 +26,7 @@ endpoints:
     responseProjection: true
     auth:
       public: true
+      reason: "Pre-auth bootstrap status probe: reports whether first-admin provisioning is complete, before any JWT exists."
     responses:
       400:
         description: "Bad request — malformed JSON body or oversized payload (from co-located setup admin handler)"

@@ -135,8 +135,11 @@ func TestCorebundlePG_UsesPerCellDatabaseURLs(t *testing.T) {
 	require.NoError(t, provisionCapabilities(ctx, shared, locals),
 		"provisionCapabilities must open the assembly pool from per-cell DSNs (#1964)")
 	require.NotNil(t, shared.PG, "shared.PG must be provisioned from the per-cell DSNs in postgres mode")
-	require.NotNil(t, locals.poolMR, "locals.poolMR must hold the pool ManagedResource")
-	defer func() { _ = locals.poolMR.Close(ctx) }()
+	require.Len(t, locals.poolMRs, 1, "colocated (same DSN for 3 cells): exactly one pool ManagedResource")
+	// #2341: the per-pool relay is now built+registered by cap_wiring (moved from
+	// configcore), so provisionCapabilities must record it on locals.relayOpts.
+	require.NotEmpty(t, locals.relayOpts, "cap_wiring must register the per-pool outbox relay (#2341)")
+	defer func() { _ = locals.poolMRs[0].Close(ctx) }()
 
 	// Build via composition.New().With(mods...).Build() — the new public API.
 	// A no-op RuntimeOptionsFunc is sufficient: we only need to verify that
@@ -177,13 +180,13 @@ func TestProvisionCapabilities_Postgres_UsesPerCellDatabaseURLs(t *testing.T) {
 	shared, locals, err := LoadSharedDepsFromEnv(ctx)
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
 
-	// provisionCapabilities opens the pool and records it as locals.poolMR.
+	// provisionCapabilities opens the pool and records it as locals.poolMRs[0].
 	require.NoError(t, provisionCapabilities(ctx, shared, locals),
 		"provisionCapabilities must succeed with per-cell DSNs set (#1964)")
 	require.NotNil(t, shared.PG, "shared.PG must be provisioned in postgres mode")
-	require.NotNil(t, locals.poolMR, "provisionCapabilities must record the pool as locals.poolMR")
+	require.Len(t, locals.poolMRs, 1, "colocated: provisionCapabilities records one pool ManagedResource")
 
-	pgRes := locals.poolMR
+	pgRes := locals.poolMRs[0]
 
 	// Verify the ManagedResource exposes a "postgres_ready" probe (the name used by
 	// adapterpg.Pool, which directly implements ManagedResource) and that it

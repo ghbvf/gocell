@@ -215,6 +215,10 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   - **下游（Hard + Medium backstop）**：generated contract client **只接收 sealed `CellTransport`**
     作为唯一可表达的兄弟-cell 调用路径（裸 `http.Client` 直拨 / 直接 import 兄弟 cell 在类型层不可
     表达）；Medium archtest typed scan 作 backstop，捕获绕过 generated client 的裸调用。
+    > **措辞修正（#2093 落地后，见 §#2093 Amendment）**：上文「只接收 sealed `CellTransport`」「裸
+    > `http.Client` 类型层不可表达」是当初目标措辞且**过度声明**——`CellTransport` 实为普通导出接口（非
+    > sealed type）。下游 Hard 归**生成物**（codegen + 字节 golden），「唯一可表达路径」归两个 **Medium**
+    > AST backstop（net/http ban + DoContract caller ban），非接口 seal。
   - → US4 #1963 / US8 #1961。
 - **broker-mandatory 双闸 fail-fast → Medium（启动期 guard，永久档位）。** 「拓扑 × bus 类型」组合
   type system **不可表达**（拓扑是启动期数据、bus 是注入实例），故 Hard 不可达、Medium 是合理永久
@@ -256,7 +260,7 @@ amendment 落地时必须同步重评安全模型」，此处显式列出威胁�
 | **业务 principal 跨进程传播伪造** | caller 伪造他人 actor/subject/session → 越权 | **现有栈不足，是真缺口**：service token MAC（`runtime/auth/servicetoken.go`）只覆盖 method/path/query/timestamp/nonce/`callerCell`/`X-Tenant-ID`，且 `authenticator.go` 只构造 `PrincipalService{CallerCellID}`——**只认证调用方 cell 身份，不传播也不还原原始业务 principal（actor/subject/session）**。故 split 下传播业务 principal **MUST 用 tamper-evident 的 signed/sealed envelope**（或把 actor/subject/session/tenant 全纳入 MAC material）+ 专用 callee middleware 重建——不能靠「现有 auth middleware 已足够」。| US5 #1966 → **已闭合**（折进 MAC + sealed funnel，见 §#1966 Amendment；残留 keyring 隔离归 #2153）|
 | **共享 HMAC keyring（无 per-cell 身份颁发）** | 单 cell 进程泄露 keyring → 可签发任意 `callerCell` | **#1964 评估并登记此缺口**：`runtime/auth/servicetoken.go` 的 4 段 MAC（`ts:nonce:callerCell:mac`）确实覆盖了 `callerCell` 字段，但所有 cell 使用**同一** `ring.Current()` 密钥签名——这只能证明「某个 keyring 持有者」发出了请求，无法证明「哪个 cell」发出。任何持有 keyring 的 cell 进程均可伪造任意 `callerCell`。推荐方向：**通过以 cellID 为 HKDF 派生上下文的 per-cell 子密钥**（`HKDF(masterKey, cellID)` → per-cell signing key），使单 cell 泄露无法伪造其它 cell 的 `callerCell`。当前补偿控制 = 服务端 `RequireCallerCell` allowlist（防止跳入预期以外的 internal endpoint）+ 可信网络/同进程假设——对 monolith/同址部署足够，**跨信任边界拆分不足**。**per-cell keyring 子密钥派生在本 PR（#1964）中不实现**，追踪在 **#2153**。 | US6 #1964（登记）→ **#2153 已实现**：per-cell provisioning（cell 持子密钥、**master 缺席**）+ HKDF 子密钥，**split 下 CLOSED**；monolith 不变（单信任域，非 per-cell-Hard，可接受）。见 §#2153 Amendment（含对上文「per-cell HKDF」措辞的修正）|
 | **无 mTLS 对等认证** | 中间人 / 端点伪造 | ~~service token MAC 提供消息完整性，但无传输层对等认证——此缺口已登记，**#1964/#2153 均不实现 mTLS**~~ → **#2263 RESOLVED**：非 loopback split 强制 mTLS（TLS 1.3 + SPIFFE-ID cross-bind），fail-closed 双闸移除「private network 补偿」soft 约束，见 §#2263 Amendment | **#2263 CLOSED**（2026-06-17） |
-| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell URL 今 egress-only fail-closed（运行期每 cell 独立连接须 #2366/#2341）。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；运行期隔离待 #2366/#2341 |
+| **共享 AMQP broker 凭据** | 单 cell 进程持有共享 AMQP 凭据 → 可跨 cell 发布 / 消费事件（突破隔离） | **PR-2 per-cell `GOCELL_<CELLID>_AMQP_URL` seam**：AMQP DSN 格式 `amqp://user:pass@host/vhost` 携带 broker 凭据+vhost；operator 可为每个 cell provision 独立 vhost/user（**operator-provisioned**，非 framework 派生——外部 broker 用户，无 master key，不适用 HKDF，对比 #2153）。**凭据 non-leak**：adapter sanitize funnel（`sanitizeURL` / `sanitizeErrorURL` / `sanitizeDialError`）防止凭据写入 log/error；archtest `AMQP-URL-REDACTION-FUNNEL-01`（Medium，typed AST scan）守。**当前限制**：distinct per-cell broker URL 今 egress-only fail-closed（运行期每 cell 独立 broker 连接须 #2366 ingress N-router）。注：per-cell DB 池/relay fan-out 已由 #2341 独立落地，不解除此 broker 闸。| **#2152 PR-3 文档化 + Medium 守卫**（2026-06-18）；broker 运行期隔离待 #2366 |
 | **token replay（多实例）** | 重放已签 token | `RequiresDistributedReplay()` 多实例强制分布式 NonceStore（**已有，US5 复用**）| 已覆盖 |
 | **`upstream-cell-unavailable` 错误语义** | 远端不可达与本地依赖缺失混淆 → 误诊 | 新增的是 **`errcode.Code`（`ERR_UPSTREAM_CELL_UNAVAILABLE`），用既有 `KindUnavailable` 构造**（`pkg/errcode/status.go` 已有该 Kind，**非新增 Kind**），Code 经 `ERRCODE-PREFIX-OWNERSHIP-01` 注册 + golden。**wire 可见性警示**：`KindUnavailable.PublicCode()` 现折叠为 `ERR_SERVICE_UNAVAILABLE` 且 5xx details 强制 strip——故该专属码默认只作**服务端**诊断（log/trace/internal）；若要客户端 wire 可区分，须 US5 **有意重评 5xx public-code 投影策略** + redaction（非默认）。| US5 #1966 → **已落地**（见 §#1966 Amendment）|
 
@@ -422,10 +426,11 @@ bootstrap guard（Medium）；CLI↔运行时派生一致 = 单测锁定（同�
 **per-cell DB 凭据 / 连接注入 seam**（`cellmodules/percellpg`）已在本 PR 落地：composition root
 可为每个 cell 注入独立的 `GOCELL_<CELLID>_DATABASE_URL`，seam 以 DSN 去重——同一 DSN 的 cell
 共享连接池（monolith 常见形态），不同 DSN 的 cell 持有独立连接池（split / per-cell DB 形态）。
-若某 cellID 缺少对应的 `DATABASE_URL` 配置，启动期 fail-closed（非静默降级回全局 pool）。注意：
-**split 拓扑下 per-cell outbox relay 扇出** 尚未实现（每条 outbox entry 需由所属 cell 的连接池读取并
-relay 到 broker），此部分追踪在 **#2152** 中；在该 issue 落地前，多个 DSN
-（即真正 split 的 per-cell DB）的组合在启动期以「多于 1 个不同 DSN」作为 fail-closed 边界。
+若某 cellID 缺少对应的 `DATABASE_URL` 配置，启动期 fail-closed（非静默降级回全局 pool）。
+
+> **更新 2026-06-18（#2341）**：上段「多于 1 个不同 DSN → fail-closed」已被取代。#2341 落地了
+> per-cell DB 池/relay 完整 fan-out：distinct DSN → N keyed instances（`InfraInstanceKey`）+
+> 每 instance 一个 pool + 一个 relay，端到端可运行。详见 §Amendment 2026-06-18 — #2341。
 
 **broker 连接为 assembly 级（非 per-cell seam）的设计论据**：broker（RabbitMQ，`GOCELL_AMQP_URL`）
 是跨 cell 事件总线的传输介质——其天然语义是「跨 cell 共享」，而非「per-cell 独立」。若为每个 cell
@@ -617,6 +622,139 @@ framework 可控的 master key，故不做 HKDF 派生（对比 #2153 HMAC keyri
 
 **权威语义**：`cellmodules/eventtransport/doc.go`（§INVARIANT AMQP-URL-REDACTION-FUNNEL-01 +
 §Per-cell credential/vhost isolation）+ ADR `202606131500-1940` §Amendment 2026-06-18。
+
+### #2093 Amendment — 下游 Hard 层落地：codegen 生成式 contract client（2026-06-18）
+
+D2 §enforcement 当初把「下游 Hard：generated contract client 作唯一可表达兄弟-cell 调用类型」
+defer 为 #2093（触发条件 = US5 #1966 落地 或 第二个跨 cell 同步调用方）。US5 #1966 已落地
+（`cd5d3b877`），本 amendment 记录该下游 Hard 层落地 + 威胁矩阵重评。
+
+#### 落地形态
+
+- **生成式 client（client.tmpl）**：contractgen 新增 `client.tmpl`，为声明了 `endpoints.clients`
+  的 internal-path http 契约生成 `Client`（unexported 字段，仅经下述构造器构造）。每个 `endpoints.clients`
+  声明的 cell 生成一个 `NewClientFor<Cell>(transport.CellTransport, ring, clk)` 构造器，**bake caller-cell
+  身份为字面量**（无可传入的 `callerCell` 串），故误/伪 caller 在调用点不可表达（F2，仿 `command.tmpl`
+  的 baked `DispatchID`）。构造器收 `transport.CellTransport`——注意 `CellTransport` 是**普通导出接口、非
+  sealed type**（对比同文件的 sealed `TransportMode`）：裸 `*http.Client` 只是不被该构造器签名接收，并非
+  「sibling 调用路径在类型层不可表达」（见下「威胁矩阵重评」）。client 自签名（`auth.SignInternalRequest`）
+  + 编码 path/query/body（query 在签名**前**写入 `RawQuery`，因签名把 `RawQuery` 折进 MAC，F3）+ `DoContract`
+  分发 + 解码。
+- **gate = internal-path + 非空 `endpoints.clients`**（`shouldEmitClient`；`buildHTTPEndpointSpec`
+  只为 `metadata.IsInternalHTTPPath` 填 `Endpoint.Clients`，故非空 ⇒ 作者已声明的兄弟-callable 契约）。
+  实际命中 **4 个**契约：`http.config.internal.get.v1`（projection GET，accesscore→configcore，
+  本 PR 迁移）、`http.auth.role.assign.v1` / `http.auth.role.revoke.v1`（POST，已生成、暂未接线）、
+  `http.internal.devicecommands.list.v1`（examples/iotdevice，GET，已生成、暂未接线）。
+- **单调用方迁移**：accesscore `HTTPConfigGetter`（仓内唯一手写跨 cell 同步调用方）改为持有生成
+  `get.Client`，只保留 configcore-specific 的 status→域 errcode + DTO→`ports.ConfigEntry` 映射。
+
+#### 威胁矩阵重评（D2 §enforcement「sync 直拨 funnel → 目标 Hard」行）
+
+原文设目标「上游 Hard + 下游 Hard + Medium backstop」。**落地后实测评级**（按 AI-robust 章程
+「funnel 须分别说明上游和下游强度，只锁 callsite 不是闭环」）：
+
+- **上游 = Hard**：`InProcessTransport` / `RemoteHTTPTransport` sealed（unexported 字段 + 单一
+  sanctioned constructor，`INPROCESS-TRANSPORT-SEALED-01` / `REMOTE-TRANSPORT-SEALED-01`）。
+- **下游 Hard 层 = 生成 artifact（codegen + 字节 golden），非接口 seal**：Hard 性由「生成 client 的存在性/
+  形态被字节 golden 锁存」承载——不可手改/手加 sibling 调用 client 类型。**修正 planning 措辞**：`CellTransport`
+  是普通导出接口，**非** sealed type，故「构造器只收 sealed `CellTransport`」「裸 `*http.Client` 在类型层
+  不可表达为 sibling 路径」是过度声明——真相是裸 `*http.Client` 仅不被生成构造器签名接收；cell 仍可自持
+  `net/http` 直拨（由下面 Medium backstop A 捕获，非编译错）。caller-cell 身份由 `NewClientFor<Cell>` baked
+  字面量锁定（F2，Hard：误 caller 在调用点不可表达）；codegen completeness 预检在构建期拒绝 `clients` 契约
+  无法被 client 忠实编码的形态（NoContent-204 / 非 tenant 自定义 header，F3/F4，`validateGeneratedClientEncodable`）。
+- **下游两个 Medium backstop（皆永久天花板，非待升级 TODO，不开 fake Hard-upgrade issue）**：
+  - **A — `CELL-SYNC-TRANSPORT-FUNNEL-01`**：禁 cell 持/造裸 `net/http` client。stdlib 导出 API
+    不可封、不可使 import 成编译错误 → typed AST 符号扫描是该载体类的可达天花板。
+  - **B — `CELL-TRANSPORT-DOCONTRACT-CALLER-01`（本 PR 新增）**：禁 cell 直调
+    `transport.CellTransport.DoContract`（sanctioned caller = `generated/contracts/**` 生成 client）。
+    `DoContract` 是导出接口方法 → 调用方 typed scan 是可达天花板（同 `COMMAND-ASYNC-EMIT-CALLER-01`
+    族）。**没有 B，cell 持注入的 `CellTransport` 直调 `DoContract` 即绕过生成 client 且不触 A**——
+    故 B 是「唯一可表达路径」闭环的关键。
+- **闭环论证**：A + B（皆 Medium）⇒ cell 触达兄弟 sync 的「唯一可表达出口 = 生成 client」是 Medium 级保证；
+  生成 client 自身是 Hard（codegen + 字节 golden）。**故整体下游 = Hard 生成 artifact + Medium sole-path 闭环**，
+  而非「下游 Hard」单一档位。
+- **funnel 本身不升 Hard**：D2 原文「目标 Hard（上下游双侧）」中的「下游 callsite scan」永久停留
+  Medium（honest ceiling），Hard 性由生成 client 这一新载体承载，而非把 scan 本身变编译错误。
+
+**权威语义**：`tools/codegen/contractgen/doc.go` §client_gen.go + `framework/runtime/transport/doc.go`
+§Governance + archtest `CELL-SYNC-TRANSPORT-FUNNEL-01`（backstop A，godoc 已重评）+
+`CELL-TRANSPORT-DOCONTRACT-CALLER-01`（backstop B）+ codegen `validateGeneratedClientEncodable`
+（F3/F4 编码完整性，`TestValidateGeneratedClientEncodable`）+ 生成 golden（4 个 `client_gen.go` +
+`synth_http_auth_modes_clientsonly_client_gen_go.golden` + 含 query 编码的
+`synth_http_auth_modes_clientsquery_client_gen_go.golden`）。
+
+### Amendment 2026-06-18 — #2341: per-cell DB pool/relay fan-out landed
+
+#2341 closes the per-cell DB pool/relay fan-out that was previously tracked as a
+blocker. The changes below supersede all "fail-closed / blocked-by #2341" language
+in earlier sections of this ADR.
+
+#### What changed
+
+**`cellmodules/percellpg.Resolve` now returns `Resolution{Instances, CellToInstance}`**
+instead of a single `(adapterpg.Config, bool, error)`:
+
+- **Colocated** (all cells share one distinct DSN after dedup): `Instances` contains
+  one entry keyed `DefaultInstanceKey()`. Behavior-preserving — existing single-pool
+  deployments are unaffected.
+- **Split** (>1 distinct DSNs): `Instances` contains one entry per distinct DSN,
+  each keyed `NewInfraInstanceKey(rep)` where `rep` is the alphabetically-first cell
+  ID in that DSN group. `CellToInstance` maps every cell to its instance key.
+
+**`cmd/corebundle/cap_wiring.go` opens one pool + one relay per `InfraInstanceKey`**,
+registers each relay via `bootstrap.WithRelay(key, relay)`, and builds a
+`capability.PGSet` from `CellToInstance` so each cell module resolves its own pool
+provider via `shared.PG.ForCell(cellID)`.
+
+**`composition.SharedDeps.PG` retype**: from `capability.PGProvider` (single-pool
+leaf) to `capability.PGSet` (per-cell routing layer). `ForCell(cellID)` returns the
+provider for that cell; `Sole()` returns the unique provider in colocated mode and
+fails-closed in split mode (guards projection and other single-pool consumers).
+
+**`RELAY-CONSTRUCTION-CELLMODULE-BAN-01`** (Medium caller funnel) added: prevents
+cellmodules from calling `runtime/outbox.NewRelay` / `bootstrap.WithRelay` directly.
+Relay construction is per-pool infrastructure that belongs in `cap_wiring.go`.
+
+#### Threat matrix re-evaluation (AI-robust chapter requirement)
+
+| Aspect | Before #2341 | After #2341 |
+|--------|--------------|-------------|
+| Split DB pools runnable | Blocked — >1 distinct DSN fail-closed at startup | **LIVE** — N distinct DSNs fan out to N keyed pool instances |
+| Per-pool relay drain | Single relay from single pool | N relays, one per `InfraInstanceKey`; each drains its own pool's outbox table |
+| Relay metric `cell` label | Always `configcore` (sole relay owner) | Rep cell of each DSN group (alphabetically-first cell ID); in colocated mode still `accesscore` — no regression |
+| Projection in split mode | N/A (blocked) | **Fail-closed** via `PGSet.Sole()`: split topology has N independent `projection_events` / `global_seq` tables; cross-pool sequence comparison is undefined. Corebundle today has no active projection (dormant) so this is not a live blocker |
+| Per-cell DB schema | Single shared migration set | Each per-cell DB must contain the full platform schema. `cap_wiring.go` runs the same `verifyPGPreconditions` for each pool. Per-cell schema subsetting (lighter schema per cell) is future work |
+
+**Residual blind spots (explicit backlog, not silent)**:
+
+(a) Each per-cell database must contain the complete platform schema — per-cell
+schema subsetting is future work (not tracked in #2341).
+
+(b) The relay metric `cell` label uses the rep cell (alphabetically-first in the DSN
+group) for all outbox traffic originating from cells in that group. In a partial-split
+where accesscore and auditcore share a pool, auditcore relay traffic is attributed to
+`accesscore`. This is the same behavior as the existing colocated mode — not a
+regression.
+
+(c) Projection in split mode is fail-closed via `PGSet.Sole()`: independent
+`projection_events` / `global_seq` tables per pool make cross-pool ordering
+undefined. Corebundle has no active projection today (dormant), so this is not an
+immediate blocker.
+
+(d) The broker remains a single shared connection: distinct per-cell AMQP URLs are
+still fail-closed, pending #2366 (ingress N-router). Per-cell DB fan-out (#2341) and
+per-cell broker fan-out (#2366) are **independent** lifts — they do NOT unlock each
+other.
+
+#### DB vs broker asymmetry (why the two fail-closeds do not lift together)
+
+DB pools are an egress+ingress symmetric resource: each cell both writes and reads
+its own tables through its own pool. A separate pool per DSN group is safe because
+each group is self-contained — no event routing depends on a single subscriber
+draining all pools. By contrast, the broker is a pure egress sink for the relay: N
+broker connections would require N subscribers (ingress N-router, #2366) to avoid
+orphaning events. This structural difference is why #2341 lifts the DB fail-closed
+while the broker fail-closed remains.
 
 ## Rejected alternatives
 

@@ -2,6 +2,7 @@ package registryread
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,6 +141,48 @@ func seededStore(t *testing.T) *mem.Registry {
 	return store
 }
 
+// seedApproved returns a *mem.Registry holding a single registration advanced to
+// the approved state, with payloadSchema = schemaRef and approver = the
+// approve-transition actor (registrar records in.Actor as Approver on approve).
+// Used by TestContractListServe_OK_WithApprovedItem to assert the now-required
+// approver/payloadSchema columns flow to the wire with their real values.
+func seedApproved(t *testing.T, id, submitter, approver, schemaRef string) *mem.Registry {
+	t.Helper()
+	ctx := context.Background()
+	tnt, err := tenant.ParseTenantID(testTenantStr)
+	if err != nil {
+		t.Fatalf("seedApproved: parse tenant: %v", err)
+	}
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+	if _, err := store.Create(ctx, tnt, registry.SubmitInput{
+		ID:            id,
+		Kind:          "http",
+		PayloadSchema: schemaRef,
+		Submitter:     submitter,
+	}); err != nil {
+		t.Fatalf("seedApproved: create: %v", err)
+	}
+	steps := []struct {
+		to    registry.RegistrationState
+		actor string
+	}{
+		{registry.StateProbing(), "system"},
+		{registry.StateConformant(), "system"},
+		{registry.StatePendingApproval(), "system"},
+		{registry.StateApproved(), approver}, // approve actor → Approver column
+	}
+	for _, s := range steps {
+		if _, err := store.Transition(ctx, tnt, registry.AdvanceInput{
+			ID:    id,
+			To:    s.to,
+			Actor: s.actor,
+		}); err != nil {
+			t.Fatalf("seedApproved: advance to %v: %v", s.to, err)
+		}
+	}
+	return store
+}
+
 // adminCtx returns a context with an admin principal, the test tenant, and the
 // given authorizer wired. Both tenant and authorizer are required for the list
 // service to reach the store successfully.
@@ -210,6 +253,45 @@ func TestContractListServe_OK_EmptyPage(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestContractListServe_OK_WithApprovedItem: an approved registration serializes
+// its now-required approver/payloadSchema columns (#2401: optional→required) all
+// the way through the masking funnel to a schema-valid 200 body. This is the HTTP
+// contract-layer counterpart to service_test's TestList_SingleItem — it proves the
+// full serialize → projection funnel → wire → schema-validate path keeps the
+// required columns present and non-empty, which the empty-registrar OK test cannot.
+func TestContractListServe_OK_WithApprovedItem(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), contractID)
+	reg := seedApproved(t, "http.example.approved.v1", "cell-a", "admin-1", "schema-ref-1")
+	rec := getList(t, newMuxOver(t, reg), adminCtx(allowAuthorizer()), "limit=10")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	var resp struct {
+		Data []struct {
+			ID            string `json:"id"`
+			Approver      string `json:"approver"`
+			PayloadSchema string `json:"payloadSchema"`
+			State         string `json:"state"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal body: %v; body=%s", err, rec.Body.String())
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("len(data) = %d, want 1; body=%s", len(resp.Data), rec.Body.String())
+	}
+	switch it := resp.Data[0]; {
+	case it.Approver != "admin-1":
+		t.Errorf("approver = %q, want admin-1 (required column visible after approve)", it.Approver)
+	case it.PayloadSchema != "schema-ref-1":
+		t.Errorf("payloadSchema = %q, want schema-ref-1", it.PayloadSchema)
+	case it.State != registry.StateApproved().String():
+		t.Errorf("state = %q, want %q", it.State, registry.StateApproved().String())
+	}
 }
 
 // TestContractListServe_Unauthenticated: no principal ⇒ RequirePermission 401.

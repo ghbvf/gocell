@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
 	idemkey "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 func newAsyncTestSvc(t *testing.T, opts ...Option) *Service {
@@ -66,7 +66,7 @@ type errEmitter struct{}
 func (errEmitter) Emit(context.Context, kout.Entry) error { return errors.New("emit boom") }
 
 // TestEnqueueAsync_EmitsCommandFromIdempotencyKey: the async path derives the
-// command_id from the RequestIdentity's composite dedup token and emits cmdenqueue.
+// command_id from the RequestIdentity's composite dedup token and emits cmdremote.
 func TestEnqueueAsync_EmitsCommandFromIdempotencyKey(t *testing.T) {
 	rec := outboxtest.NewRecorder()
 	svc := newAsyncTestSvc(t, WithCommandEmitter(rec.CellEmitter()))
@@ -85,8 +85,8 @@ func TestEnqueueAsync_EmitsCommandFromIdempotencyKey(t *testing.T) {
 		t.Fatalf("emitted %d entries, want 1", len(entries))
 	}
 	e := entries[0]
-	if e.RoutingTopic() != string(cmdenqueue.DispatchID) {
-		t.Errorf("RoutingTopic = %q, want %q", e.RoutingTopic(), cmdenqueue.DispatchID)
+	if e.RoutingTopic() != string(cmdremote.DispatchID) {
+		t.Errorf("RoutingTopic = %q, want %q", e.RoutingTopic(), cmdremote.DispatchID)
 	}
 	if e.AggregateID() != "dev-1" {
 		t.Errorf("AggregateID = %q, want dev-1", e.AggregateID())

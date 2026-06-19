@@ -22,7 +22,7 @@ var sliceMeta = &metadata.SliceMeta{
 	Lifecycle:        "experimental",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "event.device-registered.v1", Role: "subscribe", Handler: "HandleDeviceRegistered"},
-		{Contract: "command.devicecommand.enqueue.v1", Role: "invoke"},
+		{Contract: "command.remotecommand.v1", Role: "invoke"},
 	},
 	Verify: metadata.SliceVerifyMeta{
 		Unit: []string{
@@ -32,7 +32,7 @@ var sliceMeta = &metadata.SliceMeta{
 			"contract.event.device-registered.v1.subscribe",
 		},
 		Waivers: []metadata.WaiverMeta{
-			{Contract: "command.devicecommand.enqueue.v1", Owner: "examples", Reason: "invoke is a declaration-only role (no cellgen derivation, no executable broker contract test); the command emit is covered by the slice unit test asserting the emitted entry's routing topic + idempotency metadata.", ExpiresAt: "2026-12-31"},
+			{Contract: "command.remotecommand.v1", Owner: "examples", Reason: "invoke is a declaration-only role (no cellgen derivation, no executable broker contract test); the command emit is covered by the slice unit test asserting the emitted entry's routing topic + idempotency metadata.", ExpiresAt: "2026-12-31"},
 		},
 	},
 	AllowedFiles: []string{

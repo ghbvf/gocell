@@ -12,6 +12,7 @@ endpoints:
     noContent: false
     auth:
       public: true  # demo-only: a minimal unauthenticated hello on a loopback listener
+      reason: "Demo-only: a minimal unauthenticated hello on a loopback listener."
     responses:
       400:
         description: "Bad request — malformed request (the typed error envelope requires at least one declared error response; the hello handler itself only ever returns 200)"

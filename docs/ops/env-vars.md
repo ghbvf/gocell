@@ -60,7 +60,7 @@ In postgres (durable) topology the outbox event transport is a **real message br
 
 | Variable | Purpose | Default | Required? | Notes |
 |----------|---------|---------|-----------|-------|
-| `GOCELL_<CELLID>_AMQP_URL` | Per-cell RabbitMQ connection URL for a broker cell (#2152 PR-2). Read for each broker-requiring cell (= the postgres cell set: `CONFIGCORE` / `AUDITCORE` / `ACCESSCORE`) and deduped by `eventtransport.dedupBrokerURL` | falls back to `GOCELL_AMQP_URL` when unset | optional | **Colocated** assemblies share one broker — leave these unset and set only `GOCELL_AMQP_URL` (every cell falls back to it → one connection, behavior-preserving). **Distinct** per-cell URLs are currently **fail-closed** (egress-only: only the relay/publisher fans out today; a single subscriber cannot consume N brokers). True N-broker fan-out is gated on the ingress phase6 N-router follow-up + #2341. **Ignored** in demo / memory topology. |
+| `GOCELL_<CELLID>_AMQP_URL` | Per-cell RabbitMQ connection URL for a broker cell (#2152 PR-2). Read for each broker-requiring cell (= the postgres cell set: `CONFIGCORE` / `AUDITCORE` / `ACCESSCORE`) and deduped by `eventtransport.dedupBrokerURL` | falls back to `GOCELL_AMQP_URL` when unset | optional | **Colocated** assemblies share one broker — leave these unset and set only `GOCELL_AMQP_URL` (every cell falls back to it → one connection, behavior-preserving). **Distinct** per-cell URLs are currently **fail-closed** (egress-only: only the relay/publisher fans out today; a single subscriber cannot consume N brokers). True N-broker fan-out is gated on the ingress N-router (#2366). Note: per-cell DB pool/relay fan-out has landed independently (#2341) but does **not** lift the broker distinct-URL fail-closed — DB and broker resources are not in lockstep. **Ignored** in demo / memory topology. |
 | `GOCELL_AMQP_URL` | RabbitMQ (AMQP 0-9-1) connection URL the relay publishes to and consumers subscribe from; assembly-wide fallback for the per-cell `GOCELL_<CELLID>_AMQP_URL` above | — | **postgres topology** (`GOCELL_CELL_ADAPTER_MODE=postgres`), unless every broker cell sets its own `GOCELL_<CELLID>_AMQP_URL` | Startup **fails fast** when a broker cell has neither its per-cell URL nor this fallback in postgres topology — there is **no silent in-memory fallback** (a process-local bus would lose durable outbox entries across processes / restarts). The connection dials eagerly, so an unreachable broker also fails fast at startup. Use a TLS URL (`amqps://…`) for remote brokers; `amqp://guest:guest@localhost:5672/` is dev/CI only. **Ignored** in demo / memory topology. |
 
 **Dead-letter exchange (broker topology contract):** the RabbitMQ subscriber declares a single dead-letter exchange **`gocell.events.dlx`** at subscription setup. Messages rejected past the retry budget (`outbox.Reject`) are routed there instead of being silently dropped, retaining their original routing key (topic) so a DLX consumer can route by source topic. This name is a stable operations contract — renaming it requires migrating in-flight dead letters. Operators configuring vhost ACLs or dead-letter monitoring should account for `gocell.events.dlx`.
@@ -117,22 +117,43 @@ Both variables are **required, persistent operator Basic Auth credentials** prot
 
 Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 
-### Per-cell database DSNs (#1964)
+### Per-cell database DSNs (#1964, #2341)
 
 Each postgres-requiring cell reads its own DSN via `GOCELL_<CELLID>_DATABASE_URL`.
-In colocated deployments (all cells on one server) all three cells are set to the same
-DSN; `percellpg.Resolve` deduplicates to one shared pool. A missing DSN for any cell
-fails fast at startup naming the cell and the expected env var. More than one distinct
-DSN fails closed (split-pool topology not yet supported; see #1963).
+`percellpg.Resolve` groups cells by DSN and opens **one independent pool per distinct
+DSN** plus one relay per pool (split topology, landed #2341). A missing DSN for any
+cell fails fast at startup naming the cell and the expected env var.
+
+- **Colocated** (all cells share one DSN): all three vars are identical;
+  `percellpg.Resolve` deduplicates to a single shared pool. One relay services all
+  outbox traffic.
+- **Split** (each cell on its own DB server): each distinct DSN gets its own pool
+  and relay instance. Cell IDs are grouped by DSN; the pool/relay for a group is keyed
+  by the group's alphabetically-first cell (`InfraInstanceKey`).
 
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `GOCELL_CONFIGCORE_DATABASE_URL` | PostgreSQL DSN for configcore; role must be `gocell_app` (restricted, NOSUPERUSER NOBYPASSRLS) so that `FORCE ROW LEVEL SECURITY` is enforced at runtime | — | **postgres mode** |
 | `GOCELL_AUDITCORE_DATABASE_URL` | PostgreSQL DSN for auditcore; same role requirement as configcore | — | **postgres mode** |
 | `GOCELL_ACCESSCORE_DATABASE_URL` | PostgreSQL DSN for accesscore; same role requirement as configcore | — | **postgres mode** |
-| `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` | Max open connections for the shared pool. **Pool knobs are read from the alphabetically-first postgres cell** (`accesscore` today, since `a < au < c`). In colocated/dedup mode all postgres cells share ONE pool, so operators MUST set pool knobs identically across all cells — only the knobs from the first sorted cell (`GOCELL_ACCESSCORE_DATABASE_*`) are actually applied to the shared pool. `GOCELL_AUDITCORE_DATABASE_MAX_CONNS` and `GOCELL_CONFIGCORE_DATABASE_MAX_CONNS` are read but ignored in colocated mode; per-cell pool-knob isolation requires split topology (#2152). | 10 | No |
-| `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout for the shared pool (same ordering rule as `MAX_CONNS` above; set identically across all postgres cells) | `5m` | No |
-| `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime for the shared pool (same ordering rule as `MAX_CONNS` above; set identically across all postgres cells) | `1h` | No |
+| `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` | Max open connections for a pool. **Pool knobs are read from the alphabetically-first cell in each DSN group** (`accesscore` leads the colocated group since `a < au < c`). In colocated mode all cells share ONE pool — only the knobs of the first sorted cell apply; the other cells' knob vars are read but ignored. In split mode each distinct-DSN group takes its own pool sized by the group's alphabetically-first cell. Cells within the same DSN group MUST set identical knob values; a mismatch is fail-closed by `percellpg.Resolve` (#2341). | 10 | No |
+| `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` | Idle connection timeout for the pool (same ordering/group rule as `MAX_CONNS` above; cells sharing a DSN group must set this identically or `percellpg.Resolve` fails closed) | `5m` | No |
+| `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` | Max connection lifetime for the pool (same ordering/group rule as `MAX_CONNS` above; cells sharing a DSN group must set this identically or `percellpg.Resolve` fails closed) | `1h` | No |
+
+> **F15 — Split topology: each per-cell DB must carry the full platform schema.**
+> Every database referenced by a distinct `GOCELL_<CELLID>_DATABASE_URL` must have the
+> complete platform migration set applied (the same migrations as a colocated DB). There
+> is no per-cell schema subset: `verifyPGPreconditions` runs on each pool at startup and
+> fails fast if any expected table or role is missing. Per-cell schema subsetting (only
+> the owning cell's tables) is future work.
+
+> **F16 — Partial-split: relay metric `cell` label uses the DSN-group representative.**
+> In a partial-split assembly (some cells share a DSN, others have their own), each relay
+> instance's `cell` metric label is set to the **alphabetically-first cell in its DSN
+> group** (the group representative, `InfraInstanceKey`). A single relay label may
+> therefore cover the outbox traffic of multiple cells in the same group. Operations
+> dashboards and alerts must account for this: a relay labelled `accesscore` may be
+> draining outbox entries for all cells that share the `accesscore` DSN.
 
 ### Restricted serving-role credential
 
@@ -346,9 +367,9 @@ The old global PostgreSQL env names for the **serving pool** (`cmd/corebundle`) 
 | Old name (pre-T6, removed from serving pool) | New name |
 |---|---|
 | `GOCELL_PG_DSN` (**serving pool only — removed**; migration tool still uses it) | `GOCELL_CONFIGCORE_DATABASE_URL` + `GOCELL_AUDITCORE_DATABASE_URL` + `GOCELL_ACCESSCORE_DATABASE_URL` (same value, per-cell seam #1964) |
-| `GOCELL_PG_MAX_CONNS` | `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` (pool knobs read from alphabetically-first cell; see §Per-cell database DSNs) |
-| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` |
-| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` |
+| `GOCELL_PG_MAX_CONNS` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_MAX_CONNS` — **colocated/shared-DSN: set all three to the same value, or leave all three unset.** Cells sharing a DSN group MUST declare identical pool knobs or `percellpg.Resolve` fails closed at startup; setting only `accesscore` makes `audit`/`config` keep the default and trips the mismatch gate. Partial-split: identical within each DSN group. See §Per-cell database DSNs |
+| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_IDLE_TIMEOUT` — same value across the DSN group, or all unset (same fail-closed rule as `MAX_CONNS`) |
+| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_MAX_LIFETIME` — same value across the DSN group, or all unset (same fail-closed rule as `MAX_CONNS`) |
 | `GOCELL_MASTER_KEY` | `GOCELL_CONFIGCORE_MASTER_KEY` |
 | `GOCELL_MASTER_KEY_PREVIOUS` | `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` |
 | `GOCELL_KEY_PROVIDER` | `GOCELL_CONFIGCORE_KEY_PROVIDER` |

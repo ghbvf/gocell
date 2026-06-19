@@ -109,6 +109,19 @@ func renderProjection(spec *ContractGenSpec) ([]byte, error) {
 	return b, nil
 }
 
+func renderClient(spec *ContractGenSpec) ([]byte, error) {
+	if spec.Kind != "http" {
+		return nil, fmt.Errorf("contractgen render client: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render("github.com/ghbvf/gocell", codegen.RenderOptions{
+		TemplateName: "client.tmpl", Templates: templates, Data: spec, Filename: "/dev/null",
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render client: %w", err)
+	}
+	return b, nil
+}
+
 // update flag: run with -update to regenerate golden files.
 var updateGolden = flag.Bool("update", false, "update golden files")
 
@@ -1490,6 +1503,8 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = renderSubscription(spec)
 	case "projection_gen.go":
 		content, err = renderProjection(spec)
+	case "client_gen.go":
+		content, err = renderClient(spec)
 	case "saga_gen.go":
 		content, err = renderSaga(spec)
 	case "types.ts":
@@ -2496,4 +2511,165 @@ func TestRender_TS_ResponseProjection_Skipped(t *testing.T) {
 	if specEmitsTS(spec) {
 		t.Error("specEmitsTS returned true for responseProjection contract; want false (TS v1 skips responseProjection)")
 	}
+}
+
+// TestShouldEmitClient pins the gate that decides whether a contract gets a
+// generated contract client (#2093). The gate is internal-path + non-empty
+// endpoints.clients: builder.go only populates Endpoint.Clients for
+// metadata.IsInternalHTTPPath, so "non-empty Clients" already implies an internal
+// sibling-callable contract. Only http contracts with a declared caller allowlist
+// emit a client; public/no-clients http and non-http kinds do not.
+func TestShouldEmitClient(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		spec *ContractGenSpec
+		want bool
+	}{
+		{"http with clients", &ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{Clients: []string{"accesscore"}}}, true},
+		{"http empty clients", &ContractGenSpec{Kind: "http", Endpoint: &httpEndpointSpec{}}, false},
+		{"http nil endpoint", &ContractGenSpec{Kind: "http"}, false},
+		{"event kind with clients", &ContractGenSpec{Kind: "event", Endpoint: &httpEndpointSpec{Clients: []string{"x"}}}, false},
+		{"command kind", &ContractGenSpec{Kind: "command"}, false},
+		{"nil spec", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldEmitClient(tc.spec); got != tc.want {
+				t.Errorf("shouldEmitClient(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClientPathExpr pins the path-building expression the generated client uses
+// (#2093): a quoted literal for a static path, url.PathEscape concatenation for
+// {param} placeholders mapped to the Go field name (ParamSpec.GoName), with
+// literals between/around params preserved.
+func TestClientPathExpr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ep   *httpEndpointSpec
+		want string
+	}{
+		{"nil endpoint", nil, `""`},
+		{"static path", &httpEndpointSpec{Path: "/internal/v1/access/roles/assign"}, `"/internal/v1/access/roles/assign"`},
+		{
+			"single trailing param",
+			&httpEndpointSpec{Path: "/internal/v1/config/{key}", PathParams: []ParamSpec{{Name: "key", GoName: "Key"}}},
+			`"/internal/v1/config/" + url.PathEscape(req.Key)`,
+		},
+		{
+			"param then literal",
+			&httpEndpointSpec{Path: "/x/{a}/y", PathParams: []ParamSpec{{Name: "a", GoName: "A"}}},
+			`"/x/" + url.PathEscape(req.A) + "/y"`,
+		},
+		{
+			"two params",
+			&httpEndpointSpec{Path: "/x/{a}/y/{b}", PathParams: []ParamSpec{{Name: "a", GoName: "A"}, {Name: "b", GoName: "B"}}},
+			`"/x/" + url.PathEscape(req.A) + "/y/" + url.PathEscape(req.B)`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := clientPathExpr(tc.ep); got != tc.want {
+				t.Errorf("clientPathExpr(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHTTPMethodConst pins the HTTP-method → net/http.Method* mapping used by the
+// generated client (#2093).
+func TestHTTPMethodConst(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"GET":    "http.MethodGet",
+		"POST":   "http.MethodPost",
+		"PUT":    "http.MethodPut",
+		"PATCH":  "http.MethodPatch",
+		"DELETE": "http.MethodDelete",
+		"HEAD":   "http.MethodHead",
+		"WEIRD":  `"WEIRD"`, // defensive fallback: quoted literal
+	}
+	for method, want := range cases {
+		if got := httpMethodConst(method); got != want {
+			t.Errorf("httpMethodConst(%q) = %q, want %q", method, got, want)
+		}
+	}
+}
+
+// TestRender_Golden_Client byte-locks the generated contract client (client.tmpl,
+// #2093) for the clientsonly synth fixture (GET /internal/v1/sample/clientsonly,
+// clients:[testcell], flat non-projection {ok} response). It pins: the caller-baked
+// constructor NewClientForTestcell(transport.CellTransport, ServiceKeyring, Clock)
+// (callerCell baked, F2), the signing+DoContract dispatch, and decode-into-Response
+// (the non-projection path). The query-encoding path is byte-locked by
+// TestRender_Golden_ClientQuery; the projection decode path (data envelope) and
+// POST-body path are byte-locked by the committed generated/contracts/http/** client
+// files via `gocell verify generated`.
+func TestRender_Golden_Client(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	const contractID = "http.sample.clientsonly.v1"
+	if p.Contracts[contractID] == nil {
+		t.Fatalf("%s not found in synth fixture", contractID)
+	}
+	spec, err := buildContractSpec(absTestDir, p, contractID)
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "client_gen.go")
+	goldenFile := goldenFilePath("synth_http_auth_modes_clientsonly", "client_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_ClientQuery byte-freezes the generated cross-cell client for a
+// clients+queryParams internal contract (#2093, F3): the client must encode the
+// declared query params onto httpReq.URL.RawQuery BEFORE auth.SignInternalRequest
+// (which folds RawQuery into the service-token MAC). The clientsquery fixture
+// exercises every query GoType the handler supports (string optional+required,
+// int64, float64, bool) so a template regression that drops a param — the exact
+// bug this finding fixes — is caught here, not only by cross-module verify.
+func TestRender_Golden_ClientQuery(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	const contractID = "http.sample.clientsquery.v1"
+	if p.Contracts[contractID] == nil {
+		t.Fatalf("%s not found in synth fixture", contractID)
+	}
+	spec, err := buildContractSpec(absTestDir, p, contractID)
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "client_gen.go")
+	goldenFile := goldenFilePath("synth_http_auth_modes_clientsquery", "client_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
 }

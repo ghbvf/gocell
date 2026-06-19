@@ -12,6 +12,7 @@ endpoints:
     path: /api/v1/devices
     auth:
       public: true
+      reason: "Device enrollment entrypoint: a device has no identity credential yet, so registration must be public."
     successStatus: 201
     noContent: false
     responses:

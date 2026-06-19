@@ -28,6 +28,7 @@ endpoints:
     noContent: false
     auth:
       bootstrap: true
+      reason: "First-run bootstrap: provisions the first admin via env-credentialed HTTP Basic before any JWT/RBAC exists."
       responses:
         - 401
         - 429

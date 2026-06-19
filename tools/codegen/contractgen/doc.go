@@ -23,18 +23,24 @@
 //
 // Columns are file stems; each emitted file is <stem>_gen.go.
 //
-//	           | types | iface | handler | spec | subscription | projection | saga | command
-//	-----------+-------+-------+---------+------+--------------+------------+------+---------
-//	http       |   ✔   |   ✔   |    ✔    |   —  |      —       |     —      |   —  |    —
-//	event      |   ✔   |   ✔   |    —    |   ✔  |      ✔       |     ✔      |   —  |    —
-//	command    |   ✔   |   —   |    —    |   —  |      —       |     —      |   —  |    ✔
-//	projection |   ✔   |   ✔   |    —    |   —  |      —       |     —      |   —  |    —
-//	grpc       |   —   |   —   |    —    |   —  |      —       |     —      |   —  |    —
-//	saga       |   ✔   |  ✔ *  |    —    |   —  |      —       |     —      |   ✔  |    —
-//	webhook    |   —   |   —   |    —    |   —  |      —       |     —      |   —  |    —
+//	           | types | iface | handler | client | spec | subscription | projection | saga | command
+//	-----------+-------+-------+---------+--------+------+--------------+------------+------+---------
+//	http       |   ✔   |   ✔   |    ✔    |  ✔ **  |   —  |      —       |     —      |   —  |    —
+//	event      |   ✔   |   ✔   |    —    |   —    |   ✔  |      ✔       |     ✔      |   —  |    —
+//	command    |   ✔   |   —   |    —    |   —    |   —  |      —       |     —      |   —  |    ✔
+//	projection |   ✔   |   ✔   |    —    |   —    |   —  |      —       |     —      |   —  |    —
+//	grpc       |   —   |   —   |    —    |   —    |   —  |      —       |     —      |   —  |    —
+//	saga       |   ✔   |  ✔ *  |    —    |   —    |   —  |      —       |     —      |   ✔  |    —
+//	webhook    |   —   |   —   |    —    |   —    |   —  |      —       |     —      |   —  |    —
 //
 // * saga's iface_gen.go is an empty package clause (no Service interface); the
 // typed business interface is Impl in saga_gen.go. See the iface_gen.go section.
+//
+// ** client_gen.go is the only PER-CONTRACT-gated http artifact (#2093): it is
+// emitted only when shouldEmitClient is true — i.e. an internal-path contract that
+// declares endpoints.clients (the sibling-cell caller allowlist). Public http
+// contracts and internal contracts without a clients allowlist get no client.
+// See the client_gen.go section and generator.go shouldEmitClient.
 //
 // webhook and grpc emit no contractgen artifacts at all: webhook registration
 // derives via cellgen from slice.yaml; grpc's server contract is buf's generated
@@ -97,6 +103,33 @@
 // handler_gen.go golden in render_test.go — any reintroduction of inline
 // strconv.ParseInt("limit") in the template diffs the golden output.
 // (funnel-first; see docs/plans/202605070431-pr403-funnel-fix-roadmap.md §7.)
+//
+// # client_gen.go (kind=http, gated by shouldEmitClient — #2093)
+//
+// Renders the cross-cell contract Client (unexported fields → not externally
+// struct-literal constructable). It is the sole *generated* sibling-cell caller
+// type; its Hard property is codegen + byte golden (the generated artifact is
+// frozen), NOT a sealed interface — transport.CellTransport is a plain exported
+// interface, so holding one is not a type-level seal, and "the constructor only
+// takes a CellTransport" merely means a bare *http.Client is not accepted by that
+// signature (a cell could still hold net/http; that bypass is caught by the Medium
+// backstops below, not the compiler). One NewClientFor<Cell> is emitted per
+// endpoints.clients cell, baking the caller-cell identity as a literal so a
+// wrong/forged callerCell is unexpressible (F2). The method encodes path + query
+// (url.Values → RawQuery set BEFORE signing, since SignInternalRequest folds
+// RawQuery into the MAC — F3) + body, signs with a service token
+// (auth.SignInternalRequest), dispatches via DoContract, and on the declared
+// success status decodes the body — into the directly-unmarshalable Response, or
+// for responseProjection contracts (whose Response.Data is the sealed
+// projection.ResourceProjection) into the resource-item DTO via the {data: ...}
+// envelope (Endpoint.ClientDecodeDTO/List). Domain error mapping is the caller's
+// job: the method returns (decoded, httpStatus, err) and returns (nil, status, nil)
+// for a non-success status. Emitted ONLY when shouldEmitClient is true (internal
+// path + endpoints.clients declared) and only for shapes the client can faithfully
+// encode (validateGeneratedClientEncodable rejects NoContent / custom non-tenant
+// headers at codegen — F3/F4). The Medium caller-side backstops that a cell reaches
+// siblings ONLY through this client are CELL-TRANSPORT-DOCONTRACT-CALLER-01 +
+// CELL-SYNC-TRANSPORT-FUNNEL-01.
 //
 // # spec_gen.go (kind=event only)
 //

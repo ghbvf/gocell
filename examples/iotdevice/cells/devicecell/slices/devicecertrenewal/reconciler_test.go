@@ -18,7 +18,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
 	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 var certTestBase = time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
@@ -88,12 +88,12 @@ func TestReconciler_EmitsRenewalForNearExpiry(t *testing.T) {
 	entries := rec.Entries()
 	require.Len(t, entries, 1, "exactly one renewal command for the single near-expiry device")
 	got := entries[0]
-	assert.Equal(t, string(cmdenqueue.DispatchID), got.RoutingTopic())
+	assert.Equal(t, string(cmdremote.DispatchID), got.RoutingTopic())
 	assert.Equal(t, "dev-near", got.AggregateID(), "subject is the device id")
 	assert.Equal(t, rotateCommandID("dev-near", 1), got.Metadata()[rtcommand.CommandIDMetadataKey],
 		"command_id is the deterministic per-(device,epoch) dedup token")
 
-	var req cmdenqueue.Request
+	var req cmdremote.Request
 	require.NoError(t, json.Unmarshal(got.Payload(), &req))
 	assert.Equal(t, "dev-near", req.DeviceID)
 	assert.Equal(t, rotateCertCommandType, req.CommandType)

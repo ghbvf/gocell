@@ -120,12 +120,117 @@ func TestFMT42_ValidStandardPermission(t *testing.T) {
 	}
 }
 
-// TestFMT42_AbsentPermissionLegal: a standard route without a permission overlay is
-// legal during the #2205 migration (sparse overlay) — FMT-42 must NOT flag it.
-func TestFMT42_AbsentPermissionLegal(t *testing.T) {
+// TestFMT42_ModelessRouteRejected: #2020 reverses the former sparse-overlay leniency —
+// a modeless active codegen route (no permission, no opt-out) is now an error.
+func TestFMT42_ModelessRouteRejected(t *testing.T) {
 	project := fmt42Project(func(_ *metadata.HTTPTransportMeta) {})
-	results := NewValidator(project, "", clock.Real()).validateFMT42()
-	if errs := fmt42Errors(results); len(errs) != 0 {
-		t.Fatalf("FMT-42: absent permission must be legal (sparse overlay), got: %v", errs)
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: a modeless active route must be rejected (#2020 default-ABAC), got none")
+	}
+	if errs[0].Field != "endpoints.http.auth" {
+		t.Errorf("FMT-42: expected finding on endpoints.http.auth, got %q", errs[0].Field)
+	}
+}
+
+// TestFMT42_ModelessSkippedWhenInactive: draft / non-codegen routes mount no live
+// route, so the #2020 mandatory-mode gate does not apply.
+func TestFMT42_ModelessSkippedWhenInactive(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(c *metadata.ContractMeta)
+	}{
+		{"draft", func(c *metadata.ContractMeta) { c.Lifecycle = "draft" }},
+		{"non-codegen", func(c *metadata.ContractMeta) { c.Codegen = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := fmt42Project(func(_ *metadata.HTTPTransportMeta) {})
+			tc.mutate(project.Contracts["http.config.x.v1"])
+			if errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42()); len(errs) != 0 {
+				t.Fatalf("FMT-42: %s route must be skipped, got: %v", tc.name, errs)
+			}
+		})
+	}
+}
+
+// TestFMT42_LedgeredModelessExempt: a modeless contract on the frozen #2020 migration
+// ledger is exempt (the mechanism lands without blocking #2355/#2358 migration).
+func TestFMT42_LedgeredModelessExempt(t *testing.T) {
+	ids := metadata.HTTPAuthModeLedgerIDs()
+	if len(ids) == 0 {
+		t.Skip("ledger drained — exemption path removed at #2020 endgame")
+	}
+	project := fmt42Project(func(_ *metadata.HTTPTransportMeta) {})
+	c := project.Contracts["http.config.x.v1"]
+	delete(project.Contracts, "http.config.x.v1")
+	c.ID = ids[0]
+	project.Contracts[ids[0]] = c
+	if errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42()); len(errs) != 0 {
+		t.Fatalf("FMT-42: a ledgered modeless contract must be exempt, got: %v", errs)
+	}
+}
+
+// TestFMT42_OptOutRequiresReason: each of the 4 opt-out modes must carry a non-empty
+// auth.reason — missing → error on endpoints.http.auth.reason, present → ok.
+func TestFMT42_OptOutRequiresReason(t *testing.T) {
+	modes := []struct {
+		name string
+		set  func(a *metadata.HTTPAuthMeta)
+	}{
+		{"public", func(a *metadata.HTTPAuthMeta) { a.Public = true }},
+		{"serviceOwned", func(a *metadata.HTTPAuthMeta) { a.ServiceOwned = true }},
+		{"bootstrap", func(a *metadata.HTTPAuthMeta) { a.Bootstrap = true }},
+		{"clientsOnly", func(a *metadata.HTTPAuthMeta) { a.ClientsOnly = true }},
+	}
+	for _, m := range modes {
+		t.Run(m.name+" missing reason", func(t *testing.T) {
+			project := fmt42Project(func(h *metadata.HTTPTransportMeta) { m.set(&h.Auth) })
+			errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+			if len(errs) == 0 {
+				t.Fatalf("FMT-42: opt-out %s without reason must error (#2020), got none", m.name)
+			}
+			if errs[0].Field != "endpoints.http.auth.reason" {
+				t.Errorf("expected finding on endpoints.http.auth.reason, got %q", errs[0].Field)
+			}
+		})
+		t.Run(m.name+" with reason", func(t *testing.T) {
+			project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+				m.set(&h.Auth)
+				h.Auth.Reason = "justified opt-out"
+			})
+			if errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42()); len(errs) != 0 {
+				t.Fatalf("FMT-42: opt-out %s with reason must pass, got: %v", m.name, errs)
+			}
+		})
+	}
+}
+
+// TestFMT42_NilHTTPBlock_ModelessRejected: an active codegen http contract whose
+// endpoints.http block is nil is modeless and rejected (unless ledgered).
+func TestFMT42_NilHTTPBlock_ModelessRejected(t *testing.T) {
+	project := fmt42Project(func(_ *metadata.HTTPTransportMeta) {})
+	project.Contracts["http.config.x.v1"].Endpoints.HTTP = nil
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: a nil http block on an active codegen contract must be rejected as modeless (#2020), got none")
+	}
+	if errs[0].Field != "endpoints.http.auth" {
+		t.Errorf("expected finding on endpoints.http.auth, got %q", errs[0].Field)
+	}
+}
+
+// TestFMT42_ReasonWithoutOptOutForbidden: auth.reason on a non-opt-out (ABAC/standard)
+// route is forbidden — the reason only justifies an opt-out.
+func TestFMT42_ReasonWithoutOptOutForbidden(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "config:read"
+		h.Auth.Reason = "stray reason"
+	})
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: reason without an opt-out mode must be forbidden (#2020), got none")
+	}
+	if errs[0].Field != "endpoints.http.auth.reason" {
+		t.Errorf("expected finding on endpoints.http.auth.reason, got %q", errs[0].Field)
 	}
 }

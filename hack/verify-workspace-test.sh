@@ -76,12 +76,18 @@ workspace_has() {
 # satellite go.mod against the workspace `use` set and fail on any missing member
 # (mirrors the manifest ⊆ go.work reverse check in tools/workspace). Fixture
 # modules under testdata are intentionally excluded: they are standalone broken or
-# synthetic modules for tests, not production workspace members.
+# synthetic modules for tests, not production workspace members. externalcells/*
+# are likewise excluded: they are deliberately-external cell modules (Operator-SDK
+# mode, ADR 202605281200 / #2304) that are NOT root go.work members by design —
+# each consumes gocell via its own go.mod replace + a nested `use .` go.work, and
+# is split into its own repo post-#1722. The root-workspace coverage the reverse
+# closure protects is reprovided for externalcells/* by a dedicated CI lane (#2395).
 gocell::log::status "Discovering in-repo satellite modules on disk"
 if ! disk_mods_raw="$(
     find . \
         -path './.git' -prune -o \
         -path './worktrees' -prune -o \
+        -path './externalcells' -prune -o \
         -path '*/testdata/*' -prune -o \
         -name go.mod -print | sort
 )"; then

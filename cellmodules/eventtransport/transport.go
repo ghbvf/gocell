@@ -109,20 +109,26 @@ func resolveBrokerSpec(topo bootstrap.Topology, cfg Config) (brokerSpec, error) 
 
 // dedupBrokerURL is the PURE per-cell broker-URL gate + dedup. It decides which
 // single broker URL the assembly connection is opened from; it performs NO I/O.
-// It is the broker-side twin of cellmodules/percellpg.Resolve (per-cell DSN dedup):
-// both feed the keyed relay fan-out seam (#2152 PR-1, bootstrap.WithRelay) and
-// must lift their ">1 distinct" fail-closed together once N consumers are wired
-// (#2341 for the relay/pool source, plus the ingress phase6 N-router follow-up).
+// It is the broker-side twin of cellmodules/percellpg.Resolve (per-cell DSN dedup).
+//
+// Unlike percellpg.Resolve — whose >1-distinct-DSN fail-closed has been lifted by
+// #2341 (N pools fan-out is now live) — this function's >1-distinct-URL fail-closed
+// remains. The asymmetry is intentional: DB pools are an egress+ingress symmetric
+// resource (each cell reads and writes its own tables through its own pool), so
+// per-cell DB fan-out is safe without a matching ingress change. The broker is a
+// separate egress sink: N broker connections require N subscribers (ingress N-router,
+// #2366) to avoid orphaning events. The two fail-closeds do NOT lift in lockstep.
 //
 // Returns the alphabetically-first cell's URL when there is exactly one distinct
 // URL (colocated). Fail-closed for:
 //   - empty Cells (postgres topology with no broker cells),
 //   - any empty per-cell URL (names the missing GOCELL_<CELLID>_AMQP_URL),
-//   - >1 distinct URL. This is the egress-only boundary (#2152 PR-2): with only
-//     the relay (publisher) fanned out and a single subscriber, distinct per-cell
-//     brokers would orphan events (cell A publishes to broker A; the lone
+//   - >1 distinct URL. This is the broker egress-only boundary (#2152 PR-2):
+//     with only the relay (publisher) fanned out and a single subscriber, distinct
+//     per-cell brokers would orphan events (cell A publishes to broker A; the lone
 //     subscriber consumes only the agreed broker). Colocated assemblies must set
-//     an identical GOCELL_<CELLID>_AMQP_URL for every broker cell.
+//     an identical GOCELL_<CELLID>_AMQP_URL for every broker cell. Lifting
+//     requires ingress fan-out (#2366, subscriber single → N + phase6 N-router).
 func dedupBrokerURL(cells map[string]string) (string, error) {
 	// Sort cell IDs for deterministic error messages + a stable agreed-URL pick.
 	cellIDs := make([]string, 0, len(cells))
@@ -160,12 +166,12 @@ func dedupBrokerURL(cells map[string]string) (string, error) {
 	if len(seen) > 1 {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"eventtransport: per-cell distinct broker URLs require split-topology ingress "+
-				"fan-out (phase6 N-router, #2366) plus per-cell relay fan-out (#2341), not yet "+
-				"wired (egress-only, #2152 PR-2); colocated assemblies must configure an "+
-				"identical GOCELL_<CELLID>_AMQP_URL for every broker cell. "+
-				"Per-cell credential/vhost isolation (distinct vhost/user per cell) is "+
-				"the intended security model; this egress-only gate lifts together with "+
-				"#2366/#2341",
+				"fan-out (phase6 N-router, #2366), not yet wired (egress-only, #2152 PR-2); "+
+				"colocated assemblies must configure an identical GOCELL_<CELLID>_AMQP_URL "+
+				"for every broker cell. Per-cell credential/vhost isolation (distinct "+
+				"vhost/user per cell) is the intended security model; this egress-only gate "+
+				"lifts with #2366 (broker ingress N-router). Note: per-cell DB pool fan-out "+
+				"(#2341) has landed independently and does NOT lift this broker gate.",
 			errcode.WithInternal(errcode.InternalAttr("distinct_url_count", len(seen))),
 			errcode.WithInternal(errcode.InternalAttr("cell_ids", strings.Join(cellIDs, ","))),
 		)
