@@ -33,25 +33,18 @@ var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/202
 // Handler wires HTTP decode/encode + auth.Mount for http.deviceidentity.enroll.v1.
 type Handler struct {
 	svc              Service
-	policy           auth.Policy
 	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.deviceidentity.enroll.v1.
-func NewHandler(svc Service, policy auth.Policy) *Handler {
-	if policy == nil {
-		// B-class assertion: caller must supply a non-nil auth.Policy. For public
-		// endpoints declare auth.public:true in contract.yaml. For internal endpoints
-		// relying solely on caller-cell allowlist declare auth.clientsOnly:true. For
-		// service-owned endpoints declare auth.serviceOwned:true.
-		// errcode.Assertion routes through kernel recover middleware (500 + log)
-		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
-		panic(panicregister.Approved("http-deviceidentity-enroll-v1-policy-nil", errcode.Assertion("generated handler http.deviceidentity.enroll.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)")))
-	}
-	h := &Handler{svc: svc, policy: policy}
+// This endpoint is Public (JWT-exempt); no policy argument is accepted.
+// auth.Route{Public: true} is emitted by RegisterRoutes so the listener
+// auth middleware skips JWT verification for this route.
+func NewHandler(svc Service) *Handler {
+	h := &Handler{svc: svc}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(panicregister.Approved("http-deviceidentity-enroll-v1-standard-schema-compile-failed", errcode.Assertion("generated handler http.deviceidentity.enroll.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
+		panic(panicregister.Approved("http-deviceidentity-enroll-v1-public-schema-compile-failed", errcode.Assertion("generated handler http.deviceidentity.enroll.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))
 	}
 	h.requestValidator = v
 	return h
@@ -70,7 +63,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  http.HandlerFunc(h.handle),
-		Policy:   h.policy,
+		Public:   true,
 	})
 }
 

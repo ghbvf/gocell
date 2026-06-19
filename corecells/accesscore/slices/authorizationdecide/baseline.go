@@ -221,6 +221,29 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermDeviceRead().String()},
 		Conditions: deviceSelfOwnership(),
 	},
+	// device:enroll baseline (#1904, EST enrollment front-end prerequisite):
+	// device:enroll gates the cert-signing authorization path in the EST enrollment
+	// handler. The self model is device-SELF enrollment: a DEVICE principal (e.g.
+	// supplied via NewDeviceSubjectDescriptor + AuthorizeAs) whose sub matches the
+	// resource id (the device id) may enroll ITS OWN certificate. Shape mirrors
+	// device:read — same kind-gated device-self two-condition shape (#2400 F1) —
+	// and is frozen by BASELINE-OWNER-RULE-TENANT-FREEZE-01 (registered as
+	// baseline-device-enroll-self with the device-self two-condition shape).
+	// Admin/super-admin may enroll any device's certificate via the admin rule.
+	{
+		ID:         "baseline-device-enroll-admin",
+		Name:       "Baseline: allow admin/super-admin to enroll any device certificate",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceEnroll().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-device-enroll-self",
+		Name:       "Baseline: allow a device to enroll its OWN certificate (subject.kind == device AND subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceEnroll().String()},
+		Conditions: deviceSelfOwnership(),
+	},
 }
 
 // subjectIsResource returns the cross-attribute ABAC condition that checks
@@ -302,8 +325,10 @@ func adminOrSuperAdmin() abac.Condition {
 // rules (#1863: self subject.sub == resource.id + admin) for the PDP
 // self-introspection endpoint; + 2 device:read rules (#2351/#2400: device-self
 // subject.kind == device AND subject.sub == resource.id + admin) for the framework-owned
-// devicestate serving handler (presence-backend prerequisite). Each rule is action-scoped
-// so a baseline allow for one permission never leaks to another.
+// devicestate serving handler (presence-backend prerequisite); + 2 device:enroll
+// rules (#1904: device-self subject.kind == device AND subject.sub == resource.id
+// + admin) for the EST enrollment cert-signing authorization path. Each rule is
+// action-scoped so a baseline allow for one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {

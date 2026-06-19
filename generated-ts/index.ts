@@ -59,6 +59,7 @@ export * as httpDeviceCommandReportV1 from './contracts/http/device/command/repo
 export * as httpDeviceListV1 from './contracts/http/device/list/v1/types';
 export * as httpDeviceRegisterV1 from './contracts/http/device/register/v1/types';
 export * as httpDeviceStatusV1 from './contracts/http/device/status/v1/types';
+export * as httpDeviceidentityCacertsV1 from './contracts/http/deviceidentity/cacerts/v1/types';
 export * as httpDeviceidentityEnrollV1 from './contracts/http/deviceidentity/enroll/v1/types';
 export * as httpDeviceidentityRenewV1 from './contracts/http/deviceidentity/renew/v1/types';
 export * as httpDeviceidentityRevokeV1 from './contracts/http/deviceidentity/revoke/v1/types';

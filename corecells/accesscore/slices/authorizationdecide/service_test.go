@@ -630,7 +630,7 @@ func runAuthorizerConformance(t *testing.T, factory func(t *testing.T) (ports.Po
 // default branch: a Policy.Validate would reject an invalid Operator, so the
 // only way to reach it is a direct call. An unknown operator must be fail-closed.
 func TestMatchCondition_UnknownOperator_FailsClosed(t *testing.T) {
-	r := attributeResolver{principal: userPrincipal(map[string]string{"department": "eng"})}
+	r := attributeResolver{subject: principalSubjectSource{p: userPrincipal(map[string]string{"department": "eng"})}}
 	c := abac.Condition{Source: abac.SourceSubject, Key: "department", Operator: abac.Operator(99), Values: []string{"eng"}}
 	assert.False(t, matchCondition(c, r), "unknown operator must be fail-closed (condition unsatisfied)")
 }

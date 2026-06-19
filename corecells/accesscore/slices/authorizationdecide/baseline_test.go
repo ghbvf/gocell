@@ -75,7 +75,7 @@ func TestBuiltinBaseline_AuditRead(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Evaluate with NO tenant policies — only baseline applies.
-			resolver := attributeResolver{principal: tt.principal}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}}
 			dec, _ := svc.evaluate(nil, resolver, tt.action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
@@ -131,7 +131,7 @@ func TestBuiltinBaseline_SystemRead(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := attributeResolver{principal: tt.principal}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}}
 			dec, _ := svc.evaluate(nil, resolver, systemReadAction)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
@@ -189,7 +189,7 @@ func TestBuiltinBaseline_SessionVerify(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := attributeResolver{principal: tt.principal}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}}
 			dec, _ := svc.evaluate(nil, resolver, sessionVerifyAction)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow())
 		})
@@ -225,10 +225,10 @@ func TestBuiltinBaseline_ConfigcorePerms(t *testing.T) {
 	for _, action := range perms {
 		for _, rc := range roleCases {
 			t.Run(action+" / "+rc.name, func(t *testing.T) {
-				resolver := attributeResolver{principal: &auth.Principal{
+				resolver := attributeResolver{subject: principalSubjectSource{p: &auth.Principal{
 					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
 					Roles: rc.roles,
-				}}
+				}}}
 				dec, _ := svc.evaluate(nil, resolver, action)
 				assert.Equal(t, rc.wantAllow, dec.IsAllow())
 			})
@@ -269,10 +269,10 @@ func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 	for _, action := range perms {
 		for _, rc := range roleCases {
 			t.Run(action+" / "+rc.name, func(t *testing.T) {
-				resolver := attributeResolver{principal: &auth.Principal{
+				resolver := attributeResolver{subject: principalSubjectSource{p: &auth.Principal{
 					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
 					Roles: rc.roles,
-				}}
+				}}}
 				dec, _ := svc.evaluate(nil, resolver, action)
 				assert.Equal(t, rc.wantAllow, dec.IsAllow())
 			})
@@ -399,7 +399,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}, resourceID: tt.resourceID}
 			dec, _ := svc.evaluate(nil, resolver, tt.action)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow(), "action=%q resourceID=%q roles=%v",
 				tt.action, tt.resourceID, tt.principal.Roles)
@@ -414,7 +414,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 		authz.PermPolicyRead().String(),
 	} {
 		t.Run("ownership rule not fired for "+action, func(t *testing.T) {
-			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
+			resolver := attributeResolver{subject: principalSubjectSource{p: ownerPrincipal}, resourceID: ownerID}
 			dec, _ := svc.evaluate(nil, resolver, action)
 			assert.False(t, dec.IsAllow(),
 				"ownership rule must not grant non-ownership action %q to non-admin", action)
@@ -424,7 +424,7 @@ func TestBuiltinBaseline_SelfOwnership(t *testing.T) {
 	// All 3 ownership actions must be covered.
 	for _, action := range ownershipActions {
 		t.Run("ownership rule fires for "+action, func(t *testing.T) {
-			resolver := attributeResolver{principal: ownerPrincipal, resourceID: ownerID}
+			resolver := attributeResolver{subject: principalSubjectSource{p: ownerPrincipal}, resourceID: ownerID}
 			dec, _ := svc.evaluate(nil, resolver, action)
 			assert.True(t, dec.IsAllow(), "ownership rule must grant action %q to owner", action)
 		})
@@ -479,7 +479,7 @@ func TestBuiltinBaseline_AccessDecide(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}, resourceID: tt.resourceID}
 			dec, _ := svc.evaluate(nil, resolver, decide)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow(),
 				"resourceID=%q roles=%v", tt.resourceID, tt.principal.Roles)
@@ -488,11 +488,11 @@ func TestBuiltinBaseline_AccessDecide(t *testing.T) {
 
 	// Action-scope guard: the access:decide rules must NOT grant a different action.
 	t.Run("access:decide self rule does not grant user:read", func(t *testing.T) {
-		resolver := attributeResolver{principal: userPrincipal, resourceID: selfID}
+		resolver := attributeResolver{subject: principalSubjectSource{p: userPrincipal}, resourceID: selfID}
 		dec, _ := svc.evaluate(nil, resolver, authz.PermUserRead().String())
 		assert.True(t, dec.IsAllow(),
 			"sanity: self IS allowed user:read on own id (baseline-user-read-self)")
-		resolver = attributeResolver{principal: userPrincipal, resourceID: selfID}
+		resolver = attributeResolver{subject: principalSubjectSource{p: userPrincipal}, resourceID: selfID}
 		dec, _ = svc.evaluate(nil, resolver, authz.PermConfigRead().String())
 		assert.False(t, dec.IsAllow(),
 			"access:decide self rule must not leak into an unrelated action (config:read)")
@@ -569,7 +569,7 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}, resourceID: tt.resourceID}
 			dec, _ := svc.evaluate(nil, resolver, deviceRead)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow(),
 				"kind=%v resourceID=%q roles=%v", tt.principal.Kind, tt.resourceID, tt.principal.Roles)
@@ -578,9 +578,90 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 
 	// Action-scope guard: the device:read rules must NOT grant a different action.
 	t.Run("device:read self rule does not leak into config:read", func(t *testing.T) {
-		resolver := attributeResolver{principal: deviceSelfPrincipal, resourceID: selfID}
+		resolver := attributeResolver{subject: principalSubjectSource{p: deviceSelfPrincipal}, resourceID: selfID}
 		dec, _ := svc.evaluate(nil, resolver, authz.PermConfigRead().String())
 		assert.False(t, dec.IsAllow(),
 			"device:read self rule must not leak into an unrelated action (config:read)")
+	})
+}
+
+// TestBuiltinBaseline_DeviceEnroll covers the device:enroll device-ownership baseline pair
+// (#1904, EST enrollment front-end): the self rule admits a DEVICE principal
+// (subject.kind == device) enrolling ITS OWN certificate (subject.sub == resource.id),
+// and the admin rule admits admin/super-admin enrolling any device's certificate —
+// the {owner, admin} closed set frozen by BASELINE-OWNER-RULE-TENANT-FREEZE-01.
+// Shape is identical to device:read (#2400 F1): kind-gated, two-condition, device-self.
+// Action-scoped: device:enroll self does NOT grant device:read or any other action.
+func TestBuiltinBaseline_DeviceEnroll(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	const (
+		selfID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+		otherID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	)
+	deviceSelfPrincipal := &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: selfID, TenantID: testTenantIDStr,
+	}
+	// userSubjectMatchPrincipal: a normal USER whose subject == the device id. Under the
+	// kind-gated device-self rule, this must be DENIED (kind != device).
+	userSubjectMatchPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: selfID, TenantID: testTenantIDStr,
+		Roles: []string{"user"},
+	}
+	deviceOtherPrincipal := &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: otherID, TenantID: testTenantIDStr,
+	}
+	adminPrincipal := &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: otherID, TenantID: testTenantIDStr,
+		Roles: []string{auth.RoleAdmin},
+	}
+	deviceEnroll := authz.PermDeviceEnroll().String()
+
+	tests := []struct {
+		name       string
+		principal  *auth.Principal
+		resourceID string
+		wantAllow  bool
+	}{
+		{
+			name:      "device principal + device:enroll + resource==self → Allow (device-self rule)",
+			principal: deviceSelfPrincipal, resourceID: selfID, wantAllow: true,
+		},
+		{
+			name:      "USER principal + device:enroll + resource==self → Deny (kind != device)",
+			principal: userSubjectMatchPrincipal, resourceID: selfID, wantAllow: false,
+		},
+		{
+			name:      "device principal + device:enroll + resource==other → Deny (non-owner, non-admin)",
+			principal: deviceOtherPrincipal, resourceID: selfID, wantAllow: false,
+		},
+		{
+			name:      "admin + device:enroll + resource==any → Allow (admin rule, kind-agnostic)",
+			principal: adminPrincipal, resourceID: selfID, wantAllow: true,
+		},
+		{
+			name:      "device principal + device:enroll + empty resource → Deny (resource.id not-found, fail-closed)",
+			principal: deviceSelfPrincipal, resourceID: "", wantAllow: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := attributeResolver{subject: principalSubjectSource{p: tt.principal}, resourceID: tt.resourceID}
+			dec, _ := svc.evaluate(nil, resolver, deviceEnroll)
+			assert.Equal(t, tt.wantAllow, dec.IsAllow(),
+				"kind=%v resourceID=%q roles=%v", tt.principal.Kind, tt.resourceID, tt.principal.Roles)
+		})
+	}
+
+	// Action-scope guards: device:enroll self must NOT grant device:read or config:read.
+	t.Run("device:enroll self rule does not grant device:read", func(t *testing.T) {
+		resolver := attributeResolver{subject: principalSubjectSource{p: deviceSelfPrincipal}, resourceID: selfID}
+		dec, _ := svc.evaluate(nil, resolver, authz.PermDeviceRead().String())
+		assert.True(t, dec.IsAllow(),
+			"sanity: device self IS allowed device:read via its own baseline rule")
+		resolver = attributeResolver{subject: principalSubjectSource{p: deviceSelfPrincipal}, resourceID: selfID}
+		dec, _ = svc.evaluate(nil, resolver, authz.PermConfigRead().String())
+		assert.False(t, dec.IsAllow(),
+			"device:enroll self rule must not grant config:read")
 	})
 }

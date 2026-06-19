@@ -314,6 +314,7 @@ var (
 	permDeviceConsume = newPermission("device:consume", scopeOwnerScoped)
 	permDeviceRead    = newPermission("device:read", scopeOwnerScoped)
 	permDeviceList    = newPermission("device:list", scopeCoarse)
+	permDeviceEnroll  = newPermission("device:enroll", scopeOwnerScoped)
 )
 
 // PermDeviceCommand authorizes dispatching a command to a device (devicecommand
@@ -339,6 +340,18 @@ func PermDeviceRead() Permission { return permDeviceRead }
 // PermDeviceList authorizes listing all devices (devicelist). Baseline grants it
 // to admin only.
 func PermDeviceList() Permission { return permDeviceList }
+
+// PermDeviceEnroll authorizes a device enrolling its OWN certificate via the
+// EST front-end (cert-signing authorization path, #1904). The gate uses
+// auth.SubjectAuthorizer.AuthorizeAs with a device SubjectDescriptor; the
+// platform baseline (corecells/accesscore, #1904, device-self kind-gated per
+// #2400 F1) grants it to the device ITSELF (device-SELF ownership: subject.kind
+// == device AND subject.sub == resource.id — the same shape as device:read) or
+// to admin / super-admin.
+//
+// It is an accessor function (not an exported var) so the registry value is
+// immutable to external packages — reassigning a func is a compile error.
+func PermDeviceEnroll() Permission { return permDeviceEnroll }
 
 // examples/todoorder permissions (PR-10d #1894). The todoorder example owns its
 // own lightweight PDP (cells/ordercell/authorizer.go); same registry/seal +
@@ -397,6 +410,7 @@ var allPermissions = []Permission{
 	permDeviceConsume,
 	permDeviceRead,
 	permDeviceList,
+	permDeviceEnroll,
 	permOrderCreate,
 	permOrderList,
 	permOrderRead,

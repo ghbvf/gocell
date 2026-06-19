@@ -118,6 +118,7 @@ func TestExamplePermissions_String(t *testing.T) {
 		{"PermDeviceConsume", PermDeviceConsume(), "device:consume"},
 		{"PermDeviceRead", PermDeviceRead(), "device:read"},
 		{"PermDeviceList", PermDeviceList(), "device:list"},
+		{"PermDeviceEnroll", PermDeviceEnroll(), "device:enroll"},
 		{"PermOrderCreate", PermOrderCreate(), "order:create"},
 		{"PermOrderList", PermOrderList(), "order:list"},
 		{"PermOrderRead", PermOrderRead(), "order:read"},
@@ -144,6 +145,7 @@ func TestExamplePermissions_StableIdentity(t *testing.T) {
 		{"PermDeviceConsume", PermDeviceConsume(), permDeviceConsume},
 		{"PermDeviceRead", PermDeviceRead(), permDeviceRead},
 		{"PermDeviceList", PermDeviceList(), permDeviceList},
+		{"PermDeviceEnroll", PermDeviceEnroll(), permDeviceEnroll},
 		{"PermOrderCreate", PermOrderCreate(), permOrderCreate},
 		{"PermOrderList", PermOrderList(), permOrderList},
 		{"PermOrderRead", PermOrderRead(), permOrderRead},
@@ -235,10 +237,10 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 	// (or an accidental extra) trips this — the anti-vacuity guard for the closed
 	// registry. Current set: audit:read (PR-10a) + system:read (#1860) + 5 configcore
 	// (PR-10b) + 7 accesscore (PR-10c + session:verify #1154 + access:decide #1863) +
-	// 2 registrycore (303-US4 #2235) + 4 iotdevice + 4 todoorder (PR-10d #1894).
-	if len(perms) != 24 {
-		t.Fatalf("Permissions() len = %d, want 24 "+
-			"(2 platform + 5 configcore + 7 accesscore + 2 registrycore + 4 iotdevice + 4 todoorder)", len(perms))
+	// 2 registrycore (303-US4 #2235) + 5 iotdevice (device:enroll #1904) + 4 todoorder (PR-10d #1894).
+	if len(perms) != 25 {
+		t.Fatalf("Permissions() len = %d, want 25 "+
+			"(2 platform + 5 configcore + 7 accesscore + 2 registrycore + 5 iotdevice + 4 todoorder)", len(perms))
 	}
 	want := map[string]bool{
 		"audit:read": true, "system:read": true,
@@ -249,7 +251,8 @@ func TestPermissions_ClosedRegistry(t *testing.T) {
 		"access:decide": true, "session:verify": true,
 		"registry:submit": true, "registry:read": true,
 		"device:command": true, "device:consume": true, "device:read": true, "device:list": true,
-		"order:create": true, "order:list": true, "order:read": true, "order:update": true,
+		"device:enroll": true,
+		"order:create":  true, "order:list": true, "order:read": true, "order:update": true,
 	}
 	for _, p := range perms {
 		if !want[p.String()] {
@@ -475,6 +478,7 @@ func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
 	wantOwnerScoped := map[string]bool{
 		"device:consume": true,
 		"device:read":    true,
+		"device:enroll":  true,
 		"user:read":      true,
 		"user:write":     true,
 		"role:read":      true,
@@ -482,7 +486,7 @@ func TestPermissions_OwnerScopedPinnedSet(t *testing.T) {
 		"order:update":   true,
 		"access:decide":  true,
 	}
-	const wantOwnerScopedCount = 8
+	const wantOwnerScopedCount = 9
 
 	ownerScopedCount := 0
 	for _, p := range Permissions() {

@@ -14,6 +14,9 @@ endpoints:
     method: POST
     path: /api/v1/deviceidentity/renew
     successStatus: 200
+    auth:
+      public: true
+      reason: "Certificate renewal authenticates by the device's EXISTING client certificate via mutual TLS on the dedicated device-mTLS listener (kernel/auth.AuthMTLS + middleware.MTLS PeerIdentity); transport-layer peer authentication replaces the JWT/ABAC route gate (the ABAC PDP Authorizer is injected on the primary listener only). The device identity (tenant + device) is recovered from the presented certificate's SPIFFE URI SAN, and authorization (device:enroll) is enforced inside the handler via the certsigning Authorizer (PDP)."
     noContent: false
     responses:
       400:

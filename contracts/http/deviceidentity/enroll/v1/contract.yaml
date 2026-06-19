@@ -14,6 +14,9 @@ endpoints:
     method: POST
     path: /api/v1/deviceidentity/enroll
     successStatus: 201
+    auth:
+      public: true
+      reason: "Device first-enrollment authenticates with a dedicated enrollment-credential bearer token (auth.TokenIntentEnrollment), verified application-layer by EnrollmentCredentialVerifier — NOT the listener JWT/ABAC route gate (a freshly provisioned device holds no access token). Authorization (device:enroll) is enforced inside the handler via the certsigning Authorizer (PDP), and setup-bootstrap credential reuse is forbidden (EST-ENROLL-AUTH-BOUNDARY-01)."
     noContent: false
     responses:
       400:

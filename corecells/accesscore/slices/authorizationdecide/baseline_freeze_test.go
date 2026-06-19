@@ -3,12 +3,13 @@ package authorizationdecide
 // INVARIANT: BASELINE-OWNER-RULE-TENANT-FREEZE-01
 //
 // BASELINE-OWNER-RULE-TENANT-FREEZE-01 freezes the baseline grant surface of the
-// owner-scoped actions (user:read, user:write, role:read, access:decide, device:read —
-// authoritative set: ownerScopedBaselineSelfRules) so that tenant can never become
-// an owner-grant factor. It enforces two complementary properties:
+// owner-scoped actions (user:read, user:write, role:read, access:decide, device:read,
+// device:enroll — authoritative set: ownerScopedBaselineSelfRules) so that tenant can never
+// become an owner-grant factor. It enforces two complementary properties:
 //
 //  1. Each owner-scoped SELF rule (baseline-user-read-self, baseline-user-write-self,
-//     baseline-role-read-self, baseline-access-decide-self, baseline-device-read-self) is an
+//     baseline-role-read-self, baseline-access-decide-self, baseline-device-read-self,
+//     baseline-device-enroll-self) is an
 //     EffectAllow rule granting EXACTLY its one action and carrying EXACTLY its registered
 //     frozen condition list (ownerScopedBaselineSelfRules). Two sanctioned owner shapes exist
 //     (#2400 F1): kind-agnostic identity-ownership [subject.sub == resource.id]
@@ -151,6 +152,7 @@ var ownerScopedBaselineSelfRules = map[string]ownerSelfRuleSpec{
 	"baseline-role-read-self":     {authz.PermRoleRead().String(), []abac.Condition{frozenOwnerCondition}},
 	"baseline-access-decide-self": {authz.PermAccessDecide().String(), []abac.Condition{frozenOwnerCondition}},
 	"baseline-device-read-self":   {authz.PermDeviceRead().String(), []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition}},
+	"baseline-device-enroll-self": {authz.PermDeviceEnroll().String(), []abac.Condition{frozenDeviceKindCondition, frozenOwnerCondition}},
 }
 
 // conditionMatches reports field-by-field equality of two abac.Conditions, including the
