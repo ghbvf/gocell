@@ -21,6 +21,7 @@ func TestRule_Validate(t *testing.T) {
 		ID:         "rule-1",
 		Name:       "Engineering Access",
 		Effect:     authz.EffectAllow,
+		Action:     []string{"user:read"},
 		Conditions: []abac.Condition{goodCond},
 	}
 
@@ -114,6 +115,7 @@ func TestRule_Validate(t *testing.T) {
 				ID:     "rule-x",
 				Name:   "Test",
 				Effect: authz.EffectAllow,
+				Action: []string{"x:y"},
 				Conditions: []abac.Condition{
 					{Source: 0, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}},
 				},
@@ -136,9 +138,46 @@ func TestRule_Validate(t *testing.T) {
 				ID:          "rule-x",
 				Name:        "Test",
 				Effect:      authz.EffectAllow,
+				Action:      []string{"x:y"},
 				Obligations: authz.Obligations{RowScope: tenant.RowScope(99)},
 			},
 			wantErr: true,
+		},
+		{
+			// #1979: an allow rule with empty Action would (combined with empty
+			// Conditions) unconditionally permit every action — blowing open the
+			// route gate for all permissions. Allow rules MUST name at least one
+			// Action. Rejected even when Conditions are present (a condition-scoped
+			// blanket allow still widens every route gate it does not exclude).
+			name: "allow rule with empty Action rejected",
+			rule: abac.Rule{
+				ID:         "allow-no-action",
+				Name:       "Blanket allow",
+				Effect:     authz.EffectAllow,
+				Conditions: []abac.Condition{goodCond},
+			},
+			wantErr: true,
+		},
+		{
+			name: "allow rule with non-empty Action passes",
+			rule: abac.Rule{
+				ID:     "allow-scoped",
+				Name:   "Scoped allow",
+				Effect: authz.EffectAllow,
+				Action: []string{"audit:read"},
+			},
+			wantErr: false,
+		},
+		{
+			// Deny with empty Action stays valid: an untargeted deny is a legitimate
+			// deny-all (forbid-wins over every action). Only Allow requires a target.
+			name: "deny rule with empty Action allowed (deny-all)",
+			rule: abac.Rule{
+				ID:     "deny-all",
+				Name:   "Deny everything",
+				Effect: authz.EffectDeny,
+			},
+			wantErr: false,
 		},
 	}
 

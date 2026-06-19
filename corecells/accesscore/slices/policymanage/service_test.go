@@ -90,13 +90,16 @@ func newDurableTestService(t testing.TB) (*Service, *recordingWriter) {
 	return svc, writer
 }
 
-// minimalRules returns one valid allow rule for test policy payloads.
+// minimalRules returns one valid allow rule for test policy payloads. Since
+// #1979 an allow rule must declare a non-empty Action, so the rule is scoped to
+// a single action rather than being an untargeted "allow all".
 func minimalRules() []abac.Rule {
 	return []abac.Rule{
 		{
 			ID:     "r1",
-			Name:   "Allow all",
+			Name:   "Allow audit read",
 			Effect: authz.EffectAllow,
+			Action: []string{"audit:read"},
 		},
 	}
 }
@@ -149,6 +152,31 @@ func TestService_Create_InvalidInput_NoRules(t *testing.T) {
 	var ce *errcode.Error
 	require.ErrorAs(t, err, &ce)
 	assert.Equal(t, errcode.KindInvalid, ce.Kind)
+}
+
+// TestService_Create_InvalidInput_AllowRuleEmptyAction is the #1979 write-side
+// guard: a tenant allow rule with an empty Action would (with empty Conditions)
+// unconditionally permit every action — blowing open the route gate. Create must
+// reject it with KindInvalid (422) before hitting the repo. A deny rule with
+// empty Action stays valid (deny-all), proving the check is allow-specific.
+func TestService_Create_InvalidInput_AllowRuleEmptyAction(t *testing.T) {
+	svc, _ := newDurableTestService(t)
+
+	emptyActionAllow := []abac.Rule{
+		{ID: "r1", Name: "Blanket allow", Effect: authz.EffectAllow}, // no Action
+	}
+	_, err := svc.Create(testSvcAdminCtx(), CreateInput{Name: "P", Rules: emptyActionAllow})
+	require.Error(t, err)
+	var ce *errcode.Error
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, errcode.KindInvalid, ce.Kind)
+
+	// Control: an empty-Action DENY rule is a legitimate deny-all and is accepted.
+	denyAll := []abac.Rule{
+		{ID: "r1", Name: "Deny all", Effect: authz.EffectDeny},
+	}
+	_, err = svc.Create(testSvcAdminCtx(), CreateInput{Name: "P2", Rules: denyAll})
+	require.NoError(t, err, "empty-Action deny (deny-all) must remain valid")
 }
 
 func TestService_Create_EmitterFailureRollsBack(t *testing.T) {
@@ -260,6 +288,7 @@ func TestService_Update_InvalidInput_EqAttrStrayValues(t *testing.T) {
 			ID:     "r1",
 			Name:   "Bad cross-attr",
 			Effect: authz.EffectAllow,
+			Action: []string{"user:read"}, // valid action so the eq_attr stray-values check is what fails (not #1979)
 			Conditions: []abac.Condition{
 				{
 					Source:    abac.SourceSubject,

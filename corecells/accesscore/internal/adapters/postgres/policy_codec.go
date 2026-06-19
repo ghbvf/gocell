@@ -98,12 +98,14 @@ var (
 type ruleJSON struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	// Action is the optional action-target set (PR-10a #1348). Persisted with
-	// omitempty: an untargeted rule (nil Action = match-all) writes no `action`
-	// key, so existing rows (authored before the field existed) stay byte-identical
-	// and an action-scoped rule round-trips its target instead of silently
-	// widening to match-all on read (F3). Decode is bounded by DisallowUnknownFields
-	// like every other field.
+	// Action is the action-target set (PR-10a #1348). Persisted with omitempty: a
+	// deny rule with empty Action (deny-all) writes no `action` key, so existing
+	// deny rows stay byte-identical and an action-scoped rule round-trips its
+	// target. Since #1979 an empty-Action ALLOW is invalid (Rule.Validate rejects
+	// it on write) and inert on read (the evaluator's read-side fail-closed treats
+	// it as not-applicable), so a persisted allow always carries a non-empty
+	// Action; a legacy empty-Action allow row decodes faithfully and is simply
+	// never granted. Decode is bounded by DisallowUnknownFields like every other field.
 	Action      []string        `json:"action,omitempty"`
 	Effect      string          `json:"effect"`
 	Conditions  []conditionJSON `json:"conditions,omitempty"`

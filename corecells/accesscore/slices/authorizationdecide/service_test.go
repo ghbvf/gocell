@@ -45,8 +45,14 @@ func policyWith(id string, rules ...abac.Rule) *abac.Policy {
 	return &abac.Policy{ID: id, TenantID: testTenantID, Name: id, Rules: rules}
 }
 
+// permitRule builds an Allow rule scoped to the canonical test action "read" —
+// the action every Authorize/evaluate call in this package queries. Since #1979,
+// an Allow rule MUST declare a non-empty Action (an empty-Action allow no longer
+// matches every action), so this helper bakes that single action; tests exercise
+// the condition/obligation dimensions, not action targeting (see
+// permitRuleWithAction for explicit multi-action targeting tests).
 func permitRule(id string, obl authz.Obligations, conds ...abac.Condition) abac.Rule {
-	return abac.Rule{ID: id, Name: id, Effect: authz.EffectAllow, Conditions: conds, Obligations: obl}
+	return abac.Rule{ID: id, Name: id, Effect: authz.EffectAllow, Action: []string{"read"}, Conditions: conds, Obligations: obl}
 }
 
 func forbidRule(id string, conds ...abac.Condition) abac.Rule {

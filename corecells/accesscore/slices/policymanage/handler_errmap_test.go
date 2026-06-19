@@ -108,7 +108,7 @@ func TestMapCreateError_Default(t *testing.T) {
 
 	resp, err := ad.Create(ctx, &policyCreate.Request{
 		Name:  "P",
-		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 	})
 	require.NoError(t, err)
 	_, ok := resp.(policyCreate.Create400ErrorResponse)
@@ -123,7 +123,7 @@ func TestMapCreateError_Unauthenticated(t *testing.T) {
 
 	resp, err := ad.Create(ctx, &policyCreate.Request{
 		Name:  "P",
-		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules: []*policyCreate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 	})
 	require.NoError(t, err)
 	_, ok := resp.(policyCreate.Create401ErrorResponse)
@@ -167,7 +167,7 @@ func TestMapUpdateError_Unauthenticated(t *testing.T) {
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              "pol-x",
 		Name:            "X",
-		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 		ExpectedVersion: 1,
 	})
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestMapUpdateError_Default(t *testing.T) {
 	resp, err := ad.Update(ctx, &policyUpdate.Request{
 		ID:              "pol-x",
 		Name:            "X",
-		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow"}},
+		Rules:           []*policyUpdate.RequestRulesItem{{ID: "r1", Name: "N", Effect: "allow", Action: []string{"audit:read"}}},
 		ExpectedVersion: 1,
 	})
 	require.NoError(t, err)

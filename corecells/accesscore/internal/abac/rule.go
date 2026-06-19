@@ -35,11 +35,15 @@ type Rule struct {
 	Effect authz.Effect
 	// Conditions are AND-combined predicates. Zero conditions = unconditional match.
 	Conditions []Condition
-	// Action, when non-empty, restricts this rule to requests whose action is in
-	// the set (e.g. {"audit:read"}). EMPTY = untargeted: the rule applies to every
-	// action (preserving the pre-PR-10 evaluate-all semantics of existing
-	// tenant-authored policies). This is the first-class action target that
-	// condition.go deliberately deferred under YAGNI — PR-10 is the "real need".
+	// Action restricts this rule to requests whose action is in the set (e.g.
+	// {"audit:read"}). For an Allow rule it MUST be non-empty (#1979): an allow
+	// must name which route gate(s) it widens, otherwise one blank allow (empty
+	// Action + empty Conditions) would unconditionally permit every action and
+	// blow open the route gate for all permissions. Empty Action is valid ONLY for
+	// a Deny rule, where it means deny-all (forbid-wins over every action). The
+	// non-empty-for-Allow invariant is enforced by Validate (write side → 422) and,
+	// in depth, by the evaluator's read-side fail-closed (an empty-Action Allow
+	// that slips past validation is treated as not-applicable and never grants).
 	Action []string
 	// Obligations are mandatory PEP actions on an Allow decision.
 	// See Obligations.Validate() for the zero-value semantics.
@@ -50,6 +54,8 @@ type Rule struct {
 //   - ID must be non-empty.
 //   - Name must be non-empty.
 //   - Effect must be a valid authz.Effect.
+//   - An Allow rule must declare at least one Action (#1979); empty Action is
+//     valid only for a Deny rule (deny-all).
 //   - Each Condition (if any) must pass Condition.Validate().
 //   - Obligations must pass Obligations.Validate().
 func (r Rule) Validate() error {
@@ -65,6 +71,14 @@ func (r Rule) Validate() error {
 	}
 	if err := r.Effect.Validate(); err != nil {
 		return err
+	}
+	// #1979: an Allow rule must name at least one Action. An empty-Action Allow
+	// combined with empty Conditions unconditionally permits every action — a
+	// single such tenant rule would blow open the route gate for all permissions.
+	// Deny is exempt: an untargeted deny is a legitimate deny-all (forbid-wins).
+	if r.Effect == authz.EffectAllow && len(r.Action) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"abac: allow rule must declare at least one Action")
 	}
 	for _, cond := range r.Conditions {
 		if err := cond.Validate(); err != nil {

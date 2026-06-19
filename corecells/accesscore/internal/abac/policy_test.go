@@ -24,6 +24,8 @@ func makeValidRule(id string) abac.Rule {
 		ID:     id,
 		Name:   "rule " + id,
 		Effect: authz.EffectAllow,
+		// #1979: an allow rule must declare at least one Action.
+		Action: []string{"user:read"},
 		Conditions: []abac.Condition{
 			{
 				Source:   abac.SourceSubject,

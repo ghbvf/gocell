@@ -49,6 +49,7 @@ func richCreateRules() []*policyCreate.RequestRulesItem {
 			ID:     "r1",
 			Name:   "Rich allow rule",
 			Effect: "allow",
+			Action: []string{"audit:read", "config:read"},
 			Conditions: []*policyCreate.RequestRulesItemConditionsItem{
 				{
 					Source:   "subject",
@@ -76,6 +77,7 @@ func richUpdateRules(version int64) *policyUpdate.Request {
 				ID:     "r1",
 				Name:   "Updated rich rule",
 				Effect: "allow",
+				Action: []string{"audit:read"},
 				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
 					{
 						Source:   "resource",
@@ -119,6 +121,9 @@ func TestConverter_RichRule_CreateRoundTrip(t *testing.T) {
 	require.Len(t, data.Rules, 1, "must return one rule")
 	rule := data.Rules[0]
 
+	// Action wire round-trip (#1979): the targeted action set survives request→domain→wire.
+	assert.Equal(t, []string{"audit:read", "config:read"}, rule.Action, "action must round-trip")
+
 	// Condition wire round-trip (operator "eq" is the wire spelling of OpEquals).
 	require.Len(t, rule.Conditions, 1, "must return one condition")
 	cond := rule.Conditions[0]
@@ -145,6 +150,7 @@ func TestConverter_RichRule_GetRoundTrip(t *testing.T) {
 			ID:     "r1",
 			Name:   "Rich rule",
 			Effect: authz.EffectAllow,
+			Action: []string{"audit:read"},
 			Conditions: []abac.Condition{
 				{
 					Source:   abac.SourceSubject,
@@ -170,6 +176,7 @@ func TestConverter_RichRule_GetRoundTrip(t *testing.T) {
 	require.Len(t, wireData.Rules, 1)
 	rule := wireData.Rules[0]
 
+	assert.Equal(t, []string{"audit:read"}, rule.Action, "get wire must return action (#1979)")
 	require.Len(t, rule.Conditions, 1, "get wire must return conditions")
 	assert.Equal(t, "subject", rule.Conditions[0].Source)
 	assert.Equal(t, "department", rule.Conditions[0].Key)
@@ -205,6 +212,9 @@ func TestConverter_RichRule_UpdateRoundTrip(t *testing.T) {
 	require.Len(t, data.Rules, 1, "must return one rule")
 	rule := data.Rules[0]
 
+	// Action round-trip (#1979).
+	assert.Equal(t, []string{"audit:read"}, rule.Action, "update wire must return action")
+
 	// Condition round-trip.
 	require.Len(t, rule.Conditions, 1)
 	assert.Equal(t, "resource", rule.Conditions[0].Source)
@@ -229,6 +239,7 @@ func TestConverter_RichRule_ListRoundTrip(t *testing.T) {
 			ID:     "r1",
 			Name:   "List rich",
 			Effect: authz.EffectAllow,
+			Action: []string{"audit:read"},
 			Conditions: []abac.Condition{
 				{
 					Source:   abac.SourceResource,
@@ -253,6 +264,7 @@ func TestConverter_RichRule_ListRoundTrip(t *testing.T) {
 	require.Len(t, wireItem.Rules, 1)
 	rule := wireItem.Rules[0]
 
+	assert.Equal(t, []string{"audit:read"}, rule.Action, "list wire must return action (#1979)")
 	require.Len(t, rule.Conditions, 1)
 	assert.Equal(t, "resource", rule.Conditions[0].Source)
 	assert.Equal(t, "level", rule.Conditions[0].Key)
@@ -532,6 +544,7 @@ func TestConverter_CrossAttr_Create_RoundTrip(t *testing.T) {
 				ID:     "r1",
 				Name:   "Self ownership",
 				Effect: "allow",
+				Action: []string{"user:read"},
 				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
 					{
 						Source:    "subject",
@@ -580,6 +593,7 @@ func TestConverter_CrossAttr_Update_RoundTrip(t *testing.T) {
 				ID:     "r1",
 				Name:   "Self ownership update",
 				Effect: "allow",
+				Action: []string{"user:read"},
 				Conditions: []*policyUpdate.RequestRulesItemConditionsItem{
 					{
 						Source:    "subject",
@@ -762,6 +776,7 @@ func TestConverter_StaticCondition_NoRHSInResponse(t *testing.T) {
 				ID:     "r1",
 				Name:   "Static eq",
 				Effect: "allow",
+				Action: []string{"user:read"},
 				Conditions: []*policyCreate.RequestRulesItemConditionsItem{
 					{
 						Source:   "subject",
