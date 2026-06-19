@@ -699,6 +699,20 @@ var expectedColumns = []expectedColumn{
 	{Table: "projection_events", Column: "principal", Type: "jsonb", NotNull: true},
 	{Table: "projection_events", Column: "created_at", Type: pgTypeTSTZ, NotNull: true},
 	{Table: "projection_events", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true},
+	// saga_projection_dead_letters (067_create_saga_projection_dead_letters.sql) —
+	// poison-event sink for the saga-journal Tailer (#2110). error_type/error_message
+	// carry a redacted reason; their NOT NULL DEFAULT '' is load-bearing (an INSERT
+	// that omits them must be well-defined). occurred_at is the poison event's domain
+	// time; recorded_at defaults to NOW(). No tenant_id / no RLS (framework-internal).
+	{Table: "saga_projection_dead_letters", Column: "cell_id", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "projection_id", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "global_seq", Type: "bigint", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "event_id", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "stream", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "error_type", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "error_message", Type: "text", NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "occurred_at", Type: pgTypeTSTZ, NotNull: true},
+	{Table: "saga_projection_dead_letters", Column: "recorded_at", Type: pgTypeTSTZ, NotNull: true},
 	// reconcile_leases (046_create_reconcile_leases.sql) — kernel/reconcile
 	// LeaderElector PG backend. epoch is the monotonic fencing token; expires_at is
 	// the row-TTL lease authority (PR-A6 review C2).
@@ -793,6 +807,10 @@ var expectedPKs = []expectedPK{
 	{Table: "projection_checkpoints", Columns: []string{"cell_id", "projection_id"}},
 	// projection_events: global_seq IDENTITY PK (058_create_projection_events.sql / #1504).
 	{Table: "projection_events", Columns: []string{"global_seq"}},
+	// saga_projection_dead_letters: composite PK (cell_id, projection_id, global_seq)
+	// (067, #2110) — the natural key doubles as Record's idempotency key (ON CONFLICT
+	// DO NOTHING dedups a re-driven skip).
+	{Table: "saga_projection_dead_letters", Columns: []string{"cell_id", "projection_id", "global_seq"}},
 	// reconcile_leases: PK on reconciler_id (046_create_reconcile_leases.sql).
 	{Table: "reconcile_leases", Columns: []string{"reconciler_id"}},
 	// config_entries (051_configcore_tenant_id.sql): PK on id (global opaque ID).

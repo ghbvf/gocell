@@ -198,10 +198,15 @@ const (
 	sagaExecutorPkg = sagaRuntimeExecutorPkg
 
 	// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01.
-	sagaTailerAdvancerRuleID        = "SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01"
-	sagaAdvanceIfOwnerMethodName    = "AdvanceIfOwner"
-	sagaTailerTypeName              = "Tailer"
-	sagaTailerCommitEventMethodName = "commitEvent"
+	sagaTailerAdvancerRuleID            = "SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01"
+	sagaAdvanceIfOwnerMethodName        = "AdvanceIfOwner"
+	sagaTailerTypeName                  = "Tailer"
+	sagaTailerCommitEventMethodName     = "commitEvent"
+	sagaTailerSkipPoisonEventMethodName = "skipPoisonEvent"
+
+	// SAGA-TAILER-DEAD-LETTER-WRITER-01 (#2110).
+	sagaTailerDeadLetterWriterRuleID = "SAGA-TAILER-DEAD-LETTER-WRITER-01"
+	sagaDeadLetterRecordMethodName   = "Record"
 
 	// SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01.
 	sagaOwnerCheckpointIfaceName       = "OwnerCheckpointStore"
@@ -245,7 +250,7 @@ var sagaLabelEnumWant = map[string][]string{
 	// tailer enums (EPIC #1609 PR-04).
 	"LockAcquireResult": {"backend_error", "contended", "ctx_canceled"},
 	"DrainResult":       {"apply_error", "head_error", "ok", "store_error"},
-	"AdvanceResult":     {"error", "ok", "stale_owner"},
+	"AdvanceResult":     {"error", "ok", "poison_skip", "stale_owner"},
 }
 
 // sagaBannedReceiverKeys maps "<pkgpath>.<TypeName>" → display label for
@@ -2684,11 +2689,14 @@ func CheckSagaMetricLabelValuesFrozen(t *testing.T, cfg ConfigForExternalCell) [
 
 // sagaTailerAdvancerSanctionedCallers is the set of (pkgPath, recv type name,
 // method name) triples sanctioned to call OwnerCheckpointStore.AdvanceIfOwner.
-// The sole runtime caller is (*Tailer).commitEvent in runtime/saga/tailer. The
-// key is package-qualified so a same-named type/method in another package cannot
-// inherit the exemption (the scan is repo-wide, see scanSagaTailerAdvancerCallers).
+// Two runtime callers in runtime/saga/tailer: (*Tailer).commitEvent advances on a
+// clean apply; (*Tailer).skipPoisonEvent advances PAST a poison event (permanent
+// apply error) in the dead-letter skip path (#2110). The key is package-qualified
+// so a same-named type/method in another package cannot inherit the exemption (the
+// scan is repo-wide, see scanSagaTailerAdvancerCallers).
 var sagaTailerAdvancerSanctionedCallers = map[[3]string]bool{
-	{sagaTailerPkg, sagaTailerTypeName, sagaTailerCommitEventMethodName}: true,
+	{sagaTailerPkg, sagaTailerTypeName, sagaTailerCommitEventMethodName}:     true,
+	{sagaTailerPkg, sagaTailerTypeName, sagaTailerSkipPoisonEventMethodName}: true,
 }
 
 // sagaTailerAdvancerExemptPkgs lists test-support packages whose whole purpose is
@@ -2770,13 +2778,114 @@ func scanSagaTailerAdvancerCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyc
 					Line: p.Fset.Position(call.Pos()).Line,
 					Message: sagaTailerAdvancerRuleID + ": AdvanceIfOwner called from unsanctioned function " +
 						pkgPath + ".(" + funcKey[1] + ")." + funcKey[2] +
-						" — only (*Tailer).commitEvent (runtime/saga/tailer) may call AdvanceIfOwner; " +
-						"route checkpoint advances through commitEvent",
+						" — only (*Tailer).commitEvent or (*Tailer).skipPoisonEvent (runtime/saga/tailer) may call " +
+						"AdvanceIfOwner; route checkpoint advances through them",
 				})
 			})
 		}
 	}
 	return diags
+}
+
+// sagaTailerDeadLetterWriterSanctionedCallers is the set of (pkgPath, recv type
+// name, method name) triples sanctioned to call DeadLetterStore.Record. The sole
+// runtime caller is (*Tailer).skipPoisonEvent in runtime/saga/tailer (#2110) — the
+// poison-event skip path records the dead-letter AND advances the checkpoint in
+// one tx. Package-qualified so a same-named type/method elsewhere cannot inherit
+// the exemption.
+var sagaTailerDeadLetterWriterSanctionedCallers = map[[3]string]bool{
+	{sagaTailerPkg, sagaTailerTypeName, sagaTailerSkipPoisonEventMethodName}: true,
+}
+
+// scanSagaTailerDeadLetterWriterCallers reports any call to
+// projection.DeadLetterStore.Record that is NOT enclosed in a sanctioned FuncDecl.
+// It mirrors scanSagaTailerAdvancerCallers: repo-wide Production scope, EachInSubtree
+// descent into FuncLit closures (the Record call lives inside skipPoisonEvent's
+// RunInTx closure), _test.go skipped. Record is defined only by DeadLetterStore /
+// MemDeadLetterStore in kernel/projection, so the (method name + projection pkg)
+// key cannot over-match a sibling Record. The PG impl's Record is in the postgres
+// package (different pkg path) and is never called directly by runtime code.
+func scanSagaTailerDeadLetterWriterCallers(p *Pass) []Diagnostic { //nolint:gocognit,cyclop,lll // archtest: EachInSubtree into FuncLit closures for attribution + receiver-key + go/types callee resolution; same shape as scanSagaTailerAdvancerCallers
+	if p.TypesInfo == nil || p.Pkg == nil {
+		return nil
+	}
+	pkgPath := p.Pkg.Path()
+	info := p.TypesInfo
+	var diags []Diagnostic
+	for _, file := range p.Files {
+		if strings.HasSuffix(p.Rel(file), "_test.go") {
+			continue
+		}
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
+			}
+			recvName := ""
+			if fd.Recv != nil && len(fd.Recv.List) == 1 {
+				t := fd.Recv.List[0].Type
+				if star, ok := t.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok {
+						recvName = id.Name
+					}
+				} else if id, ok := t.(*ast.Ident); ok {
+					recvName = id.Name
+				}
+			}
+			funcKey := [3]string{pkgPath, recvName, fd.Name.Name}
+			EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != sagaDeadLetterRecordMethodName {
+					return
+				}
+				obj := info.ObjectOf(sel.Sel)
+				if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
+					return
+				}
+				if sagaTailerDeadLetterWriterSanctionedCallers[funcKey] {
+					return
+				}
+				diags = append(diags, Diagnostic{
+					Rel:  p.Rel(file),
+					Line: p.Fset.Position(call.Pos()).Line,
+					Message: sagaTailerDeadLetterWriterRuleID + ": DeadLetterStore.Record called from unsanctioned function " +
+						pkgPath + ".(" + funcKey[1] + ")." + funcKey[2] +
+						" — only (*Tailer).skipPoisonEvent (runtime/saga/tailer) may record a dead-letter; " +
+						"route poison-event disposition through skipPoisonEvent so record+advance stay in one tx",
+				})
+			})
+		}
+	}
+	return diags
+}
+
+// CheckSagaTailerDeadLetterWriter is the importable form of
+// SAGA-TAILER-DEAD-LETTER-WRITER-01.
+//
+// Locks projection.DeadLetterStore.Record so the sole runtime callsite is
+// (*Tailer).skipPoisonEvent in runtime/saga/tailer (#2110). This keeps the
+// dead-letter record bound to the same RunInTx as the checkpoint advance
+// ("skipped ⟺ recorded"): a record written from anywhere else would not be paired
+// with the fenced advance.
+//
+// AI-robust rating (mirrors SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01):
+//   - Downstream Hard: go/types caller-allowlist — pkg path + method identity via
+//     info.ObjectOf; package-qualified key, alias-proof.
+//   - Upstream Medium: Go visibility ceiling — Record is a public method on a
+//     public interface; Go cannot prevent another type from holding a
+//     DeadLetterStore and recording directly. Hard upgrade path shares the sealed
+//     OwnerCheckpointStore-handle track (gh #1612).
+//
+// Not registered in StandardCellRules (targets GoCell-internal tailer package).
+func CheckSagaTailerDeadLetterWriter(t *testing.T, cfg ConfigForExternalCell) []Diagnostic {
+	t.Helper()
+	_ = cfg
+	var out []Diagnostic
+	Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
+		out = append(out, scanSagaTailerDeadLetterWriterCallers(p)...)
+		return nil
+	})
+	return out
 }
 
 // CheckSagaTailerCheckpointAdvancerCaller is the importable form of

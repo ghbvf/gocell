@@ -11,10 +11,14 @@
 // repo/store types.
 //
 // This rule enforces: every concrete production type implementing
-// kernel/projection.CheckpointStore must NOT directly hold a *pgxpool.Pool
-// struct field. Pool-holding implementations bypass the ambient-tx contract
-// and make it impossible to commit the offset advance atomically with the
-// Apply mutation (the core exactly-once guarantee of PR-01).
+// kernel/projection.CheckpointStore OR kernel/projection.DeadLetterStore must NOT
+// directly hold a *pgxpool.Pool struct field. Pool-holding implementations bypass
+// the ambient-tx contract and make it impossible to commit the offset advance
+// atomically with the Apply mutation (CheckpointStore: the PR-01 exactly-once
+// guarantee) or the dead-letter record atomically with the checkpoint advance
+// (DeadLetterStore: #2110 "skipped ⟺ recorded" — the saga Tailer records the
+// poison event AND advances past it in one RunInTx; a pool-holding impl would
+// commit the record outside that tx, breaking the coupling).
 //
 // PR-01 status: vacuous-but-real pass. The only production implementation is
 // MemCheckpointStore (no pool, no DB). A discovery sanity anchor asserts ≥1
@@ -80,7 +84,33 @@ import (
 const (
 	checkpointStoreIfacePkg  = PlatformFrameworkModulePath + "/kernel/projection"
 	checkpointStoreIfaceName = "CheckpointStore"
+	// deadLetterStoreIfaceName shares the ambient-tx contract (#2110): the saga
+	// Tailer records the dead-letter AND advances the checkpoint in one RunInTx, so
+	// a pool-holding DeadLetterStore impl would break that atomicity exactly like a
+	// pool-holding CheckpointStore. Same package, same scan.
+	deadLetterStoreIfaceName = "DeadLetterStore"
 )
+
+// resolveProjectionIface returns the named interface ifaceName from the
+// kernel/projection package scope, completed, or nil.
+func resolveProjectionIface(p *Pass, ifaceName string) *types.Interface {
+	if p.Pkg == nil || p.Pkg.Path() != checkpointStoreIfacePkg {
+		return nil
+	}
+	obj := p.Pkg.Scope().Lookup(ifaceName)
+	if obj == nil {
+		return nil
+	}
+	named, ok := obj.Type().(*types.Named)
+	if !ok {
+		return nil
+	}
+	iface, ok := named.Underlying().(*types.Interface)
+	if !ok {
+		return nil
+	}
+	return iface.Complete()
+}
 
 // TestProjectionCheckpointTxBound01 enforces PROJECTION-CHECKPOINT-TX-BOUND-01:
 // every concrete production type implementing kernel/projection.CheckpointStore
@@ -106,7 +136,7 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 	// are both in kernel/projection and thus in the same load.
 	prodPatterns := prodscan.Patterns(root)
 
-	var checkpointStoreIface *types.Interface
+	var checkpointStoreIface, deadLetterStoreIface *types.Interface
 	var implPkgs []*types.Package
 
 	_ = Run(t, Typed(TypedOpts{Tests: false, Tags: FlatNonDefaultTags()}, prodPatterns),
@@ -114,17 +144,12 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 			if p.Pkg == nil {
 				return nil
 			}
-
-			if p.Pkg.Path() == checkpointStoreIfacePkg {
-				if obj := p.Pkg.Scope().Lookup(checkpointStoreIfaceName); obj != nil {
-					if named, ok := obj.Type().(*types.Named); ok {
-						if iface, ok := named.Underlying().(*types.Interface); ok {
-							checkpointStoreIface = iface.Complete()
-						}
-					}
-				}
+			if iface := resolveProjectionIface(p, checkpointStoreIfaceName); iface != nil {
+				checkpointStoreIface = iface
 			}
-
+			if iface := resolveProjectionIface(p, deadLetterStoreIfaceName); iface != nil {
+				deadLetterStoreIface = iface
+			}
 			implPkgs = append(implPkgs, p.Pkg)
 			return nil
 		})
@@ -132,21 +157,26 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 	require.NotNil(t, checkpointStoreIface,
 		"PROJECTION-CHECKPOINT-TX-BOUND-01: failed to resolve CheckpointStore interface; "+
 			"check import path %s", checkpointStoreIfacePkg)
+	require.NotNil(t, deadLetterStoreIface,
+		"PROJECTION-CHECKPOINT-TX-BOUND-01: failed to resolve DeadLetterStore interface; "+
+			"check import path %s", checkpointStoreIfacePkg)
 
 	// Discovery sanity anchor: assert ≥1 implementation was found.
 	// This prevents a prodscan regression from producing a spurious vacuous-green.
-	// "pkg/path.TypeName" → *types.Named
+	// Both CheckpointStore and DeadLetterStore impls share the ambient-tx contract;
+	// collect them into one set ("pkg/path.TypeName" → *types.Named).
 	checkpointStoreImpls := make(map[string]*types.Named)
 	for _, pkg := range implPkgs {
 		if pkg == nil {
 			continue
 		}
 		collectCheckpointStoreImpls(pkg, checkpointStoreIface, checkpointStoreImpls)
+		collectCheckpointStoreImpls(pkg, deadLetterStoreIface, checkpointStoreImpls)
 	}
 
 	require.NotEmpty(t, checkpointStoreImpls,
-		"PROJECTION-CHECKPOINT-TX-BOUND-01: zero CheckpointStore implementations collected — "+
-			"discovery sanity anchor: at least kernel/projection.MemCheckpointStore must be found. "+
+		"PROJECTION-CHECKPOINT-TX-BOUND-01: zero CheckpointStore/DeadLetterStore implementations collected — "+
+			"discovery sanity anchor: at least kernel/projection.MemCheckpointStore + MemDeadLetterStore must be found. "+
 			"Likely a prodscan regression or type-universe mismatch.")
 
 	// Scan for pool fields in each impl.
@@ -186,13 +216,13 @@ func TestProjectionCheckpointTxBound01(t *testing.T) {
 							Rel:  rel,
 							Line: line,
 							Message: fmt.Sprintf(
-								"PROJECTION-CHECKPOINT-TX-BOUND-01: CheckpointStore impl %s "+
-									"field %s holds *pgxpool.Pool directly. "+
-									"SaveOffset must use persistence.TxFromContext(ctx) to "+
+								"PROJECTION-CHECKPOINT-TX-BOUND-01: ambient-tx projection store impl %s "+
+									"(CheckpointStore/DeadLetterStore) field %s holds *pgxpool.Pool directly. "+
+									"SaveOffset/Record must use persistence.TxFromContext(ctx) to "+
 									"obtain the ambient transaction — a raw pool bypasses atomic "+
-									"commit with the Apply mutation (exactly-once guarantee). "+
-									"Hold pgexec.PGExecutor (interface) instead; wrap the pool "+
-									"via the adapter's internal/pgexec/.New factory (mirroring "+
+									"commit with the Apply mutation / checkpoint advance (exactly-once / "+
+									"skipped⟺recorded). Hold pgexec.PGExecutor (interface) instead; wrap the "+
+									"pool via the adapter's internal/pgexec/.New factory (mirroring "+
 									"PG-REPO-AMBIENT-TX-01 R1).",
 								ts.Name.Name, fieldName,
 							),

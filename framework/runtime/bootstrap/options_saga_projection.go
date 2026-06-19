@@ -65,6 +65,24 @@ func WithSagaProjectionOwnerCheckpointStore(store projection.OwnerCheckpointStor
 	}
 }
 
+// WithSagaProjectionDeadLetterStore injects the [projection.DeadLetterStore] the
+// Tailer records poison events to (permanent apply errors) before advancing the
+// checkpoint past them (#2110). It is REQUIRED — a Tailer without a dead-letter
+// sink would have to either stall forever on a poison event or skip without a
+// durable record; the former freezes the projection, the latter loses the event
+// silently. Typed-nil or bare-nil inputs are not stored; the phase6 saga-projection
+// drain fails fast naming this option when a saga-journal projection is declared.
+//
+// For tests, projection.NewMemDeadLetterStore() is sufficient.
+func WithSagaProjectionDeadLetterStore(store projection.DeadLetterStore) Option {
+	return func(b *Bootstrap) {
+		if validation.IsNilInterface(store) {
+			return
+		}
+		b.sagaProjDeadLetters = store
+	}
+}
+
 // WithSagaProjectionLocker injects the [distlock.Locker] the Tailer uses as its
 // per-projection leader gate (a distinct lock key per projection over the SAME
 // shared Locker instance). Unlike the saga Coordinator's optional single-process

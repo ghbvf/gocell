@@ -169,6 +169,7 @@ func newJourneyEnv(t *testing.T) journeyEnv {
 		src,                    // ReplaySource
 		src,                    // Cursor (same instance)
 		deps.OwnerStore,        // OwnerCheckpointStore
+		deps.DeadLetters,       // DeadLetterStore (poison-event sink)
 		deps.TxRunner,          // TxRunner
 		ossvc.HandleOrderEvent, // Apply
 		deps.Locker,            // Locker

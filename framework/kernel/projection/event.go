@@ -22,12 +22,22 @@ type ProjectionEvent = cellvocab.ProjectionEvent
 // delivery; the harness never calls Apply twice for the same offset).
 //
 // Apply MUST NOT open its own transaction or connection. A transient failure
-// returns a plain error (the Coordinator requeues). A permanent failure returns
-// an error wrapping outbox.NewPermanentError(err); the Coordinator classifies it
-// as DispositionReject and routes to the DLX — the same vocabulary as the
-// ConsumerBase handler convention (see .claude/rules/gocell/eventbus.md). Decided
-// in ADR §3 Q2 against the eventhorizon read-modify-write entity shape and the
-// explicit tx-handle parameter.
+// returns a plain error (the harness retries). A permanent failure returns an
+// error wrapping outbox.NewPermanentError(err) — outbox.IsPermanent is the single
+// predicate both projection drivers consume. The contract is "permanent → routed
+// to a durable dead-letter sink + the event is skipped, never blocking the
+// projection"; the realization differs by transport:
+//
+//   - push-delivered Coordinator: classify → DispositionReject → broker DLX (the
+//     same vocabulary as the ConsumerBase handler convention, see
+//     .claude/rules/gocell/eventbus.md).
+//   - pull-tailing saga-journal Tailer (no broker): record the poison event to
+//     the DeadLetterStore AND advance the checkpoint past it in one transaction,
+//     so a single bad event does not freeze the whole projection.
+//
+// Decided in ADR §3 Q2 against the eventhorizon read-modify-write entity shape
+// and the explicit tx-handle parameter; the Tailer dead-letter realization in
+// ADR #2110.
 //
 // It is an alias of cellvocab.ProjectionApply (also aliased by
 // kernel/cell.ProjectionApply), the single underlying type that lets the

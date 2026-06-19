@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/projection"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/distlock"
@@ -140,6 +141,27 @@ func (fakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 	return fn(ctx)
 }
 
+// fakeDeadLetterStore embeds the real mem store but allows injecting a Record
+// fault to exercise the poison-skip fail-closed branch (#2110). recordErr is
+// applied BEFORE delegating, so a forced error means nothing is recorded.
+type fakeDeadLetterStore struct {
+	*projection.MemDeadLetterStore
+	recordErr error
+}
+
+func newFakeDeadLetterStore() *fakeDeadLetterStore {
+	return &fakeDeadLetterStore{MemDeadLetterStore: projection.NewMemDeadLetterStore()}
+}
+
+func (f *fakeDeadLetterStore) Record(ctx context.Context, dl projection.DeadLetter) error {
+	if f.recordErr != nil {
+		return f.recordErr
+	}
+	return f.MemDeadLetterStore.Record(ctx, dl)
+}
+
+var _ projection.DeadLetterStore = (*fakeDeadLetterStore)(nil)
+
 // acquireErrDriver wraps a FakeDriver and injects a SetNX backend I/O error so
 // distlock.Acquire returns a non-timeout (backend) error — exercising the
 // readiness probe's leader-gate backend dimension (F5). Set err to nil to let
@@ -249,7 +271,8 @@ func newTestTailerWithDeps(
 	locker distlock.Locker,
 	opts ...Option,
 ) (*Tailer, error) {
-	return NewTailer(clk, replay, cursor, store, fakeTxRunner{}, apply, locker, testCell, testProj, opts...)
+	return NewTailer(clk, replay, cursor, store, projection.NewMemDeadLetterStore(), fakeTxRunner{},
+		apply, locker, testCell, testProj, opts...)
 }
 
 func events(seqs ...int64) []*fakeEvent {
@@ -435,10 +458,10 @@ func TestTailer_NilDepErrRedaction(t *testing.T) {
 		newCall func() (*Tailer, error)
 	}{
 		{"replay", func() (*Tailer, error) {
-			return NewTailer(clk, nil, src, store, fakeTxRunner{}, apply, locker, testCell, testProj)
+			return NewTailer(clk, nil, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, testCell, testProj)
 		}},
 		{"apply", func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, nil, locker, testCell, testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, nil, locker, testCell, testProj)
 		}},
 	}
 	for _, tc := range cases {
@@ -505,6 +528,116 @@ func TestTailer_ApplyErrorStopsAndReports(t *testing.T) {
 	}
 	if len(drains) != 1 || drains[0] != DrainApplyError {
 		t.Errorf("drains = %v, want [apply_error]", drains)
+	}
+}
+
+// TestTailer_PermanentApplyError_DeadLettersAndSkips verifies a permanent apply
+// error (outbox.PermanentError) is dead-lettered and the checkpoint advances PAST
+// the poison event — the projection is NOT frozen (#2110). Contrast with
+// TestTailer_ApplyErrorStopsAndReports, which proves a transient (plain) error
+// stalls.
+func TestTailer_PermanentApplyError_DeadLettersAndSkips(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+	dlx := newFakeDeadLetterStore()
+	poison := outbox.NewPermanentError(errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "unknown event kind"))
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		if evt.EventID() == "evt-2" {
+			return poison
+		}
+		return nil
+	}
+	obs := &recordingObserver{}
+	tl, err := NewTailer(clk, src, src, store, dlx, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	if err := tl.pollOnce(context.Background()); err != nil {
+		t.Fatalf("poison event must be skipped, not surfaced as a tick error: %v", err)
+	}
+
+	// Checkpoint advanced past the poison evt-2 to evt-3: the single bad event did
+	// not freeze the projection.
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 3 {
+		t.Errorf("checkpoint = %d, want 3 (poison evt-2 skipped)", off)
+	}
+
+	recs := dlx.Records()
+	if len(recs) != 1 {
+		t.Fatalf("dead letters = %d, want 1", len(recs))
+	}
+	dl := recs[0]
+	if dl.GlobalSeq != 2 || dl.EventID != "evt-2" || dl.CellID != testCell || dl.ProjectionID != testProj {
+		t.Errorf("dead letter = %+v, want GlobalSeq=2 EventID=evt-2 cell=%s proj=%s", dl, testCell, testProj)
+	}
+	if dl.ErrorType != string(errcode.ErrValidationFailed) {
+		t.Errorf("dead letter ErrorType = %q, want %q", dl.ErrorType, errcode.ErrValidationFailed)
+	}
+	if dl.ErrorMessage == "" {
+		t.Error("dead letter ErrorMessage must be populated (redacted reason)")
+	}
+
+	_, drains, advances, _, _ := obs.snapshot()
+	wantAdv := []AdvanceResult{AdvanceOK, AdvancePoisonSkip, AdvanceOK} // evt-1 ok, evt-2 poison_skip, evt-3 ok
+	if len(advances) != len(wantAdv) {
+		t.Fatalf("advances = %v, want %v", advances, wantAdv)
+	}
+	for i := range wantAdv {
+		if advances[i] != wantAdv[i] {
+			t.Errorf("advances[%d] = %v, want %v (full %v)", i, advances[i], wantAdv[i], advances)
+		}
+	}
+	if len(drains) != 1 || drains[0] != DrainOK {
+		t.Errorf("drains = %v, want [ok] (drain made progress)", drains)
+	}
+}
+
+// TestTailer_PermanentApplyError_RecordFailStallsFailClosed verifies that when the
+// dead-letter Record fails, the Tailer fails closed: the checkpoint does NOT
+// advance past the poison event (it is neither applied nor skipped), and nothing
+// is recorded. Skip is gated on a successful dead-letter record — "skipped ⟺
+// recorded" (#2110). Full DB record+advance atomicity (both-or-neither commit) is
+// a real-transaction guarantee, asserted in the PG integration test.
+func TestTailer_PermanentApplyError_RecordFailStallsFailClosed(t *testing.T) {
+	clk := clockmock.New(time.Unix(1000, 0))
+	src := &fakeSource{events: events(1, 2, 3)}
+	store := projection.NewMemOwnerCheckpointStore()
+	dlx := newFakeDeadLetterStore()
+	dlx.recordErr = errors.New("dead-letter storage down")
+	poison := outbox.NewPermanentError(errors.New("bad payload"))
+	apply := func(_ context.Context, evt projection.ProjectionEvent) error {
+		if evt.EventID() == "evt-2" {
+			return poison
+		}
+		return nil
+	}
+	obs := &recordingObserver{}
+	tl, err := NewTailer(clk, src, src, store, dlx, fakeTxRunner{}, apply, newTestLocker(t, clk), testCell, testProj, WithObserver(obs))
+	if err != nil {
+		t.Fatalf("NewTailer: %v", err)
+	}
+
+	if err := tl.pollOnce(context.Background()); err == nil {
+		t.Fatal("dead-letter record failure must fail closed (surface as a tick error)")
+	}
+
+	// Fail-closed: checkpoint stuck at evt-1 — evt-2 was neither applied nor
+	// skipped-past, evt-3 never reached.
+	off, _ := store.LoadOffset(context.Background(), testCell, testProj)
+	if off != 1 {
+		t.Errorf("checkpoint = %d, want 1 (poison NOT skipped when dead-letter record fails)", off)
+	}
+	if recs := dlx.Records(); len(recs) != 0 {
+		t.Errorf("dead letters = %d, want 0 (record failed, nothing persisted)", len(recs))
+	}
+
+	_, _, advances, _, _ := obs.snapshot()
+	// evt-1 ok; evt-2 record-fail classified as an advance fault (not poison_skip).
+	if len(advances) != 2 || advances[0] != AdvanceOK || advances[1] != AdvanceError {
+		t.Errorf("advances = %v, want [ok error]", advances)
 	}
 }
 
@@ -575,8 +708,11 @@ func TestTailer_ConstructorNilGuards(t *testing.T) {
 		"nil store": func() (*Tailer, error) {
 			return newTestTailerWithDeps(clk, src, src, nil, apply, locker)
 		},
+		"nil deadLetters": func() (*Tailer, error) {
+			return NewTailer(clk, src, src, store, nil, fakeTxRunner{}, apply, locker, testCell, testProj)
+		},
 		"nil tx": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, nil, apply, locker, testCell, testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), nil, apply, locker, testCell, testProj)
 		},
 		"nil apply": func() (*Tailer, error) {
 			return newTestTailerWithDeps(clk, src, src, store, nil, locker)
@@ -585,10 +721,10 @@ func TestTailer_ConstructorNilGuards(t *testing.T) {
 			return newTestTailerWithDeps(clk, src, src, store, apply, nil)
 		},
 		"empty cell": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, "", testProj)
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, "", testProj)
 		},
 		"empty proj": func() (*Tailer, error) {
-			return NewTailer(clk, src, src, store, fakeTxRunner{}, apply, locker, testCell, "")
+			return NewTailer(clk, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{}, apply, locker, testCell, "")
 		},
 	}
 	for name, ctor := range cases {
@@ -607,7 +743,7 @@ func TestTailer_NilClockPanics(t *testing.T) {
 		}
 	}()
 	src := &fakeSource{}
-	_, _ = NewTailer(nil, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
+	_, _ = NewTailer(nil, src, src, projection.NewMemOwnerCheckpointStore(), projection.NewMemDeadLetterStore(), fakeTxRunner{},
 		func(context.Context, projection.ProjectionEvent) error { return nil },
 		newTestLocker(t, clockmock.New(time.Unix(0, 0))), testCell, testProj)
 }
@@ -616,7 +752,7 @@ func TestTailer_ConfigValidation(t *testing.T) {
 	clk := clockmock.New(time.Unix(0, 0))
 	src := &fakeSource{}
 	mk := func(cfg Config) error {
-		_, err := NewTailer(clk, src, src, projection.NewMemOwnerCheckpointStore(), fakeTxRunner{},
+		_, err := NewTailer(clk, src, src, projection.NewMemOwnerCheckpointStore(), projection.NewMemDeadLetterStore(), fakeTxRunner{},
 			func(context.Context, projection.ProjectionEvent) error { return nil },
 			newTestLocker(t, clk), testCell, testProj, WithConfig(cfg))
 		return err
@@ -926,7 +1062,8 @@ func TestTailer_StopTimeoutRetryable(t *testing.T) {
 
 	// Real clock + short poll interval so the loop ticks into apply promptly.
 	realClock := clock.Real()
-	tl, err := NewTailer(realClock, src, src, store, fakeTxRunner{}, apply, newTestLocker(t, realClock), testCell, testProj,
+	tl, err := NewTailer(realClock, src, src, store, projection.NewMemDeadLetterStore(), fakeTxRunner{},
+		apply, newTestLocker(t, realClock), testCell, testProj,
 		WithConfig(Config{PollInterval: testFastPoll, LeaseTTL: testLockTTL}))
 	if err != nil {
 		t.Fatalf("NewTailer: %v", err)
