@@ -63,12 +63,29 @@ func TestOperatorAuthFromEnv_WeakPassword(t *testing.T) {
 }
 
 func TestAdminHTTPAddr_DefaultAndOverride(t *testing.T) {
-	t.Setenv(adminHTTPAddrEnv, "")
-	if got := adminHTTPAddr(); got != defaultAdminHTTPAddr {
-		t.Errorf("adminHTTPAddr default = %q, want %q", got, defaultAdminHTTPAddr)
-	}
-	t.Setenv(adminHTTPAddrEnv, "127.0.0.1:19999")
-	if got := adminHTTPAddr(); got != "127.0.0.1:19999" {
-		t.Errorf("adminHTTPAddr override = %q, want 127.0.0.1:19999", got)
+	t.Run("default", func(t *testing.T) {
+		t.Setenv(adminHTTPAddrEnv, "")
+		if got := adminHTTPAddr(); got != defaultAdminHTTPAddr {
+			t.Errorf("adminHTTPAddr default = %q, want %q", got, defaultAdminHTTPAddr)
+		}
+	})
+
+	t.Run("override", func(t *testing.T) {
+		t.Setenv(adminHTTPAddrEnv, "127.0.0.1:19999")
+		if got := adminHTTPAddr(); got != "127.0.0.1:19999" {
+			t.Errorf("adminHTTPAddr override = %q, want 127.0.0.1:19999", got)
+		}
+	})
+}
+
+// TestAdminHTTPAddr_NonLoopbackWarns verifies that a non-loopback override still
+// returns the override address (operator may front with reverse proxy). The Warn
+// side-effect is best-effort and not easily captured in a unit test without
+// injecting a slog handler, so we just assert the return value is correct.
+func TestAdminHTTPAddr_NonLoopbackWarns(t *testing.T) {
+	t.Setenv(adminHTTPAddrEnv, "0.0.0.0:9092")
+	got := adminHTTPAddr()
+	if got != "0.0.0.0:9092" {
+		t.Errorf("adminHTTPAddr non-loopback = %q, want 0.0.0.0:9092", got)
 	}
 }

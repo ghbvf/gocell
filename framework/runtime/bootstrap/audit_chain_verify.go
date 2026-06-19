@@ -69,12 +69,15 @@ type auditChainFailure struct {
 
 // auditChainVerifyResponseData is the data object of the 200 response body. Valid
 // chains are summarized by count; only invalid/errored chains are listed, so the
-// body is bounded by the number of problems (usually zero).
+// body is bounded by the number of problems (usually zero). timedOut indicates the
+// 30s budget truncated the run — remaining chains are in erroredChains due to ctx
+// cancellation, distinct from real infra errors.
 type auditChainVerifyResponseData struct {
 	AllValid      bool                `json:"allValid"`
 	TotalChains   int                 `json:"totalChains"`
 	InvalidChains int                 `json:"invalidChains"`
 	ErroredChains int                 `json:"erroredChains"`
+	TimedOut      bool                `json:"timedOut"`
 	DurationMs    int64               `json:"durationMs"`
 	Failures      []auditChainFailure `json:"failures"`
 }
@@ -140,6 +143,7 @@ func (b *Bootstrap) newAuditChainVerifyHandler() http.Handler {
 			TotalChains:   report.TotalChains,
 			InvalidChains: report.InvalidChains,
 			ErroredChains: report.ErroredChains,
+			TimedOut:      report.TimedOut,
 			DurationMs:    report.Duration.Milliseconds(),
 			Failures:      collectAuditChainFailures(report),
 		}

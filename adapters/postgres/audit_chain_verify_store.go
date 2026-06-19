@@ -48,12 +48,13 @@ GROUP BY namespace, tenant_id`
 //   - a non-empty protocols map (one *ledger.Protocol per namespace it verifies —
 //     in production the relay "auditcore" + "bootstrap" chains), each non-nil.
 //
-// AI-HARD (fail-closed admin-pool guard, #1755): the constructor runs
+// AI-robust Medium (fail-closed, #1755): the constructor runs
 // pool.AuditAdminReadyCheck before returning, so a non-admin pool — e.g. the
 // NOBYPASSRLS serving pool, which would silently RLS-under-enumerate rather than
-// error — cannot yield a usable verify store. (The composition root also preflights
-// the same pool for the cross-tenant store; this independent check makes the verify
-// store self-guarding regardless of wiring order.)
+// error — cannot yield a usable verify store. This preflight is an INDEPENDENT
+// self-guard: it runs regardless of whether the cross-tenant store's own preflight
+// (in buildAdminPoolDeps) has already run, ensuring correctness independent of
+// wiring order.
 func NewAuditChainVerifyStore(ctx context.Context, pool *Pool, protocols map[string]*ledger.Protocol) (*AuditChainVerifyStore, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,

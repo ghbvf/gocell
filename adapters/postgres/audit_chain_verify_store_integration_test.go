@@ -174,10 +174,29 @@ func TestAuditChainVerifyStore_PG_UnknownNamespace(t *testing.T) {
 	assert.False(t, valid, "unknown namespace must not report valid")
 }
 
-// TestAuditChainVerifyStore_PG_ConstructorRejectsServingPool is the AI-HARD guard:
-// the NOBYPASSRLS serving role (which would silently RLS-under-enumerate) cannot
-// yield a usable verify store — the constructor's AuditAdminReadyCheck preflight
-// rejects it.
+// TestAuditChainVerifyStore_PG_AbsentTenant proves that verifying a canonical
+// tenant UUID that was never seeded returns a non-nil error and valid=false (the
+// orchestrator only calls VerifyChain with MaxSeq>=1, so a missing tenant with a
+// range of [1,1] finds no rows — not-found error, fail-closed).
+func TestAuditChainVerifyStore_PG_AbsentTenant(t *testing.T) {
+	store, _ := buildVerifyFixture(t)
+	ctx := context.Background()
+
+	// Use a canonical UUID that was never seeded.
+	unseeded := "00000000-0000-0000-0000-000000000099"
+	valid, _, err := store.VerifyChain(ctx, ctNSAuditcore, unseeded, 1, 1)
+	if err == nil {
+		t.Fatal("VerifyChain: expected non-nil error for absent tenant, got nil")
+	}
+	if valid {
+		t.Error("VerifyChain: absent tenant must not report valid=true")
+	}
+}
+
+// TestAuditChainVerifyStore_PG_ConstructorRejectsServingPool is the Medium
+// fail-closed guard: the NOBYPASSRLS serving role (which would silently
+// RLS-under-enumerate) cannot yield a usable verify store — the constructor's
+// AuditAdminReadyCheck preflight rejects it.
 func TestAuditChainVerifyStore_PG_ConstructorRejectsServingPool(t *testing.T) {
 	dsn := sharedPG.CloneDSN(t)
 	ownerPool := openPerTestPool(t, dsn)

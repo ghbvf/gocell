@@ -121,8 +121,13 @@ func TestAuditChainVerify_200_WithFailures(t *testing.T) {
 	assert.Equal(t, int64(2), byTenant["t-bad"].FirstInvalidSeq)
 	assert.False(t, byTenant["t-bad"].Errored)
 	assert.True(t, byTenant["t-err"].Errored, "the errored chain must carry errored=true")
+	// Fix A.1: errored chain FirstInvalidSeq must be -1 (not the store's init value).
+	assert.Equal(t, int64(-1), byTenant["t-err"].FirstInvalidSeq,
+		"errored chain must carry FirstInvalidSeq=-1")
 	// The infra error text must NOT leak onto the wire (server-log only).
 	assert.NotContains(t, rec.Body.String(), "infra")
+	// The response must include the timedOut field (false for a non-timed-out run).
+	assert.False(t, got.Data.TimedOut, "completed run must have timedOut=false")
 }
 
 func TestAuditChainVerify_500_OnVerifierError(t *testing.T) {

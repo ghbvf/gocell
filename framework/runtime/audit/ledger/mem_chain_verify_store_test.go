@@ -8,6 +8,7 @@ package ledger
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func appendN(t *testing.T, store *MemStore, tenantID string, n int) {
 	t.Helper()
 	for i := 1; i <= n; i++ {
 		e := &Entry{
-			EventID:   tenantID + "-evt-" + string(rune('0'+i)),
+			EventID:   fmt.Sprintf("%s-evt-%d", tenantID, i),
 			EventType: "verify.test",
 			ActorID:   "actor",
 			TenantID:  tenantID,

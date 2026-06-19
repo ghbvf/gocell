@@ -322,8 +322,9 @@ func auditAdminRoleResult(isExpectedRole, rolsuper, rolbypassrls, canSelect bool
 //     missing or mis-shaped policy means the pool would read nothing (or the wrong
 //     scope) at runtime; readyz must catch it (#1810 F3).
 //
-// This single method is reused at both composition-time fail-fast
-// (buildCrossTenantStore calls it once on startup) and in the
+// This single method is reused at three callsites: at composition time it is called
+// independently by both buildAdminPoolDeps (cross-tenant store preflight) and
+// NewAuditChainVerifyStore (verify store self-guard, #1755); at runtime by the
 // ProbeAuditAdminRestrictedReady /readyz probe (auditAdminPoolResource.Probes).
 func (p *Pool) AuditAdminReadyCheck(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultHealthTimeout)

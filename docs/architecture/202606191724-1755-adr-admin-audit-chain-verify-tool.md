@@ -128,6 +128,15 @@ AdminListener that is declared only when operator credentials are provisioned.
 - **OUT:** per-chain `tenant_id` as a metric label (cardinality); async/job-mode
   endpoint (synchronous is adequate at current audit volumes — revisit with a
   configurable timeout if real fleets exceed 30s).
+- **NOTE:** the worst-case `failures` array length equals `totalChains` (all chains
+  failed or invalid) — bounded only by the number of distinct `(namespace, tenant)`
+  pairs in the fleet (i.e. tenant count × namespace count). This is acceptable for
+  the current synchronous model but should be revisited with an async/streaming mode
+  if the fleet grows large enough that the response body becomes unwieldy. The new
+  `timedOut: true` field in the response (and `report.TimedOut` in
+  `ChainVerifyReport`) indicates the 30s budget was exhausted before all chains were
+  verified; remaining chains appear as errored due to ctx cancellation (distinct from
+  real infra errors).
 
 ## References
 

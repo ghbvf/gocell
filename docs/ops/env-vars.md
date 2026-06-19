@@ -133,6 +133,35 @@ Design: `docs/architecture/202606191724-1755-adr-admin-audit-chain-verify-tool.m
 `docs/ops/listener-topology.md` §"Admin Listener". `examples/todoorder` demonstrates
 the same operator-credential pattern for the projection rebuild endpoint.
 
+**Cross-ref — making the verify endpoint reachable:** the endpoint requires BOTH
+`GOCELL_AUDIT_ADMIN_DSN` (builds the `ChainVerifier`, enables `#1810` super-admin
+reads) AND operator credentials (`GOCELL_OPERATOR_ADMIN_USERNAME` /
+`GOCELL_OPERATOR_ADMIN_PASSWORD`, declares the `AdminListener`). Neither alone is
+sufficient: admin DSN without operator creds → verifier injected, endpoint dormant
+(no AdminListener); operator creds without admin DSN → AdminListener declared, no
+verifier injected (phase0 fails fast).
+
+**Runbook — interpreting results:**
+
+| Signal | Meaning | Action |
+|--------|---------|--------|
+| `allValid:false` / `audit_chain_verify_invalid_chains > 0` | Integrity incident — one or more chains have been tampered | **Escalate immediately**; per-chain detail (namespace, tenant, first-invalid seq) is in the server log and the `failures` array |
+| `erroredChains > 0` / `audit_chain_verify_errored_chains > 0` | Verify could not complete — infra/misconfig prevented at least one chain from being fully checked | Investigate infra (DB, HMAC key config); re-run after remediation |
+| `timedOut: true` in response | The 30s budget was exhausted before all chains were verified; remaining chains appear as errored | Large fleet — revisit async mode; `erroredChains` count includes the unverified chains |
+
+Example Prometheus alert expressions:
+
+```promql
+# Integrity incident: alert when any chains were found invalid in the last run.
+audit_chain_verify_invalid_chains > 0
+
+# Verify incomplete: alert when errored chains were reported.
+audit_chain_verify_errored_chains > 0
+```
+
+**Rate limit:** the endpoint is fixed at 1 req/s burst 5 (per-IP token bucket via
+`auth.NewAuthOperator`). This is not configurable.
+
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 
 Each Cell that uses PostgreSQL reads its own DB and encryption env variables.

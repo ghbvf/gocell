@@ -11,6 +11,10 @@ import "context"
 //   - Namespace is the chain's namespace column (the relay "auditcore" or the
 //     "bootstrap" chain). It is a bounded closed set and MAY appear in a report;
 //     it is NOT used as a metric label (see ChainVerifier).
+//     NOTE: Namespace and TenantID are DB-row projections (raw strings, NOT
+//     re-validated as NamespaceID); an unregistered or malformed namespace fails
+//     closed at the protocol-map lookup in VerifyChain — no separate format check
+//     is needed here.
 //   - TenantID is the chain's tenant_id ("" = the system/framework sub-chain).
 //     It is UNBOUNDED and MUST NEVER be used as a metric label (observability.md).
 //   - MinSeq / MaxSeq are MIN(seq_no) / MAX(seq_no) for the chain. A healthy

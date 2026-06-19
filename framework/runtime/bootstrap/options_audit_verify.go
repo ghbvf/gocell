@@ -25,6 +25,10 @@ import (
 // separately via WithAuditChainVerifyEndpoint; phase0
 // (validateAuditChainVerifyEndpoint) fails fast if the endpoint is enabled but no
 // verifier was injected.
+//
+// See [WithAuditChainVerifyEndpoint] for the call-order requirement. phase0
+// (validateAuditChainVerifyEndpoint) enforces that both this option and
+// WithListener(cell.AdminListener, …) are in place before the endpoint is served.
 func WithAuditChainVerifier(v *audit.ChainVerifier) Option {
 	return func(b *Bootstrap) {
 		if validation.IsNilInterface(v) {
@@ -49,6 +53,15 @@ func WithAuditChainVerifier(v *audit.ChainVerifier) Option {
 // be declared and a verifier MUST be injected (WithAuditChainVerifier) — phase0
 // (validateAuditChainVerifyEndpoint) fails fast otherwise. Not calling this option
 // leaves the endpoint unmounted with NO error (verify remains programmatic-only).
+//
+// Typical call order in a composition root:
+//
+//	bootstrap.WithAuditChainVerifier(verifier)              // dep injection
+//	bootstrap.WithListener(cell.AdminListener, addr, auths) // declare the listener
+//	bootstrap.WithAuditChainVerifyEndpoint()                // enable the route
+//
+// phase0 (validateAuditChainVerifyEndpoint) cross-checks that both WithAuditChainVerifier
+// and WithListener(cell.AdminListener, …) were called before serving begins.
 func WithAuditChainVerifyEndpoint() Option {
 	return func(b *Bootstrap) {
 		b.auditChainVerifyEnabled = true

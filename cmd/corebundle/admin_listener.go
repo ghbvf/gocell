@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 
@@ -35,12 +36,28 @@ const (
 
 // adminHTTPAddr resolves the AdminListener bind address from GOCELL_ADMIN_HTTP_ADDR,
 // defaulting to a loopback port. Only consulted when operator credentials enable
-// the admin plane.
+// the admin plane. When an override is set and its host is non-loopback, a Warn is
+// emitted once (defense-in-depth note, ADR §D6) — the operator may front it with a
+// reverse proxy, so the override is still returned.
 func adminHTTPAddr() string {
-	if a := strings.TrimSpace(os.Getenv(adminHTTPAddrEnv)); a != "" {
-		return a
+	a := strings.TrimSpace(os.Getenv(adminHTTPAddrEnv))
+	if a == "" {
+		return defaultAdminHTTPAddr
 	}
-	return defaultAdminHTTPAddr
+	// Best-effort non-loopback warning: parse host, skip if empty or unparseable.
+	if host, _, err := net.SplitHostPort(a); err == nil && host != "" {
+		if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+			// Log the canonical parsed IP (ip.String()), never the raw env string —
+			// it is the value we just validated and cannot carry log-injection
+			// control characters. GOCELL_ADMIN_HTTP_ADDR is operator deployment
+			// config, not untrusted external input; gosec G706's taint tracker
+			// over-approximates by propagating through net.ParseIP→String().
+			//nolint:gosec // G706: ip.String() is a sanitized canonical IP from validated operator config, not untrusted input
+			slog.Warn("admin control-plane bound to non-loopback address (defense-in-depth: ensure it is fronted by a reverse proxy or firewall)",
+				slog.String("host", ip.String()))
+		}
+	}
+	return a
 }
 
 // operatorAuthFromEnv builds the AdminListener operator-credential auth plan

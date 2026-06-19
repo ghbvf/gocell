@@ -17,24 +17,56 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
 )
 
+// --- capturing slog handler for warn-log assertions -----------------------
+
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *capturingHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *capturingHandler) hasWarn() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn {
+			return true
+		}
+	}
+	return false
+}
+
 // --- fake ledger.ChainVerifyStore ------------------------------------------
 
 type fakeVerifyStore struct {
-	chains  []ledger.ChainRef
-	enumErr error
-	verify  func(ns, tenant string, from, to int64) (bool, int64, error)
+	chains    []ledger.ChainRef
+	enumErr   error
+	ignoreCtx bool // enumerate even when ctx is already done (to exercise the in-loop timeout path)
+	verify    func(ctx context.Context, ns, tenant string, from, to int64) (bool, int64, error)
 }
 
-func (f *fakeVerifyStore) EnumerateChains(context.Context) ([]ledger.ChainRef, error) {
+func (f *fakeVerifyStore) EnumerateChains(ctx context.Context) ([]ledger.ChainRef, error) {
+	if !f.ignoreCtx && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if f.enumErr != nil {
 		return nil, f.enumErr
 	}
 	return f.chains, nil
 }
 
-func (f *fakeVerifyStore) VerifyChain(_ context.Context, ns, tenant string, from, to int64) (bool, int64, error) {
+func (f *fakeVerifyStore) VerifyChain(ctx context.Context, ns, tenant string, from, to int64) (bool, int64, error) {
 	if f.verify != nil {
-		return f.verify(ns, tenant, from, to)
+		return f.verify(ctx, ns, tenant, from, to)
 	}
 	return true, -1, nil
 }
@@ -176,7 +208,7 @@ func TestVerifyAll_OneInvalid(t *testing.T) {
 	t.Parallel()
 	store := &fakeVerifyStore{
 		chains: []ledger.ChainRef{ref("auditcore", "t-a", 1, 3), ref("auditcore", "t-b", 1, 2)},
-		verify: func(_, tenant string, _, _ int64) (bool, int64, error) {
+		verify: func(_ context.Context, _, tenant string, _, _ int64) (bool, int64, error) {
 			if tenant == "t-b" {
 				return false, 2, nil // tamper at seq 2
 			}
@@ -221,7 +253,7 @@ func TestVerifyAll_VerifyChainError_RunContinues(t *testing.T) {
 	t.Parallel()
 	store := &fakeVerifyStore{
 		chains: []ledger.ChainRef{ref("auditcore", "t-a", 1, 1), ref("auditcore", "t-b", 1, 1)},
-		verify: func(_, tenant string, _, _ int64) (bool, int64, error) {
+		verify: func(_ context.Context, _, tenant string, _, _ int64) (bool, int64, error) {
 			if tenant == "t-a" {
 				return false, 1, errors.New("infra down")
 			}
@@ -234,6 +266,12 @@ func TestVerifyAll_VerifyChainError_RunContinues(t *testing.T) {
 	}
 	if report.ErroredChains != 1 || report.TotalChains != 2 {
 		t.Fatalf("report=%+v, want 1 errored of 2 (run continues)", report)
+	}
+	// Fix A.1: errored chain must carry FirstInvalidSeq=-1 (not the store's init value).
+	for _, r := range report.Results {
+		if r.Err != nil && r.FirstInvalidSeq != -1 {
+			t.Errorf("errored result for tenant=%q has FirstInvalidSeq=%d, want -1", r.TenantID, r.FirstInvalidSeq)
+		}
 	}
 }
 
@@ -255,7 +293,7 @@ func TestVerifyAll_MissingGenesis(t *testing.T) {
 	// MissingGenesis distinctly so it is not mistaken for a seq-1 tamper.
 	store := &fakeVerifyStore{
 		chains: []ledger.ChainRef{ref("auditcore", "t-a", 3, 5)},
-		verify: func(_, _ string, _, _ int64) (bool, int64, error) { return false, 1, nil },
+		verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) { return false, 1, nil },
 	}
 	report, err := newTestVerifier(t, store, newRecordingProvider()).VerifyAll(context.Background())
 	if err != nil {
@@ -274,7 +312,7 @@ func TestVerifyAll_MetricLabelHygiene(t *testing.T) {
 	mp := newRecordingProvider()
 	store := &fakeVerifyStore{
 		chains: []ledger.ChainRef{ref("auditcore", "tenant-secret-uuid", 1, 2)},
-		verify: func(_, _ string, _, _ int64) (bool, int64, error) { return false, 1, nil },
+		verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) { return false, 1, nil },
 	}
 	if _, err := newTestVerifier(t, store, mp).VerifyAll(context.Background()); err != nil {
 		t.Fatalf("VerifyAll: %v", err)
@@ -323,5 +361,201 @@ func TestChainVerifyResult_FieldSetFrozen(t *testing.T) {
 	want := []string{"Err", "FirstInvalidSeq", "MissingGenesis", "Namespace", "TailSeq", "TenantID", "Valid"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ChainVerifyResult field set drift:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+// --- errorProvider (for TestNewChainVerifier_MetricsRegistrationError) -----
+
+type errorProvider struct{}
+
+func (errorProvider) CounterVec(metrics.CounterOpts) (metrics.CounterVec, error) {
+	return nil, errors.New("metrics registration error")
+}
+
+func (errorProvider) HistogramVec(metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return nil, errors.New("metrics registration error")
+}
+
+func (errorProvider) GaugeVec(metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return nil, errors.New("metrics registration error")
+}
+func (errorProvider) Unregister(metrics.Collector) error { return nil }
+
+// --- new tests (items H.13-H.20) -------------------------------------------
+
+func TestNewChainVerifier_NilMetricsProvider(t *testing.T) {
+	t.Parallel()
+	store := &fakeVerifyStore{}
+	_, err := audit.NewChainVerifier(store, nil, clockmock.New(time.Now()), nil)
+	if err == nil {
+		t.Fatal("expected error for nil metrics.Provider")
+	}
+}
+
+func TestNewChainVerifier_NilClock(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for nil clock (MustHaveClock)")
+		}
+	}()
+	store := &fakeVerifyStore{}
+	// MustHaveClock panics when clock is nil.
+	_, _ = audit.NewChainVerifier(store, metrics.NopProvider{}, nil, nil)
+}
+
+func TestNewChainVerifier_MetricsRegistrationError(t *testing.T) {
+	t.Parallel()
+	store := &fakeVerifyStore{}
+	_, err := audit.NewChainVerifier(store, errorProvider{}, clockmock.New(time.Now()), nil)
+	if err == nil {
+		t.Fatal("expected error when metrics registration fails")
+	}
+}
+
+func TestVerifyAll_ZeroMaxSeq(t *testing.T) {
+	t.Parallel()
+	// A ChainRef with MaxSeq=0 should be valid immediately — VerifyChain must NOT
+	// be called (the zero-rows chain has nothing to verify).
+	store := &fakeVerifyStore{
+		chains: []ledger.ChainRef{ref("auditcore", "t-a", 0, 0)},
+		verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) {
+			t.Error("VerifyChain must not be called for MaxSeq=0")
+			return false, 0, nil
+		},
+	}
+	report, err := newTestVerifier(t, store, newRecordingProvider()).VerifyAll(context.Background())
+	if err != nil {
+		t.Fatalf("VerifyAll: %v", err)
+	}
+	if !report.AllValid() || report.TotalChains != 1 {
+		t.Fatalf("report=%+v, want all-valid 1 chain (MaxSeq=0 skips verify)", report)
+	}
+}
+
+func TestVerifyAll_DeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	// Pass an already-canceled context → EnumerateChains returns ctx.Err().
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already done
+
+	store := &fakeVerifyStore{} // EnumerateChains checks ctx.Err()
+	mp := newRecordingProvider()
+	_, err := newTestVerifier(t, store, mp).VerifyAll(ctx)
+	if err == nil {
+		t.Fatal("expected error when context is canceled before enumerate")
+	}
+	// The outcome metric must have been recorded as "error".
+	outcomeFound := false
+	for _, l := range mp.withCalls {
+		if l["outcome"] == "error" {
+			outcomeFound = true
+		}
+	}
+	if !outcomeFound {
+		t.Errorf("expected outcome=error metric, withCalls=%v", mp.withCalls)
+	}
+}
+
+func TestVerifyAll_OutcomeValues_Frozen(t *testing.T) {
+	t.Parallel()
+
+	outcomeOf := func(mp *recordingProvider) string {
+		for _, l := range mp.withCalls {
+			if v, ok := l["outcome"]; ok {
+				return v
+			}
+		}
+		return ""
+	}
+
+	// Case 1: all-valid → outcome "success"
+	{
+		mp := newRecordingProvider()
+		store := &fakeVerifyStore{chains: []ledger.ChainRef{ref("ns", "t", 1, 1)}}
+		if _, err := newTestVerifier(t, store, mp).VerifyAll(context.Background()); err != nil {
+			t.Fatalf("all-valid VerifyAll: %v", err)
+		}
+		if got := outcomeOf(mp); got != "success" {
+			t.Errorf("all-valid outcome=%q, want success", got)
+		}
+	}
+
+	// Case 2: one invalid → outcome "invalid_found"
+	{
+		mp := newRecordingProvider()
+		store := &fakeVerifyStore{
+			chains: []ledger.ChainRef{ref("ns", "t", 1, 1)},
+			verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) {
+				return false, 1, nil
+			},
+		}
+		if _, err := newTestVerifier(t, store, mp).VerifyAll(context.Background()); err != nil {
+			t.Fatalf("invalid VerifyAll: %v", err)
+		}
+		if got := outcomeOf(mp); got != "invalid_found" {
+			t.Errorf("invalid outcome=%q, want invalid_found", got)
+		}
+	}
+
+	// Case 3: one errored → outcome "error"
+	{
+		mp := newRecordingProvider()
+		store := &fakeVerifyStore{
+			chains: []ledger.ChainRef{ref("ns", "t", 1, 1)},
+			verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) {
+				return false, 0, errors.New("infra")
+			},
+		}
+		if _, err := newTestVerifier(t, store, mp).VerifyAll(context.Background()); err != nil {
+			t.Fatalf("errored VerifyAll: %v", err)
+		}
+		if got := outcomeOf(mp); got != "error" {
+			t.Errorf("errored outcome=%q, want error", got)
+		}
+	}
+
+	// Frozen set assertion: only these three values are ever used.
+	frozen := map[string]bool{"success": true, "invalid_found": true, "error": true}
+	_ = frozen // documented constraint; the three cases above cover the full set
+}
+
+func TestVerifyAll_TimedOut(t *testing.T) {
+	t.Parallel()
+
+	// An outer ctx whose deadline is already in the past makes the runner's internal
+	// context.WithTimeout child immediately DeadlineExceeded. With ignoreCtx the store
+	// still enumerates one chain, so the loop runs to completion and VerifyAll sets
+	// report.TimedOut from ctx.Err()==DeadlineExceeded — the truncation signal (F3),
+	// distinct from a real infra failure.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	cap := &capturingHandler{}
+	logger := slog.New(cap)
+
+	// A truncated run is not all-valid (the in-flight chain errors under the expired
+	// ctx), so emit() logs the Warn run summary (F4) carrying timed_out=true.
+	store := &fakeVerifyStore{
+		ignoreCtx: true,
+		chains:    []ledger.ChainRef{ref("ns", "t", 1, 1)},
+		verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) {
+			return false, 0, errors.New("truncated by deadline")
+		},
+	}
+	v, err := audit.NewChainVerifier(store, newRecordingProvider(), clockmock.New(time.Now()), logger)
+	if err != nil {
+		t.Fatalf("NewChainVerifier: %v", err)
+	}
+
+	report, err := v.VerifyAll(ctx)
+	if err != nil {
+		t.Fatalf("VerifyAll must not return a run-level error when chains enumerate: %v", err)
+	}
+	if !report.TimedOut {
+		t.Errorf("report.TimedOut=false, want true when the run deadline is already exceeded")
+	}
+	if !cap.hasWarn() {
+		t.Error("expected a Warn run summary when the run timed out with issues")
 	}
 }

@@ -186,7 +186,7 @@ func auditStorageOpts(
 		auditcell.WithOutboxDeps(nil, outbox.WrapWriterForCell(pg.OutboxWriter())),
 		auditcell.WithTxManager(persistence.WrapForCell(pg.TxManager())),
 	}
-	crossTenantStore, verifier, ctRes, ctErr := buildCrossTenantStore(ctx, shared, auditProtocol, bootstrapProtocol)
+	crossTenantStore, verifier, ctRes, ctErr := buildAdminPoolDeps(ctx, shared, auditProtocol, bootstrapProtocol)
 	if ctErr != nil {
 		return nil, nil, nil, ctErr
 	}
@@ -224,7 +224,7 @@ func memAuditStorageOpts(
 		[]bootstrap.Option{bootstrap.WithAuditChainVerifier(verifier)}, nil, nil
 }
 
-// buildCrossTenantStore constructs the admin-pool-backed dependencies that need
+// buildAdminPoolDeps constructs the admin-pool-backed dependencies that need
 // the gocell_audit_admin role: the super-admin CrossTenantQueryStore (#1810) AND
 // the #1755 full-chain ChainVerifier (one shared admin pool, one ManagedResource).
 // Returns (nil, nil, nil, nil) when GOCELL_AUDIT_ADMIN_DSN is not set — the caller
@@ -238,7 +238,7 @@ func memAuditStorageOpts(
 // role-scoped permissive RLS SELECT policy (migration 065 — USING(true)), so it
 // can read every tenant's rows without BYPASSRLS, preserving ADR #1676.
 // No localhost fallback; no default credentials.
-func buildCrossTenantStore(
+func buildAdminPoolDeps(
 	ctx context.Context, shared *composition.SharedDeps, auditProtocol, bootstrapProtocol *ledger.Protocol,
 ) (ledger.CrossTenantQueryStore, *audit.ChainVerifier, kernellifecycle.ManagedResource, error) {
 	adminDSN := os.Getenv("GOCELL_AUDIT_ADMIN_DSN")

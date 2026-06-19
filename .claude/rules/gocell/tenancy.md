@@ -34,7 +34,7 @@ audit read 的 **serving 池**（NOBYPASSRLS）对 `RowScopeAll` 始终 fail-clo
 （AdminListener，凭据 gated）触发。它是**系统完整性操作**（同 `VerifyBootstrapTailOnStartup`），
 只返回完整性裁决（valid / first-invalid-seq）、**不返回审计行内容**，故**不带** `CrossTenantVisibility`
 obligation（不经 #1760 sealed 数据读 funnel——Hard by `ChainVerifyResult` 字段集）。verify store 构造期
-强制 `AuditAdminReadyCheck`（serving 池被 fail-closed 拒，#1755 AI-HARD），机制见 ADR
+强制 `AuditAdminReadyCheck`（serving 池被 fail-closed 拒，#1755 Medium fail-closed），机制见 ADR
 `202606191724-1755`。
 
 ## Principal claim source

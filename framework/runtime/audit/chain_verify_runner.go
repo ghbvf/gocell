@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -28,6 +29,10 @@ import (
 // the trigger indefinitely. Mirrors the 30s startup-verify budget
 // (bootstrapTailVerifyStartupTimeout) for a consistent operator latency envelope.
 const chainVerifyTimeout = 30 * time.Second
+
+// logMsgPrefix is the shared slog/errcode message prefix for all chain-verify
+// log lines. Extracted per go-standards (string repeated ≥ 3 times → const).
+const logMsgPrefix = "audit chain verify: "
 
 // run outcome label values — the closed set of the only metric label this tool
 // emits (audit_chain_verify_runs_total{outcome}). The metric name + label KEY are
@@ -59,8 +64,11 @@ type ChainVerifyReport struct {
 	TotalChains   int
 	InvalidChains int // tamper: Valid==false && Err==nil
 	ErroredChains int // Err != nil (could not complete)
-	Results       []ChainVerifyResult
-	Duration      time.Duration
+	// TimedOut is true when the 30s deadline truncated the run — remaining chains
+	// are reported as errored due to ctx cancellation, distinct from real infra errors.
+	TimedOut bool
+	Results  []ChainVerifyResult
+	Duration time.Duration
 }
 
 // AllValid reports whether every chain verified intact (no tamper, no error).
@@ -105,7 +113,7 @@ func newChainVerifyMetrics(mp metrics.Provider) (*chainVerifyMetrics, error) {
 	duration, err := mp.HistogramVec(metrics.HistogramOpts{
 		Name:    "audit_chain_verify_duration_seconds",
 		Help:    "Wall-clock duration of a full admin audit chain verify run.",
-		Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
+		Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30},
 	})
 	if err != nil {
 		return nil, err
@@ -128,11 +136,11 @@ type ChainVerifier struct {
 func NewChainVerifier(store ledger.ChainVerifyStore, mp metrics.Provider, clk clock.Clock, logger *slog.Logger) (*ChainVerifier, error) {
 	if validation.IsNilInterface(store) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit: NewChainVerifier requires a non-nil ChainVerifyStore")
+			logMsgPrefix+"NewChainVerifier requires a non-nil ChainVerifyStore")
 	}
 	if validation.IsNilInterface(mp) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit: NewChainVerifier requires a non-nil metrics.Provider (use metrics.NopProvider{} for none)")
+			logMsgPrefix+"NewChainVerifier requires a non-nil metrics.Provider (use metrics.NopProvider{} for none)")
 	}
 	clock.MustHaveClock(clk, "audit.NewChainVerifier")
 	m, err := newChainVerifyMetrics(mp)
@@ -159,9 +167,9 @@ func (v *ChainVerifier) VerifyAll(ctx context.Context) (ChainVerifyReport, error
 	chains, err := v.store.EnumerateChains(ctx)
 	if err != nil {
 		v.metrics.runs.With(metrics.Labels{"outcome": outcomeError}).Inc(ctx)
-		v.logger.ErrorContext(ctx, "audit chain verify: enumerate chains failed", slog.Any("error", err))
+		v.logger.ErrorContext(ctx, logMsgPrefix+"enumerate chains failed", slog.Any("error", err))
 		return ChainVerifyReport{Duration: v.clock.Since(start)}, errcode.Wrap(errcode.KindInternal,
-			errcode.ErrInternal, "audit chain verify: enumerate chains failed", err)
+			errcode.ErrInternal, logMsgPrefix+"enumerate chains failed", err)
 	}
 
 	report := ChainVerifyReport{TotalChains: len(chains)}
@@ -176,6 +184,9 @@ func (v *ChainVerifier) VerifyAll(ctx context.Context) (ChainVerifyReport, error
 		}
 	}
 	report.Duration = v.clock.Since(start)
+	// TimedOut: the 30s deadline truncated the run; remaining chains were not
+	// verified (they appear as errored due to ctx cancellation, not real infra failure).
+	report.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	v.emit(ctx, report)
 	return report, nil
 }
@@ -197,23 +208,28 @@ func (v *ChainVerifier) verifyOne(ctx context.Context, c ledger.ChainRef) ChainV
 	}
 	valid, firstInvalid, err := v.store.VerifyChain(ctx, c.Namespace, c.TenantID, 1, c.MaxSeq)
 	res.Valid = valid
-	res.FirstInvalidSeq = firstInvalid
 	res.Err = err
 
 	switch {
 	case err != nil:
-		v.logger.ErrorContext(ctx, "audit chain verify: chain verify could not complete",
+		// Errored chain: set FirstInvalidSeq=-1 (the store's returned value is a
+		// meaningless init value for errored chains, not a real first-invalid seq).
+		res.FirstInvalidSeq = -1
+		v.logger.ErrorContext(ctx, logMsgPrefix+"chain verify could not complete",
 			slog.String("namespace", c.Namespace), slog.String("tenant_id", c.TenantID),
 			slog.Any("error", err))
 	case !valid:
-		v.logger.ErrorContext(ctx, "audit chain verify: chain integrity broken",
+		res.FirstInvalidSeq = firstInvalid
+		v.logger.ErrorContext(ctx, logMsgPrefix+"chain integrity broken",
 			slog.String("namespace", c.Namespace), slog.String("tenant_id", c.TenantID),
 			slog.Int64("first_invalid_seq", firstInvalid), slog.Bool("missing_genesis", res.MissingGenesis))
+	default:
+		res.FirstInvalidSeq = firstInvalid // -1 for valid chains
 	}
 	return res
 }
 
-// emit records aggregate metrics + the all-valid Info log for one completed run.
+// emit records aggregate metrics and ALWAYS logs a run summary.
 // outcome precedence: any errored chain → error; else any tampered chain →
 // invalid_found; else success.
 func (v *ChainVerifier) emit(ctx context.Context, report ChainVerifyReport) {
@@ -230,7 +246,15 @@ func (v *ChainVerifier) emit(ctx context.Context, report ChainVerifyReport) {
 	v.metrics.duration.With(metrics.Labels{}).Observe(ctx, report.Duration.Seconds())
 
 	if report.AllValid() {
-		v.logger.InfoContext(ctx, "audit chain verify: all chains valid",
-			slog.Int("total_chains", report.TotalChains), slog.Duration("duration", report.Duration))
+		v.logger.InfoContext(ctx, logMsgPrefix+"all chains valid",
+			slog.Int("total_chains", report.TotalChains),
+			slog.Duration("duration", report.Duration))
+	} else {
+		v.logger.WarnContext(ctx, logMsgPrefix+"completed with issues",
+			slog.Int("total_chains", report.TotalChains),
+			slog.Int("invalid_chains", report.InvalidChains),
+			slog.Int("errored_chains", report.ErroredChains),
+			slog.Bool("timed_out", report.TimedOut),
+			slog.Duration("duration", report.Duration))
 	}
 }
