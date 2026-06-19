@@ -30,12 +30,20 @@ import (
 // Note: the internal list handler lives in devicecommandinternal; its contract
 // test is in that package.
 func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
+	// limit 0 → WithPendingLimit no-op → devicecmd.NewService default cap (1000).
+	return newContractCommandHandlerWithLimit(0)
+}
+
+// newContractCommandHandlerWithLimit wires the public handlers with an explicit
+// per-device Pending cap, for the F-S-005 #822 429 contract test.
+func newContractCommandHandlerWithLimit(limit int) (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	svc, err := devicecmd.NewService(
 		clock.Real(), q, devRepo, codec, slog.Default(), query.RunModeProd,
 		devicecmd.WithSliceName("devicecommand"),
+		devicecmd.WithPendingLimit(limit),
 	)
 	if err != nil {
 		panic(err)
@@ -79,6 +87,45 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	req = req.WithContext(withTestAuth("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestHttpDeviceCommandEnqueueV1_PendingLimit429 exercises the per-device
+// Pending command cap (F-S-005 #822) end-to-end over the HTTP enqueue contract:
+// once a device holds its cap of Pending commands, the next enqueue is rejected
+// with the contract-declared 429 (ERR_RATE_LIMITED).
+func TestHttpDeviceCommandEnqueueV1_PendingLimit429(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.command.enqueue.v1")
+
+	// Cap of 1 so the second enqueue for the same device trips the guard.
+	handler, devRepo, _ := newContractCommandHandlerWithLimit(1)
+	_ = devRepo.Create(context.Background(), &domain.Device{
+		ID: "dev-1", Name: "sensor-a", Status: "online",
+	})
+	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
+
+	enqueue := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot","commandType":"reboot"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(withTestAuth("operator-1", []string{dto.RoleOperator}))
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// First enqueue fills the cap → 201.
+	if rec := enqueue(); rec.Code != http.StatusCreated {
+		t.Fatalf("first enqueue: want 201, got %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// Second enqueue exceeds the cap → contract-declared 429 error envelope.
+	rec := enqueue()
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-cap enqueue: want 429, got %d (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ERR_RATE_LIMITED") {
+		t.Errorf("429 body must carry ERR_RATE_LIMITED, got %s", rec.Body.String())
+	}
 }
 
 func TestHttpDeviceCommandEnqueueAsyncV1Serve(t *testing.T) {

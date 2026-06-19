@@ -172,6 +172,21 @@ ON CONFLICT ((metadata->>'_idempotency_key'))
    WHERE metadata->>'_idempotency_key' IS NOT NULL AND status IN (1,2,3)
    DO NOTHING`
 
+// Per-device Pending quota (EnqueueOptions.MaxPendingPerDevice, F-S-005 #822).
+// pg_advisory_xact_lock(namespace, device) serializes concurrent enqueues for the
+// SAME device within the transaction, so the speculative insert + count below is
+// atomic and the cap is a hard invariant under concurrency and across instances —
+// no read-then-write TOCTOU. Different devices hash to different keys and never
+// block each other; the lock is released automatically at transaction end. Mirrors
+// audit_ledger_store's namespace+key advisory lock. status = 1 is StatusPending
+// (kernel/command); only Pending counts toward the cap.
+const (
+	pendingQuotaLockNamespace = "device-command-pending-quota"
+	lockDevicePendingQuotaSQL = `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`
+	countPendingByDeviceSQL   = `SELECT count(*) FROM commands WHERE device_id = $1 AND status = 1`
+	msgPendingLimitExceeded   = "per-device pending command limit exceeded"
+)
+
 // ---------------------------------------------------------------------------
 // command.Queue implementation
 // ---------------------------------------------------------------------------
@@ -201,11 +216,51 @@ func (q *PGCommandQueue) Enqueue(ctx context.Context, entry command.Entry, opts 
 	}
 
 	return q.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := entry.ValidateNew(); err != nil {
-			return err
-		}
-		return q.insertEntry(txCtx, entry)
+		return q.enqueueTx(txCtx, entry, opts)
 	})
+}
+
+// enqueueTx is the transactional body of Enqueue: validate, optionally acquire the
+// per-device advisory lock, insert, and (only for a freshly inserted row) enforce
+// the per-device Pending cap. Extracted so Enqueue stays within the cognitive-
+// complexity budget.
+func (q *PGCommandQueue) enqueueTx(ctx context.Context, entry command.Entry, opts command.EnqueueOptions) error {
+	if err := entry.ValidateNew(); err != nil {
+		return err
+	}
+	if opts.MaxPendingPerDevice > 0 {
+		// Serialize concurrent enqueues for this device so the insert + count below
+		// is atomic; different devices hash to different keys and don't block.
+		if _, err := q.db.Exec(ctx, lockDevicePendingQuotaSQL, pendingQuotaLockNamespace, entry.DeviceID); err != nil {
+			return fmt.Errorf("command_queue: pending-quota lock: %w", err)
+		}
+	}
+	inserted, err := q.insertEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+	if opts.MaxPendingPerDevice > 0 && inserted {
+		return q.enforcePendingLimit(ctx, entry.DeviceID, opts.MaxPendingPerDevice)
+	}
+	return nil
+}
+
+// enforcePendingLimit counts the device's Pending commands (including the row the
+// caller just inserted, visible within the same transaction) and rejects with
+// KindRateLimited when the device is over its cap — aborting the transaction so the
+// speculative insert rolls back. It runs only for a freshly inserted row: an
+// idempotency-coalesced no-op adds nothing and must not trip the cap. The
+// transaction-scoped advisory lock acquired in Enqueue makes count+insert atomic.
+func (q *PGCommandQueue) enforcePendingLimit(ctx context.Context, deviceID string, limit int) error {
+	var pending int
+	if err := q.db.QueryRow(ctx, countPendingByDeviceSQL, deviceID).Scan(&pending); err != nil {
+		return fmt.Errorf("command_queue: count pending: %w", err)
+	}
+	if pending > limit {
+		return errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited,
+			msgPendingLimitExceeded, errcode.WithDetails(errcode.PublicInt("limit", limit)))
+	}
+	return nil
 }
 
 // stampIdempotencyKey writes the idempotency key into entry.Metadata so it is
@@ -228,10 +283,15 @@ func (q *PGCommandQueue) stampIdempotencyKey(entry *command.Entry, key string) {
 // savepoint rollback gymnastics. PK collisions still raise unique_violation
 // (the ON CONFLICT clause is keyed on the idempotency-key index only) and are
 // reported as ErrConflict.
-func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) error {
+// insertEntry runs the INSERT and reports whether a row was actually written.
+// inserted=false means ON CONFLICT (idempotency_key) DO NOTHING fired (RowsAffected
+// == 0) — an idempotent no-op the per-device cap must skip. inserted=true means a
+// fresh Pending row landed. PK collisions and FK violations are translated to typed
+// errcode (inserted is meaningless on error).
+func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) (inserted bool, err error) {
 	metaBytes, err := marshalMetadata(entry.Metadata)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	tag, insertErr := q.db.Exec(ctx, enqueueInsertSQL,
@@ -247,19 +307,16 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 	)
 	if insertErr == nil {
 		// rows=0 → ON CONFLICT (idempotency_key) DO NOTHING fired, idempotent no-op.
-		if tag.RowsAffected() == 0 {
-			return nil
-		}
-		return nil
+		return tag.RowsAffected() == 1, nil
 	}
 	if pgquery.IsUniqueViolation(insertErr) {
 		// PK collision (same id, no matching idempotency key) → ErrConflict.
-		return errcode.New(errcode.KindConflict, errcode.ErrConflict,
+		return false, errcode.New(errcode.KindConflict, errcode.ErrConflict,
 			"command already exists",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("id=%q", entry.ID))))
 	}
 	if pgquery.IsForeignKeyViolation(insertErr) {
-		return errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
+		return false, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			"device not found",
 			errcode.WithDetails(errcode.PublicString("deviceId", entry.DeviceID)))
 	}
@@ -267,7 +324,7 @@ func (q *PGCommandQueue) insertEntry(ctx context.Context, entry command.Entry) e
 		slog.String("operation", "insert"),
 		slog.String("device_id", entry.DeviceID),
 		slog.Any("error", insertErr))
-	return fmt.Errorf("command_queue: insert: %w", insertErr)
+	return false, fmt.Errorf("command_queue: insert: %w", insertErr)
 }
 
 // Dequeue atomically claims up to n Pending entries for deviceID (oldest FIFO),

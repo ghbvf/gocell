@@ -101,3 +101,16 @@ func (r Enqueue413ErrorResponse) visitEnqueueResponse(ctx context.Context, w htt
 	httputil.WriteErrorWithStatus(ctx, w, 413, &r.Body)
 	return nil
 }
+
+// Enqueue429ErrorResponse renders an HTTP 429 error response.
+// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
+// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
+// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
+type Enqueue429ErrorResponse struct {
+	Body errcode.Error
+}
+
+func (r Enqueue429ErrorResponse) visitEnqueueResponse(ctx context.Context, w http.ResponseWriter) error {
+	httputil.WriteErrorWithStatus(ctx, w, 429, &r.Body)
+	return nil
+}
