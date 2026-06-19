@@ -1,0 +1,77 @@
+name: externalcells/mdm CI
+
+# Dedicated PR lane for the externalcells/mdm satellite module (Operator-SDK mode,
+# ADR 202605281200 / #2304). The module is NOT a root go.work member by design, so
+# the root build-test matrix (_build-lint.yml) and the verify-workspace gates
+# deliberately skip it (hack/verify-workspace-test.sh prunes externalcells/*).
+# Before this lane that left the satellite with ZERO CI coverage — its build, tests,
+# and lint could regress unseen on a root-targeted PR (#2426 F3).
+#
+# It builds / tests / lints the module with GOWORK=off so the satellite resolves
+# against its OWN pinned go.mod (the local `replace ... => ../../...` redirects to
+# the in-repo core), the same release-consistency discipline as
+# hack/verify-workspace.sh / hack/verify-workspace-test.sh.
+#
+# Scope note (#2426 F3, Resolution C): governance (`gocell validate`) is NOT run
+# here yet. The mdm assembly's frameworkContracts still references a draft framework
+# contract (http.deviceidentity.status.v1); active-ization is tracked in #2431
+# (blocked-by #2403). A validate step would go red until #2431 lands, so the
+# governance half of this lane is added alongside that active-ization, not here.
+#
+# golangci-lint is pinned via hack/lib/golangci-lint.sh (the single version source,
+# the same binary the platform lint shard resolves), so the satellite's cells/
+# subtree is held to the same .golangci.yml discipline as platform cells.
+
+on:
+  pull_request:
+    branches: [develop, main, 'release/**']
+    paths:
+      - 'externalcells/mdm/**'
+      - '.golangci.yml'
+      - '.github/workflows/externalcells-mdm.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'externalcells/mdm/**'
+      - '.golangci.yml'
+      - '.github/workflows/externalcells-mdm.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: externalcells-mdm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          # The satellite's own pinned go.mod is the toolchain source for this lane
+          # (release-consistent with how it ships), not the root go.work.
+          go-version-file: externalcells/mdm/go.mod
+          cache-dependency-path: "**/go.sum"
+
+      # GOWORK=off so the satellite resolves against its OWN pinned go.mod.
+      - name: Build (GOWORK=off)
+        run: GOWORK=off go -C externalcells/mdm build ./...
+
+      - name: Test (GOWORK=off)
+        run: GOWORK=off go -C externalcells/mdm test ./... -count=1
+
+      # Lint with the platform-pinned golangci-lint against the repo-root config, so
+      # the satellite's cells/ subtree obeys the same cells-isolation discipline
+      # (the cells-isolation / corecells-isolation split, #2426 F4). `config verify`
+      # fails fast on a broken .golangci.yml before walking the module.
+      - name: golangci-lint (GOWORK=off)
+        run: |
+          set -euo pipefail
+          source hack/lib/golangci-lint.sh
+          root="$PWD"
+          lint_bin="$(gocell::golangci_lint::ensure)"
+          "$lint_bin" config verify --config "$root/.golangci.yml"
+          ( cd externalcells/mdm && GOWORK=off "$lint_bin" run --config "$root/.golangci.yml" ./... )
