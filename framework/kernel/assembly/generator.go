@@ -270,8 +270,9 @@ type ScaffoldCellRef struct {
 // scaffoldAssemblyContext is the template context for the K#09 scaffold
 // templates (assembly-yaml / run-go / app-go). User-input fields are typed
 // as yamlsafe.Scalar so the type system rejects raw string interpolation
-// into the inline YAML template; buildScaffoldContext is the single funnel
-// that wraps user input through yamlsafe.Quote.
+// into the inline YAML template; buildScaffoldContext is the construction
+// site that wraps user input through yamlsafe.Quote (the funnel enforcement
+// itself is asserted on buildScaffoldContext by archtest YAML-QUOTE-FUNNEL-01).
 type scaffoldAssemblyContext struct {
 	ID             yamlsafe.Scalar
 	Cells          []scaffoldAssemblyCellYAML // per-cell {id[, module]} entries for the assembly.yaml cells block
@@ -551,7 +552,17 @@ func (g *Generator) isCrossModule(ref metadata.AssemblyCellRef) bool {
 // isCrossModule (codegen) and the scaffold path (existence-skip, compositionAPI,
 // derived-file skip) so all three stay aligned.
 func (g *Generator) crossModule(module string) bool {
-	return module != "" && module != g.module
+	return IsCrossModule(module, g.module)
+}
+
+// IsCrossModule reports whether a cell's declared module path names a Go module
+// other than ownModule (the assembly's own module). An empty module, or one
+// equal to ownModule, is same-module. It is the single shared predicate behind
+// the generator's derived-file-skip / compositionAPI decisions and the CLI's
+// cross-module hint, so the two cannot drift — the CLI imports this rather than
+// re-implementing the comparison.
+func IsCrossModule(module, ownModule string) bool {
+	return module != "" && module != ownModule
 }
 
 // specHasCrossModule reports whether any cell in the scaffold spec is

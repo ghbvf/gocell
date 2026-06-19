@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
@@ -84,6 +85,61 @@ func TestPlanAssemblyScaffold_ExplicitSameModuleNotCrossModule(t *testing.T) {
 	require.Len(t, plan, 6, "explicit same-module ref must keep the full derived plan")
 	assert.NotContains(t, planContent(t, plan, "assembly.yaml"), "compositionAPI",
 		"module == own module must not trigger compositionAPI")
+}
+
+// TestScaffoldAssembly_CrossModuleYAMLInjection asserts that a cross-module
+// cell's module path — rendered into the flow-mapping `- {id: X, module: Y}`
+// form — cannot break out of the scalar to inject adjacent keys or extra cells.
+// MatchAssemblyModulePath rejects control/space/quote/backtick/backslash upstream;
+// the remaining YAML-significant runes ({ } [ ] : , ' # & * ! | > %) are handled
+// by yamlsafe.Quote. This is the cross-module counterpart of
+// TestScaffoldAssembly_YAMLScalarInjection (which covers owner.team/role).
+func TestScaffoldAssembly_CrossModuleYAMLInjection(t *testing.T) {
+	t.Parallel()
+	// Each module string passes MatchAssemblyModulePath but carries a YAML
+	// metacharacter class that would break the flow-mapping without quoting.
+	modules := []struct {
+		name   string
+		module string
+	}{
+		{"brace_close", "github.com/acme/x}injected"},
+		{"colon_comma", "github.com/acme/x,injected:true"},
+		{"single_quote", "github.com/acme/x'injected"},
+		{"flow_seq", "github.com/acme/[x]injected"},
+		{"yaml_indicators", "github.com/acme/x#&*!|>%"},
+	}
+	for _, tc := range modules {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root, pm := scaffoldTestProject(t)
+			gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+			spec := AssemblyScaffoldSpec{
+				ID:        mustID(t, "mdm"),
+				Cells:     []ScaffoldCellRef{{ID: mustID(t, "enrollcell"), Module: tc.module}},
+				OwnerTeam: "platform",
+				OwnerRole: "maintainer",
+			}
+			plan, err := gen.PlanAssemblyScaffold(spec)
+			require.NoError(t, err)
+			asmYAML := []byte(planContent(t, plan, "assembly.yaml"))
+
+			// Top-level / build keys: no injected adjacent keys (reuses the
+			// owner-injection structural guard).
+			assertNoInjectedAdjacentKeys(t, asmYAML)
+
+			// cells round-trips to exactly one {id, module} entry, module verbatim,
+			// no smuggled extra cell or key.
+			var doc struct {
+				Cells []map[string]any `yaml:"cells"`
+			}
+			require.NoError(t, yaml.Unmarshal(asmYAML, &doc), "rendered yaml must parse")
+			require.Len(t, doc.Cells, 1, "exactly one cell — no injected entry")
+			assert.Equal(t, "enrollcell", doc.Cells[0]["id"])
+			assert.Equal(t, tc.module, doc.Cells[0]["module"], "module must round-trip verbatim")
+			assert.Len(t, doc.Cells[0], 2, "cell entry must carry only id + module")
+		})
+	}
 }
 
 // TestValidateScaffoldCells covers existence (same-module), existence-skip

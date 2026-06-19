@@ -163,7 +163,7 @@ func assertNoInjectedAdjacentKeys(t *testing.T, asmYAML []byte) {
 		assertKeysAllowed(t, "owner", ownerMap, "team", "role")
 	}
 	if buildMap, ok := topLevel["build"].(map[string]any); ok {
-		assertKeysAllowed(t, "build", buildMap, "entrypoint", "binary", "deployTemplate")
+		assertKeysAllowed(t, "build", buildMap, "entrypoint", "binary", "deployTemplate", "compositionAPI")
 	}
 }
 

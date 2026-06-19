@@ -20,12 +20,14 @@ import (
 // requires, not an assembly-level field.)
 var synthesisFieldExemptions = map[string]string{
 	// build.compositionAPI selects the runtime/composition.CellModule
-	// modules_gen form. It is an in-tree opt-in reserved for the platform
-	// corebundle (#1085); newly scaffolded assemblies always use the legacy
-	// local-CellModule form (compositionAPI=false), so AssemblyScaffoldSpec
-	// has no field to derive it from and the zero value (false) is the
-	// intended scaffold output.
-	"build.compositionAPI": "scaffold uses legacy modules_gen; composition API form is in-tree corebundle opt-in (#1085), not scaffold input",
+	// modules_gen form. synthesizeAssemblyMeta is only reached for SAME-module
+	// scaffolds: PlanAssemblyScaffold short-circuits to a skeleton-only plan when
+	// any cell is cross-module (#1516), so the derived-file path that calls
+	// synthesize never sees a cross-module cell and the legacy local-CellModule
+	// form (compositionAPI=false) is always correct here. The cross-module
+	// compositionAPI: true output is emitted via the template path
+	// (buildScaffoldContext.CompositionAPI), not through synthesizeAssemblyMeta.
+	"build.compositionAPI": "synthesize is same-module-only; cross-module short-circuits before synthesis (#1516)",
 
 	// topology.groups is the deployment-partition graph (#1962, groups model
 	// #2278). Newly scaffolded assemblies have no explicit topology (all cells

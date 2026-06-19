@@ -42,7 +42,7 @@ func scaffoldAssembly(root string, args []string) error {
 	id := fs.String("id", "", "assembly ID (required)")
 	cells := fs.String("cells", "", "comma-separated same-module cell IDs (mutually exclusive with --cell)")
 	var cellEntries repeatedFlag
-	fs.Var(&cellEntries, "cell", "cell entry <id[@module]> (repeatable; @module = cross-module; mutually exclusive with --cells)")
+	fs.Var(&cellEntries, "cell", "cell entry <id[@module]>; repeatable; @module = cross-module; exclusive with --cells")
 	team := fs.String("team", "", "owner team (required)")
 	role := fs.String("role", "", "owner role, e.g. maintainer (required)")
 	deploy := fs.String("deploy", "k8s", "deployment template: one of [k8s compose binary]")
@@ -122,23 +122,25 @@ func scaffoldAssembly(root string, args []string) error {
 			"Run `gocell generate assembly --id=%s` to materialize "+
 			"modules_gen.go / main.go / boundary.yaml.\n", *id)
 	case hasCrossModuleCell(cellRefs, mod):
-		// Mirrors the generator's derived-file skip for cross-module specs
-		// (Generator.specHasCrossModule): cross-module cell metadata is not locally
-		// resolvable (#1515), so only the assembly.yaml + skeleton are emitted.
-		fmt.Printf("scaffold assembly: cross-module cells present — emitted assembly.yaml "+
-			"(build.compositionAPI: true) + skeleton; K#10 derived files skipped. "+
-			"Run `gocell generate assembly --id=%s` once the cross-module cells are "+
-			"resolvable (go.work / #1515) to materialize modules_gen.go / main.go / boundary.yaml.\n", *id)
+		// Cross-module cell metadata is not locally resolvable, so only the
+		// assembly.yaml (build.compositionAPI: true) + run.go/app.go skeleton are
+		// emitted; the K#10 derived files are deferred (mirrors --skip-generate).
+		fmt.Printf("scaffold assembly: cross-module cell(s) present — wrote assembly.yaml "+
+			"(build.compositionAPI: true) + skeleton; derived files (modules_gen.go / "+
+			"main.go / boundary.yaml) skipped.\nNext: (1) add the external module(s) to "+
+			"your go.work so the cross-module cells build locally, then (2) run "+
+			"`gocell generate assembly --id=%s` to materialize them.\n", *id)
 	}
 	return nil
 }
 
 // hasCrossModuleCell reports whether any ref names a cell in a Go module other
-// than the assembly's own (ownModule). It mirrors Generator.crossModule so the
-// CLI hint fires exactly when the generator skipped the derived files.
+// than the assembly's own (ownModule). It uses the same assembly.IsCrossModule
+// predicate the generator uses for its derived-file skip, so the CLI hint fires
+// exactly when the generator skipped the derived files (no duplicated logic).
 func hasCrossModuleCell(refs []assembly.ScaffoldCellRef, ownModule string) bool {
 	for _, r := range refs {
-		if r.Module != "" && r.Module != ownModule {
+		if assembly.IsCrossModule(r.Module, ownModule) {
 			return true
 		}
 	}
@@ -278,6 +280,7 @@ func markSeenCell(seen map[string]bool, id string) error {
 	if seen[id] {
 		return errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"duplicate cell",
+			errcode.WithDetails(errcode.PublicString("cell", id)),
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", id))))
 	}
 	seen[id] = true
@@ -301,6 +304,13 @@ func parseCellEntry(raw string) (assembly.ScaffoldCellRef, error) {
 	if modulePart == "" {
 		return assembly.ScaffoldCellRef{}, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
 			"--cell module is empty after '@' (omit '@' for a same-module cell)",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q", raw))))
+	}
+	// '@' is the id@module delimiter; a Go module path never contains '@', so a
+	// second '@' (e.g. id@@module) is a typo rather than a valid module path.
+	if strings.Contains(modulePart, "@") {
+		return assembly.ScaffoldCellRef{}, errcode.New(errcode.KindInvalid, ErrScaffoldInvalidOpts,
+			"--cell module path must not contain '@' (expected <id>@<module>)",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("flag=--cell value=%q", raw))))
 	}
 	if !metadata.MatchAssemblyModulePath(modulePart) {

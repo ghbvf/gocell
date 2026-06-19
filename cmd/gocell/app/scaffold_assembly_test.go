@@ -478,6 +478,33 @@ func TestRunScaffoldAssembly_CellFlag_SameModule(t *testing.T) {
 	}
 }
 
+// TestRunScaffoldAssembly_CellFlag_ExplicitSameModule asserts that --cell with
+// an explicit module equal to the assembly's own module is treated as
+// same-module: full 6-file plan, no compositionAPI, no module object form.
+func TestRunScaffoldAssembly_CellFlag_ExplicitSameModule(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=explicitsame",
+		"--cell=examplecell@github.com/ghbvf/gocell", // == go.mod module
+		"--team=platform",
+		"--role=maintainer",
+	}
+	if err := scaffoldAssembly(root, args); err != nil {
+		t.Fatalf("scaffoldAssembly --cell explicit same-module: %v", err)
+	}
+	for _, rel := range sixFileRels("explicitsame") {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("explicit same-module --cell missing %s: %v", rel, err)
+		}
+	}
+	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies", "explicitsame", "assembly.yaml")) //nolint:gosec // tempdir test fixture
+	if strings.Contains(string(asmYAML), "compositionAPI") {
+		t.Errorf("module == own module must not emit compositionAPI; got:\n%s", asmYAML)
+	}
+}
+
 // TestRunScaffoldAssembly_CellFlag_CrossModule asserts that --cell id@module
 // emits object-form cells[].{id,module} + build.compositionAPI: true, and that
 // cross-module entries auto-skip the K#10 derived files (cross-module cell
@@ -586,6 +613,7 @@ func TestRunScaffoldAssembly_CellFlag_BadModule(t *testing.T) {
 		{"quote_in_module", "examplecell@github.com/acme/\"x"},
 		{"backslash_in_module", "examplecell@github.com/acme/x\\y"},
 		{"empty_module_after_at", "examplecell@"},
+		{"double_at", "examplecell@@github.com/acme/x"},
 	}
 	for _, tc := range cases {
 		tc := tc
