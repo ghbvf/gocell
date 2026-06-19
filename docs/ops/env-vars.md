@@ -277,22 +277,25 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 在启动期 fail-fast）。以下四个变量**全有或全无（all-or-nothing）**：只设部分等同于全部未设，在
 topology 含非 loopback group endpoint 时 `celltls.Resolve` 启动 fail-fast，不降级明文。
 
-每个 cell 进程需要：一张携带 `spiffe://<trustDomain>/cell/<cellID>` URI SAN + 双 EKU
-（ServerAuth + ClientAuth）的 leaf cert、配套私钥，以及签发所有 cell cert 的 trust-root CA bundle。
+每个进程需要：一张携带本进程承载的**全部** cell SPIFFE ID（`spiffe://<trustDomain>/cell/<cellID>`，每个本地 cell 一条 URI SAN）+ 双 EKU
+（ServerAuth + ClientAuth）的 workload leaf cert（#2297，多-SAN workload cert）、配套私钥，以及签发所有进程 cert 的 trust-root CA bundle。
+承载多个 cell 的进程持一张多-SAN cert；`celltls.Resolve` 启动期校验本地 SAN 集合**精确等于** topology 声明的 colocated cell 集合（不能多也不能少）。
 完整证书要求、SPIFFE-ID 格式和操作步骤见 `docs/guides/deployment-topology.md` §Split mTLS 配置 checklist。
 
 | 变量 | 用途 | 默认值 | 必填 | 说明 |
 |------|------|--------|------|------|
-| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM **文件路径**（URI SAN `spiffe://<trustDomain>/cell/<cellID>`，双 EKU）| — | topology 含非 loopback remote cell 时必填（all-or-nothing） | 框架在启动时读取文件内容到内存，不在请求路径重读。cert 必须同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——兼作 server cert 和 client cert。TLS 1.3 强制，cert 签名算法须兼容（ECDSA P-256+ 或 RSA 2048+）。|
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | workload 的 leaf cert PEM **文件路径**（URI SAN 含本进程承载的**全部** cell 的 SPIFFE ID，每 cell 一条 `spiffe://<trustDomain>/cell/<cellID>`，双 EKU）| — | topology 含非 loopback remote cell 时必填（all-or-nothing） | 框架在启动时读取文件内容到内存，不在请求路径重读。cert 必须同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——兼作 server cert 和 client cert。TLS 1.3 强制，cert 签名算法须兼容（ECDSA P-256+ 或 RSA 2048+）。启动期 `celltls.Resolve` 校验 cert URI SAN 集合 == colocated cell 集合，不一致 fail-fast。|
 | `GOCELL_TRANSPORT_TLS_KEY_FILE`  | `GOCELL_TRANSPORT_TLS_CERT_FILE` 配套的私钥 PEM **文件路径** | — | 同上（all-or-nothing） | 私钥必须与 cert 中的公钥匹配；不匹配导致 `tls.LoadX509KeyPair` 报错，启动 fail-fast。|
 | `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM **文件路径**（签发所有 cell leaf cert 的单根 CA） | — | 同上（all-or-nothing） | 同时作为客户端 `RootCAs`（验证 server 证书链）和服务端 `ClientCAs`（验证 client 证书链）。支持多 CA 的 bundle PEM（多个 `-----BEGIN CERTIFICATE-----` 块），但所有 leaf cert 须在同一信任根下。|
-| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain，不含 `spiffe://` 前缀（如 `gocell.internal`）| — | 同上（all-or-nothing） | 用于构造和验证 SPIFFE-ID：客户端 `VerifyConnection` 要求 server cert 的 URI SAN 以 `spiffe://<trustDomain>/cell/` 开头；服务端 cross-bind middleware 同样以本 env 作为 trust domain 过滤。非空 + 不含 `spiffe://` 前缀 + 不含 `/` 尾缀；违反格式启动 fail-fast。|
+| `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain，不含 `spiffe://` 前缀（如 `gocell.internal`）| — | 同上（all-or-nothing） | 用于构造和验证 SPIFFE-ID：客户端 `VerifyConnection` 校验 server cert 中是否有 `spiffe://<trustDomain>/cell/<targetCellID>` URI SAN（集合成员判定，#2297）；服务端 cross-bind middleware 校验 client cert cell 集合是否含 service-token callerCell（`CellSet.Contains`）。非空 + 不含 `spiffe://` 前缀 + 不含 `/` 尾缀；违反格式启动 fail-fast。|
 
 **Fail-closed 行为要点**：
 - topology 含非 loopback remote cell + 任一变量缺失 → **启动 fail-fast**。
+- 本地证书 URI SAN 集合 ≠ topology 声明的 colocated cell 集合（精确 `==`，非超集）→ **启动 fail-fast**（#2297，最小权限精确匹配）。
 - 四变量全设但无 remote cell → 仍 honor（loopback remote 亦升 mTLS）。
-- cert chain 验证失败 / SPIFFE cell ID 不匹配目标 cell → TLS 握手拒绝（client 侧 `VerifyConnection` 报错）。
-- client cert SPIFFE cell ID 与 service-token callerCell 不一致 → **401**（server 侧 cross-bind middleware）。
+- cert chain 验证失败 → TLS 握手拒绝（连接终止）。
+- server cert cell 集合不含 targetCell → TLS 握手拒绝（client 侧 `VerifyConnection` 集合成员判定失败，#2297）。
+- client cert cell 集合不含 service-token callerCell → **401**（server 侧 cross-bind middleware，`CellSet.Contains`，#2297）。
 
 > **Warning — loopback remote 亦强制 mTLS（反直觉行为）：**
 > 即使 remote peer 端点是 loopback 地址（`localhost` / `127.x.x.x` / `::1`），只要四个 TLS

@@ -5,17 +5,24 @@
 //
 //	spiffe://<trustDomain>/cell/<cell>
 //
-// It is carried as a URI SAN on the cell's mTLS leaf certificate. The client
-// transport authorizes a peer by matching the server cert's cell SPIFFE ID
-// against the expected target cell ([CellID.Equal]); the server's cross-binding
-// guard matches the client cert's cell SPIFFE ID against the service-token
-// caller cell. See ADR 202606131142-1423 (#2263) and ADR 049.
+// A cell SPIFFE ID is carried as a URI SAN on the cell's mTLS leaf certificate. A
+// process may host SEVERAL cells (#2297): its workload certificate then carries
+// every hosted cell's SPIFFE ID, forming a [CellSet]. Peer authorization is set
+// MEMBERSHIP, not single-identity equality — the client transport checks the
+// expected target cell is IN the server cert's set ([CellSet.Contains]); the
+// server's cross-binding guard checks the service-token caller cell is IN the
+// client cert's set. This is the allow-set model of go-spiffe's
+// tlsconfig.Authorizer (AuthorizeMemberOf). See ADR 202606171200-2263 (#2263,
+// amended #2297) and ADR 049.
 //
 // INVARIANT (string-typed concept funnel, AI-robust Hard 范本): SPIFFE cell IDs
-// are NEVER compared as bare strings. [CellID] is sealed (unexported fields, sole
-// constructors [ForCell] / [Parse]); comparison goes through [CellID.Equal]. This
-// keeps the spiffe:// wire form single-sourced (canonical [CellID.String]) and
-// makes a hand-rolled, mis-normalized string compare unrepresentable at call sites.
+// are NEVER compared as bare strings. [CellID] and [CellSet] are sealed
+// (unexported fields, sole constructors [ForCell] / [Parse] / [CellSetFromURIs]);
+// comparison goes through [CellID.Equal] and membership through
+// [CellSet.Contains] (which takes a [CellID], so the trust domain is always part
+// of the check). Neither type exposes a raw comparable cell string, so a
+// hand-rolled, mis-normalized string compare is unrepresentable at call sites and
+// the spiffe:// wire form stays single-sourced (canonical [CellID.String]).
 //
 // This package lives under framework/pkg/ (not runtime/http/tlsutil) so that
 // kernel/governance gocell-validate rules — which may only import the standard
@@ -28,6 +35,7 @@ package spiffeid
 
 import (
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -49,7 +57,7 @@ const (
 	msgInvalidCell        = "spiffeid: cell must not contain '/', whitespace, or control characters"
 	msgParseScheme        = "spiffeid: ID must use the spiffe:// scheme with a non-empty trust domain"
 	msgParseCellPath      = "spiffeid: ID path must be exactly /cell/<cell>"
-	msgAmbiguousURIs      = "spiffeid: certificate presents more than one distinct cell SPIFFE ID"
+	msgMixedTrustDomains  = "spiffeid: certificate presents cell SPIFFE IDs from more than one trust domain"
 )
 
 // CellID is the sealed SPIFFE ID of a GoCell cell at the transport layer:
@@ -107,21 +115,35 @@ func Parse(raw string) (CellID, error) {
 	return ForCell(u.Host, cell)
 }
 
-// FromURIs extracts the single cell SPIFFE ID from a certificate's URI SANs
-// (e.g. crypto/x509.Certificate.URIs, after the framework's mTLS middleware has
-// copied them into pkg/ctxkeys.PeerIdentity.URIs). Non-cell SPIFFE IDs and
-// non-spiffe URIs are ignored.
+// CellSet is the sealed set of cell SPIFFE IDs carried on a single mTLS workload
+// certificate (its URI SANs), all sharing ONE trust domain. A process hosting
+// several cells presents a workload cert whose CellSet enumerates every cell it
+// hosts (#2297). Peer authorization is membership ([CellSet.Contains]) — the
+// allow-set model of go-spiffe's tlsconfig.Authorizer (AuthorizeMemberOf) — never
+// single-identity equality, so co-located cells legitimately share one cert.
 //
-// Returns:
-//   - (id, true, nil)  — exactly one distinct cell SPIFFE ID present.
-//   - (zero, false, nil) — no cell SPIFFE ID present.
-//   - (zero, false, err) — two or more DISTINCT cell SPIFFE IDs present
-//     (ambiguous identity → fail-closed; the caller must not guess which).
+// Sealed: fields unexported, sole constructor [CellSetFromURIs]. The zero value is
+// the empty set ([CellSet.IsEmpty] reports true). Membership goes through
+// Contains(CellID); the set never exposes a raw comparable cell string (string-
+// typed concept funnel, see package INVARIANT).
+type CellSet struct {
+	trustDomain string
+	cells       map[string]struct{}
+}
+
+// CellSetFromURIs extracts the set of cell SPIFFE IDs from a certificate's URI
+// SANs (e.g. crypto/x509.Certificate.URIs, after the framework's mTLS middleware
+// has copied them into pkg/ctxkeys.PeerIdentity.URIs). Non-cell SPIFFE IDs and
+// non-spiffe URIs are ignored; duplicate identical cell IDs collapse.
 //
-// Duplicate identical cell IDs collapse to one (ok=true).
-func FromURIs(uris []*url.URL) (CellID, bool, error) {
-	var found CellID
-	haveOne := false
+// All cell SPIFFE IDs MUST share one trust domain: a certificate carrying cell IDs
+// from two distinct trust domains is rejected (KindInvalid) — a workload belongs
+// to exactly one trust domain, and a bridging cert is a misconfiguration that must
+// fail closed rather than authorize against either domain. Returns the empty set
+// (no error) when no cell SPIFFE ID is present; the caller decides whether that is
+// acceptable.
+func CellSetFromURIs(uris []*url.URL) (CellSet, error) {
+	set := CellSet{}
 	for _, u := range uris {
 		if u == nil || u.Scheme != scheme || u.Host == "" {
 			continue
@@ -134,19 +156,57 @@ func FromURIs(uris []*url.URL) (CellID, bool, error) {
 		if err != nil {
 			continue // malformed trust domain on a cell-shaped path — ignore, not ours.
 		}
-		if !haveOne {
-			found, haveOne = id, true
-			continue
+		if set.cells == nil {
+			set.trustDomain = id.trustDomain
+			set.cells = make(map[string]struct{}, len(uris))
 		}
-		if !found.Equal(id) {
-			return CellID{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgAmbiguousURIs,
+		if id.trustDomain != set.trustDomain {
+			return CellSet{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgMixedTrustDomains,
 				errcode.WithInternal(
-					errcode.InternalAttr("first", found.String()),
-					errcode.InternalAttr("second", id.String()),
+					errcode.InternalAttr("first", set.trustDomain),
+					errcode.InternalAttr("second", id.trustDomain),
 				))
 		}
+		set.cells[id.cell] = struct{}{}
 	}
-	return found, haveOne, nil
+	return set, nil
+}
+
+// Contains reports whether id is a member of the set: both the trust domain and
+// the cell must match. The zero CellID is never a member. This is the sole
+// sanctioned membership check (string-typed concept funnel) — the go-spiffe
+// AuthorizeMemberOf analog.
+func (s CellSet) Contains(id CellID) bool {
+	if id.IsZero() || id.trustDomain != s.trustDomain {
+		return false
+	}
+	_, ok := s.cells[id.cell]
+	return ok
+}
+
+// TrustDomain returns the common trust domain of the set's cells, or "" for the
+// empty set.
+func (s CellSet) TrustDomain() string { return s.trustDomain }
+
+// Len returns the number of distinct cells in the set.
+func (s CellSet) Len() int { return len(s.cells) }
+
+// IsEmpty reports whether the set carries no cell SPIFFE ID.
+func (s CellSet) IsEmpty() bool { return len(s.cells) == 0 }
+
+// String returns a deterministic, canonical diagnostic rendering: the sorted
+// spiffe://<td>/cell/<cell> IDs joined by spaces inside brackets (e.g.
+// "[spiffe://td/cell/a spiffe://td/cell/b]"). The empty set returns "[]".
+func (s CellSet) String() string {
+	if s.IsEmpty() {
+		return "[]"
+	}
+	ids := make([]string, 0, len(s.cells))
+	for cell := range s.cells {
+		ids = append(ids, scheme+"://"+s.trustDomain+cellPathPrefix+cell)
+	}
+	sort.Strings(ids)
+	return "[" + strings.Join(ids, " ") + "]"
 }
 
 // String returns the canonical spiffe://<trustDomain>/cell/<cell> form. The zero

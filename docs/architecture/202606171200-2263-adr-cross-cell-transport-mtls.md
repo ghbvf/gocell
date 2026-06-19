@@ -67,6 +67,10 @@ spiffe://<trustDomain>/cell/<cellID>
 暴露 `ParseFromURI(uri *url.URL) (SPIFFEID, error)` + `CellID() string` + `TrustDomain() string`。
 只做类型解析，不做 CA 信任决策。
 
+**#2297 Amendment**：workload 证书的 URI SAN 携带该进程承载的**全部** cell SPIFFE ID（多-SAN
+workload cert）。`framework/pkg/spiffeid.CellSet` 是封装多-SAN 集合的 sealed 类型，由
+`CellSetFromURIs` 唯一构造。单 cell 进程仍仅包含一条 URI SAN，格式不变。
+
 ### C2 — 客户端 mTLS config 构造（client side）
 
 当 caller cell 拨向 remote peer 时，客户端 TLS config 的构造逻辑：
@@ -76,16 +80,17 @@ InsecureSkipVerify: true   // 禁用 Go stdlib 默认的 hostname 验证
 VerifyConnection: func(state tls.ConnectionState) error {
     // 步骤 1：完整证书链验证（对 trust-root CA bundle 做 x509 chain verify）
     // 步骤 2：提取 leaf 证书的 URI SANs
-    // 步骤 3：解析 SPIFFE ID，要求：
+    // 步骤 3：解析 SPIFFE ID，要求（#2297 Amendment，成员判定）：
     //   - trust domain 与本 cell 配置一致
-    //   - cellID == 预期 target cell（来自 assembly topology 声明）
+    //   - targetCell ∈ server 证书的 cell 集合（CellSet.Contains(targetCellID)）
+    //   （原「精确 Equal」已替换为集合成员判定）
     // 步骤 1-3 全通则握手成功，否则拒绝连接
 }
 ```
 
 **这不是 fail-open**：`InsecureSkipVerify:true` 关闭的是 Go 默认的 hostname 检查，被
 **更强的** identity+chain 双重检查替代——chain 验证比 hostname 验证更严格（SPIFFE 规范的
-标准做法，对标 go-spiffe `MTLSClientConfig` + `AuthorizeID` 组合）。
+标准做法，对标 go-spiffe `MTLSClientConfig` + `AuthorizeMemberOf` 组合，见 §Amendment 对标引用）。
 
 客户端 TLS config 由 sealed `tlsutil.ClientIdentity` 类型承载（unexported 字段），
 唯一 minter = `celltls.Resolve`（topology-gated），包外不可 struct-literal 构造。
@@ -107,11 +112,17 @@ internal listener 在 split topology 下的服务端 mTLS 配置（ADR 049 已�
 listener 的 auth chain 增加一个 middleware，将**两层身份绑定**：
 
 ```
-peer cert SPIFFE cell ID  ==  service token callerCell claim
+peer cert CellSet.Contains(service token callerCell)
 ```
+
+（**#2297 Amendment**：原「精确单一身份 Equal」改为「成员判定：callerCell ∈ cert cell 集合」。）
 
 若不一致（如误配置、cert 与 key 部署到了错误的 cell 进程），请求被拒（401）。这使
 「拿到有效 cert 但 token 用另一个 cellID 签」的误配置在首次请求时即暴露，而非仅运维侧才发现。
+
+token 的 callerCell（由 #2153 per-cell keyring 密码学锁定）仍精确锁定「是哪个 cell 在调用」，
+证书只界定**合法调用方集合**——与 go-spiffe 双层模型（workload cert = 进程信任边界；
+service identity = 具体服务声明）对齐。
 
 **为何 #2153 合入后才能做 cross-bind**：在 #2153 之前，`callerCell` 是 self-reported（任何
 持 keyring 的进程都能声明任意 `callerCell`）；cross-bind 一个 self-reported field 没有密码学
@@ -124,7 +135,7 @@ peer cert SPIFFE cell ID  ==  service token callerCell claim
 
 | 变量 | 含义 |
 |------|------|
-| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM 文件路径（URI SAN `spiffe://<td>/cell/<cellID>`，双 EKU） |
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | workload 的 leaf cert PEM 文件路径（URI SAN 含本进程承载的全部 cell SPIFFE ID，双 EKU） |
 | `GOCELL_TRANSPORT_TLS_KEY_FILE`  | 配套私钥 PEM 文件路径 |
 | `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM 文件路径（单根签发所有 cell cert） |
 | `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain（如 `gocell.internal`） |
@@ -150,6 +161,9 @@ loopback endpoint 保持不变（本地多进程开发，明文可接受）。
 
 `cellmodules/celltls.Resolve` 在 topology 含非 loopback remote cell 时：
 - 若 TLS material（四环境变量）缺失 → 启动 fail-fast，明确错误信息。
+- **#2297 Amendment**：本地 workload 证书 cell-SAN 集合必须**精确等于**（`==`，非超集）
+  topology 声明的本进程 colocated cell 集——既抓「漏配某本地 cell」也抓「越权多配本进程不
+  承载的 cell」。违反此约束 fail-fast，不静默继续。
 
 `cellmodules/celltransport.Resolve` 逐 peer 检查：
 - 若 peer endpoint 非 loopback 且无 client identity → fail-fast，不降级明文。
@@ -159,24 +173,22 @@ remote + TLS material 配置仍会启用 mTLS（不静默忽略 TLS config）。
 
 ## 威胁矩阵更新（对照 ADR 1423 §安全模型）
 
-| 威胁 | 本 PR 前状态 | 本 PR 后状态 | 评级 |
-|------|------------|------------|------|
-| **中间人 / wire 窃听** | 明文 HTTP，仅 private network 补偿（Soft） | TLS 1.3 强制加密，非 loopback 无明文路径 | Hard（技术闸，非文档约束） |
-| **端点伪造（DNS/ARP 欺骗）** | 无传输层 peer auth，仅 private network 补偿 | mTLS 双向证书验证 + SPIFFE-ID 精确匹配，伪端点无有效 cert → 握手失败 | Hard |
-| **cert 与 token callerCell 错配（误配置）** | 不存在（无 cert 层） | cross-bind middleware 在首请求即 401，不静默通过 | Medium（middleware 可被绕过如不 wire，但 `CELLTLS-CROSSBIND-WIRING-FUNNEL-01` archtest 守卫） |
-| **cert InsecureSkipVerify 滥用（bypass chain check）** | 不适用 | raw `tls.Config{InsecureSkipVerify:true}` 在 wiring 层被 ban（参见 §AI-robust 档位）；stdlib `*tls.Config` 不可 seal 是文档化 Go 天花板 | Medium（archtest ban） |
-| **loopback/demo 明文降级** | 明文 | loopback + 无 TLS material → 明文（设计许可，本地开发）；loopback + 有 TLS material → honor mTLS | Hard（双闸仅对非 loopback 生效） |
-| **cert 轮换停机** | 不适用 | 静态 PEM：operator 手动轮换 + 重启；自动轮换属 follow-up（见下）| Soft（操作流程，技术闸不覆盖） |
+| 威胁 | 本 PR（#2263）前状态 | #2263 后状态 | #2297 Amendment 后状态 | 评级 |
+|------|--------------------|--------------|-----------------------|------|
+| **中间人 / wire 窃听** | 明文 HTTP，仅 private network 补偿（Soft） | TLS 1.3 强制加密，非 loopback 无明文路径 | 同 #2263 | Hard（技术闸，非文档约束） |
+| **端点伪造（DNS/ARP 欺骗）** | 无传输层 peer auth，仅 private network 补偿 | mTLS 双向证书验证 + SPIFFE-ID 精确匹配，伪端点无有效 cert → 握手失败 | mTLS 双向证书验证 + **集合成员判定**（`CellSet.Contains`），伪端点无有效 CA 签发 cert → 握手失败；Hard：链验证 + sealed `CellSet` | Hard |
+| **多-SAN cert 被接受（#2297 新增行）** | 不适用（旧 `FromURIs` 对 ≥2 cell fail-closed 拒绝） | 不适用（一进程一 cell 强制） | **by design**：workload cert 携带本进程全部 cell SAN；CA-compromise blast radius **未扩大**——信任模型本就假设单根 CA 可信，被攻破的 CA 已能 mint 任意单 cell 证书冒充任意 cell，多-SAN 不增量；启动期精确匹配（本地 SAN 集合 == colocated cell 集）以**最小权限**约束本地证书 | Medium（bootstrap 启动期 fail-fast；运行期 cert 内容是 operator 供给的 PEM，type system 无法静态验证） |
+| **cert 与 token callerCell 错配（误配置）** | 不存在（无 cert 层） | cross-bind middleware 在首请求即 401，不静默通过（精确 Equal） | callerCell 须 **∈ cert 集合**（`CellSet.Contains`）；co-located cell **可**断言兄弟身份（**by design**：进程即信任边界，进程被攻破则内存所有 key 已暴露，per-cell 多证书亦无额外隔离；token per-cell keyring #2153 仍密码学锁定具体调用 cell）| Medium（middleware 可被绕过如不 wire，但 `CELLTLS-CROSSBIND-WIRING-FUNNEL-01` archtest 守卫） |
+| **cert InsecureSkipVerify 滥用（bypass chain check）** | 不适用 | raw `tls.Config{InsecureSkipVerify:true}` 在 wiring 层被 ban（参见 §AI-robust 档位）；stdlib `*tls.Config` 不可 seal 是文档化 Go 天花板 | 同 #2263 | Medium（archtest ban） |
+| **loopback/demo 明文降级** | 明文 | loopback + 无 TLS material → 明文（设计许可，本地开发）；loopback + 有 TLS material → honor mTLS | 同 #2263 | Hard（双闸仅对非 loopback 生效） |
+| **cert 轮换停机** | 不适用 | 静态 PEM：operator 手动轮换 + 重启；自动轮换属 follow-up（见下）| 同 #2263 | Soft（操作流程，技术闸不覆盖） |
 
-**本 PR 后残留（显式登记）**：
-- **split mTLS = 一进程一 cell（本 PR 强制 + 文档化的最小缓解；codex pr-review F1）**：mTLS 绑定
-  **一进程一 cell SPIFFE 身份**（internal listener 持一张 cell 证书），故一个进程不能在同一非 loopback
-  mTLS endpoint 承载多个 cell。本 PR 把该隐式假设**显式 fail-closed**：TLS 材料已配置 + topology 把
-  同一非 loopback endpoint 分给 ≥2 个 remote cell → `celltls.Resolve` 启动期报错
-  （`bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 派生信号；loopback/明文共址豁免）。
-  **完整解**（解除一进程一 cell 限制）= per-caller-cell TLS identity resolver / workload-vs-cell 双层
-  身份模型 + peer-authorize 允许集合 —— epic 级 follow-up（可对标 go-spiffe `spiffetls/tlsconfig`
-  的 per-workload SVID + Authorizer 模型）。评级：运行时 fail-closed guard = Medium。
+**#2263 原残留（部分由 #2297 RESOLVED）**：
+
+- ~~**split mTLS = 一进程一 cell（本 PR 强制 + 文档化的最小缓解）**~~
+  **RESOLVED by #2297**：#2297 实现 allow-set 成员制（多-SAN workload cert + `CellSet` 集合成员判定
+  + 启动期精确匹配），解除一进程一 cell 限制。删除旧 `SharedNonLoopbackRemoteEndpoint` fail-closed
+  闸（已被更精确的启动期 SAN-集合 == colocated-cell 匹配替换）。
 - **cert 自动轮换**：静态 PEM 需要手动轮换 + 重启；`runtime/certlifecycle` reconciler
   自动颁发/续期是独立 follow-up（涉及：reconciler DB + leader election + EST/ACME 对接，
   已有独立子系统，不塞入本 PR）。
@@ -195,6 +207,8 @@ remote + TLS material 配置仍会启用 mTLS（不静默忽略 TLS config）。
 | raw `tls.Config{InsecureSkipVerify:true}` 在 wiring 层 ban | archtest（wiring 层 struct-literal `InsecureSkipVerify:true` scan，含 RED fixture） | **Medium**（stdlib `*tls.Config` 不可 seal，文档化 Go 天花板，同 ADR 049 §"post-return-mutation Soft 天花板"机制，但此处在 wiring 层 ban） |
 | all-or-nothing TLS material 启动 fail-fast | `cellmodules/celltls.Resolve` bootstrap guard | **Medium**（运行时 guard，type system 不可表达「四 env 联动」） |
 | VerifyConnection 替换 hostname check（非 fail-open） | `tlsutil.ClientIdentity` builder 唯一成功路径无条件写入 `VerifyConnection`；`InsecureSkipVerify:true` 与 `VerifyConnection` 同构造，无法分离 | **Hard**（emit-time，与 ADR 049 §`NewServerMTLSConfig` Hard 同族） |
+| **#2297 新增** — cell 集合成员判定不可绕过 | sealed `spiffeid.CellSet`（unexported 字段 + 唯一构造 `CellSetFromURIs`）+ `Contains(CellID)` 唯一成员入口（不暴露可比较裸 cell 串）+ spiffe string-funnel | **Hard**（sealed construction，downstream） |
+| **#2297 新增** — 本地证书集合 == 承载 cell 集（运行期绑定） | `celltls.Resolve` 启动期 fail-fast（SAN 集合精确等于 colocated cell 集）+ RED/GREEN anti-vacuity 测试 | **Medium**（真实类型系统天花板：cert 是 operator 运行期 provision 的 PEM，非编译期产物，type system/golden 无法表达「PEM SAN == topology cells」；宪章认可 bootstrap 启动期 fail-fast guard 为 Medium 载体；不伪装成 Hard） |
 
 **Funnel 双向说明**（按 AI-robust 章程「只锁 callsite 不是闭环 funnel」）：
 
@@ -212,12 +226,52 @@ remote + TLS material 配置仍会启用 mTLS（不静默忽略 TLS config）。
 | **SPIFFE Workload API / SPIRE agent 集成**（ZT-4） | 需要 `adapters/spiffe` 包 + SPIRE agent 在 sidecar 或 DaemonSet 形态运行，是独立 infra 依赖，超出本 PR 范围。GoCell 的 SPIFFE-ID 身份约定（C1）在 wire 上与 SPIRE 签发的 cert 完全兼容——ZT-4 实现时只需把静态 PEM 换成 SPIRE WorkloadAPI 的 X.509-SVID，不需改 VerifyConnection 逻辑。 |
 | **cert hot-reload（不重启轮换）** | 需要 `tls.Config.GetCertificate` / `GetConfigForClient` 动态回调 + 文件 watcher。ADR 049 已显式推迟；cert 生命周期管理（含 hot-reload）归 `runtime/certlifecycle`。 |
 | **gRPC cross-cell mTLS** | gRPC cross-cell transport 有独立 seam（ADR 1423 D2 明文：`grpc` 走独立路径）；gRPC 的 `credentials.TransportCredentials` 与本 `tls.Config` seam 正交，届时另出 ADR。 |
+| ~~**完整解（per-caller-cell resolver / workload-vs-cell 双层 + allow-set）**~~ | **已由 #2297 以 allow-set 成员制实现**：多-SAN workload cert + `spiffeid.CellSet` 集合成员判定 + 启动期精确匹配，解除一进程一 cell 限制。 |
+
+## Amendment（#2297）：allow-set 成员制解除一进程一 cell
+
+### 决策
+
+采用**方案 A（allow-set 成员制）**，而非 per-cell 多证书 resolver：
+一个进程持一张 workload 证书，URI SAN 携带本进程承载的**全部** cell SPIFFE ID（多-SAN workload
+cert）；认证谓词从「精确单一身份 Equal」改为「集合成员判定 `cell ∈ 证书 cell 集合`」（双向：
+出站 `VerifyConnection` 判定 targetCell ∈ server cert 集合；入站 cross-bind 判定 callerCell ∈ client
+cert 集合）。
+
+### 理由
+
+- **灵活性在授权谓词，非选证**：一张 workload cert 代表进程信任边界，与 go-spiffe 双层模型对齐；
+  「哪个 cell 在调用」由密码学锁定的 token callerCell 精确表达，不依赖 cert 区分。
+- **同进程内 per-cell 证书无额外隔离**：进程被攻破则内存所有 key 均已暴露，per-cell 多证书不增加
+  任何隔离收益，徒增复杂度（SNI routing、多 TLS config、多文件管理）。
+- **代码更少，无 SNI**：`RemoteClientTLS` 仍是进程单例，类型不变；无需 SNI 路由或多 listener。
+- **启动期精确匹配保持最小权限**：本地证书 SAN 集合精确等于 topology colocated cell 集，既防漏配也防越权多配。
+
+### AI-robust 评级
+
+| 机制 | 载体 | 评级 |
+|------|------|------|
+| cell 集合成员判定不可绕过 | sealed `CellSet`（unexported 字段 + 唯一构造 `CellSetFromURIs`）+ `Contains(CellID)` 唯一成员入口（不暴露可比较裸 cell 串）+ spiffe string-funnel | **Hard** |
+| 本地证书集合 == 承载 cell 集（运行期绑定） | `celltls.Resolve` 启动期 fail-fast + RED/GREEN anti-vacuity 测试 | **Medium**（真实类型系统天花板：cert 是 operator 运行期 provision 的 PEM，非编译期产物；宪章认可 bootstrap 启动期 fail-fast guard 为 Medium 载体） |
+
+无新增 Soft。删除的旧 Medium 守卫（`SharedNonLoopbackRemoteEndpoint` 一进程一 cell fail-closed）被
+Hard + Medium 组合替换，净安全性不降。
+
+### go-spiffe 对标
+
+本 Amendment 的双层模型对标 go-spiffe `spiffetls/tlsconfig`：
+- workload cert = `X509Source`（进程级 SVID）。
+- 认证谓词 = `AuthorizeMemberOf(trustDomain)` / `AuthorizeOneOf(id1, id2, ...)` 组合。
+
+GoCell 不 vendor go-spiffe（ADR 049 Decision §6），但设计哲学对齐：证书界定进程合法集合，
+service identity 由 token callerCell 独立声明。
 
 ## 参考
 
 - 本 ADR 关闭的缺口：ADR `202606131142-1423` §安全模型 行「无 mTLS 对等认证」。
 - server 侧 mTLS builder：ADR `202605290130-049`（`tlsutil.NewServerMTLSConfig` / `PeerIdentity` / `PEER-IDENTITY-FIELDS-FROZEN-01`）。
 - per-cell keyring（cross-bind 前置条件）：ADR `202606131142-1423` §#2153 Amendment。
+- allow-set 成员制（本 ADR Amendment）：Issue #2297。
 - SPIFFE ID 标准：SPIFFE X.509 SVID（`spiffe.io/id`，URI SAN 格式）。
-- go-spiffe 对标（未 vendor）：`github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig — MTLSClientConfig + AuthorizeID`。
+- go-spiffe 对标（未 vendor）：`github.com/spiffe/go-spiffe/v2/spiffetls/tlsconfig — MTLSClientConfig + AuthorizeMemberOf / AuthorizeOneOf`。
 - 架构约束：`docs/guides/deployment-topology.md`（部署操作），`docs/ops/env-vars.md`（环境变量）。

@@ -161,9 +161,18 @@ func TestResolve_CertColocatedExactMatch(t *testing.T) {
 		wantErr   bool
 	}{
 		{name: "exact match single", certCells: []string{"accesscore"}, colocated: []string{"accesscore"}},
-		{name: "exact match multi", certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore", "configcore"}},
-		{name: "cert missing a hosted cell -> fail", certCells: []string{"accesscore"}, colocated: []string{"accesscore", "configcore"}, wantErr: true},
-		{name: "cert carries an unhosted extra cell -> fail", certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore"}, wantErr: true},
+		{
+			name:      "exact match multi",
+			certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore", "configcore"},
+		},
+		{
+			name:      "cert missing a hosted cell -> fail",
+			certCells: []string{"accesscore"}, colocated: []string{"accesscore", "configcore"}, wantErr: true,
+		},
+		{
+			name:      "cert carries an unhosted extra cell -> fail",
+			certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore"}, wantErr: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

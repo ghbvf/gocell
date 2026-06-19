@@ -155,11 +155,13 @@ func chainContainsServiceToken(chain []kauth.ListenerAuth) bool {
 }
 
 // serverCertTrustDomain extracts the SPIFFE trust domain from a listener's server
-// certificate (the leaf's cell SPIFFE ID URI SAN). It is the expected peer trust
+// certificate (the leaf's cell SPIFFE ID URI SANs). It is the expected peer trust
 // domain for the cross-bind guard: a peer must present a cert in the SAME trust
-// domain as the server. Fails closed if there is no TLS config / no server cert /
-// the leaf carries no cell SPIFFE ID — a mTLS+service-token listener whose server
-// cert lacks a cell identity cannot bind peer identities safely (#2263).
+// domain as the server. A multi-cell workload cert carries several cell SPIFFE IDs,
+// all sharing one trust domain (#2297). Fails closed if there is no TLS config / no
+// server cert / the leaf carries no cell SPIFFE ID / the leaf bridges trust domains
+// — a mTLS+service-token listener whose server cert lacks a single cell identity
+// trust domain cannot bind peer identities safely (#2263).
 //
 // phase0 validateAuthPlanMTLSBindings has already ensured an AuthMTLS listener
 // has a non-nil TLS config with a client-CA pool, so the nil/empty paths here are
@@ -177,11 +179,11 @@ func serverCertTrustDomain(tlsCfg *tls.Config) (string, error) {
 		}
 		leaf = parsed
 	}
-	id, ok, err := spiffeid.FromURIs(leaf.URIs)
-	if err != nil || !ok {
+	set, err := spiffeid.CellSetFromURIs(leaf.URIs)
+	if err != nil || set.IsEmpty() {
 		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertNoID)
 	}
-	return id.TrustDomain(), nil
+	return set.TrustDomain(), nil
 }
 
 // runAuthPlanValidateHooks iterates over all listener chains and, for any
