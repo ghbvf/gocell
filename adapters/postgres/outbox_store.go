@@ -183,6 +183,10 @@ const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 // status='pending' is a closed-set enum value; bound via $1 parameter (no string interpolation).
 const countPendingQuery = `SELECT count(*) FROM outbox_entries WHERE status = $1 AND (next_retry_at IS NULL OR next_retry_at <= now())`
 
+const oldestPublishedEligibleQuery = `SELECT MIN(published_at) FROM outbox_entries WHERE status = $1`
+
+const oldestDeadEligibleQuery = `SELECT MIN(dead_at) FROM outbox_entries WHERE status = $1`
+
 // ---------------------------------------------------------------------------
 // Store method implementations
 // ---------------------------------------------------------------------------
@@ -531,20 +535,18 @@ func (s *PGOutboxStore) CountPending(ctx context.Context) (int64, error) {
 // status MUST be kout.StatePublished or kout.StateDead. Other values return an
 // error immediately.
 func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status kout.State) (time.Time, bool, error) {
-	var col string
+	var query string
 	switch status {
 	case kout.StatePublished:
-		col = "published_at"
+		query = oldestPublishedEligibleQuery
 	case kout.StateDead:
-		col = "dead_at"
+		query = oldestDeadEligibleQuery
 	default:
 		return time.Time{}, false, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
 			"OldestEligibleAt: invalid status",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("status=%s want StatePublished or StateDead", status))))
 	}
 
-	// The column name cannot be parameterised; the status value is bound via $1.
-	query := fmt.Sprintf("SELECT MIN(%s) FROM outbox_entries WHERE status = $1", col)
 	var oldest *time.Time
 	if err := s.db.QueryRow(ctx, query, status.String()).Scan(&oldest); err != nil {
 		return time.Time{}, false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: OldestEligibleAt failed", err)
