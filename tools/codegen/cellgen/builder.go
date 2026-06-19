@@ -97,8 +97,6 @@ const (
 //   - subscribe CU handler field empty
 //   - subscribe CU references a contract not declared in project
 //   - fieldIndex missing entry for subscribing slice
-//
-//nolint:funlen // pipeline of independent build steps; each step is ≤10 lines; extraction adds more lines than it removes
 func BuildCellSpec(
 	p *metadata.ProjectMeta,
 	cellID string,
@@ -160,43 +158,121 @@ func BuildCellSpec(
 
 	spec.RouteGroups = buildRouteGroupsFromBundle(bundle.Routes, listenerOrder, listenerPrefix)
 
+	if err := buildSliceDerivedSpecs(p, cellID, fieldIndex, spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
+// buildSliceDerivedSpecs populates the slice-derived sections of spec (subscriptions,
+// webhooks, projections, grpc services, HTTP permission resolver) and runs the #2020
+// HTTP AuthZ-mode completeness gate. Extracted from BuildCellSpec to keep that function
+// within the cognitive-complexity budget.
+func buildSliceDerivedSpecs(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex, spec *CellGenSpec) error {
 	subs, err := buildSubscriptionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Subscriptions = subs
 
 	receivers, err := buildWebhookReceiversFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookReceivers = receivers
 
 	dispatches, err := buildWebhookDispatchesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookDispatches = dispatches
 
 	projections, err := buildProjectionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Projections = projections
 
 	grpcServices, err := buildGrpcServicesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.GrpcServices = grpcServices
 
 	httpPerms, err := buildHTTPMethodPermissions(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.HTTPMethodPermissions = httpPerms
 
-	return spec, nil
+	return validateHTTPAuthModeCompleteness(p, cellID)
+}
+
+// validateHTTPAuthModeCompleteness enforces the #2020 mandatory-AuthZ-mode gate at
+// generate time — the Hard carrier, mirroring the gRPC #2008 completeness pre-pass
+// (validateGrpcMethodOverlayAgainstProto, "Completeness (#2008)" above). Every
+// served, lifecycle:active, codegen HTTP contract MUST declare exactly one AuthZ
+// mode — the ABAC default (endpoints.http.permission) or an explicit opt-out flag
+// (public/bootstrap/clientsOnly/serviceOwned) — and every opt-out mode MUST carry a
+// non-empty endpoints.http.auth.reason. A modeless contract is rejected UNLESS it is
+// on the frozen migration ledger (metadata.IsHTTPAuthModeLedgered); the ledger
+// shrinks to empty as #2355/#2358 migrate, after which this branch is deleted.
+//
+// Failing here makes the violation unrepresentable in generated code: a standard
+// route that silently forgot its authz mode cannot ship (dead-default fail-closed).
+func validateHTTPAuthModeCompleteness(p *metadata.ProjectMeta, cellID string) error {
+	prefix := cellID + "/"
+	for key, s := range p.Slices {
+		if s == nil || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := checkSliceServeAuthModes(p, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSliceServeAuthModes runs the #2020 mode gate over one slice's serve
+// contractUsages, split from validateHTTPAuthModeCompleteness to keep both within the
+// cognitive-complexity budget.
+func checkSliceServeAuthModes(p *metadata.ProjectMeta, s *metadata.SliceMeta) error {
+	for _, cu := range s.ContractUsages {
+		if cu.Role != roleServe {
+			continue
+		}
+		c := p.Contracts[cu.Contract]
+		if c == nil || c.Kind != "http" || c.Lifecycle != "active" || !c.Codegen {
+			continue
+		}
+		if err := checkHTTPAuthModeDeclared(c.ID, c.Endpoints.HTTP); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkHTTPAuthModeDeclared is the per-contract arm of validateHTTPAuthModeCompleteness,
+// split out to keep that function within the cognitive-complexity budget.
+func checkHTTPAuthModeDeclared(contractID string, h *metadata.HTTPTransportMeta) error {
+	if !metadata.HTTPAuthModeDeclared(h) {
+		if metadata.IsHTTPAuthModeLedgered(contractID) {
+			return nil
+		}
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build http: contract declares no AuthZ mode; every active route must declare "+
+				"endpoints.http.permission (ABAC default) or an explicit opt-out "+
+				"(public/bootstrap/clientsOnly/serviceOwned) (#2020 default-ABAC, strict fail-closed)",
+			errcode.WithDetails(errcode.PublicString("contract", contractID)))
+	}
+	if h != nil && metadata.HTTPAuthModeIsOptOut(h.Auth) && strings.TrimSpace(h.Auth.Reason) == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"cellgen build http: opt-out auth mode (public/bootstrap/clientsOnly/serviceOwned) "+
+				"must declare a non-empty endpoints.http.auth.reason (#2020 non-ABAC must justify)",
+			errcode.WithDetails(errcode.PublicString("contract", contractID)))
+	}
+	return nil
 }
 
 // BuildSliceSpec returns the rendering input for slice.tmpl. Every slice in

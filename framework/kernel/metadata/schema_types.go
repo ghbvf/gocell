@@ -344,6 +344,16 @@ type HTTPAuthMeta struct {
 	// /internal/v1/...) where caller-cell identity is verifiable via the
 	// service token.
 	ClientsOnly bool `yaml:"clientsOnly,omitempty" json:"clientsOnly,omitempty"`
+	// Reason documents WHY this route opts out of the ABAC default (#2020). It is
+	// REQUIRED (non-empty) whenever any opt-out flag (public / serviceOwned /
+	// bootstrap / clientsOnly) is set, and forbidden otherwise — ABAC (the default,
+	// expressed via endpoints.http.permission) is self-justifying and needs no
+	// reason. Enforced by the schema if/then rules (Hard), the cellgen completeness
+	// gate (Hard), and governance FMT-42 (Medium defense-in-depth). It is NOT a
+	// mutex-governed mode flag, so it stays outside the 2^5 AuthComboLegal matrix
+	// (like Responses). passwordResetExempt is a modifier, not an opt-out mode, and
+	// does not require a reason on its own.
+	Reason string `yaml:"reason,omitempty" json:"reason,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware,
 	// NOT emitted by the handler/adapter — so they are declared here (no typed
 	// response struct) rather than in the responses map. Despite the "auth" name,

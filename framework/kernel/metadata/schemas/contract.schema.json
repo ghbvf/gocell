@@ -411,6 +411,11 @@
                           "minimum": 100,
                           "maximum": 599
                         }
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Documents WHY this route opts out of the ABAC default (#2020). REQUIRED (non-empty) when any opt-out flag (public/serviceOwned/bootstrap/clientsOnly) is set, forbidden otherwise — the required/forbidden coupling is enforced by the cellgen completeness gate (Hard) and governance FMT-42 (Medium), not here, to keep the auth bool-mutex matrix at 2^5. This schema only pins the field shape (non-empty string)."
                       }
                     },
                     "allOf": [

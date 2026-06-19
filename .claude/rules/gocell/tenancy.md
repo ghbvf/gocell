@@ -144,9 +144,17 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   overlay 经 cellgen 派生入 cell 级 resolver，生成 handler 经 `auth.RequirePermissionForContract`
   解析（复用 `RequirePermission` 单一 PDP 路径，不新增第二入口）。来源合法性由治理 `FMT-42` 验证
   （present-only：∈ closed authz registry + 与 public/bootstrap/clientsOnly/serviceOwned 互斥），
-  resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。overlay 现为
-  sparse optional（迁移期 transient，未迁路由保留手写 gate）；configcore 已全量迁移，其余 cell 迁移 +
-  「standard route MUST 声明 permission」mandatory 化见 #2355 / #2358。
+  resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。
+- **默认 ABAC + 强制 AuthZ mode 声明（#2020）**：每个 `lifecycle: active` + `codegen` 的 HTTP 契约**必须**声明
+  恰好一个 AuthZ mode——ABAC 默认（`endpoints.http.permission`）或显式 opt-out（`public`/`bootstrap`/
+  `clientsOnly`/`serviceOwned`）；缺失（modeless）= cellgen generate-time 完整性预检拒绝（**Hard 唯一主载体**，
+  与 gRPC `Completeness (#2008)` 同构）+ FMT-42 `gocell validate` 早报（Medium 纵深）。opt-out 必带非空
+  `endpoints.http.auth.reason`（ABAC 自证、不带 reason）。分类 oracle + 冻结迁移 ledger 单源在
+  `kernel/metadata/authz_mode.go`（`HTTPAuthModeDeclared`/`HTTPAuthModeIsOptOut` + `httpAuthModeMigrationLedger`），
+  ledger frozen+no-stale 由 archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守、随 #2355/#2358 迁移收敛到空后删除豁免分支。
+  runtime `auth.Mount` 经评估**不承载**此约束（serviceOwned≡nil-policy 设计本意 / operator·internal 鉴权来自
+  listener·Mount 不可见 / ContractSpec 不带 mode），与 gRPC 同。机制/威胁矩阵/PR-10a 重评见 ADR
+  `docs/architecture/202606190847-2020-adr-authz-default-abac.md`。未迁路由的手写 gate 迁移本体归 #2355 / #2358。
 
 相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
 （`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。

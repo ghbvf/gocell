@@ -19,6 +19,7 @@ endpoints:
     noContent: false
     auth:
       public: true  # demo-only: production MUST set public:false + configure a JWT plan. No machine guard exists for this (example scope); see backlog.
+      reason: "Demo-only: production MUST set public:false + configure a JWT plan (example scope)."
     responses:
       400:
         description: "Bad request — malformed path parameter or validation failure"
