@@ -232,3 +232,39 @@ func (f *errcodeMappingFakeStream) RecvMsg(_ any) error            { return nil 
 func (f *errcodeMappingFakeStream) SetHeader(_ metadata.MD) error  { return nil }
 func (f *errcodeMappingFakeStream) SendHeader(_ metadata.MD) error { return nil }
 func (f *errcodeMappingFakeStream) SetTrailer(_ metadata.MD)       {}
+
+// TestErrToStatus_ContextErrors asserts a handler-returned context error is mapped
+// to the canonical gRPC code (Canceled / DeadlineExceeded), NOT the generic Internal
+// fallback (#2479 review F1). A canceled/drained stream is a normal outcome; mapping
+// it to Internal would let the outer CircuitBreaker count it as a server failure.
+func TestErrToStatus_ContextErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want codes.Code
+		// breakerTrips encodes the INTENDED circuit-breaker interaction:
+		//   - Canceled (client cancel / graceful drain) must NOT trip the breaker —
+		//     this is F1's core fix (previously these mapped to Internal and polluted
+		//     breaker health).
+		//   - DeadlineExceeded (the server was too slow) IS a legitimate server-health
+		//     signal and DOES trip the breaker — unchanged, and correct.
+		breakerTrips bool
+	}{
+		{"context.Canceled", context.Canceled, codes.Canceled, false},
+		{"context.DeadlineExceeded", context.DeadlineExceeded, codes.DeadlineExceeded, true},
+		{"wrapped Canceled", fmt.Errorf("handler: %w", context.Canceled), codes.Canceled, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := status.Code(errToStatus(tc.err))
+			if got != tc.want {
+				t.Errorf("errToStatus(%v) code = %v, want %v", tc.err, got, tc.want)
+			}
+			if isServerFailureCode(got) != tc.breakerTrips {
+				t.Errorf("isServerFailureCode(%v) = %v, want %v (breaker interaction)",
+					got, isServerFailureCode(got), tc.breakerTrips)
+			}
+		})
+	}
+}

@@ -127,6 +127,17 @@ func errToStatus(err error) error {
 		msg := buildStatusMessage(ec)
 		return status.Error(code, msg)
 	}
+	// Context cancellation / deadline are NORMAL outcomes (client cancel, graceful
+	// drain via StreamDrain, per-RPC timeout) — NOT server failures. Map them to the
+	// canonical codes.Canceled / codes.DeadlineExceeded instead of the generic
+	// Internal fallback, so the outer Metrics/Tracing/CircuitBreaker interceptors do
+	// not count a cancellation as a server-side failure (neither code is in
+	// isServerFailureCode). status.FromContextError is the gRPC-idiomatic mapper;
+	// guard with errors.Is so non-context errors still fall through to the fail-closed
+	// Internal below (FromContextError would otherwise map them to Unknown).
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
 	// Unknown non-errcode error: fail-closed to Internal with generic message.
 	return status.Error(codes.Internal, msgInternalServerError)
 }

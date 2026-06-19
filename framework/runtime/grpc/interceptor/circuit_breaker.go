@@ -63,6 +63,13 @@ type Allower interface {
 // role is to signal "count this as a failure" to the circuit-breaker.
 var errServerFailure = errors.New("server failure")
 
+// msgCircuitOpen is the wire-safe public message returned when the circuit is
+// open. It deliberately matches the HTTP path's public circuit-open message
+// (runtime/http/middleware.writeCircuitOpenError → "service unavailable"): the
+// client must not learn the internal protection-mechanism name ("circuit open"),
+// and the same protection state must read identically across transports.
+const msgCircuitOpen = "service unavailable"
+
 // isServerFailureCode reports whether the gRPC status code should be counted
 // as a server-side health failure for circuit-breaker purposes.
 //
@@ -112,7 +119,7 @@ func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
 		}
 		allowed, done := cb.Allow()
 		if !allowed {
-			return nil, status.Error(codes.Unavailable, "circuit open")
+			return nil, status.Error(codes.Unavailable, msgCircuitOpen)
 		}
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open
@@ -139,7 +146,7 @@ func StreamCircuitBreaker(cb Allower) grpc.StreamServerInterceptor {
 		}
 		allowed, done := cb.Allow()
 		if !allowed {
-			return status.Error(codes.Unavailable, "circuit open")
+			return status.Error(codes.Unavailable, msgCircuitOpen)
 		}
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open.

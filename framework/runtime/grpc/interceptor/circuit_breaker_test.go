@@ -120,6 +120,11 @@ func TestUnaryCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	if got := status.Code(err); got != codes.Unavailable {
 		t.Errorf("open circuit: code = %v, want Unavailable", got)
 	}
+	// F3 (#2479): public message must be the HTTP-parity "service unavailable",
+	// never the internal mechanism name "circuit open".
+	if msg := status.Convert(err).Message(); msg != "service unavailable" {
+		t.Errorf("open circuit: message = %q, want %q (no internal mechanism leak)", msg, "service unavailable")
+	}
 }
 
 func TestUnaryCircuitBreaker_Closed_Success_DoneNil(t *testing.T) {
@@ -224,6 +229,9 @@ func TestStreamCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	}
 	if got := status.Code(err); got != codes.Unavailable {
 		t.Errorf("open circuit stream: code = %v, want Unavailable", got)
+	}
+	if msg := status.Convert(err).Message(); msg != "service unavailable" {
+		t.Errorf("open circuit stream: message = %q, want %q (no internal mechanism leak)", msg, "service unavailable")
 	}
 }
 

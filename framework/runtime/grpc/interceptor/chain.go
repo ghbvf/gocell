@@ -173,6 +173,16 @@ func authChainOptions(deps Deps, reg *runtimegrpc.ServiceRegistrar) []AuthOption
 // two. It also closes the "forgot newStreamChain" streaming-auth gap while keeping
 // adapters/grpc free of a direct interceptor import.
 func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
+	// Optional protection deps: a BARE nil interface is the sanctioned opt-out
+	// (RateLimit/CircuitBreaker pass through). A TYPED-nil interface (e.g.
+	// `var l *Limiter; Deps{RateLimiter: l}`) is a composition-root bug — bare ==nil
+	// checks in the interceptors miss it, and the first RPC would panic on .Allow()
+	// OUTSIDE the Recovery interceptor (RateLimit/CircuitBreaker run outer of Recovery).
+	// Fail fast at construction (startup), mirroring the HTTP protection chain's
+	// validation.IsNilInterface guard.
+	assertOptionalDepNotTypedNil(deps.RateLimiter, "RateLimiter")
+	assertOptionalDepNotTypedNil(deps.Allower, "Allower")
+
 	// F1 (#2008): capture whether a PDP Authorizer backs the gate BEFORE the F8
 	// wrap (the observable decorator is always non-nil, so reading after would mask
 	// a nil source). The minted registrar carries this bit so Register fail-fasts
@@ -207,6 +217,21 @@ func NewServerInterceptors(deps Deps) runtimegrpc.ServerInterceptors {
 		reg,
 		drain,
 	)
+}
+
+// assertOptionalDepNotTypedNil fail-fasts when an OPTIONAL protection dependency
+// is a typed-nil interface. dep is read via the any param: a bare-nil interface
+// arrives as a nil any (dep == nil → opt-out, allowed); a typed-nil interface
+// (concrete type, nil value) arrives non-nil with validation.IsNilInterface true
+// → panic at construction. name is the Deps field name for the operator message.
+func assertOptionalDepNotTypedNil(dep any, name string) {
+	if dep != nil && validation.IsNilInterface(dep) {
+		panic(panicregister.Approved("interceptor-optional-dep-typed-nil",
+			errcode.Assertion(
+				"interceptor.NewServerInterceptors: Deps.%s is a typed-nil interface; "+
+					"pass a real value or leave it nil (bare nil = opt-out passthrough)", name,
+			)))
+	}
 }
 
 // buildValidCellIDs materializes the assembly cell-id closed set into the lookup

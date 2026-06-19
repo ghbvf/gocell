@@ -3,7 +3,7 @@ package interceptor
 // rate_limit.go — per-key gRPC rate-limit interceptors (unary + stream).
 //
 // The RateLimiter interface is declared here with a narrow footprint (Allow(key)
-// bool) that is structurally compatible with the HTTP middleware's circuitbreaker
+// bool) that is structurally compatible with the HTTP middleware's ratelimit.Limiter
 // interface but WITHOUT a direct import dependency. The coupling is intentional:
 // gRPC and HTTP rate-limiters share deployment (e.g. the same redis token-bucket
 // adapter), but the interceptor package must not import runtime/http/middleware.
@@ -43,8 +43,12 @@ type RateLimiter interface {
 }
 
 // peerKey extracts the rate-limit key from the gRPC peer context. The key is
-// the peer's IP address with the port stripped via net.SplitHostPort. If no
-// peer is present or the address cannot be parsed, "" is returned.
+// the peer's IP address with the port stripped via net.SplitHostPort. Two edge
+// cases:
+//   - No peer in context (in-process call / unit test without peer): returns "".
+//   - Peer present but address unparseable (e.g. unix-socket path): returns the
+//     raw Addr().String() so each distinct address keeps its OWN bucket rather
+//     than collapsing into the shared "" anonymous bucket (no rate-limit bypass).
 //
 // Note: when the limiter is non-nil and the peer is unavailable (in-process
 // call, unix socket, or unit test without peer injection), all such calls

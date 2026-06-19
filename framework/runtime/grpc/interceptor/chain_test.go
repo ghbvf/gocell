@@ -707,3 +707,28 @@ func TestNewUnaryChain_RegistrarPublicMethodExempts(t *testing.T) {
 		t.Fatalf("handler was not reached — registrar public-method wiring did not exempt /svc/Public")
 	}
 }
+
+// TestNewServerInterceptors_TypedNilRateLimiter_Panics asserts a typed-nil
+// RateLimiter (a non-nil interface holding a nil concrete) fails fast at
+// construction (#2479 review F2). Bare nil = opt-out passthrough (covered by the
+// rate-limit tests); a typed-nil is a composition-root bug that would otherwise
+// panic on the first RPC OUTSIDE Recovery.
+func TestNewServerInterceptors_TypedNilRateLimiter_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("typed-nil Deps.RateLimiter must panic at construction")
+		}
+	}()
+	_ = NewServerInterceptors(Deps{RateLimiter: (*capturingLimiter)(nil)})
+}
+
+// TestNewServerInterceptors_TypedNilAllower_Panics is the Allower sibling of the
+// typed-nil RateLimiter guard (#2479 review F2).
+func TestNewServerInterceptors_TypedNilAllower_Panics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("typed-nil Deps.Allower must panic at construction")
+		}
+	}()
+	_ = NewServerInterceptors(Deps{Allower: (*stubAllower)(nil)})
+}

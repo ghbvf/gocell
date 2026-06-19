@@ -101,13 +101,9 @@ func TestUnaryRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	_, _ = UnaryRateLimit(limiter)(ctxWithPeer("10.0.0.1"), nil, info,
 		func(_ context.Context, _ any) (any, error) { return "ok", nil })
-	if capturedKey == "" {
-		t.Fatal("limiter.Allow was never called")
-	}
-	// The key must not contain a port.
-	if _, port, _ := net.SplitHostPort(capturedKey + ":0"); port == "12345" {
-		// net.SplitHostPort succeeded only if capturedKey contains a colon → port present
-		t.Errorf("rate-limit key %q still contains a port (expected stripped IP)", capturedKey)
+	// Exact key: the port (12345 from ctxWithPeer) must be stripped, leaving the IP.
+	if capturedKey != "10.0.0.1" {
+		t.Errorf("rate-limit key = %q, want %q (port stripped)", capturedKey, "10.0.0.1")
 	}
 }
 
@@ -122,6 +118,9 @@ func TestUnaryRateLimit_NoPeer_StableFallback(t *testing.T) {
 		func(_ context.Context, _ any) (any, error) { called = true; return "ok", nil })
 	if !called {
 		t.Fatal("handler not called (no-peer path should allow when limiter allows)")
+	}
+	if capturedKey != "" {
+		t.Errorf("no-peer key = %q, want empty string", capturedKey)
 	}
 }
 
@@ -184,12 +183,9 @@ func TestStreamRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: ctxWithPeer("10.0.0.2")}
 	_ = StreamRateLimit(limiter)(nil, ss, info, func(_ any, _ grpc.ServerStream) error { return nil })
-	if capturedKey == "" {
-		t.Fatal("limiter.Allow was never called")
-	}
-	// The key must not contain a port (same assertion as the unary variant).
-	if _, port, _ := net.SplitHostPort(capturedKey + ":0"); port == "12345" {
-		t.Errorf("stream rate-limit key %q still contains a port (expected stripped IP)", capturedKey)
+	// Exact key: port stripped, leaving the stream peer IP.
+	if capturedKey != "10.0.0.2" {
+		t.Errorf("stream rate-limit key = %q, want %q (port stripped)", capturedKey, "10.0.0.2")
 	}
 }
 
@@ -207,6 +203,38 @@ func TestStreamRateLimit_NoPeer_StableFallback(t *testing.T) {
 	})
 	if !called {
 		t.Fatal("handler not called (no-peer stream path should allow when limiter allows)")
+	}
+	if capturedKey != "" {
+		t.Errorf("no-peer stream key = %q, want empty string", capturedKey)
+	}
+}
+
+// TestPeerKey_Table locks the peerKey contract directly (the source of the
+// rate-limit bucket key) across all three peer shapes, so the godoc and impl
+// cannot drift apart silently again (#2479 review F4).
+func TestPeerKey_Table(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"tcp strips port", ctxWithPeer("10.0.0.1"), "10.0.0.1"},
+		{"no peer → empty", context.Background(), ""},
+		{
+			"unparseable (unix socket) → raw addr",
+			peer.NewContext(context.Background(), &peer.Peer{
+				Addr: &net.UnixAddr{Name: "/tmp/gocell.sock", Net: "unix"},
+			}),
+			"/tmp/gocell.sock",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := peerKey(tc.ctx); got != tc.want {
+				t.Errorf("peerKey = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
