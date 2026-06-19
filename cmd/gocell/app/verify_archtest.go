@@ -133,7 +133,7 @@ func emitChangedSelectionSummary(w io.Writer, req archtestrunner.Request, select
 	}
 	// Best-effort diagnostic line; a stderr write failure must not fail the run.
 	_, _ = fmt.Fprintf(w,
-		"archtest --changed%s: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+		"archtest --changed%s: %d test function(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
 			" this is a pre-filter, not the authoritative full run\n", scopeNote, selectedCount)
 }
 

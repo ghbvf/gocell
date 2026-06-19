@@ -249,3 +249,38 @@ func TestBuildFrameworkFuncIndex_NonexistentDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, idx)
 }
+
+// TestApplyFilters_FrameworkRuleFuncLevel: under --scope=framework, the --rule
+// filter must use the FUNC-LEVEL index — when two framework rules share a
+// theme-consolidated file, --rule on one must NOT leak the other's funcs (the
+// file-level index that backs workspace --rule would conflate them). Regression
+// for the codex F1 finding (PR #2478).
+func TestApplyFilters_FrameworkRuleFuncLevel(t *testing.T) {
+	ids := scoperules.FrameworkRuleIDs()
+	require.GreaterOrEqual(t, len(ids), 2, "need ≥2 framework rules to co-locate")
+
+	// ids[0] and ids[1] share one consolidated file (separate section anchors);
+	// the rest get one file each so frameworkTestFuncs resolves the whole set.
+	files := map[string]string{
+		"consolidated_test.go": "//go:build archtest\n\n" +
+			"// Theme.\n//   - INVARIANT: " + ids[0] + "\n//   - INVARIANT: " + ids[1] + "\n" +
+			"package archtest\n\nimport \"testing\"\n\n" +
+			"// INVARIANT: " + ids[0] + "\nfunc TestRule0A(t *testing.T) {}\n\n" +
+			"// INVARIANT: " + ids[1] + "\nfunc TestRule1A(t *testing.T) {}\n",
+	}
+	for i := 2; i < len(ids); i++ {
+		files[fmt.Sprintf("rule_%d_test.go", i)] = fmt.Sprintf(
+			"//go:build archtest\n\n// INVARIANT: %s\npackage archtest\nimport \"testing\"\nfunc TestFrameworkRule%d(t *testing.T) {}\n",
+			ids[i], i,
+		)
+	}
+	root := makeFakeArchtestDir(t, files)
+	e := engine{exec: defaultExec, changed: changedRepoFiles}
+
+	got, err := e.applyFilters(t.Context(),
+		Request{WorkspaceRoot: root, Scope: ScopeFramework, Rule: ids[0]},
+		[]string{"TestRule0A", "TestRule1A"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"TestRule0A"}, got,
+		"framework --rule must select only the rule's own section func, not the co-file framework rule")
+}

@@ -53,8 +53,8 @@ type Request struct {
 	// It is the subprocess-runner counterpart of tools/archtest.RuntimeScopeConfig.WorkspaceRoot()
 	// — when the child `go test` process resolves its own in-process RuntimeScopeConfig, it
 	// derives the workspace root from go.work discovery (WorkspaceRoot() is the result).
-	// A future --scope flag (#2331) will allow callers to supply an explicit root here instead
-	// of relying on process-cwd discovery inside the child.
+	// Scope selection is carried separately by [Request.Scope] (set from the --scope flag);
+	// WorkspaceRoot only fixes the subprocess cwd / root discovery, it does not select scope.
 	WorkspaceRoot string
 	// Scope selects which subset of the suite to run (see [Scope]). The empty value
 	// normalizes to [ScopeWorkspace]; an unknown value is rejected fail-closed by

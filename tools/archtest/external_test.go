@@ -25,8 +25,9 @@ import (
 //
 // Asserting exact membership (not merely "contains PANIC-REGISTERED-01") proves
 // the standard set holds only adjudicated rules: registering a new rule or
-// dropping one becomes a deliberate, test-visible edit to wantRuleIDs rather
-// than silent drift. This closes codex #1621 F1 — the cell-family rules are
+// dropping one becomes a deliberate, test-visible edit to scoperules.FrameworkRuleIDs
+// (this test derives wantRuleIDs from it) rather than silent drift. This closes
+// codex #1621 F1 — the cell-family rules are
 // gocell-internal and deliberately NOT registered (see each rule file's godoc),
 // so a stray registration must fail here, not slip in behind a stale "wrapped
 // by StandardCellRules" narrative.
@@ -67,7 +68,7 @@ func TestStandardCellRulesComposition(t *testing.T) {
 	for id := range seen {
 		if !wantRuleIDs[id] {
 			t.Errorf("StandardCellRules() contains undeclared rule %q; if intended, add it to "+
-				"wantRuleIDs and confirm the rule is portable to external Cell repos", id)
+				"scoperules.FrameworkRuleIDs after confirming the rule is portable to external Cell repos", id)
 		}
 	}
 	for id := range wantRuleIDs {

@@ -21,13 +21,13 @@ func TestEmitChangedSelectionSummary(t *testing.T) {
 		var buf bytes.Buffer
 		emitChangedSelectionSummary(&buf, archtestrunner.Request{Changed: true}, 0)
 		out := buf.String()
-		assert.Contains(t, out, "0 rule(s) selected")
+		assert.Contains(t, out, "0 test function(s) selected")
 		assert.Contains(t, out, "pre-filter")
 	})
 	t.Run("changed nonzero count", func(t *testing.T) {
 		var buf bytes.Buffer
 		emitChangedSelectionSummary(&buf, archtestrunner.Request{Changed: true}, 7)
-		assert.Contains(t, buf.String(), "7 rule(s) selected")
+		assert.Contains(t, buf.String(), "7 test function(s) selected")
 	})
 	t.Run("not changed is silent", func(t *testing.T) {
 		var buf bytes.Buffer

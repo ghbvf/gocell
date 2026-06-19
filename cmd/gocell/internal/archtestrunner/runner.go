@@ -185,11 +185,20 @@ func (e engine) applyFilters(ctx context.Context, req Request, discovered []stri
 	// Apply shard partitioning (within the scoped universe).
 	selected := applyShardSelection(scoped, req.Shard)
 
-	// Apply rule filter (intersect).
+	// Apply rule filter (intersect). Under ScopeFramework the rule filter must use
+	// the same FUNC-LEVEL index as scope narrowing (buildFrameworkFuncIndex); else a
+	// --rule naming one rule in a theme-consolidated file would also pull in that
+	// file's OTHER framework rules — file-level buildRuleIndex conflates them
+	// (e.g. --scope=framework --rule=ERRCODE-KIND-LITERAL-01 leaking the sibling
+	// errcode portable rules). Workspace scope keeps file-level (--rule's
+	// established granularity).
 	if req.Rule != "" {
-		idx, err := buildRuleIndex(req.WorkspaceRoot)
-		if err != nil {
-			return nil, err
+		idx, ierr := buildRuleIndex(req.WorkspaceRoot)
+		if req.Scope == ScopeFramework {
+			idx, ierr = buildFrameworkFuncIndex(req.WorkspaceRoot)
+		}
+		if ierr != nil {
+			return nil, ierr
 		}
 		selected, err = selectByRule(idx, req.Rule, selected)
 		if err != nil {
