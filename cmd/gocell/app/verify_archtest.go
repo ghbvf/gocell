@@ -45,8 +45,10 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 	root := fs.String("root", "", "workspace root directory (default: auto-detect)")
 	rule := fs.String("rule", "", "optional INVARIANT rule ID, e.g. LAYER-05")
 	changed := fs.Bool("changed", false,
-		"run only tests whose tools/archtest/*_test.go file changed vs origin/develop"+
-			" (mechanical; NOT source→affected-rule mapping, see #1877)")
+		"run only rules a changed file (vs origin/develop) could affect: rules whose own"+
+			" *_test.go changed, plus rules whose static scan domain contains a changed source"+
+			" file; rules with an undeterminable scan domain always run (fast pre-filter, not a"+
+			" merge gate)")
 	shardStr := fs.String("shard", "", "shard selection N/K (e.g. 0/3)")
 	formatFlag := fs.String("format", "text", "output format: "+strings.Join(printers.SupportedFormats(), " | "))
 	testJSONOut := fs.String("test-json-out", "", "optional file: write raw go test -json events")
@@ -91,8 +93,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		// seam reserved for external-repo archtest (epic gh #1878).
 		Scope: archtestrunner.ScopeWorkspace,
 		Rule:  *rule,
-		// Mechanical --changed: changed archtest test files only; source→affected-rule
-		// mapping deferred (gh #1877).
+		// Source-aware --changed: a changed file selects the rules whose own *_test.go
+		// changed plus the rules whose static scan domain contains the change (gh #1877).
 		Changed:     *changed,
 		Shard:       shard,
 		TestJSONOut: *testJSONOut,

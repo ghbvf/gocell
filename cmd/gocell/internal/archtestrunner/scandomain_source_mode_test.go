@@ -11,12 +11,18 @@ import (
 // sourceModeFixture is a set of archtest rule files with distinct scopes,
 // used to exercise --changed source-mode selection.
 func sourceModeFixture() map[string]string {
-	const hdr = "//go:build archtest\n\npackage archtest\n\nimport \"testing\"\n\n"
 	return map[string]string{
-		"redis_test.go":     "//go:build archtest\n\n// INVARIANT: REDIS-01\n\npackage archtest\n\nimport \"testing\"\n\nfunc TestRedis(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{\"./adapters/redis/...\"}), nil) }\n",
-		"framework_test.go": "//go:build archtest\n\n// INVARIANT: FW-01\n\npackage archtest\n\nimport \"testing\"\n\nfunc TestFw(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{\"./framework/kernel/...\"}), nil) }\n",
-		"prod_test.go":      "//go:build archtest\n\n// INVARIANT: PROD-01\n\npackage archtest\n\nimport \"testing\"\n\nfunc TestProd(t *testing.T) { Run(t, Production(TypedOpts{Tests: false}), nil) }\n",
-		"unknown_test.go":   hdr + "// INVARIANT: UNK-01\nfunc TestUnk(t *testing.T) { pkgs := loadPkgs(); Run(t, Typed(TypedOpts{}, pkgs), nil) }\n",
+		"redis_test.go": wrapRule(`func TestRedis(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil)
+}`),
+		"framework_test.go": wrapRule(`func TestFw(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/..."}), nil)
+}`),
+		"prod_test.go": wrapRule(`func TestProd(t *testing.T) { Run(t, Production(TypedOpts{Tests: false}), nil) }`),
+		"unknown_test.go": wrapRule(`func TestUnk(t *testing.T) {
+	pkgs := loadPkgs()
+	Run(t, Typed(TypedOpts{}, pkgs), nil)
+}`),
 	}
 }
 

@@ -1,6 +1,13 @@
 package archtestrunner
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -95,10 +102,362 @@ func pathHasPrefix(changed, prefix string) bool {
 // buildFileDomainIndex returns a map from archtest test function name to its
 // scan domain, derived from a static analysis of the tools/archtest package.
 //
-// STUB (RED): the real implementation lands in the GREEN commit. Returning an
-// empty map means every test func resolves to the zero-value (unknown) domain,
-// i.e. always run — the safe default while the analysis is unimplemented.
+// It parses every top-level *.go in tools/archtest as one package (test files
+// and their companion .go files alike — the scope of a Report(t, rule,
+// CheckXxx(...)) rule lives in the companion CheckXxx), then for each TestXxx
+// func walks its intra-package call closure to recover the scan domain.
+//
+// A single unparseable file is skipped (its funcs become absent => unknown =>
+// always run), never failing the whole index — safety over precision.
 func buildFileDomainIndex(workspaceRoot string) (map[string]fileDomain, error) {
-	_ = workspaceRoot
-	return map[string]fileDomain{}, nil
+	dir := filepath.Join(workspaceRoot, archtestPkgDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]fileDomain{}, nil
+		}
+		return nil, fmt.Errorf("archtestrunner: read archtest dir for domain index: %w", err)
+	}
+
+	ix := &archtestPkgIndex{
+		funcs:        map[string]*ast.FuncDecl{},
+		stringConsts: map[string]string{},
+		scopeCache:   map[string]scopeAccum{},
+	}
+
+	// Pass 1: parse all package-archtest files; collect funcs, string consts,
+	// and the top-level test func names.
+	var testFuncNames []string
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		f, perr := parser.ParseFile(fset, filepath.Join(dir, entry.Name()), nil, 0)
+		if perr != nil || f.Name == nil || f.Name.Name != "archtest" {
+			continue // skip unparseable or non-archtest-package files (safety)
+		}
+		ix.collectDecls(f)
+		testFuncNames = append(testFuncNames, extractTestFuncNames(f)...)
+	}
+
+	// Pass 2: resolve each test func's domain over the now-complete index.
+	out := make(map[string]fileDomain, len(testFuncNames))
+	for _, name := range testFuncNames {
+		out[name] = ix.funcScope(name, map[string]bool{}).toDomain()
+	}
+	return out, nil
+}
+
+// archtestPkgIndex holds the package-level declarations parsed from
+// tools/archtest, plus a memo of per-func scope accumulation.
+type archtestPkgIndex struct {
+	funcs        map[string]*ast.FuncDecl // funcName -> decl (no receiver)
+	stringConsts map[string]string        // const name -> string value (best-effort)
+	scopeCache   map[string]scopeAccum    // funcName -> resolved scope (memo)
+}
+
+// collectDecls indexes top-level funcs and string consts from one file.
+func (ix *archtestPkgIndex) collectDecls(f *ast.File) {
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv == nil {
+				ix.funcs[d.Name.Name] = d
+			}
+		case *ast.GenDecl:
+			if d.Tok == token.CONST {
+				ix.collectStringConsts(d)
+			}
+		}
+	}
+}
+
+// collectStringConsts records string-literal const declarations (used to
+// resolve const-referenced scope prefixes like PlatformCellsDir).
+func (ix *archtestPkgIndex) collectStringConsts(d *ast.GenDecl) {
+	for _, spec := range d.Specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for i, nm := range vs.Names {
+			if i >= len(vs.Values) {
+				continue
+			}
+			if s, ok := stringLitValue(vs.Values[i]); ok {
+				ix.stringConsts[nm.Name] = s
+			}
+		}
+	}
+}
+
+// scopeAccum accumulates the scope evidence found in a func's call closure.
+type scopeAccum struct {
+	sawAny        bool // any scope constructor was seen
+	sawComputed   bool // a scope arg could not be statically resolved
+	hasProduction bool // a Production(...) scope was seen
+	prefixes      []string
+}
+
+func (a *scopeAccum) merge(b scopeAccum) {
+	a.sawAny = a.sawAny || b.sawAny
+	a.sawComputed = a.sawComputed || b.sawComputed
+	a.hasProduction = a.hasProduction || b.hasProduction
+	a.prefixes = append(a.prefixes, b.prefixes...)
+}
+
+// toDomain reduces accumulated evidence to a fileDomain. Any uncertainty
+// (computed scope, no scope seen, or a scoped-but-empty result) collapses to
+// the zero value (unknown => always run).
+func (a scopeAccum) toDomain() fileDomain {
+	if a.sawComputed || !a.sawAny {
+		return fileDomain{}
+	}
+	if !a.hasProduction && len(a.prefixes) == 0 {
+		return fileDomain{}
+	}
+	return fileDomain{scoped: true, productionGo: a.hasProduction, prefixes: dedupe(a.prefixes)}
+}
+
+// maxScopeDepth bounds the intra-package call-closure walk.
+const maxScopeDepth = 8
+
+// funcScope resolves (memoized) the scope evidence for a package-level func by
+// walking its body: scope constructors are recorded directly; calls to other
+// package funcs are followed (so companion CheckXxx scopes attribute back to
+// the dispatching test func). Recursion is bounded by a visited stack (cycles
+// contribute nothing) and maxScopeDepth.
+func (ix *archtestPkgIndex) funcScope(name string, stack map[string]bool) scopeAccum {
+	if cached, ok := ix.scopeCache[name]; ok {
+		return cached
+	}
+	if stack[name] || len(stack) > maxScopeDepth {
+		return scopeAccum{} // cycle / depth cap: contribute nothing (safe)
+	}
+	fn, ok := ix.funcs[name]
+	if !ok || fn.Body == nil {
+		return scopeAccum{}
+	}
+	stack[name] = true
+	var acc scopeAccum
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		cname := calleeName(call.Fun)
+		if cname == "" {
+			return true
+		}
+		if isScopeCtor(cname, call) {
+			ix.recordScope(cname, call, &acc)
+			return true
+		}
+		if _, isPkgFunc := ix.funcs[cname]; isPkgFunc {
+			sub := ix.funcScope(cname, stack)
+			acc.merge(sub)
+		}
+		return true
+	})
+	delete(stack, name)
+	ix.scopeCache[name] = acc
+	return acc
+}
+
+// scopeCtorArgIndex maps a scope-constructor name to the index of its
+// patterns/dirs argument. Production has none (it scans all production Go).
+var scopeCtorArgIndex = map[string]int{
+	"Typed":            1, // Typed(opts, patterns)
+	"Fixture":          1, // Fixture(opts, patterns)
+	"DirsScope":        1, // DirsScope(root, dirs, ...predicates)
+	"StandaloneModule": 2, // StandaloneModule(dir, opts, patterns)
+}
+
+// isScopeCtor reports whether a call names a scan-scope constructor. Production,
+// Typed and Fixture require a composite-literal first arg (their *Opts struct),
+// which discriminates them from the unrelated 0-arg p.Typed() predicate method.
+func isScopeCtor(name string, call *ast.CallExpr) bool {
+	switch name {
+	case "Production", "Typed", "Fixture":
+		return len(call.Args) >= 1 && isCompositeLit(call.Args[0])
+	case "DirsScope", "ModuleScope", "StandaloneModule":
+		return true
+	default:
+		return false
+	}
+}
+
+// recordScope folds one scope-constructor call into the accumulator.
+func (ix *archtestPkgIndex) recordScope(name string, call *ast.CallExpr, acc *scopeAccum) {
+	acc.sawAny = true
+	switch name {
+	case "Production":
+		acc.hasProduction = true
+		return
+	case "ModuleScope":
+		acc.sawComputed = true // whole-module scope: cannot narrow
+		return
+	}
+	argIdx, ok := scopeCtorArgIndex[name]
+	if !ok || argIdx >= len(call.Args) {
+		acc.sawComputed = true
+		return
+	}
+	raws, ok := ix.evalStringSlice(call.Args[argIdx], map[string]bool{})
+	if !ok {
+		acc.sawComputed = true
+		return
+	}
+	for _, raw := range raws {
+		p, ok := normalizePattern(raw)
+		if !ok {
+			acc.sawComputed = true // glob / whole-tree pattern: cannot narrow
+			return
+		}
+		acc.prefixes = append(acc.prefixes, p)
+	}
+}
+
+// evalStringSlice best-effort resolves an expression to a []string of literal
+// values: composite literals, append(...), and calls to package-level helpers
+// whose body is a single return of a resolvable slice. Returns ok=false for
+// anything it cannot statically resolve (vars, spreads, foreign calls).
+func (ix *archtestPkgIndex) evalStringSlice(expr ast.Expr, stack map[string]bool) ([]string, bool) {
+	switch e := expr.(type) {
+	case *ast.CompositeLit:
+		out := make([]string, 0, len(e.Elts))
+		for _, elt := range e.Elts {
+			s, ok := ix.evalStringExpr(elt)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	case *ast.CallExpr:
+		cname := calleeName(e.Fun)
+		if cname == "append" {
+			return ix.evalAppend(e, stack)
+		}
+		fd, ok := ix.funcs[cname]
+		if !ok || stack[cname] {
+			return nil, false
+		}
+		stack[cname] = true
+		res, ok := ix.evalFuncReturnSlice(fd, stack)
+		delete(stack, cname)
+		return res, ok
+	default:
+		return nil, false
+	}
+}
+
+// evalAppend resolves append(slice, "lit", ...). Variadic spread (append(a,
+// b...)) is not resolvable and returns ok=false.
+func (ix *archtestPkgIndex) evalAppend(call *ast.CallExpr, stack map[string]bool) ([]string, bool) {
+	if len(call.Args) == 0 || call.Ellipsis != token.NoPos {
+		return nil, false
+	}
+	base, ok := ix.evalStringSlice(call.Args[0], stack)
+	if !ok {
+		return nil, false
+	}
+	out := append([]string{}, base...)
+	for _, a := range call.Args[1:] {
+		s, ok := ix.evalStringExpr(a)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// evalFuncReturnSlice resolves a helper whose body returns exactly one slice
+// expression (e.g. `return []string{...}` or `return append(base(), "x")`).
+// Functions with branching / multiple returns are not resolvable.
+func (ix *archtestPkgIndex) evalFuncReturnSlice(fd *ast.FuncDecl, stack map[string]bool) ([]string, bool) {
+	if fd.Body == nil {
+		return nil, false
+	}
+	var ret *ast.ReturnStmt
+	for _, stmt := range fd.Body.List {
+		r, ok := stmt.(*ast.ReturnStmt)
+		if !ok {
+			continue
+		}
+		if ret != nil {
+			return nil, false // multiple returns: cannot resolve a single value
+		}
+		ret = r
+	}
+	if ret == nil || len(ret.Results) != 1 {
+		return nil, false
+	}
+	return ix.evalStringSlice(ret.Results[0], stack)
+}
+
+// evalStringExpr resolves an expression to a single string: a string literal or
+// a package-level string const reference.
+func (ix *archtestPkgIndex) evalStringExpr(expr ast.Expr) (string, bool) {
+	if s, ok := stringLitValue(expr); ok {
+		return s, true
+	}
+	if id, ok := expr.(*ast.Ident); ok {
+		if v, ok := ix.stringConsts[id.Name]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// normalizePattern reduces a scope pattern to a repo-relative prefix: it strips
+// a leading "./", a trailing "/..." and "/", and rejects (ok=false) glob or
+// whole-tree patterns that cannot be narrowed to a path prefix.
+func normalizePattern(raw string) (string, bool) {
+	p := strings.TrimSpace(raw)
+	p = strings.TrimPrefix(p, "./")
+	p = strings.TrimSuffix(p, "/...")
+	p = strings.TrimSuffix(p, "/")
+	if p == "" || p == "." || strings.Contains(p, "...") {
+		return "", false
+	}
+	if strings.ContainsAny(p, "*?[") {
+		return "", false
+	}
+	return p, true
+}
+
+// calleeName returns the bare identifier of a call's function — for a plain
+// Ident (Production), a selector's final segment (scanner.DirsScope ->
+// DirsScope, p.Typed -> Typed). Returns "" for any other callee shape.
+func calleeName(fun ast.Expr) string {
+	switch f := fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	default:
+		return ""
+	}
+}
+
+// isCompositeLit reports whether expr is a composite literal (e.g. TypedOpts{}).
+func isCompositeLit(expr ast.Expr) bool {
+	_, ok := expr.(*ast.CompositeLit)
+	return ok
+}
+
+// stringLitValue returns the unquoted value of a string literal expression.
+func stringLitValue(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return s, true
 }

@@ -7,6 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// wrapRule wraps a func/decl body in a minimal package-archtest test file. The
+// source only needs to parse (the runner AST-parses tools/archtest; it never
+// type-checks it), so scope constructors are referenced as bare identifiers
+// without importing the archtest package.
+func wrapRule(body string) string {
+	return "//go:build archtest\n\n// INVARIANT: X-01\n\npackage archtest\n\nimport \"testing\"\n\n" + body + "\n"
+}
+
 // domainOf builds the domain index over a fixture tools/archtest dir and
 // returns the domain for one test func (zero value when absent).
 func domainOf(t *testing.T, files map[string]string, fn string) fileDomain {
@@ -18,81 +26,98 @@ func domainOf(t *testing.T, files map[string]string, fn string) fileDomain {
 }
 
 // TestBuildFileDomainIndex_Extraction is the extractor table: synthetic
-// archtest source → derived fileDomain. Source need only parse (the runner
-// AST-parses tools/archtest; it never type-checks it), so scope constructors
-// are referenced as bare identifiers without importing the archtest package.
+// archtest source → derived fileDomain.
 func TestBuildFileDomainIndex_Extraction(t *testing.T) {
-	const header = "//go:build archtest\n\n// INVARIANT: X-01\n\npackage archtest\n\nimport \"testing\"\n\n"
-
 	cases := []struct {
 		name string
-		src  string
+		body string
 		fn   string
 		want fileDomain
 	}{
 		{
 			name: "production scope",
-			src:  header + "func TestProd(t *testing.T) { Run(t, Production(TypedOpts{Tests: false}), nil) }\n",
+			body: `func TestProd(t *testing.T) { Run(t, Production(TypedOpts{Tests: false}), nil) }`,
 			fn:   "TestProd",
 			want: fileDomain{scoped: true, productionGo: true},
 		},
 		{
 			name: "typed literal prefix",
-			src:  header + "func TestRedis(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{\"./adapters/redis/...\"}), nil) }\n",
+			body: `func TestRedis(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil)
+}`,
 			fn:   "TestRedis",
 			want: fileDomain{scoped: true, prefixes: []string{"adapters/redis"}},
 		},
 		{
 			name: "dirsscope literal via scope var",
-			src:  header + "func TestAsm(t *testing.T) { scope := DirsScope(root, []string{\"framework/kernel/assembly\"}); Run(t, AST(scope), nil) }\n",
+			body: `func TestAsm(t *testing.T) {
+	scope := DirsScope(root, []string{"framework/kernel/assembly"})
+	Run(t, AST(scope), nil)
+}`,
 			fn:   "TestAsm",
 			want: fileDomain{scoped: true, prefixes: []string{"framework/kernel/assembly"}},
 		},
 		{
 			name: "scanner-qualified dirsscope literal",
-			src:  header + "func TestCg(t *testing.T) { Run(t, AST(scanner.DirsScope(root, []string{\"tools/codegen/contractgen\"})), nil) }\n",
+			body: `func TestCg(t *testing.T) {
+	Run(t, AST(scanner.DirsScope(root, []string{"tools/codegen/contractgen"})), nil)
+}`,
 			fn:   "TestCg",
 			want: fileDomain{scoped: true, prefixes: []string{"tools/codegen/contractgen"}},
 		},
 		{
 			name: "computed typed var is unknown",
-			src:  header + "func TestVar(t *testing.T) { pkgs := loadPkgs(); Run(t, Typed(TypedOpts{}, pkgs), nil) }\n",
+			body: `func TestVar(t *testing.T) {
+	pkgs := loadPkgs()
+	Run(t, Typed(TypedOpts{}, pkgs), nil)
+}`,
 			fn:   "TestVar",
 			want: fileDomain{}, // unknown
 		},
 		{
 			name: "modulescope whole-module is unknown",
-			src:  header + "func TestMod(t *testing.T) { Run(t, AST(ModuleScope(root)), nil) }\n",
+			body: `func TestMod(t *testing.T) { Run(t, AST(ModuleScope(root)), nil) }`,
 			fn:   "TestMod",
 			want: fileDomain{}, // unknown
 		},
 		{
 			name: "glob mid-path is unknown",
-			src:  header + "func TestGlob(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{\"./foo/*/bar\"}), nil) }\n",
+			body: `func TestGlob(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{"./foo/*/bar"}), nil) }`,
 			fn:   "TestGlob",
 			want: fileDomain{}, // unknown
 		},
 		{
 			name: "no scope is unknown",
-			src:  header + "func TestNone(t *testing.T) { _ = 1 }\n",
+			body: `func TestNone(t *testing.T) { _ = 1 }`,
 			fn:   "TestNone",
 			want: fileDomain{}, // unknown
 		},
 		{
 			name: "p.Typed() method does not collide with Production",
-			src:  header + "func TestColl(t *testing.T) { Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic { if !p.Typed() { return nil }; return nil }) }\n",
+			body: `func TestColl(t *testing.T) {
+	Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
+		if !p.Typed() {
+			return nil
+		}
+		return nil
+	})
+}`,
 			fn:   "TestColl",
 			want: fileDomain{scoped: true, productionGo: true},
 		},
 		{
 			name: "fixture-only prefix",
-			src:  header + "func TestFix(t *testing.T) { Run(t, Fixture(FixtureOpts{}, []string{\"./tools/archtest/internal/foofixture/...\"}), nil) }\n",
+			body: `func TestFix(t *testing.T) {
+	Run(t, Fixture(FixtureOpts{}, []string{"./tools/archtest/internal/foofixture/..."}), nil)
+}`,
 			fn:   "TestFix",
 			want: fileDomain{scoped: true, prefixes: []string{"tools/archtest/internal/foofixture"}},
 		},
 		{
 			name: "multiple typed literals union",
-			src:  header + "func TestMulti(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{\"./adapters/redis/...\", \"./adapters/postgres/...\"}), nil) }\n",
+			body: `func TestMulti(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/...", "./adapters/postgres/..."}), nil)
+}`,
 			fn:   "TestMulti",
 			want: fileDomain{scoped: true, prefixes: []string{"adapters/redis", "adapters/postgres"}},
 		},
@@ -100,7 +125,7 @@ func TestBuildFileDomainIndex_Extraction(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := domainOf(t, map[string]string{"rule_test.go": tc.src}, tc.fn)
+			got := domainOf(t, map[string]string{"rule_test.go": wrapRule(tc.body)}, tc.fn)
 			assert.Equal(t, tc.want.scoped, got.scoped, "scoped")
 			assert.Equal(t, tc.want.productionGo, got.productionGo, "productionGo")
 			assert.ElementsMatch(t, tc.want.prefixes, got.prefixes, "prefixes")
@@ -111,20 +136,11 @@ func TestBuildFileDomainIndex_Extraction(t *testing.T) {
 // TestBuildFileDomainIndex_ProductionAndFixtureUnion verifies a file that has
 // both a real Production scan and a Fixture RED test yields a union domain.
 func TestBuildFileDomainIndex_ProductionAndFixtureUnion(t *testing.T) {
-	src := `//go:build archtest
-
-// INVARIANT: X-01
-
-package archtest
-
-import "testing"
-
-func TestRule(t *testing.T) {
+	body := `func TestRule(t *testing.T) {
 	Run(t, Production(TypedOpts{Tests: false}), nil)
 	Run(t, Fixture(FixtureOpts{}, []string{"./tools/archtest/internal/rulefixture/..."}), nil)
-}
-`
-	got := domainOf(t, map[string]string{"rule_test.go": src}, "TestRule")
+}`
+	got := domainOf(t, map[string]string{"rule_test.go": wrapRule(body)}, "TestRule")
 	assert.True(t, got.scoped)
 	assert.True(t, got.productionGo)
 	assert.ElementsMatch(t, []string{"tools/archtest/internal/rulefixture"}, got.prefixes)
@@ -134,16 +150,7 @@ func TestRule(t *testing.T) {
 // companion CheckXxx func reached via Report(t, rule, CheckXxx(...)) is
 // attributed back to the dispatching test func (the dominant archtest shape).
 func TestBuildFileDomainIndex_CompanionDispatch(t *testing.T) {
-	testFile := `//go:build archtest
-
-// INVARIANT: ADAPTER-01
-
-package archtest
-
-import "testing"
-
-func TestAdapter(t *testing.T) { Report(t, adapterRule, CheckAdapter(t)) }
-`
+	testFile := wrapRule(`func TestAdapter(t *testing.T) { Report(t, adapterRule, CheckAdapter(t)) }`)
 	companion := `//go:build archtest
 
 package archtest
@@ -166,16 +173,7 @@ func CheckAdapter(t *testing.T) []Diagnostic {
 // helper that returns a slice built from a string const + append (mirrors the
 // real platformAndExampleCellScanDirs shape).
 func TestBuildFileDomainIndex_HelperResolution(t *testing.T) {
-	testFile := `//go:build archtest
-
-// INVARIANT: CELL-01
-
-package archtest
-
-import "testing"
-
-func TestCell(t *testing.T) { Run(t, AST(DirsScope(root, cellDirs())), nil) }
-`
+	testFile := wrapRule(`func TestCell(t *testing.T) { Run(t, AST(DirsScope(root, cellDirs())), nil) }`)
 	helpers := `//go:build archtest
 
 package archtest
@@ -199,7 +197,7 @@ func cellDirs() []string { return append(cellBase(), "examples") }
 // domain, which always runs.
 func TestBuildFileDomainIndex_MissingFuncIsUnknown(t *testing.T) {
 	root := makeFakeArchtestDir(t, map[string]string{
-		"rule_test.go": "//go:build archtest\n\n// INVARIANT: X-01\n\npackage archtest\n\nimport \"testing\"\n\nfunc TestKnown(t *testing.T) {}\n",
+		"rule_test.go": wrapRule(`func TestKnown(t *testing.T) {}`),
 	})
 	idx, err := buildFileDomainIndex(root)
 	require.NoError(t, err)
@@ -214,7 +212,7 @@ func TestBuildFileDomainIndex_MissingFuncIsUnknown(t *testing.T) {
 // (=> unknown => always run).
 func TestBuildFileDomainIndex_ParseErrorIsUnknownNotFatal(t *testing.T) {
 	root := makeFakeArchtestDir(t, map[string]string{
-		"good_test.go": "//go:build archtest\n\n// INVARIANT: G-01\n\npackage archtest\n\nimport \"testing\"\n\nfunc TestGood(t *testing.T) { Run(t, Production(TypedOpts{}), nil) }\n",
+		"good_test.go": wrapRule(`func TestGood(t *testing.T) { Run(t, Production(TypedOpts{}), nil) }`),
 		"bad_test.go":  "package archtest\nfunc TestBad( { this is not valid go",
 	})
 	idx, err := buildFileDomainIndex(root)

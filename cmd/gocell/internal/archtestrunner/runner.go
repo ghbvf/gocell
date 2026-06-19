@@ -14,8 +14,9 @@ import (
 // Injected via engine to enable unit-testing without spawning real subprocesses.
 type execFn func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error)
 
-// changedFilesFn is the function signature for retrieving changed archtest files.
-// Injected via engine to enable unit-testing without a live git repo.
+// changedFilesFn is the function signature for retrieving the repo-relative
+// changed files (of any kind) vs origin/develop. Injected via engine to enable
+// unit-testing without a live git repo.
 type changedFilesFn func(ctx context.Context, workspaceRoot string) ([]string, error)
 
 // engine holds the injected subprocess functions.
@@ -29,7 +30,7 @@ type engine struct {
 func newEngine() engine {
 	return engine{
 		exec:    defaultExec,
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 }
 
@@ -173,20 +174,66 @@ func (e engine) applyFilters(ctx context.Context, req Request, discovered []stri
 		}
 	}
 
-	// Apply changed-files filter (intersect).
+	// Apply changed-source filter: keep only rules a changed file could affect.
 	if req.Changed {
 		changedFiles, err := e.changed(ctx, req.WorkspaceRoot)
 		if err != nil {
 			return nil, err
 		}
-		changedTests, err := changedFilesToTests(req.WorkspaceRoot, changedFiles)
+		selected, err = selectByChangedSource(req.WorkspaceRoot, selected, changedFiles)
 		if err != nil {
 			return nil, err
 		}
-		selected = intersect(selected, changedTests)
 	}
 
 	return selected, nil
+}
+
+// selectByChangedSource returns the subset of selected rules (test funcs) that a
+// changed file could affect (gh #1877). A rule is kept when either:
+//   - its own *_test.go file changed (mechanical subsumption, via
+//     changedFilesToTests, which self-filters to archtest files), or
+//   - a changed source file falls within the rule's static scan domain.
+//
+// Rules whose scan domain cannot be statically determined (the zero-value
+// fileDomain returned for an absent index key) always match — no false
+// negatives. Selection preserves the discovery order of `selected`.
+func selectByChangedSource(workspaceRoot string, selected, changedFiles []string) ([]string, error) {
+	domainIdx, err := buildFileDomainIndex(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	selfTests, err := changedFilesToTests(workspaceRoot, changedFiles)
+	if err != nil {
+		return nil, err
+	}
+	selfSet := make(map[string]bool, len(selfTests))
+	for _, name := range selfTests {
+		selfSet[name] = true
+	}
+
+	normChanged := make([]string, len(changedFiles))
+	for i, c := range changedFiles {
+		normChanged[i] = filepath.ToSlash(c)
+	}
+
+	var out []string
+	for _, name := range selected {
+		if selfSet[name] || anyChangeSelects(domainIdx[name], normChanged) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// anyChangeSelects reports whether any changed file selects the given domain.
+func anyChangeSelects(d fileDomain, changed []string) bool {
+	for _, c := range changed {
+		if domainSelectsChange(d, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // discoverTests runs `go test -tags=archtest -list '^Test' ./tools/archtest`
@@ -236,21 +283,6 @@ func hasFailures(tests []TestResult) bool {
 		}
 	}
 	return false
-}
-
-// intersect returns the elements of a that are also in b, preserving a's order.
-func intersect(a, b []string) []string {
-	bSet := make(map[string]bool, len(b))
-	for _, s := range b {
-		bSet[s] = true
-	}
-	out := make([]string, 0, len(a))
-	for _, s := range a {
-		if bSet[s] {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // checkGOWORK returns an error if GOWORK=off. workspace modules are required

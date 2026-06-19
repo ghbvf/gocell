@@ -40,7 +40,12 @@ func TestDomainSelectsChange(t *testing.T) {
 		{"union via prodgo", fileDomain{scoped: true, productionGo: true, prefixes: []string{"contracts"}}, "framework/x.go", true},
 
 		// worktrees copy must not cross-match a bare top-level prefix.
-		{"worktrees does not match framework prefix", fileDomain{scoped: true, prefixes: []string{"framework"}}, "worktrees/Feature/x/framework/y.go", false},
+		{
+			name:    "worktrees does not match framework prefix",
+			domain:  fileDomain{scoped: true, prefixes: []string{"framework"}},
+			changed: "worktrees/Feature/x/framework/y.go",
+			want:    false,
+		},
 
 		// scoped but matches nothing relevant.
 		{"scoped prefix no match", fileDomain{scoped: true, prefixes: []string{"tools/codegen/contractgen"}}, "adapters/redis/x.go", false},

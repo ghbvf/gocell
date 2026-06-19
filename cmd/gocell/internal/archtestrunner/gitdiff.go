@@ -9,8 +9,8 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/cmdrun"
 )
 
-// changedArchtestFiles returns the set of top-level tools/archtest/*_test.go
-// file paths (repo-relative, slash-separated) that differ between the current
+// changedRepoFiles returns the set of repo-relative, slash-separated file paths
+// (of any kind — source, test, contract, doc) that differ between the current
 // working tree and the merge-base with origin/develop.
 //
 // Two git diffs are unioned to capture both committed changes (vs merge-base)
@@ -18,15 +18,13 @@ import (
 //  1. git diff --name-only <merge-base>  (committed changes since branch point)
 //  2. git diff --name-only HEAD          (working tree vs HEAD)
 //
-// "Mechanical --changed" semantic: this function returns the set of archtest
-// files that were touched; if the set is empty, the caller (Run/ListTests)
-// selects the empty set and returns a trivially passed Report without running
-// any tests. This is intentional — --changed is a focused filter, not a
-// "run nothing if nothing changed" shortcut.
-//
-// Source-file → affected-rule mapping is deferred (gh #1877); this only
-// selects changed archtest test files.
-func changedArchtestFiles(ctx context.Context, workspaceRoot string) ([]string, error) {
+// This is the single git-diff seam for --changed: it reports *what* changed
+// (raw), and the selection policy (which rules a change affects) lives
+// downstream in applyFilters → selectByChangedSource (#1877). If the set is
+// empty, the caller (Run/ListTests) selects the empty set and returns a
+// trivially passed Report — --changed is a focused pre-filter, not a "run
+// nothing if nothing changed" shortcut.
+func changedRepoFiles(ctx context.Context, workspaceRoot string) ([]string, error) {
 	gitTool, err := cmdrun.NewTool("git")
 	if err != nil {
 		return nil, fmt.Errorf("archtestrunner: resolve git tool: %w", err)
@@ -49,8 +47,7 @@ func changedArchtestFiles(ctx context.Context, workspaceRoot string) ([]string, 
 		return nil, fmt.Errorf("archtestrunner: git diff working-tree: %w", err)
 	}
 
-	all := dedupe(append(committed, worktree...))
-	return filterArchtestFiles(all), nil
+	return dedupe(append(committed, worktree...)), nil
 }
 
 // changedFilesToTests maps a list of changed file paths (repo-relative) to the
