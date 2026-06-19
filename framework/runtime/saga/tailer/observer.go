@@ -73,7 +73,10 @@ const (
 type DrainResult string
 
 const (
-	// DrainOK means the drain applied ≥1 event and advanced the checkpoint cleanly.
+	// DrainOK means the drain applied OR skipped-past (dead-lettered) ≥1 event and
+	// advanced the checkpoint. A drain that only skips poison events via
+	// skipPoisonEvent (#2110) also counts as DrainOK because drained++ is
+	// incremented on both the clean-apply and poison-skip paths.
 	DrainOK DrainResult = "ok"
 	// DrainHeadError means the head-bound fetch (replay.Head) failed, so the tick's
 	// replay upper bound is unknown and the drain aborts before any replay — no

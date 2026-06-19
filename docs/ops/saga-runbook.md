@@ -229,9 +229,24 @@ ORDER BY global_seq;
 **恢复**（Tailer 无 rebuild 路径——靠 Apply 幂等重放收敛）：
 
 1. 修复根因（producer 侧坏事件 / consumer 侧 `FoldStatus` 缺 kind 等）。
-2. **手动 rewind checkpoint** 到 poison `global_seq` 之前——Apply 终态吸收 + 幂等，重放安全：
-   `UPDATE projection_checkpoints SET offset_seq = <poison_global_seq - 1> WHERE cell_id = $1 AND projection_id = $2;`
-   （维护窗口内执行，确保该 projection 无其它 leader 在推进，避免与 fenced advance 竞态。）
+2. **手动 rewind checkpoint** 到 poison `global_seq` 之前——Apply 终态吸收 + 幂等，重放安全。
+   执行前须确认无其它 leader 在推进该 projection，以免与 fenced advance 产生竞态：
+
+   a. **查 distlock key**（场景 4a 格式：`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，`<len>` 为紧跟字段的字节长度）：
+      ```
+      # Redis CLI（或 redis-py / ioredis）
+      EXISTS saga-journal-tailer:<cellLen>:<cell>:<projLen>:<proj>
+      TTL   saga-journal-tailer:<cellLen>:<cell>:<projLen>:<proj>
+      ```
+      - key **不存在** → 无 tailer 持锁，可安全执行 rewind。
+      - key **存在** → 有 tailer 持锁：等 TTL 过期（最稳，≤ `LeaseDuration`），或确认持锁 pod 进程已停止后再执行。**不要在持锁 pod 存活时强删 key**（会打开双驱动窗口；journal fencing CAS 兜底正确性，但应优先让 TTL 自然收敛）。
+
+   b. 确认安全后执行 rewind：
+      ```sql
+      UPDATE projection_checkpoints
+         SET offset_seq = <poison_global_seq - 1>
+       WHERE cell_id = $1 AND projection_id = $2;
+      ```
 3. Tailer 下个 tick 从该点重放，现已修复的 Apply 正确处理原 poison 事件。
 4. 重放收敛后，**admin** 清理该区间已恢复的 dead-letter 行（serving role 无 DELETE 权限，纵深防御）：
    `DELETE FROM saga_projection_dead_letters WHERE cell_id = $1 AND projection_id = $2 AND global_seq <= <recovered_max>;`

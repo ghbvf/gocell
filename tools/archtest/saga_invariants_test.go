@@ -1188,8 +1188,10 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 // ref: SAGA-INVARIANTS-FILE-CONSOLIDATED-01 (this rule must stay in this file)
 
 // TestSagaTailerCheckpointAdvancerCaller enforces
-// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: only (*Tailer).commitEvent may call
-// projection.OwnerCheckpointStore.AdvanceIfOwner in runtime/saga/tailer.
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: sanctioned callers of
+// projection.OwnerCheckpointStore.AdvanceIfOwner in runtime/saga/tailer are
+// (*Tailer).commitEvent (clean apply) and (*Tailer).skipPoisonEvent
+// (poison-event dead-letter skip, #2110).
 func TestSagaTailerCheckpointAdvancerCaller(t *testing.T) {
 	t.Parallel()
 	diags := CheckSagaTailerCheckpointAdvancerCaller(t, ConfigForExternalCell{})
@@ -1303,11 +1305,14 @@ func TestSagaTailerDeadLetterWriter(t *testing.T) {
 }
 
 // TestSagaTailerDeadLetterWriter_NonVacuity asserts the production scanner finds at
-// least one DeadLetterStore.Record call in runtime/saga/tailer — confirming the
-// rule is non-vacuous (skipPoisonEvent does call Record and is NOT flagged).
+// least one DeadLetterStore.Record call whose enclosing FuncDecl is
+// (*Tailer).skipPoisonEvent in runtime/saga/tailer — confirming the rule is
+// non-vacuous and that the sanctioned caller is still the one actually calling Record.
+// A rename of skipPoisonEvent would cause the GREEN fixture to fail while this check
+// also turns red, keeping the two in sync.
 func TestSagaTailerDeadLetterWriter_NonVacuity(t *testing.T) {
 	t.Parallel()
-	var recordCalls int
+	var sanctionedCallerFound bool
 	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
 		if p.Pkg == nil || p.Pkg.Path() != sagaTailerPkg {
 			return nil
@@ -1321,6 +1326,7 @@ func TestSagaTailerDeadLetterWriter_NonVacuity(t *testing.T) {
 				if fd.Body == nil {
 					return
 				}
+				fdName := fd.Name.Name
 				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
 					sel, ok := call.Fun.(*ast.SelectorExpr)
 					if !ok || sel.Sel.Name != sagaDeadLetterRecordMethodName {
@@ -1330,15 +1336,19 @@ func TestSagaTailerDeadLetterWriter_NonVacuity(t *testing.T) {
 					if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
 						return
 					}
-					recordCalls++
+					if fdName == sagaTailerSkipPoisonEventMethodName {
+						sanctionedCallerFound = true
+					}
 				})
 			})
 		}
 		return nil
 	})
-	if recordCalls == 0 {
-		t.Fatalf("%s: non-vacuity check failed — no DeadLetterStore.Record call found in runtime/saga/tailer; "+
-			"either the call was removed (update sanctioned set) or the package path changed", sagaTailerDeadLetterWriterRuleID)
+	if !sanctionedCallerFound {
+		t.Fatalf("%s: non-vacuity check failed — no DeadLetterStore.Record call found inside "+
+			"(*Tailer).%s in runtime/saga/tailer; either the call was removed, the method was "+
+			"renamed, or the package path changed (update sagaTailerPkg constant)",
+			sagaTailerDeadLetterWriterRuleID, sagaTailerSkipPoisonEventMethodName)
 	}
 }
 

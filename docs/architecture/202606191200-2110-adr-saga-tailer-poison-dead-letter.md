@@ -69,6 +69,26 @@ Axon 按 aggregate sequence 整体入队（防「后续事件应用到不一致�
 GoCell saga journal 是单一全序流、Apply 幂等（`FoldStatus` 终态吸收）、无 per-aggregate 序依赖，poison 是
 apply 层永久错误——故 **skip 单个事件**即可。与 GoCell saga-tailer / saga-engine 边界吻合。
 
+**非终态 unknown kind 被 skip 的产品后果（显式权衡）**：`FoldStatus` 的终态吸收幂等性只对**已知终态事件**
+（`KindSagaSucceeded` / `KindSagaFailed` / `KindSagaCompensated` / `KindSagaExpired` /
+`KindSagaCompensationFailed`）保证：重放这些 kind 不改变已收敛的终态。**非终态 kind**（如
+`KindStepStarted`、`KindStepCompleted` 等）对同一 prev 状态是幂等的（返回相同的 Running，见测试
+`TestFoldStatus_IdempotentNonTerminal`），但它们**不是**终态吸收——它们携带真实的状态转移语义。
+
+若 saga 引擎未来新增一个 `EventKind`（既不属于现有终态集，也不在当前 `FoldStatus` switch 中），
+运行中的**旧版本**投影会把该事件作为 unknown kind 返回 permanent error，Tailer 将其 dead-letter 并跳过：
+该次状态转移**永久缺失于 read model**，投影停在上一个已知状态，直到 operator 手动 rewind checkpoint
+并重放（Apply 幂等，重放安全）。
+
+这是**有意识的可用性优先权衡**：
+
+- 可用性：单个未知 kind 不冻结整条投影（优于旧行为）；read model 继续前进，只漏这一次转移。
+- 可观测性：dead-letter 表留痕（`error_type` + `error_message` 已脱敏）；`poison_skip` 指标自增；Warn 日志带 `global_seq`。
+- 可恢复性：手动 rewind + 升级 `FoldStatus` 后重放即可收敛，无数据损坏（poison event 仍在 `projection_events` / `saga_events` 原位）。
+- 替代方案的代价：等待 operator 手动介入解冻（旧行为）比「漏一次转移 + 留痕 + 可 rewind」可用性更差；sequence-aware DLQ 引入跨事件序依赖，与 GoCell 单全序流模型不符。
+
+Operator 在发现 `poison_skip` 持续增长时，应优先排查 `FoldStatus` 是否遗漏了新 kind（见 §5b 诊断 SQL），升级后按恢复流程 rewind。
+
 ## 6. L3 概念一致性：两个 dead-letter 实现非不一致
 
 同一 `Apply` 契约现有两个 dead-letter 实现——Coordinator → broker DLX、Tailer → DB 表。这**不是**矛盾：

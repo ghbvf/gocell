@@ -2889,8 +2889,10 @@ func CheckSagaTailerDeadLetterWriter(t *testing.T, cfg ConfigForExternalCell) []
 // CheckSagaTailerCheckpointAdvancerCaller is the importable form of
 // SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01.
 //
-// Locks OwnerCheckpointStore.AdvanceIfOwner so that the sole runtime callsite is
-// (*Tailer).commitEvent in runtime/saga/tailer. The scan runs over the WHOLE
+// Locks OwnerCheckpointStore.AdvanceIfOwner to a sanctioned caller set in
+// runtime/saga/tailer: (*Tailer).commitEvent (clean apply) and
+// (*Tailer).skipPoisonEvent (poison-event dead-letter skip, #2110). The scan
+// runs over the WHOLE
 // production tree (Production scope), so a different production package that holds
 // an OwnerCheckpointStore and advances the checkpoint directly is caught — the
 // declared scope (repo-wide runtime production) now matches the execution scope

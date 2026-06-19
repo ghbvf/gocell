@@ -456,7 +456,7 @@ func (t *Tailer) tickLoop(ctx context.Context) {
 				t.logger.WarnContext(ctx, "saga journal tailer: tick failed",
 					slog.String("cell", t.cellID),
 					slog.String("projection", t.projectionID),
-					slog.Any("error", err))
+					slog.Any("error", redaction.RedactError(err)))
 			}
 		}
 	}
@@ -677,10 +677,13 @@ func (t *Tailer) skipPoisonEvent(
 		return txErr
 	}
 	*drained++
-	t.logger.Warn("saga tailer: poison event skipped past (permanent apply error, dead-lettered)",
-		"cell", t.cellID, "projection", t.projectionID,
-		"event_id", evt.EventID(), "stream", evt.Stream(), "position", pos,
-		"error", redacted)
+	t.logger.WarnContext(ctx, "saga tailer: poison event skipped past (permanent apply error, dead-lettered)",
+		slog.String("cell", t.cellID),
+		slog.String("projection", t.projectionID),
+		slog.String("event_id", evt.EventID()),
+		slog.String("stream", evt.Stream()),
+		slog.Int64("position", pos),
+		slog.Any("error", redacted))
 	t.safeObserve(ctx, "ObserveCheckpointAdvance", func() {
 		t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvancePoisonSkip)
 	})
