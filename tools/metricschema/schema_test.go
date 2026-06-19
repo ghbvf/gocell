@@ -2826,6 +2826,17 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 			if rel == top && prodscan.IsModuleRoot(path) {
 				return filepath.SkipDir
 			}
+			// Deliberately-external cell modules (externalcells/*, Operator-SDK mode,
+			// ADR 202605281200 / #2304) are NOT root go.work members and cannot be loaded
+			// by the satellite-aware workspace loader (own go.work/replace, split into
+			// their own repos post-#1722). Exclude them BEFORE the HasNestedModuleRoot
+			// branch would mark the parent required — their observability governance is
+			// the external-module track (#1090/M9), mirroring the certdeps/replaydeps
+			// funnels' externalcells vacuous-green. Coverage is reprovided by the
+			// externalcells CI lane (#2395), not this root-relative platform guard.
+			if rel == top && obs01CoverageExcludedTop(top) {
+				return filepath.SkipDir
+			}
 			// A MULTI-MEMBER PARENT (cmd/adapters/examples, holding go.work member
 			// modules one level deeper — HasNestedModuleRoot) IS required since #2147:
 			// the merged satellite-aware loader (packagesload.LoadWorkspace) expands
@@ -2864,7 +2875,9 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 
 func obs01CoverageExcludedTop(top string) bool {
 	switch top {
-	case "tools", "tests", "vendor", "generated":
+	// externalcells: deliberately-external cell modules (Operator-SDK mode, #2304),
+	// not root go.work members — see productionGoTopLevels for the full rationale.
+	case "tools", "tests", "vendor", "generated", "externalcells":
 		return true
 	default:
 		return false

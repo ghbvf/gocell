@@ -1,0 +1,7 @@
+go 1.25.11
+
+// Minimal workspace: roots this module as its own workspace so archtest scopes
+// to mdm (not the repo root) and shadows the gocell root go.work. gocell modules
+// are resolved via go.mod replace, NOT go.work use (avoids the "../.." path that
+// archtest fail-closes on). #1722 split removes both this file and the replaces.
+use .

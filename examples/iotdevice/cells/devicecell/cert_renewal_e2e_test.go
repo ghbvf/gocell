@@ -43,7 +43,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	rtcommand "github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 // cert renewal e2e duration constants.
@@ -73,7 +73,7 @@ func deviceSelfCtx(ctx context.Context, deviceID string) context.Context {
 // This simulates the relay's active-uniqueness injection path (relay's
 // dispatchCommand, #1698) without starting any relay goroutines.
 // After dispatching, rec is Reset so the next call only dispatches new entries.
-func dispatchNew(t *testing.T, ctx context.Context, h cmdenqueue.Handler, rec *outboxtest.Recorder) {
+func dispatchNew(t *testing.T, ctx context.Context, h cmdremote.Handler, rec *outboxtest.Recorder) {
 	t.Helper()
 	entries := rec.Entries()
 	rec.Reset()
@@ -92,10 +92,10 @@ func dispatchNew(t *testing.T, ctx context.Context, h cmdenqueue.Handler, rec *o
 		dctx := rtcommand.WithDispatchedUniqueness(ctx, key, dl)
 
 		// Parse the handler request from the entry payload.
-		var req cmdenqueue.Request
-		require.NoError(t, json.Unmarshal(entry.Payload(), &req), "payload must decode as cmdenqueue.Request")
+		var req cmdremote.Request
+		require.NoError(t, json.Unmarshal(entry.Payload(), &req), "payload must decode as cmdremote.Request")
 
-		_, err = h.HandleEnqueue(dctx, &req)
+		_, err = h.HandleRemotecommand(dctx, &req)
 		require.NoError(t, err, "enqueue handler must succeed")
 	}
 }
@@ -140,7 +140,7 @@ func TestCertRenewal_F1_OfflineDeviceNoDuplicates(t *testing.T) {
 	svc, err := devicecmd.NewService(fc, queue, repo, codec, logger, query.RunModeForDemo(true),
 		devicecmd.WithSliceName("devicecommand"))
 	require.NoError(t, err)
-	handler := slicecmd.EnqueueCommandAdapter{S: svc}
+	handler := slicecmd.RemoteCommandAdapter{S: svc}
 
 	// --- Phase 1: Three ticks, device stays offline. ---
 	// Each tick: reconciler emits 1 entry; relay-sim dispatches it; queue
@@ -244,7 +244,7 @@ func TestCertRenewal_CompletionClosesLoop(t *testing.T) {
 		devicecmd.WithSliceName("devicecommand"),
 		devicecmd.WithOnCommandResolved(completionSvc.OnCommandResolved))
 	require.NoError(t, err)
-	handler := slicecmd.EnqueueCommandAdapter{S: svc}
+	handler := slicecmd.RemoteCommandAdapter{S: svc}
 
 	// --- Tick 1: produce + dispatch the rotate-cert command. ---
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})
@@ -344,7 +344,7 @@ func TestCertRenewal_EmitFailureSelfHeals(t *testing.T) {
 		devicecmd.WithSliceName("devicecommand"),
 		devicecmd.WithOnCommandResolved(completionSvc.OnCommandResolved))
 	require.NoError(t, err)
-	handler := slicecmd.EnqueueCommandAdapter{S: svc}
+	handler := slicecmd.RemoteCommandAdapter{S: svc}
 
 	// --- Tick 1: produce + dispatch the rotate-cert command. ---
 	_, err = reconciler.Reconcile(ctx, reconcile.Request{})

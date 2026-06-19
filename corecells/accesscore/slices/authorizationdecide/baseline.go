@@ -186,12 +186,49 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermAccessDecide().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// device-ownership baseline (#2351, presence-backend prerequisite): device:read
+	// gates the framework-owned http.devicestate.v1 serving handler
+	// (auth.RequirePermissionForResource("id", PermDeviceRead()), cellmodules/deviceserving).
+	// Living here is by the centralized-PDP-baseline convention: accesscore is the single
+	// baseline source for ALL permissions regardless of consuming cell (config:read from
+	// configcore, audit:read from auditcore, …); a framework-owned contract is no exception.
+	// The self model is device-SELF ownership: a DEVICE principal (subject.kind == device)
+	// whose subject.sub == resource.id reads its OWN state (#2400 review F1). Unlike the
+	// kind-agnostic user/role self rules, this carries an explicit subject.kind == device
+	// qualifier — a normal user whose subject UUID happens to equal a device id does NOT get
+	// device-self read (defense-in-depth + zero-trust subject/resource separation, cf. k8s
+	// SubjectAccessReview / SPIFFE distinguishing subject identity from resource). The
+	// user-owns-device path (a user reading a device they OWN) is the future DELEGATED rule
+	// (subject.sub == resource.owner via a device→owner PIP lookup), which lands with the
+	// presence backend / device registry — NOT this self rule.
+	// Enabling the grant now (before real presence data) is safe: the handler always returns
+	// state "unknown" for any id (no device registry), so there is no device-existence oracle —
+	// it lets the ownership model be tested + frozen before data lands, leaving the presence PR
+	// to wire only the data-layer RowScope/tenant isolation. Closed {owner, admin} surface,
+	// frozen by BASELINE-OWNER-RULE-TENANT-FREEZE-01 (baseline-device-read-self registered there
+	// with the device-self two-condition shape).
+	{
+		ID:         "baseline-device-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read any device's presence state",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-device-read-self",
+		Name:       "Baseline: allow a device to read its OWN presence state (subject.kind == device AND subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceRead().String()},
+		Conditions: deviceSelfOwnership(),
+	},
 }
 
 // subjectIsResource returns the cross-attribute ABAC condition that checks
-// subject.sub == resource.id (#1977 Batch B). This is the identity-ownership
-// condition: the authenticated subject is the owner of the resource they are
-// accessing (user owns their own account/roles). Uses abac.OpEqualsAttr to
+// subject.sub == resource.id (#1977 Batch B) — the id-equality ownership condition.
+// Used STANDALONE by the kind-agnostic identity-ownership self rules (user:read/write,
+// role:read, access:decide — a user owns its own account/roles/decisions). device-self
+// (deviceSelfOwnership, #2400 F1) reuses it as the id-equality half, ANDed with an
+// explicit subject.kind == device qualifier. Uses abac.OpEqualsAttr to
 // compare the LHS (subject.sub) against the RHS (resource.id) at evaluation
 // time — both resolved via attributeResolver, both fail-closed on not-found.
 //
@@ -209,6 +246,27 @@ func subjectIsResource() abac.Condition {
 		Operator:  abac.OpEqualsAttr,
 		RHSSource: abac.SourceResource,
 		RHSKey:    "id",
+	}
+}
+
+// deviceSelfOwnership returns the two-condition device-SELF ownership shape (#2400 F1):
+// subject.kind == "device" AND subject.sub == resource.id. Unlike the kind-agnostic
+// subjectIsResource() shape used by the user/role/access self rules, device-self requires
+// the principal to BE a device — a normal user whose subject UUID equals a device id does
+// NOT match. The user-owns-device path is the future delegated rule (subject.sub ==
+// resource.owner via a device→owner PIP lookup), not this self rule. The condition ORDER
+// is fixed [kind, sub==id] to match the frozen shape in BASELINE-OWNER-RULE-TENANT-FREEZE-01.
+// The "device" literal is sourced from PrincipalDevice.String() so it matches exactly what
+// attributeResolver.resolveSubject("kind") emits (principal.Kind.String()).
+func deviceSelfOwnership() []abac.Condition {
+	return []abac.Condition{
+		{
+			Source:   abac.SourceSubject,
+			Key:      "kind",
+			Operator: abac.OpEquals,
+			Values:   []string{runtimeauth.PrincipalDevice.String()},
+		},
+		subjectIsResource(),
 	}
 }
 
@@ -242,8 +300,10 @@ func adminOrSuperAdmin() abac.Condition {
 // admin/super-admin; + 3 identity-ownership rules (#1977 Batch B:
 // user:read/write, role:read for subject.sub == resource.id); + 2 access:decide
 // rules (#1863: self subject.sub == resource.id + admin) for the PDP
-// self-introspection endpoint. Each rule is action-scoped so a baseline allow for
-// one permission never leaks to another.
+// self-introspection endpoint; + 2 device:read rules (#2351/#2400: device-self
+// subject.kind == device AND subject.sub == resource.id + admin) for the framework-owned
+// devicestate serving handler (presence-backend prerequisite). Each rule is action-scoped
+// so a baseline allow for one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {

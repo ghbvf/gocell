@@ -257,12 +257,12 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 
 // --- Command-kind contract tests (schema validation) ---
 
-func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
+func TestCommandRemoteCommandV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "command.devicecommand.enqueue.v1")
+	c := contracttest.LoadByID(t, root, "command.remotecommand.v1")
 
 	// deviceId + payload + commandType all required (#1580: deviceId added so the
-	// sync command-bus handler can target a device — see EnqueueCommandAdapter;
+	// sync command-bus handler can target a device — see RemoteCommandAdapter;
 	// #1694 F9: commandType made required, silent "default" fallback removed).
 	c.ValidateRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot","commandType":"firmware-update"}`))
 	c.MustRejectRequest(t, []byte(`{"deviceId":"d-1","payload":"reboot"}`))             // missing required commandType

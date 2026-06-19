@@ -3,6 +3,7 @@ package contractgen
 import (
 	"embed"
 	"strconv"
+	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -86,6 +87,20 @@ var templates = func() *template.Template {
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			return spec.Endpoint != nil
 		},
+		// clientPathExpr returns the Go expression the generated cross-cell client
+		// (client.tmpl, #2093) uses to build the request path: a quoted literal for
+		// a static path, or a url.PathEscape concatenation for a path with
+		// {param} placeholders. Covered by render_test.TestClientPathExpr.
+		"clientPathExpr": clientPathExpr,
+		// httpMethodConst maps an upper-case HTTP method to its net/http.Method*
+		// constant (e.g. "GET" → "http.MethodGet"), so the generated client uses the
+		// stdlib const rather than a bare string literal.
+		"httpMethodConst": httpMethodConst,
+		// goPascalCase converts an identifier to PascalCase. client.tmpl uses it to
+		// derive one NewClientFor<Cell> constructor per endpoints.clients cell
+		// (e.g. "accesscore" → "NewClientForAccesscore"), baking the caller-cell
+		// identity so a wrong/forged callerCell is unexpressible (#2093, F2).
+		"goPascalCase": goPascalCase,
 	}
 
 	t := template.Must(codegen.SharedTemplates.Clone())
@@ -136,6 +151,75 @@ func needsMinLengthCheck(p *int) bool {
 // render_test.TestNeedsGuardedMinLengthCheck. Issue #1914.
 func needsGuardedMinLengthCheck(p *int) bool {
 	return p != nil && *p > 1
+}
+
+// clientPathExpr returns the Go expression the generated cross-cell client uses
+// to build the request URL path (#2093). For a static path (no path params) it
+// returns the quoted literal. For a path with {name} placeholders it returns a
+// string-concatenation expression that url.PathEscape-encodes each path param
+// from the request DTO, e.g. /internal/v1/config/{key} →
+// `"/internal/v1/config/" + url.PathEscape(req.Key)`. Placeholder names map to
+// the param's Go field name (ParamSpec.GoName). A nil endpoint returns `""`.
+func clientPathExpr(ep *httpEndpointSpec) string {
+	if ep == nil {
+		return `""`
+	}
+	if len(ep.PathParams) == 0 {
+		return strconv.Quote(ep.Path)
+	}
+	goName := make(map[string]string, len(ep.PathParams))
+	for _, pp := range ep.PathParams {
+		goName[pp.Name] = pp.GoName
+	}
+	var parts []string
+	var lit strings.Builder
+	flush := func() {
+		if lit.Len() > 0 {
+			parts = append(parts, strconv.Quote(lit.String()))
+			lit.Reset()
+		}
+	}
+	path := ep.Path
+	for i := 0; i < len(path); {
+		if path[i] == '{' {
+			if j := strings.IndexByte(path[i:], '}'); j > 0 {
+				name := path[i+1 : i+j]
+				flush()
+				parts = append(parts, "url.PathEscape(req."+goName[name]+")")
+				i += j + 1
+				continue
+			}
+		}
+		lit.WriteByte(path[i])
+		i++
+	}
+	flush()
+	if len(parts) == 0 {
+		return `""`
+	}
+	return strings.Join(parts, " + ")
+}
+
+// httpMethodConst maps an upper-case HTTP method to its net/http.Method* constant.
+// Unknown methods fall back to a quoted literal (defensive; the parser constrains
+// the method set upstream).
+func httpMethodConst(method string) string {
+	switch method {
+	case "GET":
+		return "http.MethodGet"
+	case "POST":
+		return "http.MethodPost"
+	case "PUT":
+		return "http.MethodPut"
+	case "PATCH":
+		return "http.MethodPatch"
+	case "DELETE":
+		return "http.MethodDelete"
+	case "HEAD":
+		return "http.MethodHead"
+	default:
+		return strconv.Quote(method)
+	}
 }
 
 // Per-template rendering for production goes through Generate /

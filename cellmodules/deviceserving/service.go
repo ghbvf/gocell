@@ -73,17 +73,26 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 // (GET /api/v1/devicestate/{id}) on the primary listener, gated by
 // auth.RequirePermissionForResource("id", device:read) — the device id path param
 // is forwarded to the PDP as the ABAC `resource`, so the engine decides per-device
-// ownership (baseline owner rule `subject.sub == resource.id`) rather than an
-// all-or-nothing coarse gate. This is the documented PermDeviceRead() shape and
-// matches the sibling devicecommand gate (#2348 F3 / #2351). The composition root
-// passes generatedFrameworkServedContracts() as the must-serve expectation set
-// alongside this route; bootstrap reconciles the two at startup.
+// ownership (baseline owner rule) rather than an all-or-nothing coarse gate. This is the
+// documented PermDeviceRead() shape and matches the sibling devicecommand gate (#2348 F3).
+// The composition root passes generatedFrameworkServedContracts() as the must-serve
+// expectation set alongside this route; bootstrap reconciles the two at startup.
 //
-// The platform (corecells/accesscore) PDP baseline grants no device:read rule yet,
-// so on corebundle the endpoint fail-closes to deny until a tenant policy (or the
-// presence-backend PR) supplies a device:read grant — the safe default for an
-// MDM/zero-trust boundary. The device-ownership data-layer (RowScope/tenant
-// isolation against real presence data) is tracked in #2351.
+// The platform (corecells/accesscore) PDP baseline grants device:read via two rules
+// (#2351, kind-gated per #2400 review F1): device-SELF ownership — a DEVICE principal
+// (subject.kind == device) whose subject.sub == resource.id reads its OWN state — and
+// admin/super-admin (fleet read). A non-device principal whose id merely matches, a
+// non-owner device, and a non-admin user are all PDP-denied; the user-owns-device path is
+// the future delegated rule (subject.sub == resource.owner via PIP). Enabling the grant
+// before a real presence backend is safe:
+// this handler always returns state "unknown" for ANY id (it never consults a device
+// registry), so the response carries no information about whether a device actually
+// exists — there is no device-existence oracle to enumerate, and no state to leak — the
+// ownership model is established and frozen now, leaving only the
+// data-layer RowScope/typed-tenant isolation (against real presence data) for the
+// presence backend (#1904/#1905); TenantID stays nil until a device→tenant binding
+// source exists. Delegated user-owns-device ownership (subject.sub == resource.owner
+// via a device→owner PIP lookup) likewise lands with that device registry.
 func (s *Service) Route() bootstrap.FrameworkServedRoute {
 	h := devicestate.NewHandler(s, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{

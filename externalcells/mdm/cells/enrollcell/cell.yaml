@@ -1,0 +1,13 @@
+id: enrollcell
+type: core
+consistencyLevel: L2
+durabilityMode: demo
+lifecycle: experimental
+owner:
+  team: mdm
+  role: enrollcell-owner
+schema:
+  primary: mdm_enroll
+verify:
+  smoke:
+    - smoke.enrollcell.startup

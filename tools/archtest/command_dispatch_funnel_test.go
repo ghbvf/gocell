@@ -71,7 +71,7 @@ func isCommandSoleEmitterFuncName(name string) bool {
 //
 // Batches A–D landed a command.Registry with RegisterHandler / LookupHandler
 // methods and a REAL generated package
-// (generated/contracts/command/devicecommand/enqueue/v1/command_gen.go)
+// (generated/contracts/command/remotecommand/v1/command_gen.go)
 // that calls both methods. The generated Register and Dispatch functions are
 // the sole sanctioned callsites; a hand-written cell or example calling
 // reg.RegisterHandler(...) directly bypasses the typed Handler interface and
@@ -191,7 +191,7 @@ func TestCommandDispatchRegisterCaller01(t *testing.T) {
 	// Production scope) to confirm the sanctioned caller actually calls the guarded
 	// methods. Production() excludes generated/ by design, so we use Typed() with
 	// the generated/contracts/command/** glob (#1580: was a single hardcoded
-	// devicecommand/enqueue/v1 package; generalized so a second codegen command
+	// remotecommand/v1 package; generalized so a second codegen command
 	// auto-joins coverage and removing only one funnel never silently re-vacuates
 	// this check). At least one generated package must contain a guarded call;
 	// none means the scanner regressed or every generated funnel was

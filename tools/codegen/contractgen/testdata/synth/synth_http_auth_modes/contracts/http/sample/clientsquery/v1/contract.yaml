@@ -1,0 +1,46 @@
+id: http.sample.clientsquery.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  clients:
+    - testcell
+  http:
+    method: GET
+    path: /internal/v1/sample/clientsquery
+    successStatus: 200
+    auth:
+      clientsOnly: true
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        maxLength: 4096
+      token:
+        type: string
+        required: true
+        maxLength: 256
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+      score:
+        type: number
+        required: false
+      active:
+        type: boolean
+        required: false
+    noContent: false
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

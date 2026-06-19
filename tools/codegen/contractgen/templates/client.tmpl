@@ -1,0 +1,184 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strconv"
+
+	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/panicregister"
+	"github.com/ghbvf/gocell/framework/pkg/tenant"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/transport"
+)
+
+// ClientContractID is the logical contract id this client dispatches through the
+// transport.CellTransport seam (in-process short-circuit or remote — the
+// composition root chooses by deployment topology, US5 #1966).
+const ClientContractID = "{{.ContractID}}"
+
+// Client is the sole *generated* sibling-cell caller type for {{.ContractID}}
+// (ADR D2, #2093). Its strength is codegen+golden (this file is generated and
+// byte-frozen), NOT a sealed interface: transport.CellTransport is a plain
+// exported interface, so receiving it is not itself a type-level seal. A bare
+// *http.Client cannot be passed to this constructor, and hand-written bypass
+// callers (a cell holding net/http, or calling DoContract directly) are caught by
+// the Medium AST funnels CELL-SYNC-TRANSPORT-FUNNEL-01 /
+// CELL-TRANSPORT-DOCONTRACT-CALLER-01 — the "sole expressible path" guarantee is
+// Medium, not Hard. The client signs every outbound request itself
+// (auth.SignInternalRequest), so it is fully self-contained. Domain error mapping
+// is the caller's responsibility: the method returns the decoded success DTO, the
+// HTTP status, and a transport/build/decode error; on a non-success status it
+// returns (nil, status, nil) for the caller to classify.
+type Client struct {
+	transport  transport.CellTransport
+	ring       kauth.ServiceKeyring
+	callerCell string
+	clock      clock.Clock
+}
+
+// newClient is the shared constructor body. callerCell is never a wiring input —
+// each exported NewClientFor<Cell> below bakes the caller-cell identity as a
+// literal from contract.yaml endpoints.clients, so a wrong/forged callerCell is
+// unexpressible at the call site (#2093, F2; mirrors command.tmpl's baked
+// DispatchID). The two strong deps fail fast at construction (not at the first
+// request): a nil/typed-nil transport or a nil ring each panics here.
+func newClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell string, clk clock.Clock) *Client {
+	clock.MustHaveClock(clk, "generated client {{.ContractID}}")
+	if validation.IsNilInterface(t) {
+		panic(panicregister.Approved("{{.PanicReasonClientTransportNil}}", errcode.Assertion("generated client {{.ContractID}}: CellTransport must not be nil (the composition root must inject the in-process or remote transport)")))
+	}
+	if validation.IsNilInterface(ring) {
+		panic(panicregister.Approved("{{.PanicReasonClientRingNil}}", errcode.Assertion("generated client {{.ContractID}}: ServiceKeyring must not be nil (the composition root must supply the internal service keyring)")))
+	}
+	return &Client{transport: t, ring: ring, callerCell: callerCell, clock: clk}
+}
+{{range .Endpoint.Clients}}
+// NewClientFor{{goPascalCase .}} constructs the {{$.ContractID}} client for caller
+// cell {{. | printf "%q"}} (declared in contract.yaml endpoints.clients). The
+// caller-cell identity is baked, not a parameter, so a wrong/forged callerCell is
+// unexpressible. t is the topology-injected transport (in-process or remote); ring
+// signs the outbound service token. Both fail fast at construction.
+func NewClientFor{{goPascalCase .}}(t transport.CellTransport, ring kauth.ServiceKeyring, clk clock.Clock) *Client {
+	return newClient(t, ring, {{. | printf "%q"}}, clk)
+}
+{{end}}
+
+// {{.Endpoint.HandlerMethod}} dispatches {{.Endpoint.Method}} {{.Endpoint.Path}} through the transport.CellTransport seam.
+// It builds and signs the request, dispatches via DoContract, and on the declared
+// success status decodes the response body. tn is folded into the service-token
+// MAC and the X-Tenant-ID header by auth.SignInternalRequest.
+func (c *Client) {{.Endpoint.HandlerMethod}}(ctx context.Context, tn tenant.TenantID, req *Request) ({{if .Endpoint.ClientDecodeDTO}}{{if .Endpoint.ClientDecodeList}}[]{{else}}*{{end}}{{.Endpoint.ClientDecodeDTO}}{{else}}*Response{{end}}, int, error) {
+	path := {{clientPathExpr .Endpoint}}
+{{- if .Endpoint.HasBody}}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: marshal request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, {{httpMethodConst .Endpoint.Method}}, path, bytes.NewReader(body))
+{{- else}}
+	httpReq, err := http.NewRequestWithContext(ctx, {{httpMethodConst .Endpoint.Method}}, path, http.NoBody)
+{{- end}}
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: build request: %w", err)
+	}
+{{- if .Endpoint.HasBody}}
+	httpReq.Header.Set("Content-Type", "application/json")
+{{- end}}
+{{- if .Endpoint.QueryParams}}
+	// Encode the declared query params onto the URL BEFORE signing:
+	// SignInternalRequest folds req.URL.RawQuery into the service-token MAC, so the
+	// query must be final by then or the server's recomputed MAC rejects the call.
+	// Optional params are sent only when set (mirrors the Request struct's omitempty
+	// tags); the server validates required/range (see handler.tmpl queryParamParse).
+	q := url.Values{}
+{{- range .Endpoint.QueryParams}}
+{{- if eq .GoType "string"}}
+{{- if .Required}}
+	q.Set("{{.Name}}", req.{{.GoName}})
+{{- else}}
+	if req.{{.GoName}} != "" {
+		q.Set("{{.Name}}", req.{{.GoName}})
+	}
+{{- end}}
+{{- else if eq .GoType "int64"}}
+{{- if .Required}}
+	q.Set("{{.Name}}", strconv.FormatInt(req.{{.GoName}}, 10))
+{{- else}}
+	if req.{{.GoName}} != 0 {
+		q.Set("{{.Name}}", strconv.FormatInt(req.{{.GoName}}, 10))
+	}
+{{- end}}
+{{- else if eq .GoType "float64"}}
+{{- if .Required}}
+	q.Set("{{.Name}}", strconv.FormatFloat(req.{{.GoName}}, 'f', -1, 64))
+{{- else}}
+	if req.{{.GoName}} != 0 {
+		q.Set("{{.Name}}", strconv.FormatFloat(req.{{.GoName}}, 'f', -1, 64))
+	}
+{{- end}}
+{{- else if eq .GoType "bool"}}
+{{- if .Required}}
+	q.Set("{{.Name}}", strconv.FormatBool(req.{{.GoName}}))
+{{- else}}
+	if req.{{.GoName}} {
+		q.Set("{{.Name}}", strconv.FormatBool(req.{{.GoName}}))
+	}
+{{- end}}
+{{- end}}
+{{- end}}
+	httpReq.URL.RawQuery = q.Encode()
+{{- end}}
+	// Sign with a service token so the InternalListener middleware accepts the
+	// request; tn travels as X-Tenant-ID (set by SignInternalRequest) so the
+	// server scopes the lookup to the caller's tenant.
+	if err := auth.SignInternalRequest(ctx, c.ring, c.callerCell, httpReq, tn, c.clock); err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: sign request: %w", err)
+	}
+	resp, err := c.transport.DoContract(ctx, ClientContractID, httpReq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("{{.ContractID}} client: do request: %w", err)
+	}
+	defer func() {
+		// Drain so the remote transport can reuse the keep-alive connection
+		// (net/http requires the body fully read before Close); log a close
+		// failure (TCP RST / pool signal) instead of dropping it silently.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if cerr := resp.Body.Close(); cerr != nil {
+			slog.WarnContext(ctx, "{{.ContractID}} client: response body close error", slog.Any("error", cerr))
+		}
+	}()
+	if resp.StatusCode != {{.Endpoint.SuccessCode}} {
+		// Non-success status: return it for the caller to map to a domain error.
+		return nil, resp.StatusCode, nil
+	}
+{{- if .Endpoint.ClientDecodeDTO}}
+	// responseProjection contract: Response.Data is the sealed
+	// projection.ResourceProjection carrier (no UnmarshalJSON), so decode the
+	// {data: ...} envelope into the resource-item DTO instead.
+	var env struct {
+		Data {{if .Endpoint.ClientDecodeList}}[]{{end}}{{.Endpoint.ClientDecodeDTO}} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("{{.ContractID}} client: decode response: %w", err)
+	}
+	return {{if .Endpoint.ClientDecodeList}}env.Data{{else}}&env.Data{{end}}, resp.StatusCode, nil
+{{- else}}
+	var out Response
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("{{.ContractID}} client: decode response: %w", err)
+	}
+	return &out, resp.StatusCode, nil
+{{- end}}
+}

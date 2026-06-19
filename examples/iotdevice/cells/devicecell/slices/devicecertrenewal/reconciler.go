@@ -14,12 +14,12 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/validation"
 	"github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 // rotateCertCommandType is the CommandType stamped on the enqueued device command
 // that instructs the device to rotate (renew) its certificate. It rides inside the
-// existing command.devicecommand.enqueue.v1 payload — no new contract. The literal
+// existing command.remotecommand.v1 payload — no new contract. The literal
 // lives in domain so the completion consumer (devicecertcompletion, #1870) filters
 // terminal acks by the SAME value — the emit/filter pair cannot drift.
 const rotateCertCommandType = domain.RotateCertCommandType
@@ -53,7 +53,7 @@ func (p Policy) validate() error {
 
 // Reconciler is a STATELESS cert-renewal producer: a reconcile.Reconciler that,
 // on each tick, scans ALL near-expiry certificates and enqueues a rotate-cert
-// async command per device via the generated cmdenqueue.EmitAsync wrapper
+// async command per device via the generated cmdremote.EmitAsync wrapper
 // (→ runtime command.EmitAsync) with active-uniqueness.
 //
 // It is the iotdevice archetype-② reference (reconcile → command, issue #1757):
@@ -197,7 +197,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 }
 
 // enqueueRenewal emits one rotate-cert async outbox entry for a near-expiry cert
-// via the generated cmdenqueue.EmitAsync(..., command.WithActiveUniqueness(deadline))
+// via the generated cmdremote.EmitAsync(..., command.WithActiveUniqueness(deadline))
 // wrapper (DispatchID baked in; delegates to runtime command.EmitAsync).
 // WithActiveUniqueness stamps CommandDeadlineMetadataKey on the entry; the relay
 // reads that key and injects (claimKey, deadline) into the dispatch ctx via
@@ -214,14 +214,14 @@ func (r *Reconciler) enqueueRenewal(ctx context.Context, cand domain.Certificate
 	if err != nil {
 		return err
 	}
-	req := cmdenqueue.Request{
+	req := cmdremote.Request{
 		DeviceID:    cand.DeviceID,
 		CommandType: rotateCertCommandType,
 		Payload:     payload,
 	}
 	commandID := rotateCommandID(cand.DeviceID, cand.CertEpoch)
 	deadline := now.Add(r.policy.AttemptTTL)
-	if err := cmdenqueue.EmitAsync(ctx, r.clk, r.emitter, cand.DeviceID, commandID, &req,
+	if err := cmdremote.EmitAsync(ctx, r.clk, r.emitter, cand.DeviceID, commandID, &req,
 		command.WithActiveUniqueness(deadline)); err != nil {
 		return fmt.Errorf("devicecertrenewal: enqueue cert-renewal command: %w", err)
 	}

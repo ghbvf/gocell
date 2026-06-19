@@ -351,7 +351,7 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 //
 // Before #1580 the command branch only checked ownerCell != "" — a codegen:true
 // command contract could emit a typed Handler that no cell implemented and still
-// pass (the dead-but-compiles state #1580 fixes for command.devicecommand.enqueue.v1).
+// pass (the dead-but-compiles state #1580 fixes for command.remotecommand.v1).
 // The command branch now additionally requires, for codegen:true commands (those
 // with a generated command_gen.go, located via loadGeneratedSourceMap(…,"command",
 // "/command_gen.go")), that ≥1 cell/example type implements the generated Handler
@@ -367,7 +367,7 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 //     deterministic given the repo tree; broken scan triggers floor assertion.
 //     For the command dimension specifically, the archtest statically requires a
 //     Handler IMPL to exist but cannot express "a codegen:true command is always
-//     REGISTERED" — deleting the cmdenqueue.Register call while keeping the adapter
+//     REGISTERED" — deleting the cmdremote.Register call while keeping the adapter
 //     type leaves this green (runtime required-registry fail-fast + the e2e
 //     wiring test are the runtime backstops). The Hard upgrade = a cellgen
 //     role:handle codegen funnel deriving the Register call from slice.yaml so the
@@ -387,9 +387,9 @@ func outboxEmit(ctx context.Context, e interface{}, topic string, p interface{})
 //     caught by the anti-vacuity guard (codegen command source map non-empty ⟹
 //     ≥1 generated Handler iface must load).
 //   - Positive command-impl detection (the real types.Implements path) is exercised
-//     by THIS test's main assertion: command.devicecommand.enqueue.v1 is active +
+//     by THIS test's main assertion: command.remotecommand.v1 is active +
 //     codegen:true, so if types.Implements failed to match the satellite-module
-//     EnqueueCommandAdapter, the command branch would flag it and the test would FAIL.
+//     RemoteCommandAdapter, the command branch would flag it and the test would FAIL.
 //     A loader regression to root-only (GOWORK=off, dropping examples/* satellites
 //     #1556) therefore surfaces as a false-positive RED here (impl appears absent),
 //     never a silent pass. TestDeadContractCover_DetectsUnimplementedCommand

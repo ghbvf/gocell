@@ -1936,3 +1936,72 @@ func TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateGeneratedClientEncodable pins the codegen funnel that keeps
+// "a cross-cell client was generated for endpoints.clients" honest (#2093, F3/F4):
+// the client must be able to send the full declared request and decode the
+// declared success. The guard rejects, at codegen, a clients contract that is
+// NoContent (204 — nothing to decode) or declares a custom request header other
+// than the tenant header (client.tmpl sends only path/query/body + the
+// SignInternalRequest tenant header, so any other header is silently dropped).
+// Without endpoints.clients no client is emitted, so neither arm applies.
+func TestValidateGeneratedClientEncodable(t *testing.T) {
+	const cid = "http.sample.guard.v1"
+	tenantHeader := []ParamSpec{{Name: tenantRequestHeader, GoName: "XTenantID", GoType: "string"}}
+	customHeader := []ParamSpec{{Name: "X-Trace-Id", GoName: "XTraceID", GoType: "string"}}
+
+	cases := []struct {
+		name    string
+		ep      *httpEndpointSpec
+		wantErr bool
+		// substrs are required fragments of the error message (only when wantErr).
+		substrs []string
+	}{
+		{
+			name: "no clients: guard skipped even when NoContent",
+			ep:   &httpEndpointSpec{Clients: nil, NoContent: true, HeaderParams: customHeader},
+		},
+		{
+			name: "clients + decodable body + tenant header only: ok",
+			ep:   &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: false, HeaderParams: tenantHeader},
+		},
+		{
+			name:    "clients + NoContent: rejected",
+			ep:      &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: true},
+			wantErr: true,
+			substrs: []string{"NoContent (204)", "endpoints.clients"},
+		},
+		{
+			name:    "clients + custom request header: rejected",
+			ep:      &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: false, HeaderParams: customHeader},
+			wantErr: true,
+			substrs: []string{"X-Trace-Id", "endpoints.clients"},
+		},
+		{
+			name: "clients + tenant header in any case: ok (case-insensitive allowlist)",
+			ep: &httpEndpointSpec{
+				Clients:      []string{"accesscore"},
+				HeaderParams: []ParamSpec{{Name: "x-tenant-id", GoName: "XTenantID", GoType: "string"}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateGeneratedClientEncodable(cid, tc.ep)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				for _, s := range tc.substrs {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("error %q missing substring %q", err.Error(), s)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}

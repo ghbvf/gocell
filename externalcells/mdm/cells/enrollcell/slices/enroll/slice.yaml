@@ -1,0 +1,16 @@
+id: enroll
+belongsToCell: enrollcell
+consistencyLevel: L2
+lifecycle: experimental
+contractUsages: []
+verify:
+  # FMT-12 requires >=1 verify.unit. PR-0 has no enrollment logic, so this target
+  # resolves to the slice's skeleton drift guard (doc.go + skeleton_test.go's
+  # TestSkeleton); `gocell verify slice enrollcell/enroll` runs and passes. Real
+  # enrollment unit tests grow this package in MDM-PR1+ (epic #2299).
+  unit:
+    - unit.enroll.skeleton
+  contract: []
+  waivers: []
+allowedFiles:
+  - "cells/enrollcell/slices/enroll/**"

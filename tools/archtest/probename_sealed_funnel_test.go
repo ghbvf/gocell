@@ -243,6 +243,7 @@ func goldenProbeNames() []string {
 		"corecells/accesscore.ProbeRepoReady=accesscore_repo_ready",
 		"corecells/auditcore.ProbeRepoReady=auditcore_repo_ready",
 		"corecells/configcore.ProbeRepoReady=configcore_repo_ready",
+		"corecells/registrycore.ProbeRepoReady=registrycore_repo_ready",
 		"corecells/syscore.ProbeRepoReady=syscore_repo_ready",
 		"examples/demo/cells/democell.ProbeRepoReady=democell_repo_ready",
 		"examples/iotdevice/cells/devicecell.ProbeRepoReady=devicecell_repo_ready",

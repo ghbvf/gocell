@@ -14,12 +14,12 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/eventbus"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 // newWiredCommandCell builds a fully-wired devicecell over the given registry +
 // device repo and drives its real Init — so the cell's production
-// cmdenqueue.Register call site runs. Returns nothing extra; the caller already
+// cmdremote.Register call site runs. Returns nothing extra; the caller already
 // holds reg and repo.
 func newWiredCommandCell(t *testing.T, reg *commandruntime.Registry, repo domain.DeviceRepository) {
 	t.Helper()
@@ -38,7 +38,7 @@ func newWiredCommandCell(t *testing.T, reg *commandruntime.Registry, repo domain
 // TestDeviceCell_CommandBus_Enqueue_RealHandlerEndToEnd is the #1580 end-to-end
 // proof that the generated command funnel is wired to a REAL handler through the
 // cell — not dead-but-compiles. It drives the cell's actual Init (which calls
-// cmdenqueue.Register via EnqueueCommandAdapter), then dispatches through the
+// cmdremote.Register via RemoteCommandAdapter), then dispatches through the
 // same registry and asserts the real devicecmd.Service.Enqueue persisted an
 // entry. Deleting the cell's Register call makes Dispatch return
 // ErrCommandNotFound here (the #1580 layer-3 runtime backstop).
@@ -53,7 +53,7 @@ func TestDeviceCell_CommandBus_Enqueue_RealHandlerEndToEnd(t *testing.T) {
 
 	// Dispatch through the SAME registry the cell registered into. A real handler
 	// must be present because the cell's Register call ran during Init.
-	resp, err := cmdenqueue.Dispatch(ctx, reg, &cmdenqueue.Request{
+	resp, err := cmdremote.Dispatch(ctx, reg, &cmdremote.Request{
 		DeviceID:    "dev-1",
 		CommandType: "reboot",
 		Payload:     "now",
@@ -76,7 +76,7 @@ func TestDeviceCell_CommandBus_Enqueue_UnknownDevice(t *testing.T) {
 	reg := commandruntime.NewRegistry()
 	newWiredCommandCell(t, reg, mem.NewDeviceRepository())
 
-	_, err := cmdenqueue.Dispatch(ctx, reg, &cmdenqueue.Request{
+	_, err := cmdremote.Dispatch(ctx, reg, &cmdremote.Request{
 		DeviceID:    "ghost",
 		CommandType: "reboot",
 		Payload:     "now",

@@ -3,6 +3,7 @@
 // gocell-web can import from this barrel instead of individual type files.
 export * as httpSampleBootstrapV1 from './contracts/http/sample/bootstrap/v1/types';
 export * as httpSampleClientsonlyV1 from './contracts/http/sample/clientsonly/v1/types';
+export * as httpSampleClientsqueryV1 from './contracts/http/sample/clientsquery/v1/types';
 export * as httpSampleIdempotencyexemptV1 from './contracts/http/sample/idempotencyexempt/v1/types';
 export * as httpSamplePasswordresetexemptV1 from './contracts/http/sample/passwordresetexempt/v1/types';
 export * as httpSamplePermissionV1 from './contracts/http/sample/permission/v1/types';

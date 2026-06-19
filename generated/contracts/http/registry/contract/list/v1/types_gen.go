@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/httputil"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 )
 
 // Request — http.registry.contract.list.v1.request
@@ -22,9 +23,9 @@ type Request struct {
 
 // Response — http.registry.contract.list.v1.response
 type Response struct {
-	Data       []*ResponseDataItem `json:"data"`
-	NextCursor string              `json:"nextCursor"`
-	HasMore    bool                `json:"hasMore"`
+	Data       []projection.ResourceProjection `json:"data"`
+	NextCursor string                          `json:"nextCursor"`
+	HasMore    bool                            `json:"hasMore"`
 }
 
 // ResponseDataItem is a generated DTO for contract http.registry.contract.list.v1.
@@ -33,12 +34,41 @@ type ResponseDataItem struct {
 	Kind          string `json:"kind"`
 	State         string `json:"state"`
 	Submitter     string `json:"submitter"`
-	Approver      string `json:"approver,omitempty"`
-	PayloadSchema string `json:"payloadSchema,omitempty"`
+	Approver      string `json:"approver"`
+	PayloadSchema string `json:"payloadSchema"`
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
 	// format: date-time
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// ToMap projects ResponseDataItem into the column map the masking funnel
+// (projection.NewProjection / NewProjectionList) consumes. It is exported because
+// the read handler lives in the cell package, not this generated package, and must
+// feed the map to the funnel — the only way to populate the projection-typed
+// Response.Data. ToMap itself returns a plain map and grants no bypass: a
+// []projection.ResourceProjection is obtainable solely via the sealed constructors.
+//
+// It emits the FULL, STABLE column set: every field is an unconditional entry,
+// always present, keyed by its wire JSON name. The masking funnel can only redact
+// a key it can see (applyMask is a no-op for an absent key), so a uniform
+// always-present column set is what closes the presence-based side channel — field
+// presence never reveals whether a masked column held data (ADR 202606112000-1350
+// Decision 2; PROJECTION-TOMAP-FULL-COLUMN-SET-01). There is NO conditional /
+// omitempty omission (that #2159 regression re-opened the side channel, #1875). A
+// nullable column is a pointer (*T): its nil marshals to JSON null — schema-valid
+// "no value" with the key still present and maskable.
+func (i ResponseDataItem) ToMap() map[string]any {
+	return map[string]any{
+		"id":            i.ID,
+		"kind":          i.Kind,
+		"state":         i.State,
+		"submitter":     i.Submitter,
+		"approver":      i.Approver,
+		"payloadSchema": i.PayloadSchema,
+		"createdAt":     i.CreatedAt,
+		"updatedAt":     i.UpdatedAt,
+	}
 }
 
 // ListResponseObject is the typed response envelope for
