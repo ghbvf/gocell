@@ -209,18 +209,15 @@ func buildSliceDerivedSpecs(p *metadata.ProjectMeta, cellID string, fieldIndex *
 	return validateHTTPAuthModeCompleteness(p, cellID)
 }
 
-// validateHTTPAuthModeCompleteness enforces the #2020 mandatory-AuthZ-mode gate at
-// generate time — the Hard carrier, mirroring the gRPC #2008 completeness pre-pass
-// (validateGrpcMethodOverlayAgainstProto, "Completeness (#2008)" above). Every
-// served, lifecycle:active, codegen HTTP contract MUST declare exactly one AuthZ
-// mode — the ABAC default (endpoints.http.permission) or an explicit opt-out flag
-// (public/bootstrap/clientsOnly/serviceOwned) — and every opt-out mode MUST carry a
-// non-empty endpoints.http.auth.reason. A modeless contract is rejected UNLESS it is
-// on the frozen migration ledger (metadata.IsHTTPAuthModeLedgered); the ledger
-// shrinks to empty as #2355/#2358 migrate, after which this branch is deleted.
+// validateHTTPAuthModeCompleteness is the per-cell SERVE-scoped arm of the #2020
+// mandatory-AuthZ-mode gate, run during BuildCellSpec over this cell's slice serve
+// usages. The COMPREHENSIVE generate-time carrier is contractgen.buildHTTPSpec, which
+// runs metadata.ClassifyHTTPAuthMode over EVERY active codegen HTTP contract (including
+// non-served ones); this serve-scan is a same-oracle defense layer so a cell build also
+// fails closed. Both mirror the gRPC #2008 completeness pre-pass.
 //
-// Failing here makes the violation unrepresentable in generated code: a standard
-// route that silently forgot its authz mode cannot ship (dead-default fail-closed).
+// Failing here makes the violation unrepresentable in generated code: a standard route
+// that silently forgot its authz mode cannot ship (dead-default fail-closed).
 func validateHTTPAuthModeCompleteness(p *metadata.ProjectMeta, cellID string) error {
 	prefix := cellID + "/"
 	for key, s := range p.Slices {
@@ -235,45 +232,21 @@ func validateHTTPAuthModeCompleteness(p *metadata.ProjectMeta, cellID string) er
 }
 
 // checkSliceServeAuthModes runs the #2020 mode gate over one slice's serve
-// contractUsages, split from validateHTTPAuthModeCompleteness to keep both within the
-// cognitive-complexity budget.
+// contractUsages via the shared metadata.ClassifyHTTPAuthMode oracle (same judgment as
+// contractgen's comprehensive gate + governance FMT-42). Scope filtering (active/codegen/
+// http) and ledger exemption live in the classifier, which returns HTTPAuthModeOK for a
+// nil contract — so the c.ID dereference below only runs on a real violation.
 func checkSliceServeAuthModes(p *metadata.ProjectMeta, s *metadata.SliceMeta) error {
 	for _, cu := range s.ContractUsages {
 		if cu.Role != roleServe {
 			continue
 		}
 		c := p.Contracts[cu.Contract]
-		if c == nil || c.Kind != "http" || c.Lifecycle != "active" || !c.Codegen {
-			continue
+		if v := metadata.ClassifyHTTPAuthMode(c); v != metadata.HTTPAuthModeOK {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build http: "+v.Message(),
+				errcode.WithDetails(errcode.PublicString("contract", c.ID)))
 		}
-		if err := checkHTTPAuthModeDeclared(c.ID, c.Endpoints.HTTP); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// checkHTTPAuthModeDeclared is the per-contract arm of validateHTTPAuthModeCompleteness,
-// split out to keep that function within the cognitive-complexity budget.
-func checkHTTPAuthModeDeclared(contractID string, h *metadata.HTTPTransportMeta) error {
-	if !metadata.HTTPAuthModeDeclared(h) {
-		if metadata.IsHTTPAuthModeLedgered(contractID) {
-			return nil
-		}
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build http: contract declares no AuthZ mode; every active route must declare "+
-				"endpoints.http.permission (ABAC default) or an explicit opt-out "+
-				"(public/bootstrap/clientsOnly/serviceOwned) (#2020 default-ABAC, strict fail-closed)",
-			errcode.WithDetails(errcode.PublicString("contract", contractID)))
-	}
-	// Reaching here means HTTPAuthModeDeclared(h) was true, so h is non-nil
-	// (HTTPAuthModeDeclared(nil)==false); the h != nil guard is defensive against future
-	// reordering and costs nothing.
-	if h != nil && metadata.HTTPAuthModeIsOptOut(h.Auth) && strings.TrimSpace(h.Auth.Reason) == "" {
-		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"cellgen build http: opt-out auth mode (public/bootstrap/clientsOnly/serviceOwned) "+
-				"must declare a non-empty endpoints.http.auth.reason (#2020 non-ABAC must justify)",
-			errcode.WithDetails(errcode.PublicString("contract", contractID)))
 	}
 	return nil
 }

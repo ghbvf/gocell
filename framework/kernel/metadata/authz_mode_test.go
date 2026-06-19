@@ -75,13 +75,92 @@ func TestHTTPAuthModeLedger_Accessors(t *testing.T) {
 	}
 }
 
-// TestHTTPAuthModeLedger_FrozenSize guards the frozen ceiling: the ledger may only
-// shrink, never grow. A growing ledger means a new modeless route was added AND
-// ledgered, bypassing the cellgen Hard gate — the size cap catches that.
-func TestHTTPAuthModeLedger_FrozenSize(t *testing.T) {
-	if got := len(httpAuthModeMigrationLedger); got > httpAuthModeLedgerFrozenSize {
-		t.Fatalf("ledger grew to %d entries (> frozen %d) — a new modeless route must declare "+
-			"a mode, not be ledgered (#2020 frozen). If you migrated/removed entries, decrement "+
-			"httpAuthModeLedgerFrozenSize to match", got, httpAuthModeLedgerFrozenSize)
+// frozenInitialLedgerIDs is the IMMUTABLE #2020-landing ledger ID set (37). Never edit
+// it — migrating a route removes its entry from httpAuthModeMigrationLedger only; this
+// set stays put so TestHTTPAuthModeLedger_FrozenSubset can prove the live ledger never
+// grows or swaps in a new modeless ID.
+var frozenInitialLedgerIDs = map[string]struct{}{
+	"http.admin.health.cells.v1": {}, "http.audit.list.v1": {}, "http.auth.decide.v1": {},
+	"http.auth.role.assign.v1": {}, "http.auth.role.check.v1": {}, "http.auth.role.list.v1": {},
+	"http.auth.role.revoke.v1": {}, "http.auth.user.change-password.v1": {}, "http.auth.user.create.v1": {},
+	"http.auth.user.delete.v1": {}, "http.auth.user.get.v1": {}, "http.auth.user.lock.v1": {},
+	"http.auth.user.patch.v1": {}, "http.auth.user.unlock.v1": {}, "http.auth.user.update.v1": {},
+	"http.config.internal.get.v1": {}, "http.device.command.ack.v1": {}, "http.device.command.dequeue.v1": {},
+	"http.device.command.enqueue-async.v1": {}, "http.device.command.enqueue.v1": {}, "http.device.command.extend-lease.v1": {},
+	"http.device.command.report.v1": {}, "http.device.list.v1": {}, "http.device.status.v1": {},
+	"http.devicestate.v1": {}, "http.order.confirm.v1": {}, "http.order.create.v1": {},
+	"http.order.get.v1": {}, "http.order.list.v1": {}, "http.order.projection-summary.v1": {},
+	"http.policy.create.v1": {}, "http.policy.delete.v1": {}, "http.policy.get.v1": {},
+	"http.policy.list.v1": {}, "http.policy.update.v1": {}, "http.registry.contract.list.v1": {},
+	"http.registry.contract.submit.v1": {},
+}
+
+// TestHTTPAuthModeLedger_FrozenSubset guards the frozen ID set: the live ledger may only
+// shrink WITHIN frozenInitialLedgerIDs. An ID not in the frozen set means a new modeless
+// route was ledgered (grow) or swapped in (remove-one-add-one stays same size but a
+// size-only cap would miss it) — both bypass the codegen Hard gate.
+func TestHTTPAuthModeLedger_FrozenSubset(t *testing.T) {
+	for _, id := range HTTPAuthModeLedgerIDs() {
+		if _, ok := frozenInitialLedgerIDs[id]; !ok {
+			t.Errorf("ledger entry %q is not in the frozen #2020-landing set — a new modeless route "+
+				"must declare a mode, not be ledgered (the frozen set is immutable; the ledger may "+
+				"only shrink)", id)
+		}
 	}
+}
+
+// TestClassifyHTTPAuthMode covers the shared oracle consumed by contractgen, cellgen,
+// and FMT-42: scope gating + the three violation kinds + ledger exemption.
+func TestClassifyHTTPAuthMode(t *testing.T) {
+	httpC := func(lifecycle string, codegen bool, h *HTTPTransportMeta) *ContractMeta {
+		return &ContractMeta{ID: "http.demo.x.v1", Kind: "http", Lifecycle: lifecycle, Codegen: codegen, Endpoints: EndpointsMeta{HTTP: h}}
+	}
+	cases := []struct {
+		name string
+		c    *ContractMeta
+		want HTTPAuthModeViolation
+	}{
+		{"nil", nil, HTTPAuthModeOK},
+		{"non-http", &ContractMeta{ID: "event.x.v1", Kind: "event", Lifecycle: "active", Codegen: true}, HTTPAuthModeOK},
+		{"draft out of scope", httpC("draft", true, &HTTPTransportMeta{}), HTTPAuthModeOK},
+		{"non-codegen out of scope", httpC("active", false, &HTTPTransportMeta{}), HTTPAuthModeOK},
+		{"modeless", httpC("active", true, &HTTPTransportMeta{}), HTTPAuthModeModeless},
+		{
+			"passwordResetExempt-only modeless",
+			httpC("active", true, &HTTPTransportMeta{Auth: HTTPAuthMeta{PasswordResetExempt: true}}), HTTPAuthModeModeless,
+		},
+		{"abac ok", httpC("active", true, &HTTPTransportMeta{Permission: "config:read"}), HTTPAuthModeOK},
+		{
+			"opt-out with reason ok",
+			httpC("active", true, &HTTPTransportMeta{Auth: HTTPAuthMeta{Public: true, Reason: "login"}}), HTTPAuthModeOK,
+		},
+		{
+			"opt-out missing reason",
+			httpC("active", true, &HTTPTransportMeta{Auth: HTTPAuthMeta{Public: true}}), HTTPAuthModeOptOutMissingReason,
+		},
+		{
+			"reason without opt-out",
+			httpC("active", true, &HTTPTransportMeta{Permission: "config:read", Auth: HTTPAuthMeta{Reason: "stray"}}),
+			HTTPAuthModeReasonWithoutOptOut,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyHTTPAuthMode(tc.c); got != tc.want {
+				t.Errorf("ClassifyHTTPAuthMode = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("ledgered modeless is OK", func(t *testing.T) {
+		ids := HTTPAuthModeLedgerIDs()
+		if len(ids) == 0 {
+			t.Skip("ledger drained")
+		}
+		c := httpC("active", true, &HTTPTransportMeta{})
+		c.ID = ids[0]
+		if got := ClassifyHTTPAuthMode(c); got != HTTPAuthModeOK {
+			t.Errorf("ledgered modeless contract = %v, want OK", got)
+		}
+	})
 }

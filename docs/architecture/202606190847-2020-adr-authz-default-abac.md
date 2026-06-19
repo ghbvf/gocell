@@ -100,24 +100,32 @@ proto RPC 必须是 public 或 permissioned，否则 generate 失败）。
 冻结（`AUTH-SCHEMA-GOVERNANCE-BOOL-SEMANTICS-01`），本 PR 不新增 combo；修饰符 `passwordResetExempt`
 与 `serviceOwned` 的合法共存已在矩阵中（`"p-R-S-b-c"`）。
 
-### D4 — 唯一 Hard 主载体：codegen generate-time 完整性预检
+### D4 — Hard 主载体：codegen generate-time 完整性预检（comprehensive + 共享 oracle）
 
-**主控制点**是 `cellgen/builder.go` 的 `buildHTTPMethodPermissions`（或其新增的 modeless 分类逻辑）。
-当前该函数「跳过」无 permission 的 http 契约（sparse migration overlay 行为）；#2020 把
-「跳过」改为「分类校验」：
+判定收口为**单一共享 oracle** `metadata.ClassifyHTTPAuthMode(c)`（active+codegen+http 范围内分类）：
 
-- 契约有 `permission` → ABAC，正常纳入 resolver。
-- 契约有合法 opt-out flag（`public / bootstrap / clientsOnly / serviceOwned`）→ opt-out，
-  跳过 resolver 但**不报错**（前提是 `auth.reason` 已填，否则报错）。
-- 契约无 permission 且无 opt-out flag，且不在冻结 ledger → `gocell generate` **报错**，CI 红。
-- 契约 ID ∈ 冻结 ledger → 豁免，行为与当前 sparse-optional 等同（保持向后兼容直到 #2355/#2358 迁移）。
+- 有 `permission` → ABAC（OK）。
+- 有 opt-out flag（`public/bootstrap/clientsOnly/serviceOwned`）+ 非空 `auth.reason` → OK；缺 reason → `OptOutMissingReason`。
+- 无 permission 且无 opt-out（含仅 passwordResetExempt）且不在冻结 ledger → `Modeless`。
+- 非 opt-out 却带 `auth.reason` → `ReasonWithoutOptOut`（forbidden）。
+- ID ∈ 冻结 ledger → OK（豁免，直到 #2355/#2358 迁移）。
 
-**违反不可表达于 generated code**：modeless 契约不能生成合法的 `cell_gen.go`（generate 直接失败），
-即使 handler 手写了正确的 gate，generated code 也无法产出。这与 gRPC `Completeness (#2008)` 的
-"dead 403 不可静默上线" 防线同构。
+**comprehensive 主控制点 = generate 编排层** `cmd/gocell/app` 的 `validateProjectHTTPAuthModes`（在
+`runCodegenGenerate` 内、`parseProject` 后、写盘前），对 `p.Contracts` **每个** active codegen http 契约跑
+classifier——覆盖 `generate cell` **与** `generate contract`（及 verify-generated.sh 的 `--verify` 路径），
+既补上 cellgen serve-scan 漏的「非 served 契约」（F2），也堵 contractgen 路径（F1），且 forbidden 分支
+（reason-without-opt-out）也在 codegen 期拦（F3，由共享 classifier 提供）。`cellgen/builder.go` 的 serve-scan
+（`validateHTTPAuthModeCompleteness`）与治理 FMT-42 复用**同一** classifier，分别作 cell 构建期 defense 与
+validate 期 Medium 层——一处判定、三处复用。
 
-**AI-robust 评级（Hard）**：上游 = cellgen 单源读 `contract.yaml`；下游 = generated code
-不可表达 modeless 路由（generate 失败）。
+> 原始单点（cellgen serve-scan）的覆盖洞由外部再审（Codex）发现并在本 PR 修正：判定上移到 generate 编排层 +
+> 抽共享 classifier，对标 k8s CRD validation（直接校验声明对象、非从消费者路径反推）。
+
+**违反不可表达于 generated artifacts**：modeless 契约让 `gocell generate`（任一 kind）**报错**，即使 handler
+手写了正确 gate 也产不出 generated code。与 gRPC `Completeness (#2008)` 的 "dead 403 不可静默上线" 同构。
+
+**AI-robust 评级（Hard）**：上游 = generate 编排单源读 `contract.yaml` + 共享 classifier；下游 = generated
+artifacts 不可表达 modeless 路由（generate 失败）。
 
 ### D5 — runtime `auth.Mount` 不作为载体（设计裁决）
 
@@ -177,20 +185,22 @@ accesscore/devicecore/registrycore/auditcore + examples 的 `http.order.*`），
 / `HTTPAuthModeLedgerIDs` 访问器，与分类 helper `HTTPAuthModeDeclared` / `HTTPAuthModeIsOptOut` 同包，
 供 cellgen + governance + archtest 共享）。
 
-**ledger 约束**：
+**ledger 约束**（两道守卫，均 Medium）：
 
-- 新契约 ID **不可**入集（frozen golden，CI 发现即红）。
-- ledger 条目若已迁移/删除（契约已声明 permission 或 opt-out）→ stale → 测试红（no-stale
-  反查，驱动单调收敛到空）。
-- **endgame**：ledger 清零后删除豁免逻辑分支；清零工作归 #2355（accesscore/configcore）/#2358
-  （devicecore/registrycore）专项 wave。
+- **frozen-subset**（`TestHTTPAuthModeLedger_FrozenSubset`，metadata 包）：live ledger 必须是 #2020-landing
+  的不可变 37-ID 集 `frozenInitialLedgerIDs` 的**子集**——既挡「新增 modeless 并入 ledger」（grow），也挡
+  「删一个旧 ID + 换入一个新 modeless ID」（swap，size-only 守卫漏判）。迁移只从 ledger map 删条目，frozen 集不动。
+  （外部再审 C2/F4 发现 size-only 守卫挡不住 swap，本 PR 升级为 subset。）
+- **no-stale**（`TestHTTPAuthModeLedger_MatchesProjectModeless`，archtest）：ledger 条目若已迁移/删除 → stale → 红；
+  新 modeless 路由未入 ledger 也红（双向），驱动集合单调收敛到空。
+- **endgame**：ledger 清零后删除豁免逻辑分支 + frozen 集；清零工作归 #2355（accesscore/auditcore/configcore）
+  /#2358（devicecore/registrycore）专项 wave，examples（`http.order.*`）随附。
 
 **不引入 `ABAC_DISABLED=true` 全局开关**：PDP 缺失继续 fail-closed deny（框架既有
 `enforcePermission` fail-closed 语义，`WithPrimaryAuthorizer` nil guard + `ResolveAuthorizer`
 启动期 fail-fast 保证）。
 
-**AI-robust 评级（Medium）**：ledger 冻结集由 golden 锁定（新 ID 不可入），no-stale 反查驱动
-收敛；生成失败是 Hard，ledger 的 stale 检测是 Medium（需运行测试）。
+**AI-robust 评级（Medium）**：frozen-subset + no-stale 双向反查（需运行测试，非编译期）；生成失败（D4）是 Hard。
 
 ### D8 — FMT-42 扩展作为 authoring UX 纵深（Medium）
 
@@ -206,9 +216,9 @@ registry / golden churn）：在 `gocell validate` 阶段即报 modeless / opt-o
 
 | 措施 | 评级 | 上游 | 下游 |
 |------|------|------|------|
-| codegen 完整性预检（modeless/缺-reason → generate 失败，**唯一 Hard 主控制点**） | **Hard** | cellgen 单源读 `contract.yaml` | generated code 不可表达 modeless 路由（generate 直接失败；生成路径是单一出口） |
+| codegen 完整性预检（generate 编排层 comprehensive，modeless/缺-reason/reason-forbidden → generate 失败，**Hard 主控制点**） | **Hard** | generate 编排单源读 `contract.yaml` + 共享 `ClassifyHTTPAuthMode` oracle | generated artifacts 不可表达 modeless 路由（任一 kind generate 直接失败；覆盖每个 active codegen http 契约） |
 | schema `auth.reason` 字段形状（`type:string` + `minLength:1`） | **Hard**（schema） | schema 钉死非空字符串（不表达 required/forbidden 耦合，避免与 2^5 auth-bool 矩阵耦合） | 空串 reason → schema 校验失败；required/forbidden 耦合由 codegen（Hard）+ FMT-42（Medium）承载 |
-| 迁移 ledger frozen + no-stale | **Medium** | golden 锁定冻结集（新 ID 不可入） | no-stale 反查驱动收敛（需运行测试，非编译期） |
+| 迁移 ledger frozen-subset + no-stale | **Medium** | frozen 37-ID 不可变集（ledger 须为子集，挡 grow+swap） | no-stale 双向反查驱动收敛（需运行测试，非编译期） |
 | FMT-42 扩展（不新增 FMT-43，authoring UX 纵深） | **Medium** | `gocell validate` | 早期提示，非唯一控制点 |
 | `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（resolver 源单一性，既有） | **Medium** | archtest typed scan | D1 resolver 单源守卫，捕获 mis-wiring 偏离（Mount nil-policy 残留盲区的纵深防御） |
 

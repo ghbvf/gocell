@@ -147,11 +147,14 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。
 - **默认 ABAC + 强制 AuthZ mode 声明（#2020）**：每个 `lifecycle: active` + `codegen` 的 HTTP 契约**必须**声明
   恰好一个 AuthZ mode——ABAC 默认（`endpoints.http.permission`）或显式 opt-out（`public`/`bootstrap`/
-  `clientsOnly`/`serviceOwned`）；缺失（modeless）= cellgen generate-time 完整性预检拒绝（**Hard 唯一主载体**，
+  `clientsOnly`/`serviceOwned`）；缺失（modeless）= codegen generate-time 完整性预检拒绝（**Hard 主载体**，
   与 gRPC `Completeness (#2008)` 同构）+ FMT-42 `gocell validate` 早报（Medium 纵深）。opt-out 必带非空
-  `endpoints.http.auth.reason`（ABAC 自证、不带 reason）。分类 oracle + 冻结迁移 ledger 单源在
-  `kernel/metadata/authz_mode.go`（`HTTPAuthModeDeclared`/`HTTPAuthModeIsOptOut` + `httpAuthModeMigrationLedger`），
-  ledger frozen+no-stale 由 archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守、随 #2355/#2358 迁移收敛到空后删除豁免分支。
+  `endpoints.http.auth.reason`（ABAC 自证、不带 reason；reason-without-opt-out 亦 forbidden）。判定收口为单一共享
+  oracle `metadata.ClassifyHTTPAuthMode`，**comprehensive 主控制点 = generate 编排层**
+  `cmd/gocell/app.validateProjectHTTPAuthModes`（每个 active codegen http 契约，覆盖 `generate cell`+`contract`），
+  cellgen serve-scan + FMT-42 复用同一 oracle（一处判定三处复用）。冻结迁移 ledger 单源在
+  `kernel/metadata/authz_mode.go`（`httpAuthModeMigrationLedger`）；frozen-subset（ledger ⊆ 不可变 37-ID 集，挡
+  grow+swap）+ no-stale 由 metadata 测试 + archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守，随 #2355/#2358 迁移收敛到空后删豁免。
   runtime `auth.Mount` 经评估**不承载**此约束（serviceOwned≡nil-policy 设计本意 / operator·internal 鉴权来自
   listener·Mount 不可见 / ContractSpec 不带 mode），与 gRPC 同。机制/威胁矩阵/PR-10a 重评见 ADR
   `docs/architecture/202606190847-2020-adr-authz-default-abac.md`。未迁路由的手写 gate 迁移本体归 #2355 / #2358。

@@ -58,7 +58,12 @@ func TestValidateHTTPAuthModeCompleteness(t *testing.T) {
 		{
 			"opt-out public missing reason", "http.demo.pubnoreason.v1", "active", true,
 			&metadata.HTTPTransportMeta{Auth: metadata.HTTPAuthMeta{Public: true}},
-			"must declare a non-empty endpoints.http.auth.reason",
+			"omits endpoints.http.auth.reason",
+		},
+		{
+			"reason without opt-out forbidden", "http.demo.strayreason.v1", "active", true,
+			&metadata.HTTPTransportMeta{Permission: "config:read", Auth: metadata.HTTPAuthMeta{Reason: "stray"}},
+			"without an opt-out auth mode",
 		},
 		{
 			"opt-out serviceOwned with reason ok", "http.demo.svc.v1", "active", true,

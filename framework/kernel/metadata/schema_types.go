@@ -60,10 +60,12 @@ type HTTPTransportMeta struct {
 	// membership via authz.IsKnownPermissionString at `gocell validate`, so a typo
 	// fails there rather than at the runtime gate.
 	//
-	// During the #2205 migration the overlay is OPTIONAL (sparse, exactly like
-	// endpoints.grpc.methods[].permission): a standard route without it keeps the
-	// legacy hand-wired gate; only contracts that opt in regenerate with the
-	// resolver-based gate. PR-13 makes it mandatory for standard routes.
+	// #2020 made AuthZ-mode declaration MANDATORY: a standard route (no opt-out flag)
+	// without this permission is "modeless" and rejected at codegen
+	// (metadata.ClassifyHTTPAuthMode), unless its contract id is on the frozen migration
+	// ledger (the remaining #2205-era hand-wired-gate routes, draining via #2355/#2358).
+	// So Permission is the required ABAC declaration for any standard route not on the
+	// ledger; opt-out routes use an auth flag + reason instead.
 	Permission string `yaml:"permission,omitempty" json:"permission,omitempty"`
 	// Ownership declares object-level authorization subject/resource paths.
 	// Required when auth.serviceOwned=true (governance FMT-32 enforces presence).
@@ -347,12 +349,14 @@ type HTTPAuthMeta struct {
 	// Reason documents WHY this route opts out of the ABAC default (#2020). It is
 	// REQUIRED (non-empty) whenever any opt-out flag (public / serviceOwned /
 	// bootstrap / clientsOnly) is set, and forbidden otherwise — ABAC (the default,
-	// expressed via endpoints.http.permission) is self-justifying and needs no
-	// reason. Enforced by the schema if/then rules (Hard), the cellgen completeness
-	// gate (Hard), and governance FMT-42 (Medium defense-in-depth). It is NOT a
-	// mutex-governed mode flag, so it stays outside the 2^5 AuthComboLegal matrix
-	// (like Responses). passwordResetExempt is a modifier, not an opt-out mode, and
-	// does not require a reason on its own.
+	// expressed via endpoints.http.permission) is self-justifying and needs no reason.
+	// The required/forbidden coupling is the Hard carrier in codegen
+	// (metadata.ClassifyHTTPAuthMode, run by contractgen over every active codegen HTTP
+	// contract + cellgen's serve-scan) with governance FMT-42 as the Medium validate-time
+	// layer; JSON Schema only pins the field SHAPE (non-empty string), NOT the coupling,
+	// to keep the auth bool-mutex matrix at 2^5. It is NOT a mutex-governed mode flag, so
+	// it stays outside the AuthComboLegal matrix (like Responses). passwordResetExempt is
+	// a modifier, not an opt-out mode, and does not require a reason on its own.
 	Reason string `yaml:"reason,omitempty" json:"reason,omitempty"`
 	// Responses lists HTTP status codes injected by listener-mounted middleware,
 	// NOT emitted by the handler/adapter — so they are declared here (no typed

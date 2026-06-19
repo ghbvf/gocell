@@ -1192,52 +1192,36 @@ func (v *Validator) validateFMT42() []ValidationResult {
 		if h != nil && h.Permission != "" {
 			results = append(results, v.validateFMT42ForContract(c, h)...)
 		}
-		results = append(results, v.validateFMT42AuthMode(c, h)...)
+		results = append(results, v.validateFMT42AuthMode(c)...)
 	}
 	return results
 }
 
-// validateFMT42AuthMode enforces the #2020 mandatory-AuthZ-mode rule for one HTTP
-// contract: an active codegen route must declare a mode, and an opt-out mode must carry
-// a reason (and only an opt-out mode may carry one). Scoped to active+codegen because
-// draft/deprecated/non-generated contracts mount no live route.
-func (v *Validator) validateFMT42AuthMode(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) []ValidationResult {
-	if c.Lifecycle != "active" || !c.Codegen {
+// validateFMT42AuthMode is the governance (Medium, validate-time) arm of the #2020
+// mandatory-AuthZ-mode rule, sharing the metadata.ClassifyHTTPAuthMode oracle with the
+// contractgen comprehensive Hard gate and cellgen's serve-scan — one judgment, three
+// callers. It maps the classifier's violation kind to a field-anchored finding + fix.
+func (v *Validator) validateFMT42AuthMode(c *metadata.ContractMeta) []ValidationResult {
+	kind := metadata.ClassifyHTTPAuthMode(c)
+	if kind == metadata.HTTPAuthModeOK {
 		return nil
 	}
 	file := contractFile(c)
-	if !metadata.HTTPAuthModeDeclared(h) {
-		if metadata.IsHTTPAuthModeLedgered(c.ID) {
-			return nil
-		}
-		return []ValidationResult{v.newError(
-			codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuth,
-			fmt.Sprintf("http contract %q declares no AuthZ mode (#2020 default-ABAC): an active route must "+
-				"declare endpoints.http.permission (ABAC default) or an explicit opt-out "+
-				"(public/bootstrap/clientsOnly/serviceOwned)", c.ID),
+	msg := fmt.Sprintf("http contract %q %s", c.ID, kind.Message())
+	switch kind {
+	case metadata.HTTPAuthModeModeless:
+		return []ValidationResult{v.newError(codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuth, msg,
 			"add endpoints.http.permission with a registered authz action (e.g. config:read), "+
-				"or set an opt-out auth flag together with endpoints.http.auth.reason",
-		)}
+				"or set an opt-out auth flag together with endpoints.http.auth.reason")}
+	case metadata.HTTPAuthModeOptOutMissingReason:
+		return []ValidationResult{v.newError(codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuthReason, msg,
+			"add endpoints.http.auth.reason explaining why this route opts out of the ABAC default")}
+	case metadata.HTTPAuthModeReasonWithoutOptOut:
+		return []ValidationResult{v.newError(codeFMT42, IssueForbidden, file, fieldEndpointsHTTPAuthReason, msg,
+			"remove endpoints.http.auth.reason, or set the opt-out auth flag it is meant to justify")}
+	default:
+		return nil
 	}
-	hasReason := h != nil && strings.TrimSpace(h.Auth.Reason) != ""
-	isOptOut := h != nil && metadata.HTTPAuthModeIsOptOut(h.Auth)
-	if isOptOut && !hasReason {
-		return []ValidationResult{v.newError(
-			codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuthReason,
-			fmt.Sprintf("http contract %q sets an opt-out auth mode (public/bootstrap/clientsOnly/serviceOwned) "+
-				"but omits endpoints.http.auth.reason (#2020 non-ABAC must justify)", c.ID),
-			"add endpoints.http.auth.reason explaining why this route opts out of the ABAC default",
-		)}
-	}
-	if hasReason && !isOptOut {
-		return []ValidationResult{v.newError(
-			codeFMT42, IssueForbidden, file, fieldEndpointsHTTPAuthReason,
-			fmt.Sprintf("http contract %q sets endpoints.http.auth.reason without an opt-out auth mode "+
-				"(#2020: reason justifies a non-ABAC opt-out; ABAC/standard routes must omit it)", c.ID),
-			"remove endpoints.http.auth.reason, or set the opt-out auth flag it is meant to justify",
-		)}
-	}
-	return nil
 }
 
 // validateFMT42ForContract runs the FMT-42 guards for a single http contract that

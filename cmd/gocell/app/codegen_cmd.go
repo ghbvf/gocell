@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -48,6 +50,35 @@ func parseProject(root string, opts ...metadata.LocatorOption) (*metadata.Projec
 		return nil, fmt.Errorf("metadata parse: %w", err)
 	}
 	return project, nil
+}
+
+// validateProjectHTTPAuthModes is the COMPREHENSIVE #2020 mandatory-AuthZ-mode Hard gate:
+// it runs metadata.ClassifyHTTPAuthMode over EVERY active codegen HTTP contract in the
+// project (not just slice-served ones) before any codegen write. Run from
+// runCodegenGenerate, it covers `generate cell` AND `generate contract` (and the
+// --verify CI path in verify-generated.sh), so it closes both the cellgen serve-scan's
+// coverage gap (a non-served active codegen route) and the contractgen path — even if
+// `gocell validate` (the FMT-42 Medium layer) was skipped. Shares the ClassifyHTTPAuthMode
+// oracle with cellgen + governance FMT-42 (one judgment, three callers). Aggregates all
+// violations so a single run reports every offender.
+func validateProjectHTTPAuthModes(p *metadata.ProjectMeta) error {
+	ids := make([]string, 0, len(p.Contracts))
+	for id := range p.Contracts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var bad []string
+	for _, id := range ids {
+		if v := metadata.ClassifyHTTPAuthMode(p.Contracts[id]); v != metadata.HTTPAuthModeOK {
+			bad = append(bad, fmt.Sprintf("  - %s: %s", id, v.Message()))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("#2020 AuthZ mode gate: %d HTTP contract(s) violate the mandatory-mode rule "+
+			"(declare endpoints.http.permission or an explicit opt-out + auth.reason, or add to the "+
+			"frozen migration ledger):\n%s", len(bad), strings.Join(bad, "\n"))
+	}
+	return nil
 }
 
 // codegenSpec parameterizes a `gocell generate <kind>` + `gocell verify codegen-<kind>`
@@ -96,6 +127,9 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	}
 	project, err := parseProject(root, locatorOpts...)
 	if err != nil {
+		return err
+	}
+	if err := validateProjectHTTPAuthModes(project); err != nil {
 		return err
 	}
 	res, err := spec.Generate(root, project, dryRun, verify, only, modulePath)

@@ -1,6 +1,9 @@
 package metadata
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // authz_mode.go is the single oracle for the #2020 "default ABAC, explicit
 // opt-out" rule: every active codegen HTTP route MUST declare an AuthZ mode.
@@ -43,6 +46,68 @@ func HTTPAuthModeDeclared(h *HTTPTransportMeta) bool {
 // (auth.reason) documenting why ABAC does not apply.
 func HTTPAuthModeIsOptOut(a HTTPAuthMeta) bool {
 	return a.Public || a.ServiceOwned || a.Bootstrap || a.ClientsOnly
+}
+
+// HTTPAuthModeViolation classifies a #2020 mode-rule violation for one contract, or
+// HTTPAuthModeOK when the contract is compliant or out of scope.
+type HTTPAuthModeViolation int
+
+const (
+	// HTTPAuthModeOK = compliant, or out of scope (non-http / non-active / non-codegen /
+	// ledgered modeless).
+	HTTPAuthModeOK HTTPAuthModeViolation = iota
+	// HTTPAuthModeModeless = no permission and no opt-out flag (and not ledgered).
+	HTTPAuthModeModeless
+	// HTTPAuthModeOptOutMissingReason = an opt-out flag is set but auth.reason is empty.
+	HTTPAuthModeOptOutMissingReason
+	// HTTPAuthModeReasonWithoutOptOut = auth.reason is set on an ABAC/standard route.
+	HTTPAuthModeReasonWithoutOptOut
+)
+
+// Message returns the human-readable problem statement for a violation (empty for OK).
+func (v HTTPAuthModeViolation) Message() string {
+	switch v {
+	case HTTPAuthModeModeless:
+		return "declares no AuthZ mode; every active route must declare endpoints.http.permission " +
+			"(ABAC default) or an explicit opt-out (public/bootstrap/clientsOnly/serviceOwned) " +
+			"(#2020 default-ABAC, strict fail-closed)"
+	case HTTPAuthModeOptOutMissingReason:
+		return "sets an opt-out auth mode (public/bootstrap/clientsOnly/serviceOwned) but omits " +
+			"endpoints.http.auth.reason (#2020 non-ABAC must justify)"
+	case HTTPAuthModeReasonWithoutOptOut:
+		return "sets endpoints.http.auth.reason without an opt-out auth mode (#2020: reason justifies " +
+			"a non-ABAC opt-out; ABAC/standard routes must omit it)"
+	default:
+		return ""
+	}
+}
+
+// ClassifyHTTPAuthMode is the single oracle for the #2020 mandatory-AuthZ-mode rule,
+// shared by contractgen (the comprehensive generate-time Hard gate over every active
+// codegen HTTP contract), cellgen (per-cell serve-scan defense), and governance FMT-42
+// (the validate-time Medium layer). It is scoped to active+codegen+http: a contract
+// outside that scope, or a ledgered modeless contract, is HTTPAuthModeOK.
+func ClassifyHTTPAuthMode(c *ContractMeta) HTTPAuthModeViolation {
+	if c == nil || c.Kind != "http" || c.Lifecycle != "active" || !c.Codegen {
+		return HTTPAuthModeOK
+	}
+	h := c.Endpoints.HTTP
+	if !HTTPAuthModeDeclared(h) {
+		if IsHTTPAuthModeLedgered(c.ID) {
+			return HTTPAuthModeOK
+		}
+		return HTTPAuthModeModeless
+	}
+	optOut := h != nil && HTTPAuthModeIsOptOut(h.Auth)
+	hasReason := h != nil && strings.TrimSpace(h.Auth.Reason) != ""
+	switch {
+	case optOut && !hasReason:
+		return HTTPAuthModeOptOutMissingReason
+	case hasReason && !optOut:
+		return HTTPAuthModeReasonWithoutOptOut
+	default:
+		return HTTPAuthModeOK
+	}
 }
 
 // httpAuthModeMigrationLedger is the FROZEN set of active codegen HTTP contract
@@ -112,14 +177,12 @@ var httpAuthModeMigrationLedger = map[string]struct{}{
 	"http.order.projection-summary.v1": {},
 }
 
-// httpAuthModeLedgerFrozenSize pins the ledger's size at #2020 landing (37). The
-// ledger is FROZEN: it may only shrink as routes migrate, never grow — a NEW modeless
-// route must declare a mode, not be ledgered. TestHTTPAuthModeLedger_FrozenSize fails
-// CI when len(ledger) exceeds this, catching the "add a modeless route AND ledger it"
-// bypass of the cellgen Hard gate. (An entry-for-entry swap stays within the size but
-// is a visible map diff a reviewer must approve — the hand-maintained map IS the audit
-// surface.) Decrement this when removing entries.
-const httpAuthModeLedgerFrozenSize = 37
+// FROZEN guard: the ledger may only SHRINK within its #2020-landing ID set, never grow
+// or swap. TestHTTPAuthModeLedger_FrozenSubset pins the initial 37-ID set and asserts
+// the live ledger stays a subset — so neither "add a new modeless route AND ledger it"
+// (grow) nor "migrate one out + ledger a different new one" (swap) can pass, both of
+// which a size-only cap would miss. Migrating a route just removes its entry here; the
+// frozen set in the test is immutable.
 
 // IsHTTPAuthModeLedgered reports whether contractID is on the frozen #2020
 // migration ledger (and therefore temporarily exempt from the mandatory-mode
