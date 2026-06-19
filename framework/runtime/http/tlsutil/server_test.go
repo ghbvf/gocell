@@ -1,85 +1,26 @@
 package tlsutil
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
-	"math/big"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 )
 
-// testChain holds PEM-encoded materials produced by genTestChain.
-type testChain struct {
-	rootCertPEM   []byte
-	serverCertPEM []byte
-	serverKeyPEM  []byte
-}
-
-// genTestChain produces a self-signed root CA + a server leaf signed by the
-// root, all in PEM form. Uses ECDSA P-256 (fast, ~1ms total). The test only
-// needs material that tls.X509KeyPair will accept and x509.AppendCertsFromPEM
-// will parse — no real handshake is performed at the tlsutil package level.
-func genTestChain(t *testing.T) testChain {
-	t.Helper()
-
-	// Root CA.
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-root"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	rootCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
-
-	// Server leaf.
-	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	serverTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "test-server"},
-		DNSNames:     []string{"localhost"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	rootCert, err := x509.ParseCertificate(rootDER)
-	require.NoError(t, err)
-	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, rootCert, &serverKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	serverCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
-	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
-	require.NoError(t, err)
-	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})
-
-	return testChain{
-		rootCertPEM:   rootCertPEM,
-		serverCertPEM: serverCertPEM,
-		serverKeyPEM:  serverKeyPEM,
-	}
-}
-
 func TestNewServerMTLSConfig_ValidSetsTLS13RequireAndCAs(t *testing.T) {
-	chain := genTestChain(t)
-	pool, err := NewClientCAPool(chain.rootCertPEM)
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	pool, err := NewClientCAPool(ca.CertPEM)
 	require.NoError(t, err)
 
-	cfg, err := NewServerMTLSConfig(chain.serverCertPEM, chain.serverKeyPEM, pool)
+	cfg, err := NewServerMTLSConfig(leaf.CertPEM, leaf.KeyPEM, pool)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
@@ -90,63 +31,70 @@ func TestNewServerMTLSConfig_ValidSetsTLS13RequireAndCAs(t *testing.T) {
 }
 
 func TestNewServerMTLSConfig_ErrorPaths(t *testing.T) {
-	chain := genTestChain(t)
-	pool, err := NewClientCAPool(chain.rootCertPEM)
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	pool, err := NewClientCAPool(ca.CertPEM)
 	require.NoError(t, err)
 
 	t.Run("empty_cert_PEM_returns_error", func(t *testing.T) {
-		cfg, err := NewServerMTLSConfig(nil, chain.serverKeyPEM, pool)
+		cfg, err := NewServerMTLSConfig(nil, leaf.KeyPEM, pool)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("empty_key_PEM_returns_error", func(t *testing.T) {
-		cfg, err := NewServerMTLSConfig(chain.serverCertPEM, nil, pool)
+		cfg, err := NewServerMTLSConfig(leaf.CertPEM, nil, pool)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("malformed_cert_PEM_returns_error", func(t *testing.T) {
-		cfg, err := NewServerMTLSConfig([]byte("not a pem"), chain.serverKeyPEM, pool)
+		cfg, err := NewServerMTLSConfig([]byte("not a pem"), leaf.KeyPEM, pool)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("mismatched_cert_key_returns_error", func(t *testing.T) {
-		other := genTestChain(t)
-		cfg, err := NewServerMTLSConfig(chain.serverCertPEM, other.serverKeyPEM, pool)
+		otherLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+			DNSNames: []string{"localhost"},
+			EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		cfg, err := NewServerMTLSConfig(leaf.CertPEM, otherLeaf.KeyPEM, pool)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("nil_ClientCAs_returns_error", func(t *testing.T) {
-		cfg, err := NewServerMTLSConfig(chain.serverCertPEM, chain.serverKeyPEM, nil)
+		cfg, err := NewServerMTLSConfig(leaf.CertPEM, leaf.KeyPEM, nil)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 }
 
 func TestNewClientCAPool_SingleAndMultipleBundles(t *testing.T) {
-	a := genTestChain(t)
-	b := genTestChain(t)
+	caA := tlsutiltest.NewCA(t)
+	caB := tlsutiltest.NewCA(t)
 
 	t.Run("single_PEM_block", func(t *testing.T) {
-		pool, err := NewClientCAPool(a.rootCertPEM)
+		pool, err := NewClientCAPool(caA.CertPEM)
 		require.NoError(t, err)
 		require.NotNil(t, pool)
 		assert.Len(t, pool.Subjects(), 1) //nolint:staticcheck // Subjects() simplest count; alternatives require typed-cert reflection
 	})
 
 	t.Run("multiple_PEM_blocks_merged", func(t *testing.T) {
-		pool, err := NewClientCAPool(a.rootCertPEM, b.rootCertPEM)
+		pool, err := NewClientCAPool(caA.CertPEM, caB.CertPEM)
 		require.NoError(t, err)
 		require.NotNil(t, pool)
 		assert.Len(t, pool.Subjects(), 2) //nolint:staticcheck // Subjects() simplest count; alternatives require typed-cert reflection
 	})
 
 	t.Run("concatenated_PEM_blocks_merged", func(t *testing.T) {
-		joined := append([]byte{}, a.rootCertPEM...)
-		joined = append(joined, b.rootCertPEM...)
+		joined := append([]byte{}, caA.CertPEM...)
+		joined = append(joined, caB.CertPEM...)
 		pool, err := NewClientCAPool(joined)
 		require.NoError(t, err)
 		require.NotNil(t, pool)
@@ -177,9 +125,13 @@ func TestNewClientCAPool_NoValidCertReturnsError(t *testing.T) {
 // ─── NewServerTLSConfig ───────────────────────────────────────────────────────
 
 func TestNewServerTLSConfig_Valid(t *testing.T) {
-	chain := genTestChain(t)
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
 
-	cfg, err := NewServerTLSConfig(chain.serverCertPEM, chain.serverKeyPEM)
+	cfg, err := NewServerTLSConfig(leaf.CertPEM, leaf.KeyPEM)
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
@@ -189,29 +141,36 @@ func TestNewServerTLSConfig_Valid(t *testing.T) {
 }
 
 func TestNewServerTLSConfig_ErrorPaths(t *testing.T) {
-	chain := genTestChain(t)
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
 
 	t.Run("empty_cert_PEM_returns_error", func(t *testing.T) {
-		cfg, err := NewServerTLSConfig(nil, chain.serverKeyPEM)
+		cfg, err := NewServerTLSConfig(nil, leaf.KeyPEM)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("empty_key_PEM_returns_error", func(t *testing.T) {
-		cfg, err := NewServerTLSConfig(chain.serverCertPEM, nil)
+		cfg, err := NewServerTLSConfig(leaf.CertPEM, nil)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("cert_key_parse_error_returns_error", func(t *testing.T) {
-		cfg, err := NewServerTLSConfig([]byte("not a pem"), chain.serverKeyPEM)
+		cfg, err := NewServerTLSConfig([]byte("not a pem"), leaf.KeyPEM)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
 
 	t.Run("mismatched_cert_key_returns_error", func(t *testing.T) {
-		other := genTestChain(t)
-		cfg, err := NewServerTLSConfig(chain.serverCertPEM, other.serverKeyPEM)
+		otherLeaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+			DNSNames: []string{"localhost"},
+			EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		cfg, err := NewServerTLSConfig(leaf.CertPEM, otherLeaf.KeyPEM)
 		assert.Error(t, err)
 		assert.Nil(t, cfg)
 	})
@@ -223,22 +182,22 @@ func TestNewServerTLSConfig_ErrorPaths(t *testing.T) {
 // when another bundle is valid. The pre-fix code returned a pool that
 // silently omitted the bad bundle's intended anchors.
 func TestNewClientCAPool_FailsClosedOnBadBundleInMix(t *testing.T) {
-	valid := genTestChain(t)
+	ca := tlsutiltest.NewCA(t)
 
 	t.Run("valid_then_garbage_returns_error", func(t *testing.T) {
-		pool, err := NewClientCAPool(valid.rootCertPEM, []byte("not a cert"))
+		pool, err := NewClientCAPool(ca.CertPEM, []byte("not a cert"))
 		assert.Error(t, err)
 		assert.Nil(t, pool)
 	})
 
 	t.Run("valid_then_empty_returns_error", func(t *testing.T) {
-		pool, err := NewClientCAPool(valid.rootCertPEM, []byte{})
+		pool, err := NewClientCAPool(ca.CertPEM, []byte{})
 		assert.Error(t, err)
 		assert.Nil(t, pool)
 	})
 
 	t.Run("garbage_then_valid_returns_error", func(t *testing.T) {
-		pool, err := NewClientCAPool([]byte("not a cert"), valid.rootCertPEM)
+		pool, err := NewClientCAPool([]byte("not a cert"), ca.CertPEM)
 		assert.Error(t, err)
 		assert.Nil(t, pool)
 	})

@@ -2,15 +2,8 @@ package celltransport_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 )
 
@@ -32,7 +26,6 @@ import (
 // test deadlines, not inline literals).
 const (
 	testReadinessProbeDeadline = 200 * time.Millisecond // short ctx so a silent peer handshake fails fast
-	testCAValidity             = 2 * time.Hour          // test CA cert validity window
 	testSNICaptureWait         = 2 * time.Second        // upper bound waiting for the captured ClientHello SNI
 )
 
@@ -452,47 +445,14 @@ func TestResolve_MTLSReadiness_CompletesHandshake(t *testing.T) {
 // resulting client mTLS identity for trust domain "example.org".
 func genClientIdentity(t *testing.T) tlsutil.ClientIdentity {
 	t.Helper()
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore")},
+	})
+	id, err := tlsutil.NewClientIdentity(leaf.CertPEM, leaf.KeyPEM, ca.Pool, "example.org")
+	if err != nil {
+		t.Fatal(err)
 	}
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	must(err)
-	caTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ca"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(testCAValidity),
-		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	must(err)
-	caCert, err := x509.ParseCertificate(caDER)
-	must(err)
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	must(err)
-	uri, err := url.Parse("spiffe://example.org/cell/accesscore")
-	must(err)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "accesscore"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		URIs:        []*url.URL{uri},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	must(err)
-	leafKeyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
-	must(err)
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER})
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	pool, err := tlsutil.NewClientCAPool(caPEM)
-	must(err)
-	id, err := tlsutil.NewClientIdentity(certPEM, keyPEM, pool, "example.org")
-	must(err)
 	return id
 }
 

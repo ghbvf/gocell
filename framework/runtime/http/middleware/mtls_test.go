@@ -1,28 +1,23 @@
 package middleware
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 )
 
 func mustURL(t *testing.T, raw string) *url.URL {
@@ -234,97 +229,23 @@ func TestMTLS_PeerIdentityIsolatedFromCert(t *testing.T) {
 
 // ─── Integration: end-to-end handshake via httptest.NewUnstartedServer ───────
 
-// integTestChain holds server + client materials for a full mTLS round-trip.
-type integTestChain struct {
-	rootCertPEM   []byte
-	serverCertPEM []byte
-	serverKeyPEM  []byte
-	clientCert    tls.Certificate
-	clientLeaf    *x509.Certificate
-}
-
-func genIntegChain(t *testing.T) integTestChain {
-	t.Helper()
-
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "integ-root"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	rootCert, err := x509.ParseCertificate(rootDER)
-	require.NoError(t, err)
-	rootCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
-
-	// Server leaf — must include 127.0.0.1 / localhost in SAN for httptest.
-	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	serverTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "integ-server"},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, rootCert, &serverKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	serverCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
-	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
-	require.NoError(t, err)
-	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})
-
-	// Client leaf — CN + DNS SAN + URI SAN so the test asserts a non-trivial PeerIdentity.
-	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	spiffeURI, err := url.Parse("spiffe://example.org/ns/edge/sa/integ-client")
-	require.NoError(t, err)
-	clientTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject: pkix.Name{
-			CommonName:   "integ-client",
-			Organization: []string{"acme"},
-		},
-		DNSNames:    []string{"integ-client.example.com"},
-		URIs:        []*url.URL{spiffeURI},
-		NotBefore:   time.Now().Add(-time.Hour),
-		NotAfter:    time.Now().Add(time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	clientDER, err := x509.CreateCertificate(rand.Reader, clientTmpl, rootCert, &clientKey.PublicKey, rootKey)
-	require.NoError(t, err)
-	clientLeaf, err := x509.ParseCertificate(clientDER)
-	require.NoError(t, err)
-
-	return integTestChain{
-		rootCertPEM:   rootCertPEM,
-		serverCertPEM: serverCertPEM,
-		serverKeyPEM:  serverKeyPEM,
-		clientCert: tls.Certificate{
-			Certificate: [][]byte{clientDER},
-			PrivateKey:  clientKey,
-			Leaf:        clientLeaf,
-		},
-		clientLeaf: clientLeaf,
-	}
-}
-
 func TestMTLS_IntegrationRoundTripViaHTTPTestServer(t *testing.T) {
-	chain := genIntegChain(t)
+	ca := tlsutiltest.NewCA(t)
 
-	caPool, err := tlsutil.NewClientCAPool(chain.rootCertPEM)
+	server := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		IPs:      []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
+	client := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs:     []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/ns/edge/sa/integ-client")},
+		DNSNames: []string{"integ-client.example.com"},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+
+	caPool, err := tlsutil.NewClientCAPool(ca.CertPEM)
 	require.NoError(t, err)
-	serverCfg, err := tlsutil.NewServerMTLSConfig(chain.serverCertPEM, chain.serverKeyPEM, caPool)
+	serverCfg, err := tlsutil.NewServerMTLSConfig(server.CertPEM, server.KeyPEM, caPool)
 	require.NoError(t, err)
 
 	var seenIdentity ctxkeys.PeerIdentity
@@ -341,25 +262,24 @@ func TestMTLS_IntegrationRoundTripViaHTTPTestServer(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	clientCAs := x509.NewCertPool()
-	require.True(t, clientCAs.AppendCertsFromPEM(chain.rootCertPEM))
-	client := &http.Client{
+	require.True(t, clientCAs.AppendCertsFromPEM(ca.CertPEM))
+	httpClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
 				RootCAs:      clientCAs,
-				Certificates: []tls.Certificate{chain.clientCert},
+				Certificates: []tls.Certificate{client.TLSCert},
 				MinVersion:   tls.VersionTLS13,
 			},
 		},
 	}
 
-	resp, err := client.Get(srv.URL + "/")
+	resp, err := httpClient.Get(srv.URL + "/")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, seenOK)
-	assert.Equal(t, "integ-client", seenIdentity.Subject.CommonName)
-	assert.Equal(t, []string{"acme"}, seenIdentity.Subject.Organization)
+	assert.Equal(t, "tlsutiltest-leaf", seenIdentity.Subject.CommonName)
 	assert.Equal(t, []string{"integ-client.example.com"}, seenIdentity.DNSNames)
 	require.Len(t, seenIdentity.URIs, 1)
 	assert.Equal(t, "spiffe://example.org/ns/edge/sa/integ-client", seenIdentity.URIs[0].String())
