@@ -68,18 +68,20 @@ type auditChainFailure struct {
 }
 
 // auditChainVerifyResponseData is the data object of the 200 response body. Valid
-// chains are summarized by count; only invalid/errored chains are listed, so the
-// body is bounded by the number of problems (usually zero). timedOut indicates the
-// 30s budget truncated the run — remaining chains are in erroredChains due to ctx
-// cancellation, distinct from real infra errors.
+// chains are summarized by count; only invalid/errored chains are listed in
+// failures, so the body stays bounded by the number of problems (usually zero).
+// timedOut indicates the 30s budget truncated the run; unverifiedChains counts the
+// chains the run never reached (counted, NOT listed — keeping the body bounded), so
+// allValid is false whenever any chain went unverified.
 type auditChainVerifyResponseData struct {
-	AllValid      bool                `json:"allValid"`
-	TotalChains   int                 `json:"totalChains"`
-	InvalidChains int                 `json:"invalidChains"`
-	ErroredChains int                 `json:"erroredChains"`
-	TimedOut      bool                `json:"timedOut"`
-	DurationMs    int64               `json:"durationMs"`
-	Failures      []auditChainFailure `json:"failures"`
+	AllValid         bool                `json:"allValid"`
+	TotalChains      int                 `json:"totalChains"`
+	InvalidChains    int                 `json:"invalidChains"`
+	ErroredChains    int                 `json:"erroredChains"`
+	UnverifiedChains int                 `json:"unverifiedChains"`
+	TimedOut         bool                `json:"timedOut"`
+	DurationMs       int64               `json:"durationMs"`
+	Failures         []auditChainFailure `json:"failures"`
 }
 
 // auditChainVerifyResponse is the unified {"data": {...}} single-resource envelope.
@@ -139,13 +141,14 @@ func (b *Bootstrap) newAuditChainVerifyHandler() http.Handler {
 		}
 
 		data := auditChainVerifyResponseData{
-			AllValid:      report.AllValid(),
-			TotalChains:   report.TotalChains,
-			InvalidChains: report.InvalidChains,
-			ErroredChains: report.ErroredChains,
-			TimedOut:      report.TimedOut,
-			DurationMs:    report.Duration.Milliseconds(),
-			Failures:      collectAuditChainFailures(report),
+			AllValid:         report.AllValid(),
+			TotalChains:      report.TotalChains,
+			InvalidChains:    report.InvalidChains,
+			ErroredChains:    report.ErroredChains,
+			UnverifiedChains: report.UnverifiedChains,
+			TimedOut:         report.TimedOut,
+			DurationMs:       report.Duration.Milliseconds(),
+			Failures:         collectAuditChainFailures(report),
 		}
 
 		attrs := httputil.AppendCorrelationAttrs(ctx, []any{
@@ -153,6 +156,7 @@ func (b *Bootstrap) newAuditChainVerifyHandler() http.Handler {
 			slog.Int("total_chains", data.TotalChains),
 			slog.Int("invalid_chains", data.InvalidChains),
 			slog.Int("errored_chains", data.ErroredChains),
+			slog.Int("unverified_chains", data.UnverifiedChains),
 		})
 		slog.InfoContext(ctx, "audit chain verify endpoint served", attrs...)
 

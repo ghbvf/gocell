@@ -45,8 +45,15 @@ GROUP BY namespace, tenant_id`
 // NewAuditChainVerifyStore builds the admin-pool-backed chain verify store. It
 // requires:
 //   - a non-nil admin *Pool (the gocell_audit_admin role);
-//   - a non-empty protocols map (one *ledger.Protocol per namespace it verifies —
-//     in production the relay "auditcore" + "bootstrap" chains), each non-nil.
+//   - one or more non-nil *ledger.Protocol (in production the relay "auditcore" +
+//     "bootstrap" chains), each for a DISTINCT namespace.
+//
+// The namespace→protocol index is DERIVED here from each protocol's own
+// Namespace() — callers pass protocols, not a pre-keyed map, so a key can never
+// drift from the protocol it indexes (the misconfiguration F1 guarded against is
+// unrepresentable, not merely validated). Two protocols sharing a namespace are an
+// ambiguous registration and fail closed; a missing namespace at VerifyChain time
+// also fails closed (a misconfiguration is not tamper).
 //
 // AI-robust Medium (fail-closed, #1755): the constructor runs
 // pool.AuditAdminReadyCheck before returning, so a non-admin pool — e.g. the
@@ -55,7 +62,7 @@ GROUP BY namespace, tenant_id`
 // self-guard: it runs regardless of whether the cross-tenant store's own preflight
 // (in buildAdminPoolDeps) has already run, ensuring correctness independent of
 // wiring order.
-func NewAuditChainVerifyStore(ctx context.Context, pool *Pool, protocols map[string]*ledger.Protocol) (*AuditChainVerifyStore, error) {
+func NewAuditChainVerifyStore(ctx context.Context, pool *Pool, protocols ...*ledger.Protocol) (*AuditChainVerifyStore, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"postgres.NewAuditChainVerifyStore: pool must not be nil")
@@ -65,10 +72,15 @@ func NewAuditChainVerifyStore(ctx context.Context, pool *Pool, protocols map[str
 			"postgres.NewAuditChainVerifyStore: at least one namespace protocol is required")
 	}
 	protos := make(map[string]*ledger.Protocol, len(protocols))
-	for ns, p := range protocols {
+	for _, p := range protocols {
 		if p == nil {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"postgres.NewAuditChainVerifyStore: nil protocol for namespace",
+				"postgres.NewAuditChainVerifyStore: nil protocol in set")
+		}
+		ns := string(p.Namespace())
+		if _, dup := protos[ns]; dup {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"postgres.NewAuditChainVerifyStore: duplicate namespace in protocol set",
 				errcode.WithInternal(errcode.InternalAttr("namespace", ns)))
 		}
 		protos[ns] = p

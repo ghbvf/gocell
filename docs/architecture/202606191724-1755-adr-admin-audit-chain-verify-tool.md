@@ -58,10 +58,15 @@ A trigger-neutral verify engine + a synchronous operator HTTP endpoint.
 - **D4 — namespace→Protocol map (correctness-critical).** The grouped enumerate
   returns rows from BOTH namespace chains (relay `auditcore` + `bootstrap`), which
   have INDEPENDENT HMAC keys. Verifying with the wrong namespace's protocol would
-  flag every entry as tampered. The admin store holds `protocols
+  flag every entry as tampered. The admin store holds an internal `protocols
   map[string]*ledger.Protocol` keyed by the `namespace` column; an unregistered
-  namespace FAILS CLOSED (error, not `valid=false`). The composition root keys the
-  map by each protocol's OWN `Namespace()` so the key cannot drift from the protocol.
+  namespace FAILS CLOSED (error, not `valid=false`). **The constructor DERIVES that
+  key** — `NewAuditChainVerifyStore(ctx, pool, protocols ...*ledger.Protocol)` takes
+  the protocols themselves and indexes each by its OWN `Namespace()` (#1755 F1).
+  Callers pass no key, so a key cannot drift from the protocol it indexes — the
+  misconfiguration is unrepresentable, not merely validated — and two protocols
+  sharing a namespace fail closed at construction (ambiguous registration). This
+  mirrors the variadic `NewMemChainVerifyStore(...*MemStore)` shape.
 
 - **D5 — synchronous operator HTTP endpoint.** `POST /admin/v1/audit/chains/verify`
   on the AdminListener (framework-owned RouteGroup, no contract.yaml — the
@@ -97,9 +102,11 @@ A trigger-neutral verify engine + a synchronous operator HTTP endpoint.
 |---|---|---|
 | Verifier never returns cross-tenant audit **content** | **Hard** (by construction) + Medium drift-guard | `ChainVerifyResult` field set is verdict-scalars-only; reflect field-freeze test (`TestChainVerifyResult_FieldSetFrozen`) |
 | Verify store reads the **admin pool**, never the serving pool | **Medium** (fail-closed) | `NewAuditChainVerifyStore` requires `pool.AuditAdminReadyCheck` at construction (rejects the NOBYPASSRLS serving pool, which would silently RLS-under-enumerate); integration test `…_ConstructorRejectsServingPool`. **Hard-upgrade path:** a sealed `AuditAdminPool` marker constructed only after the preflight, shared with `NewAuditCrossTenantStore`, so "verify store on a non-admin pool" is unexpressible (gh follow-up) |
-| Unknown namespace → no false tamper | **Medium** (fail-closed) | `VerifyChain` errors (not `valid=false`) on an unregistered namespace; map keyed by `protocol.Namespace()`; integration test `…_UnknownNamespace` |
+| Unknown namespace → no false tamper | **Medium** (fail-closed) | `VerifyChain` errors (not `valid=false`) on an unregistered namespace; integration test `…_UnknownNamespace` |
+| Namespace key cannot drift from its protocol | **Medium → structural** (#1755 F1) | constructor takes `...*ledger.Protocol` and derives the index from each `Namespace()` — no caller-supplied key to mismatch; duplicate-namespace rejected at construction; unit tests `TestNewAuditChainVerifyStore_{DuplicateNamespace,NilProtocol,NoProtocols}` |
 | No `tenant_id` (or any unbounded) metric label | **Medium** | metric-name+label-set value-golden (`TestChainVerifyMetrics_FrozenSet`) + label-hygiene unit test (`TestVerifyAll_MetricLabelHygiene`) |
-| Enabling endpoint requires AdminListener **and** verifier | **Medium** (fail-fast) | phase0 `validateAuditChainVerifyEndpoint` (mirrors `validateProjectionRebuildEndpoint`) |
+| Enabling endpoint requires AdminListener **and** verifier | **Medium** (fail-fast) | phase0 `validateAuditChainVerifyEndpoint` (mirrors `validateProjectionRebuildEndpoint`); final-assembly coupling test `TestOperatorAdminOptions` asserts present-creds wire BOTH options (a dropped `WithAuditChainVerifyEndpoint` trips it), #1755 F4 |
+| Half-configured operator credentials fail fast | **Medium** (fail-fast) | `operatorAuthFromEnv` is three-state — both unset = opt-out, exactly one set = error naming the missing env (no silent disable on a typo'd secret); test `TestOperatorAuthFromEnv_PartialAbsent`, #1755 F3 |
 | No #1810 super-admin-read regression | **Medium** | split-option design + corebundle test (`operatorAuthFromEnv` absent → endpoint gated off, no AdminListener) |
 
 The verify-loop single-source (one `verifyChainExec`, two callers) is a refactor
@@ -132,11 +139,16 @@ AdminListener that is declared only when operator credentials are provisioned.
   failed or invalid) — bounded only by the number of distinct `(namespace, tenant)`
   pairs in the fleet (i.e. tenant count × namespace count). This is acceptable for
   the current synchronous model but should be revisited with an async/streaming mode
-  if the fleet grows large enough that the response body becomes unwieldy. The new
-  `timedOut: true` field in the response (and `report.TimedOut` in
-  `ChainVerifyReport`) indicates the 30s budget was exhausted before all chains were
-  verified; remaining chains appear as errored due to ctx cancellation (distinct from
-  real infra errors).
+  if the fleet grows large enough that the response body becomes unwieldy. **The 30s
+  budget is a real execution cap, not just a report flag (#1755 F2):** the verify
+  loop checks `ctx.Err()` at its top and STOPS issuing `VerifyChain` queries once the
+  deadline (or a client cancel) fires — it does NOT keep firing already-canceled
+  queries and logging a per-chain error for every remaining chain. Chains the run
+  never reached are tallied in `report.UnverifiedChains` / the `unverifiedChains`
+  response field (COUNTED, not appended to `failures` — so the body stays bounded),
+  distinct from an errored chain (which was attempted). `timedOut: true` narrows the
+  truncation to a deadline (vs a client cancel). A truncated run is never
+  `allValid:true` and emits `runs_total{outcome="error"}`.
 
 ## References
 

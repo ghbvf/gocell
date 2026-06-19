@@ -289,19 +289,16 @@ func buildAdminPoolDeps(
 }
 
 // buildChainVerifier wires the #1755 admin-pool-backed ChainVerifier from the same
-// admin pool as the cross-tenant store. The protocol map is keyed by each
-// protocol's OWN Namespace() (drift-proof — the key cannot diverge from the
-// protocol it indexes); NewAuditChainVerifyStore re-runs the admin-role preflight
-// (fail-closed self-guard, #1755). Extracted to keep buildCrossTenantStore's
-// cognitive complexity within bounds.
+// admin pool as the cross-tenant store. It passes the relay + bootstrap protocols
+// directly; NewAuditChainVerifyStore derives the namespace index from each
+// protocol's OWN Namespace() (drift-proof by construction — no caller-supplied key)
+// and re-runs the admin-role preflight (fail-closed self-guard, #1755). Extracted to
+// keep buildCrossTenantStore's cognitive complexity within bounds.
 func buildChainVerifier(
 	ctx context.Context, shared *composition.SharedDeps, adminPool *adapterpg.Pool,
 	auditProtocol, bootstrapProtocol *ledger.Protocol,
 ) (*audit.ChainVerifier, error) {
-	verifyStore, err := adapterpg.NewAuditChainVerifyStore(ctx, adminPool, map[string]*ledger.Protocol{
-		string(auditProtocol.Namespace()):     auditProtocol,
-		string(bootstrapProtocol.Namespace()): bootstrapProtocol,
-	})
+	verifyStore, err := adapterpg.NewAuditChainVerifyStore(ctx, adminPool, auditProtocol, bootstrapProtocol)
 	if err != nil {
 		return nil, fmt.Errorf("auditcore: NewAuditChainVerifyStore: %w", err)
 	}

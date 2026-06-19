@@ -61,16 +61,25 @@ func adminHTTPAddr() string {
 }
 
 // operatorAuthFromEnv builds the AdminListener operator-credential auth plan
-// (AuthOperator) from GOCELL_OPERATOR_ADMIN_USERNAME / _PASSWORD. When either is
-// unset the operator control-plane is left unconfigured (ok=false) so the default
-// corebundle deployment starts without an admin port. When set, the plan is gated
-// by a per-IP token-bucket rate limiter (defeats credential brute-force) and a
-// slog observer surfaces 401/429 operator-auth failures for brute-force visibility.
+// (AuthOperator) from GOCELL_OPERATOR_ADMIN_USERNAME / _PASSWORD. The credential
+// pair is three-state: BOTH unset → opt-out (ok=false, no error) so the default
+// corebundle deployment starts without an admin port; EXACTLY ONE set → FAIL-FAST
+// error naming the missing env (a typo'd / unset half must not be silently misread
+// as "intentionally off"); BOTH set → a plan gated by a per-IP token-bucket rate
+// limiter (defeats credential brute-force) with a slog observer surfacing 401/429
+// operator-auth failures for brute-force visibility.
 func operatorAuthFromEnv(clk clock.Clock) (auth.AuthOperator, bool, error) {
 	username := strings.TrimSpace(os.Getenv(operatorAdminUsernameEnv))
 	password := os.Getenv(operatorAdminPasswordEnv) // not trimmed — passwords may contain whitespace
-	if username == "" || password == "" {
+	const halfConfigured = "operator admin half-configured: %s is set but %s is empty " +
+		"(set both to enable the admin plane, or neither to disable)"
+	switch {
+	case username == "" && password == "":
 		return auth.AuthOperator{}, false, nil
+	case password == "":
+		return auth.AuthOperator{}, false, fmt.Errorf(halfConfigured, operatorAdminUsernameEnv, operatorAdminPasswordEnv)
+	case username == "":
+		return auth.AuthOperator{}, false, fmt.Errorf(halfConfigured, operatorAdminPasswordEnv, operatorAdminUsernameEnv)
 	}
 	limiter := ratelimit.New(ratelimit.Config{Rate: 1, Burst: 5}, clk)
 	plan, err := auth.NewAuthOperator([]byte(username), []byte(password), limiter, operatorAuthFailObserver)

@@ -64,16 +64,23 @@ type ChainVerifyReport struct {
 	TotalChains   int
 	InvalidChains int // tamper: Valid==false && Err==nil
 	ErroredChains int // Err != nil (could not complete)
-	// TimedOut is true when the 30s deadline truncated the run — remaining chains
-	// are reported as errored due to ctx cancellation, distinct from real infra errors.
+	// UnverifiedChains counts chains that were enumerated but NEVER attempted because
+	// the run was truncated (deadline / client cancel) before the loop reached them.
+	// They are distinct from errored chains (which were attempted and failed) and are
+	// NOT listed in Results — only counted, so a truncated run's wire body stays
+	// bounded by the actual problems rather than ballooning to one entry per skip.
+	UnverifiedChains int
+	// TimedOut is true when the 30s deadline (not a client cancel) truncated the run.
+	// The chains the run never reached are counted in UnverifiedChains.
 	TimedOut bool
 	Results  []ChainVerifyResult
 	Duration time.Duration
 }
 
-// AllValid reports whether every chain verified intact (no tamper, no error).
+// AllValid reports whether the run COMPLETED with every chain intact — no tamper, no
+// error, and no chain left unverified by a truncated run.
 func (r ChainVerifyReport) AllValid() bool {
-	return r.InvalidChains == 0 && r.ErroredChains == 0
+	return r.InvalidChains == 0 && r.ErroredChains == 0 && r.UnverifiedChains == 0
 }
 
 // chainVerifyMetrics holds the pre-registered aggregate instruments. AGGREGATE
@@ -174,6 +181,15 @@ func (v *ChainVerifier) VerifyAll(ctx context.Context) (ChainVerifyReport, error
 
 	report := ChainVerifyReport{TotalChains: len(chains)}
 	for _, c := range chains {
+		// The 30s deadline (or a client cancel) is a real execution budget, not just a
+		// post-hoc report flag: stop issuing VerifyChain queries the moment the ctx is
+		// done. Continuing would fire already-canceled queries and emit a per-chain
+		// Error log for every remaining chain — an I/O + log storm on a large fleet.
+		// The chains not reached are tallied as UnverifiedChains below (distinct from
+		// an errored chain, which was actually attempted).
+		if ctx.Err() != nil {
+			break
+		}
 		res := v.verifyOne(ctx, c)
 		report.Results = append(report.Results, res)
 		switch {
@@ -183,9 +199,12 @@ func (v *ChainVerifier) VerifyAll(ctx context.Context) (ChainVerifyReport, error
 			report.InvalidChains++
 		}
 	}
+	// Every enumerated chain not in Results was skipped by a truncated run.
+	report.UnverifiedChains = report.TotalChains - len(report.Results)
 	report.Duration = v.clock.Since(start)
-	// TimedOut: the 30s deadline truncated the run; remaining chains were not
-	// verified (they appear as errored due to ctx cancellation, not real infra failure).
+	// TimedOut: the 30s deadline (not a client cancel) truncated the run. Both forms
+	// of truncation leave chains in UnverifiedChains; TimedOut narrows it to a budget
+	// exhaustion vs a caller-driven cancel.
 	report.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	v.emit(ctx, report)
 	return report, nil
@@ -230,12 +249,14 @@ func (v *ChainVerifier) verifyOne(ctx context.Context, c ledger.ChainRef) ChainV
 }
 
 // emit records aggregate metrics and ALWAYS logs a run summary.
-// outcome precedence: any errored chain → error; else any tampered chain →
-// invalid_found; else success.
+// outcome precedence: any errored OR unverified chain → error (the run could not
+// complete); else any tampered chain → invalid_found; else success.
 func (v *ChainVerifier) emit(ctx context.Context, report ChainVerifyReport) {
 	outcome := outcomeSuccess
 	switch {
-	case report.ErroredChains > 0:
+	case report.ErroredChains > 0 || report.UnverifiedChains > 0:
+		// An errored chain (attempted, failed) or an unverified chain (truncated run
+		// never reached it) both mean the run did not complete cleanly → error.
 		outcome = outcomeError
 	case report.InvalidChains > 0:
 		outcome = outcomeInvalidFound
@@ -254,6 +275,7 @@ func (v *ChainVerifier) emit(ctx context.Context, report ChainVerifyReport) {
 			slog.Int("total_chains", report.TotalChains),
 			slog.Int("invalid_chains", report.InvalidChains),
 			slog.Int("errored_chains", report.ErroredChains),
+			slog.Int("unverified_chains", report.UnverifiedChains),
 			slog.Bool("timed_out", report.TimedOut),
 			slog.Duration("duration", report.Duration))
 	}

@@ -213,24 +213,35 @@ func defaultRuntimeOptions(
 		bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}),
 		devtoolsOption(shared),
 	)
-	// Operator control-plane (AdminListener) — declared ONLY when operator
-	// credentials are present, so the default deployment stays AdminListener-free
-	// and the #1755 audit chain verify endpoint stays dormant (like projection
-	// rebuild). The verify endpoint is enabled in the SAME block, so admin-pool
-	// presence (which enables #1810 super-admin reads) never forces the admin plane
-	// on — the verifier is injected by the auditcore module regardless, but stays
-	// unserved here without operator credentials (no #1810 regression).
-	operatorAuth, operatorEnabled, opErr := operatorAuthFromEnv(shared.Clock)
-	if opErr != nil {
-		return nil, fmt.Errorf("operator admin auth: %w", opErr)
+	adminOpts, err := operatorAdminOptions(shared.Clock)
+	if err != nil {
+		return nil, err
 	}
-	if operatorEnabled {
-		opts = append(opts,
-			bootstrap.WithListener(cell.AdminListener, adminHTTPAddr(), []auth.ListenerAuth{operatorAuth}),
-			bootstrap.WithAuditChainVerifyEndpoint(),
-		)
-	}
+	opts = append(opts, adminOpts...)
 	return opts, nil
+}
+
+// operatorAdminOptions builds the operator control-plane wiring as a COUPLED pair:
+// the AdminListener and the #1755 audit chain verify endpoint are wired together
+// when operator credentials are present, or NEITHER is. The default corebundle
+// deployment stays AdminListener-free (the verify endpoint then stays dormant, like
+// the projection rebuild endpoint), so provisioning the audit admin pool — which
+// enables #1810 super-admin reads — WITHOUT operator credentials leaves the verifier
+// injected by the auditcore module but the endpoint unserved (no #1810 regression).
+// A half-configured operator credential set fails fast via operatorAuthFromEnv,
+// never silently disabling the plane. Returns nil options when the plane is disabled.
+func operatorAdminOptions(clk clock.Clock) ([]bootstrap.Option, error) {
+	operatorAuth, enabled, err := operatorAuthFromEnv(clk)
+	if err != nil {
+		return nil, fmt.Errorf("operator admin auth: %w", err)
+	}
+	if !enabled {
+		return nil, nil
+	}
+	return []bootstrap.Option{
+		bootstrap.WithListener(cell.AdminListener, adminHTTPAddr(), []auth.ListenerAuth{operatorAuth}),
+		bootstrap.WithAuditChainVerifyEndpoint(),
+	}, nil
 }
 
 // buildInternalAuthChain constructs the auth chain for the internal listener
