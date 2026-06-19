@@ -241,7 +241,7 @@ func TestRegistryPG_Integration_List_StateFilter(t *testing.T) {
 // cursor branch is never reached against real PG. This test seeds N≥5 rows and
 // walks three pages (Limit=2) to cover the single-column id-ASC keyset path:
 //
-//   AND id > $N  ORDER BY id ASC  LIMIT 3  (FetchLimit = Limit+1)
+//	AND id > $N  ORDER BY id ASC  LIMIT 3  (FetchLimit = Limit+1)
 //
 // Assertions:
 //   - no id overlap between pages
