@@ -90,6 +90,7 @@ func richPolicy(id string, tid tenant.TenantID) *abac.Policy {
 				ID:     "r-allow",
 				Name:   "Allow eng non-secret",
 				Effect: authz.EffectAllow,
+				Action: []string{"user:read"}, // #1979: allow rules must declare a non-empty Action
 				Conditions: []abac.Condition{
 					{Source: abac.SourceSubject, Key: "department", Operator: abac.OpEquals, Values: []string{"eng"}},
 					{Source: abac.SourceResource, Key: "classification", Operator: abac.OpNotIn, Values: []string{"secret", "top_secret"}},
@@ -161,7 +162,7 @@ func TestPGPolicyRepo_UpdateCASSuccess(t *testing.T) {
 		ID:       "pol-x",
 		TenantID: tid,
 		Name:     "Updated",
-		Rules:    []abac.Rule{{ID: "only", Name: "Allow all", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "only", Name: "Allow all", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	got, err := repo.Update(ctx, tid, "pol-x", 1, v2)
 	require.NoError(t, err)
@@ -187,7 +188,7 @@ func TestPGPolicyRepo_UpdateVersionConflict(t *testing.T) {
 		ID:       "pol-x",
 		TenantID: tid,
 		Name:     "Should not stick",
-		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	_, err := repo.Update(ctx, tid, "pol-x", 99 /* wrong */, v2)
 	require.Error(t, err)
@@ -207,7 +208,7 @@ func TestPGPolicyRepo_UpdateNotFound(t *testing.T) {
 		ID:       "nonexistent",
 		TenantID: tid,
 		Name:     "ghost",
-		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow}},
+		Rules:    []abac.Rule{{ID: "r1", Name: "r", Effect: authz.EffectAllow, Action: []string{"user:read"}}},
 	}
 	_, err := repo.Update(ctx, tid, "nonexistent", 1, v2)
 	require.Error(t, err)
