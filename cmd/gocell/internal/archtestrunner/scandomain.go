@@ -49,14 +49,21 @@ type fileDomain struct {
 	// "./", no trailing "/..." or "/") the rule scans; a changed file at or
 	// under any prefix selects the rule.
 	prefixes []string
+	// defFiles are the repo-relative tools/archtest/*.go files defining the
+	// rule's call closure (its own *_test.go + every companion CheckXxx / helper
+	// it reaches). A changed file equal to one of these selects the rule —
+	// editing a rule's own definition re-runs it. Matched by exact equality
+	// (they are files, not dir prefixes).
+	defFiles []string
 }
 
 // domainSelectsChange reports whether a changed repo-relative file (slash form)
 // could affect a rule with the given domain.
 //
 // Unknown (unscoped) domains always select (safety). A productionGo domain
-// selects any non-generated production .go change. A prefix selects a change at
-// or under it.
+// selects any non-generated production .go change. A scanned prefix selects a
+// change at or under it. A defFile selects a change to the rule's own
+// definition (exact path match).
 func domainSelectsChange(d fileDomain, changedRepoRelPath string) bool {
 	if !d.scoped {
 		return true // unknown => always run (no false negatives)
@@ -66,6 +73,11 @@ func domainSelectsChange(d fileDomain, changedRepoRelPath string) bool {
 	}
 	for _, p := range d.prefixes {
 		if pathHasPrefix(changedRepoRelPath, p) {
+			return true
+		}
+	}
+	for _, f := range d.defFiles {
+		if changedRepoRelPath == f {
 			return true
 		}
 	}
@@ -121,12 +133,13 @@ func buildFileDomainIndex(workspaceRoot string) (map[string]fileDomain, error) {
 
 	ix := &archtestPkgIndex{
 		funcs:        map[string]*ast.FuncDecl{},
+		funcFile:     map[string]string{},
 		stringConsts: map[string]string{},
 		scopeCache:   map[string]scopeAccum{},
 	}
 
-	// Pass 1: parse all package-archtest files; collect funcs, string consts,
-	// and the top-level test func names.
+	// Pass 1: parse all package-archtest files; collect funcs (+ their defining
+	// file), string consts, and the top-level test func names.
 	var testFuncNames []string
 	fset := token.NewFileSet()
 	for _, entry := range entries {
@@ -137,7 +150,7 @@ func buildFileDomainIndex(workspaceRoot string) (map[string]fileDomain, error) {
 		if perr != nil || f.Name == nil || f.Name.Name != "archtest" {
 			continue // skip unparseable or non-archtest-package files (safety)
 		}
-		ix.collectDecls(f)
+		ix.collectDecls(f, filepath.ToSlash(filepath.Join(archtestPkgDir, entry.Name())))
 		testFuncNames = append(testFuncNames, extractTestFuncNames(f)...)
 	}
 
@@ -153,17 +166,20 @@ func buildFileDomainIndex(workspaceRoot string) (map[string]fileDomain, error) {
 // tools/archtest, plus a memo of per-func scope accumulation.
 type archtestPkgIndex struct {
 	funcs        map[string]*ast.FuncDecl // funcName -> decl (no receiver)
+	funcFile     map[string]string        // funcName -> repo-relative defining file
 	stringConsts map[string]string        // const name -> string value (best-effort)
 	scopeCache   map[string]scopeAccum    // funcName -> resolved scope (memo)
 }
 
-// collectDecls indexes top-level funcs and string consts from one file.
-func (ix *archtestPkgIndex) collectDecls(f *ast.File) {
+// collectDecls indexes top-level funcs (with their defining file) and string
+// consts from one file. repoRelFile is the file's repo-relative slash path.
+func (ix *archtestPkgIndex) collectDecls(f *ast.File, repoRelFile string) {
 	for _, decl := range f.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
 			if d.Recv == nil {
 				ix.funcs[d.Name.Name] = d
+				ix.funcFile[d.Name.Name] = repoRelFile
 			}
 		case *ast.GenDecl:
 			if d.Tok == token.CONST {
@@ -198,6 +214,11 @@ type scopeAccum struct {
 	sawComputed   bool // a scope arg could not be statically resolved
 	hasProduction bool // a Production(...) scope was seen
 	prefixes      []string
+	// defFiles are the repo-relative tools/archtest/*.go files defining the
+	// funcs in this closure (the rule's own *_test.go + every companion CheckXxx
+	// / helper it reaches). A change to any of them re-runs the rule — editing a
+	// rule's definition is as much a trigger as a change to what it scans.
+	defFiles []string
 }
 
 func (a *scopeAccum) merge(b scopeAccum) {
@@ -205,19 +226,28 @@ func (a *scopeAccum) merge(b scopeAccum) {
 	a.sawComputed = a.sawComputed || b.sawComputed
 	a.hasProduction = a.hasProduction || b.hasProduction
 	a.prefixes = append(a.prefixes, b.prefixes...)
+	a.defFiles = append(a.defFiles, b.defFiles...)
 }
 
 // toDomain reduces accumulated evidence to a fileDomain. Any uncertainty
 // (computed scope, no scope seen, or a scoped-but-empty result) collapses to
-// the zero value (unknown => always run).
+// the zero value (unknown => always run). For a resolvable rule, the domain
+// carries both its scanned source-dir prefixes and its defining archtest files
+// (defFiles), so a change to either re-runs it.
 func (a scopeAccum) toDomain() fileDomain {
 	if a.sawComputed || !a.sawAny {
 		return fileDomain{}
 	}
-	if !a.hasProduction && len(a.prefixes) == 0 {
+	prefixes := dedupe(a.prefixes)
+	if !a.hasProduction && len(prefixes) == 0 {
 		return fileDomain{}
 	}
-	return fileDomain{scoped: true, productionGo: a.hasProduction, prefixes: dedupe(a.prefixes)}
+	return fileDomain{
+		scoped:       true,
+		productionGo: a.hasProduction,
+		prefixes:     prefixes,
+		defFiles:     dedupe(a.defFiles),
+	}
 }
 
 // maxScopeDepth bounds the intra-package call-closure walk.
@@ -233,14 +263,20 @@ func (ix *archtestPkgIndex) funcScope(name string, stack map[string]bool) scopeA
 		return cached
 	}
 	if stack[name] || len(stack) > maxScopeDepth {
-		return scopeAccum{} // cycle / depth cap: contribute nothing (safe)
+		// Cannot continue analysis (cycle / depth cap): mark unknown so the
+		// truncated closure contaminates the whole rule to always-run — a
+		// resolvable sibling scope must never masquerade as the full domain
+		// when part of the closure was not analyzed (no false negatives).
+		return scopeAccum{sawAny: true, sawComputed: true}
 	}
 	fn, ok := ix.funcs[name]
 	if !ok || fn.Body == nil {
 		return scopeAccum{}
 	}
 	stack[name] = true
-	var acc scopeAccum
+	// Record this func's defining file: a change to it re-runs any rule whose
+	// closure reaches it (companion CheckXxx / helper, and the test's own file).
+	acc := scopeAccum{defFiles: []string{ix.funcFile[name]}}
 	// ast.Inspect runs synchronously, so the shared `stack` map is mutated and
 	// read in DFS order across the closure and its recursive funcScope calls.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {

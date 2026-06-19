@@ -119,6 +119,37 @@ func TestApplyFilters_SourceMode_ContractsYAMLChange(t *testing.T) {
 		"a contracts YAML change selects the contracts-scoped rule, not the Go-scoped rule")
 }
 
+// TestApplyFilters_SourceMode_CompanionFileEdited verifies F1: editing a
+// companion .go file that holds a rule's scope (reached via Report(t, rule,
+// CheckXxx(...))) selects the dispatching Test, and excludes an unrelated rule.
+func TestApplyFilters_SourceMode_CompanionFileEdited(t *testing.T) {
+	root := makeFakeArchtestDir(t, map[string]string{
+		"adapter_test.go": wrapRule(`func TestAdapter(t *testing.T) { Report(t, r, CheckAdapter(t)) }`),
+		"adapter.go": `//go:build archtest
+
+package archtest
+
+import "testing"
+
+func CheckAdapter(t *testing.T) []Diagnostic {
+	return Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil)
+}
+`,
+		"framework_test.go": wrapRule(`func TestFw(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/..."}), nil)
+}`),
+	})
+	discovered := []string{"TestAdapter", "TestFw"}
+	e := sourceModeEngine(func(_ context.Context, _ string) ([]string, error) {
+		return []string{"tools/archtest/adapter.go"}, nil // companion edit, not a _test.go
+	})
+
+	got, err := e.applyFilters(context.Background(), Request{WorkspaceRoot: root, Changed: true}, discovered)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"TestAdapter"}, got,
+		"editing a companion .go selects the rule that dispatches to it, not unrelated rules")
+}
+
 // TestApplyFilters_SourceMode_ShardComposes verifies --shard applies before
 // --changed source filtering (shard narrows the candidate set first).
 func TestApplyFilters_SourceMode_ShardComposes(t *testing.T) {

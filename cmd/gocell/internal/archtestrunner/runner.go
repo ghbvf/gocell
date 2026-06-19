@@ -190,26 +190,16 @@ func (e engine) applyFilters(ctx context.Context, req Request, discovered []stri
 }
 
 // selectByChangedSource returns the subset of selected rules (test funcs) that a
-// changed file could affect (gh #1877). A rule is kept when either:
-//   - its own *_test.go file changed (mechanical subsumption, via
-//     changedFilesToTests, which self-filters to archtest files), or
-//   - a changed source file falls within the rule's static scan domain.
-//
-// Rules whose scan domain cannot be statically determined (the zero-value
-// fileDomain returned for an absent index key) always match — no false
-// negatives. Selection preserves the discovery order of `selected`.
+// changed file could affect (gh #1877): a rule is kept when a changed file falls
+// within its domain — the union of the source dirs it scans and its own defining
+// archtest files (so editing the rule's *_test.go OR any companion CheckXxx /
+// helper it reaches re-runs it). Rules whose scan domain cannot be statically
+// determined (the zero-value fileDomain returned for an absent index key) always
+// match — no false negatives. Selection preserves the discovery order.
 func selectByChangedSource(workspaceRoot string, selected, changedFiles []string) ([]string, error) {
 	domainIdx, err := buildFileDomainIndex(workspaceRoot)
 	if err != nil {
 		return nil, err
-	}
-	selfTests, err := changedFilesToTests(workspaceRoot, changedFiles)
-	if err != nil {
-		return nil, err
-	}
-	selfSet := make(map[string]bool, len(selfTests))
-	for _, name := range selfTests {
-		selfSet[name] = true
 	}
 
 	normChanged := make([]string, len(changedFiles))
@@ -219,7 +209,7 @@ func selectByChangedSource(workspaceRoot string, selected, changedFiles []string
 
 	var out []string
 	for _, name := range selected {
-		if selfSet[name] || anyChangeSelects(domainIdx[name], normChanged) {
+		if anyChangeSelects(domainIdx[name], normChanged) {
 			out = append(out, name)
 		}
 	}

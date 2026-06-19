@@ -100,7 +100,8 @@ func TestChangedRepoFiles_TempRepo(t *testing.T) {
 
 	fooRel := archtestPkgDir + "/foo_test.go"
 	barRel := archtestPkgDir + "/bar_test.go"
-	const kernelRel = "kernel/x.go" // non-archtest file: must be filtered out
+	const kernelRel = "kernel/x.go"     // non-archtest file: must be filtered out
+	const newRel = "framework/brand.go" // untracked (never `git add`-ed)
 
 	// Base commit; point origin/develop at it so gitMergeBase resolves.
 	write(fooRel, "package archtest\n")
@@ -119,6 +120,11 @@ func TestChangedRepoFiles_TempRepo(t *testing.T) {
 	// the `git diff --name-only HEAD` (working-tree) arm + dedupe.
 	write(fooRel, "package archtest\n\nvar Y = 1\n")
 
+	// Untracked new file (never `git add`-ed) → exercises the
+	// `git ls-files --others --exclude-standard` arm (#1877 review F3): a
+	// locally-created source file must not silently escape --changed.
+	write(newRel, "package framework\n")
+
 	changed, err := changedRepoFiles(context.Background(), dir)
 	require.NoError(t, err)
 
@@ -128,6 +134,7 @@ func TestChangedRepoFiles_TempRepo(t *testing.T) {
 	}
 	assert.Truef(t, got[barRel], "committed archtest file %q must be reported; got %v", barRel, changed)
 	assert.Truef(t, got[fooRel], "uncommitted archtest file %q must be reported; got %v", fooRel, changed)
+	assert.Truef(t, got[newRel], "untracked source file %q must be reported; got %v", newRel, changed)
 	assert.Truef(t, got[kernelRel], "non-archtest source change %q must also be reported (raw seam); got %v", kernelRel, changed)
 }
 

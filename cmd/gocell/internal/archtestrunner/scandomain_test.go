@@ -199,6 +199,39 @@ func CheckAdapter(t *testing.T) []Diagnostic {
 	}, "TestAdapter")
 	assert.True(t, got.scoped)
 	assert.ElementsMatch(t, []string{"adapters/redis"}, got.prefixes)
+	// defFiles must include both the test file and the companion defining the
+	// scope, so editing either re-runs the rule (F1: companion-file trigger).
+	assert.ElementsMatch(t, []string{
+		"tools/archtest/adapter_test.go",
+		"tools/archtest/adapter.go",
+	}, got.defFiles)
+}
+
+// TestBuildFileDomainIndex_CycleTruncationUnknown verifies F2: when a call
+// closure is truncated (here, a self-recursive helper cycle), the rule
+// collapses to unknown (always-run) even though part of the closure had a
+// resolvable scope — a truncated closure must never masquerade as a narrow
+// domain.
+func TestBuildFileDomainIndex_CycleTruncationUnknown(t *testing.T) {
+	testFile := wrapRule(`func TestRec(t *testing.T) { recHelper(t) }`)
+	helper := `//go:build archtest
+
+package archtest
+
+import "testing"
+
+func recHelper(t *testing.T) []Diagnostic {
+	_ = Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil)
+	return recHelper(t) // cycle: closure cannot be fully resolved
+}
+`
+	got := domainOf(t, map[string]string{
+		"rec_test.go": testFile,
+		"rec.go":      helper,
+	}, "TestRec")
+	assert.False(t, got.scoped, "a truncated (cyclic) closure must be unknown")
+	assert.True(t, domainSelectsChange(got, "docs/unrelated.md"),
+		"unknown domain must always run")
 }
 
 // TestBuildFileDomainIndex_HelperResolution verifies resolution of a dir-set

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -105,6 +106,21 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 	return req, *listTestsFlag, *formatFlag, nil
 }
 
+// emitChangedSelectionSummary writes, under --changed, a one-line summary of how
+// many rules were selected — to w (os.Stderr in production) so stdout stays
+// clean (test names for --list-tests, the printer payload for report mode). It
+// makes a 0-rule result diagnosable instead of an empty/clean output that reads
+// like "all passed". No-op when --changed is not set.
+func emitChangedSelectionSummary(w io.Writer, req archtestrunner.Request, selectedCount int) {
+	if !req.Changed {
+		return
+	}
+	// Best-effort diagnostic line; a stderr write failure must not fail the run.
+	_, _ = fmt.Fprintf(w,
+		"archtest --changed: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+			" this is a pre-filter, not the authoritative full run\n", selectedCount)
+}
+
 // runArchtestListTests handles --list-tests mode: prints one name per line to
 // stdout and exits. The output format is exactly as ListTests returns it
 // (test function names, nothing else on stdout).
@@ -118,6 +134,7 @@ func runArchtestListTests(ctx context.Context, req archtestrunner.Request) error
 			return fmt.Errorf("write list-tests output: %w", werr)
 		}
 	}
+	emitChangedSelectionSummary(os.Stderr, req, len(names))
 	return ctxInterrupted(ctx, "archtest")
 }
 
@@ -137,14 +154,10 @@ func runArchtestReport(ctx context.Context, req archtestrunner.Request, format s
 		return ie
 	}
 
-	// Under --changed, make the selection explicit on stderr so a clean exit
-	// with 0 rules selected is not misread as "the full suite passed" — the
-	// full sharded run remains authoritative (see the --changed help text).
-	if req.Changed {
-		fmt.Fprintf(os.Stderr,
-			"archtest --changed: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
-				" this is a pre-filter, not the authoritative full run\n", len(report.Selected))
-	}
+	// Under --changed, make the selection explicit on stderr (shared with
+	// --list-tests) so a clean exit with 0 rules selected is not misread as
+	// "the full suite passed" — the full sharded run remains authoritative.
+	emitChangedSelectionSummary(os.Stderr, req, len(report.Selected))
 
 	results := mapReportToResults(report)
 	if err := printer.Print(results); err != nil {

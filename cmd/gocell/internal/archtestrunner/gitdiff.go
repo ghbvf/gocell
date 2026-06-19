@@ -3,7 +3,6 @@ package archtestrunner
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/ghbvf/gocell/framework/pkg/cmdrun"
@@ -13,17 +12,21 @@ import (
 // (of any kind — source, test, contract, doc) that differ between the current
 // working tree and the merge-base with origin/develop.
 //
-// Two git diffs are unioned to capture both committed changes (vs merge-base)
-// and uncommitted working-tree changes:
-//  1. git diff --name-only <merge-base>  (committed changes since branch point)
-//  2. git diff --name-only HEAD          (working tree vs HEAD)
+// Three git listings are unioned so no in-tree change escapes:
+//  1. git diff --name-only <merge-base>           committed since branch point
+//  2. git diff --name-only HEAD                   tracked working-tree edits
+//  3. git ls-files --others --exclude-standard    untracked (non-ignored) files
 //
-// This is the single git-diff seam for --changed: it reports *what* changed
-// (raw), and the selection policy (which rules a change affects) lives
-// downstream in applyFilters → selectByChangedSource (#1877). If the set is
-// empty, the caller (Run/ListTests) selects the empty set and returns a
-// trivially passed Report — --changed is a focused pre-filter, not a "run
-// nothing if nothing changed" shortcut.
+// (3) matters for local use: a newly-created-but-not-yet-`git add`-ed source
+// file would otherwise be invisible, letting the local --changed gate silently
+// skip it. PR CI is unaffected (its head is committed).
+//
+// This is the single git seam for --changed: it reports *what* changed (raw),
+// and the selection policy (which rules a change affects) lives downstream in
+// applyFilters → selectByChangedSource (#1877). If the set is empty, the caller
+// (Run/ListTests) selects the empty set and returns a trivially passed Report —
+// --changed is a focused pre-filter, not a "run nothing if nothing changed"
+// shortcut.
 func changedRepoFiles(ctx context.Context, workspaceRoot string) ([]string, error) {
 	gitTool, err := cmdrun.NewTool("git")
 	if err != nil {
@@ -41,67 +44,32 @@ func changedRepoFiles(ctx context.Context, workspaceRoot string) ([]string, erro
 		return nil, fmt.Errorf("archtestrunner: git diff committed: %w", err)
 	}
 
-	// Working-tree changes relative to HEAD.
+	// Tracked working-tree changes relative to HEAD.
 	worktree, err := gitDiffNames(ctx, gitTool, workspaceRoot, "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("archtestrunner: git diff working-tree: %w", err)
 	}
 
-	return dedupe(append(committed, worktree...)), nil
+	// Untracked (non-ignored) files.
+	untracked, err := gitUntrackedNames(ctx, gitTool, workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("archtestrunner: git ls-files untracked: %w", err)
+	}
+
+	all := append(committed, worktree...) //nolint:gocritic // intentional union of three disjoint listings
+	all = append(all, untracked...)
+	return dedupe(all), nil
 }
 
-// changedFilesToTests maps a list of changed file paths (repo-relative) to the
-// top-level Test* function names declared in those files. Only files that pass
-// filterArchtestFiles are scanned; others are silently ignored.
-//
-// Used by the --changed selection path to avoid re-running the full suite when
-// only a few archtest files were modified.
-func changedFilesToTests(workspaceRoot string, changedFiles []string) ([]string, error) {
-	archtestFiles := filterArchtestFiles(changedFiles)
-	if len(archtestFiles) == 0 {
-		return nil, nil
+// gitUntrackedNames runs `git ls-files --others --exclude-standard` and returns
+// the untracked (non-ignored) files.
+func gitUntrackedNames(ctx context.Context, tool cmdrun.ValidatedTool, workspaceRoot string) ([]string, error) {
+	out, err := cmdrun.RunWith(ctx, tool, cmdrun.RunOptions{Dir: workspaceRoot},
+		"ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files --others --exclude-standard: %w", err)
 	}
-
-	var tests []string
-	for _, relPath := range archtestFiles {
-		absPath := filepath.Join(workspaceRoot, relPath)
-		_, funcs, err := parseTestFile(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("archtestrunner: parse changed file %s: %w", relPath, err)
-		}
-		tests = append(tests, funcs...)
-	}
-	return tests, nil
-}
-
-// filterArchtestFiles returns the subset of paths that are top-level
-// tools/archtest/*_test.go files (not in subdirs). Input paths may use
-// OS-native or forward-slash separators.
-func filterArchtestFiles(paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		// Normalize to forward slashes for consistent matching.
-		norm := filepath.ToSlash(p)
-		if isTopLevelArchtestFile(norm) {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// isTopLevelArchtestFile reports whether path (slash-separated) is a top-level
-// tools/archtest/*_test.go file (not under a subdirectory of archtest/).
-func isTopLevelArchtestFile(slashPath string) bool {
-	prefix := archtestPkgDir + "/"
-	if !strings.HasPrefix(slashPath, prefix) {
-		return false
-	}
-	rest := slashPath[len(prefix):]
-	if !strings.HasSuffix(rest, "_test.go") {
-		return false
-	}
-	// Must not contain a "/" (i.e. not in a subdir).
-	return !strings.Contains(rest, "/")
+	return splitLines(string(out)), nil
 }
 
 // gitMergeBase returns the merge base commit SHA between HEAD and origin/develop.
