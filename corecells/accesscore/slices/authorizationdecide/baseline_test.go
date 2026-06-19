@@ -505,10 +505,13 @@ func TestBuiltinBaseline_AccessDecide(t *testing.T) {
 // device — the {owner, admin} closed set frozen by BASELINE-OWNER-RULE-TENANT-FREEZE-01.
 // A non-owner non-admin is denied, an empty resource id is fail-closed, and the rule
 // is action-scoped (device:read does not leak into another action). device:read uses
-// device-SELF ownership (subject == resource.id), shape-identical to user:read-self;
-// the rule is kind-agnostic, so this user-principal table exercises the same rule a
-// real device principal hits (the device-principal HTTP path is covered by
-// cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership).
+// device-SELF ownership (subject == resource.id), shape-identical to user:read-self.
+// The rule is principal-kind-agnostic: attributeResolver.resolveSubject reads
+// principal.Subject for the "sub" key regardless of Kind (attributes.go), so a
+// PrincipalUser whose subject == the device id exercises the IDENTICAL rule path a
+// real PrincipalDevice hits — hence selfPrincipal below is a plain user principal.
+// The device-principal HTTP path is separately covered by
+// cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership.
 func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 
@@ -516,7 +519,9 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 		selfID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 		otherID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 	)
-	devicePrincipal := &auth.Principal{
+	// selfPrincipal: the subject whose id == the requested device id (device-self).
+	// Kind is PrincipalUser because the ownership rule is kind-agnostic (see godoc).
+	selfPrincipal := &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: selfID, TenantID: testTenantIDStr,
 		Roles: []string{"user"},
 	}
@@ -534,11 +539,11 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 	}{
 		{
 			name:      "device + device:read + resource==self → Allow (self rule)",
-			principal: devicePrincipal, resourceID: selfID, wantAllow: true,
+			principal: selfPrincipal, resourceID: selfID, wantAllow: true,
 		},
 		{
 			name:      "device + device:read + resource==other → Deny (non-owner, non-admin)",
-			principal: devicePrincipal, resourceID: otherID, wantAllow: false,
+			principal: selfPrincipal, resourceID: otherID, wantAllow: false,
 		},
 		{
 			name:      "admin + device:read + resource==any → Allow (admin rule)",
@@ -546,7 +551,7 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 		},
 		{
 			name:      "device + device:read + empty resource → Deny (resource.id not-found, fail-closed)",
-			principal: devicePrincipal, resourceID: "", wantAllow: false,
+			principal: selfPrincipal, resourceID: "", wantAllow: false,
 		},
 	}
 	for _, tt := range tests {
@@ -560,7 +565,7 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 
 	// Action-scope guard: the device:read rules must NOT grant a different action.
 	t.Run("device:read self rule does not leak into config:read", func(t *testing.T) {
-		resolver := attributeResolver{principal: devicePrincipal, resourceID: selfID}
+		resolver := attributeResolver{principal: selfPrincipal, resourceID: selfID}
 		dec, _ := svc.evaluate(nil, resolver, authz.PermConfigRead().String())
 		assert.False(t, dec.IsAllow(),
 			"device:read self rule must not leak into an unrelated action (config:read)")

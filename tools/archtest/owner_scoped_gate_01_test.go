@@ -74,6 +74,13 @@
 //     ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple check
 //     forces this consciously for the already-guarded files). A RequirePermissionForSelf
 //     callsite in an unlisted file is likewise not frozen.
+//   - Scan SCOPE vs handler-key ASYMMETRY (#2351): the scan now loads all of
+//     ./cellmodules/... but ownerScopedGateHandlerKey only recognizes deviceserving/service.go;
+//     an owner gate added in ANY OTHER cellmodules file resolves handler="" and is SILENTLY
+//     SKIPPED (not flagged UNEXPECTED — unscanned ≠ unexpected). The widened scope does NOT
+//     mean "all of cellmodules is guarded"; only the explicitly keyed files are. A new
+//     cellmodules owner gate MUST add its handler key here. (Hard end state: contract-derived
+//     gate + codegen golden, PR-13, removes the manual file list entirely.)
 package archtest
 
 import (

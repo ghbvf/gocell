@@ -189,6 +189,9 @@ var builtinBaseline = []abac.Rule{
 	// device-ownership baseline (#2351, presence-backend prerequisite): device:read
 	// gates the framework-owned http.devicestate.v1 serving handler
 	// (auth.RequirePermissionForResource("id", PermDeviceRead()), cellmodules/deviceserving).
+	// Living here is by the centralized-PDP-baseline convention: accesscore is the single
+	// baseline source for ALL permissions regardless of consuming cell (config:read from
+	// configcore, audit:read from auditcore, …); a framework-owned contract is no exception.
 	// The model is device-SELF ownership (subject.sub == resource.id) — the device whose
 	// id equals the path id reads its OWN state — NOT the delegated user-owns-device model
 	// (subject.sub == resource.owner) which would need a device→owner PIP lookup the platform
@@ -219,7 +222,8 @@ var builtinBaseline = []abac.Rule{
 // subjectIsResource returns the cross-attribute ABAC condition that checks
 // subject.sub == resource.id (#1977 Batch B). This is the identity-ownership
 // condition: the authenticated subject is the owner of the resource they are
-// accessing (user owns their own account/roles). Uses abac.OpEqualsAttr to
+// accessing — a user owns its own account/roles; a device owns its own presence
+// state (device-self, #2351). Uses abac.OpEqualsAttr to
 // compare the LHS (subject.sub) against the RHS (resource.id) at evaluation
 // time — both resolved via attributeResolver, both fail-closed on not-found.
 //

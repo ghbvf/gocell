@@ -142,6 +142,14 @@ func startCorebundlePDPApp(t *testing.T) string {
 		// is wired below via WithFrameworkHTTPServing, and phase0 validateFrameworkServing
 		// reconciles the two. This lets TestABACPDPGatesDevicestate exercise the
 		// device:read baseline ownership rule (#2351) on the same app the other PDP tests use.
+		//
+		// Side-effect note (#2351 review F7): this helper is shared by ALL PDP integration
+		// tests (audit / config / access / devicestate), so they now all carry framework
+		// serving. This is safe and not a hidden coupling: validateFrameworkServing runs in
+		// phase0 — BEFORE any HTTP listener starts — so a wiring mismatch fails Run() loudly
+		// (waitForHealthy then times out; t.Cleanup asserts NoError on the Run error), never
+		// a silent false-pass. A future test that needs a DIFFERENT framework-serving set
+		// should take a parameter rather than fork this helper.
 		FrameworkContracts: generatedFrameworkServedContracts(),
 	})
 	require.NoError(t, asm.Register(ac))

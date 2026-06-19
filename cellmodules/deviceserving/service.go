@@ -83,8 +83,10 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 // (#2351): device-SELF ownership (the device whose id == the path id reads its OWN
 // state, subject.sub == resource.id) and admin/super-admin (fleet read). A non-owner
 // non-admin is PDP-denied. Enabling the grant before a real presence backend is safe:
-// this handler always returns state "unknown", so there is no existence/state oracle
-// to enumerate — the ownership model is established and frozen now, leaving only the
+// this handler always returns state "unknown" for ANY id (it never consults a device
+// registry), so the response carries no information about whether a device actually
+// exists — there is no device-existence oracle to enumerate, and no state to leak — the
+// ownership model is established and frozen now, leaving only the
 // data-layer RowScope/typed-tenant isolation (against real presence data) for the
 // presence backend (#1904/#1905); TenantID stays nil until a device→tenant binding
 // source exists. Delegated user-owns-device ownership (subject.sub == resource.owner

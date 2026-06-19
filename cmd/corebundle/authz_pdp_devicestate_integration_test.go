@@ -38,12 +38,13 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 	base := startCorebundlePDPApp(t)
 	adminToken, userToken, userID, _ := provisionPDPAdminAndUser(t, base, testTenantID)
 
-	// A non-admin user fully provisioned in a SECOND tenant (testTenantID2): its JWT
-	// carries sub=crossTenantUserID and tenant_id=tenantB, backed by a live session.
-	// Reading a tenant-A device id with it must 403 — the ownership rule compares
-	// request-local UUIDs and is tenant-agnostic, so a different-tenant subject is
-	// denied exactly like a same-tenant non-owner.
-	_, crossTenantUserToken, crossTenantUserID, _ := provisionPDPAdminAndUser(t, base, testTenantID2)
+	// A non-admin user (+ an admin) fully provisioned in a SECOND tenant (testTenantID2):
+	// the non-admin JWT carries sub=crossTenantUserID and tenant_id=tenantB, backed by a
+	// live session. Reading a tenant-A device id with the non-admin must 403 — the ownership
+	// rule compares request-local UUIDs and is tenant-agnostic, so a different-tenant subject
+	// is denied exactly like a same-tenant non-owner. The tenant-B admin token pins the
+	// admin-cross-tenant route behavior (see crossTenantAdmin case below).
+	crossTenantAdminToken, crossTenantUserToken, crossTenantUserID, _ := provisionPDPAdminAndUser(t, base, testTenantID2)
 
 	devicePath := func(id string) string { return "/api/v1/devicestate/" + id }
 
@@ -51,6 +52,8 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath(userID), adminToken, nil)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"admin GET any devicestate must be 200 (baseline admin rule, device:read); body=%s", body)
+		assert.Contains(t, body, `"state":"unknown"`,
+			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
 	})
 
 	t.Run("non_admin_read_own_device_200_pdp_ownership", func(t *testing.T) {
@@ -58,6 +61,8 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"non-admin GET own device state (subject==resource.id) must be 200 via the PDP ownership rule "+
 				"(a non-admin has no baseline admin grant, so 200 here proves the device-self rule fired); body=%s", body)
+		assert.Contains(t, body, `"state":"unknown"`,
+			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
 	})
 
 	t.Run("non_admin_read_other_device_403_pdp_deny", func(t *testing.T) {
@@ -77,6 +82,25 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"tenant-B non-admin GET its OWN id must be 200 (ownership rule fires in its own tenant; proves the "+
 				"cross-tenant token is live, so the 403 below is ownership-specific); body=%s", body)
+		assert.Contains(t, body, `"state":"unknown"`,
+			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
+	})
+
+	// admin cross-tenant is allowed AT THE ROUTE GATE by design: the admin baseline rule
+	// (adminOrSuperAdmin()) is tenant-AGNOSTIC, exactly like every other admin baseline
+	// (user:read, audit:read, …). The actual cross-tenant data boundary for admins is the
+	// data layer (principal-derived RowScope=tenant + RLS), which lands with the presence
+	// backend (#1904/#1905) — there is no presence data to isolate yet, so the handler
+	// returns the same honest "unknown" for any id. This case pins that route-level behavior
+	// so a future change that tries to make the admin rule tenant-scoped (which would belong
+	// in the data layer, not the route gate) is a conscious, test-visible decision.
+	t.Run("cross_tenant_admin_read_other_tenant_device_200_route_gate", func(t *testing.T) {
+		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath(userID), crossTenantAdminToken, nil)
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"tenant-B admin GET a tenant-A device id passes the ROUTE gate (admin baseline is tenant-agnostic, "+
+				"by design — data-layer RowScope=tenant is the real boundary, deferred to the presence backend); body=%s", body)
+		assert.Contains(t, body, `"state":"unknown"`,
+			"the 200 body must carry the honest unknown state (no presence backend → no cross-tenant data exposed); body=%s", body)
 	})
 
 	t.Run("cross_tenant_read_other_device_403_pdp_deny", func(t *testing.T) {
