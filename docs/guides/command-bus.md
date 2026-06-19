@@ -47,8 +47,8 @@ The command bus is **not** a second HTTP layer and **not** an event bus:
 ### 1. Declare the contract (`kind: command`)
 
 ```yaml
-# examples/iotdevice/contracts/command/devicecommand/enqueue/v1/contract.yaml
-id: command.devicecommand.enqueue.v1
+# examples/iotdevice/contracts/command/remotecommand/v1/contract.yaml
+id: command.remotecommand.v1
 kind: command
 ownerCell: devicecell
 consistencyLevel: L4
@@ -64,13 +64,13 @@ schemaRefs:
 `codegen` defaults to enabled; set `codegen: false` only to opt out explicitly.
 
 `gocell generate contract` (run `go run ./cmd/gocell generate contract --all`)
-derives, into `generated/contracts/command/devicecommand/enqueue/v1/`:
+derives, into `generated/contracts/command/remotecommand/v1/`:
 
 ```go
-const DispatchID idutil.SafeID = "command.devicecommand.enqueue.v1"
+const DispatchID idutil.SafeID = "command.remotecommand.v1"
 
 type Handler interface {
-    HandleEnqueue(ctx context.Context, req *Request) (*Response, error)
+    HandleRemotecommand(ctx context.Context, req *Request) (*Response, error)
 }
 
 func Register(reg *command.Registry, h Handler) error
@@ -100,18 +100,18 @@ method the HTTP path uses; do not fork the logic.
 
 ```go
 // examples/iotdevice/cells/devicecell/slices/devicecommand/command_handler.go
-type EnqueueCommandAdapter struct{ S *Service }
+type RemoteCommandAdapter struct{ S *Service }
 
-var _ cmdenqueue.Handler = EnqueueCommandAdapter{}
+var _ cmdremote.Handler = RemoteCommandAdapter{}
 
-func (a EnqueueCommandAdapter) HandleEnqueue(
-    ctx context.Context, req *cmdenqueue.Request,
-) (*cmdenqueue.Response, error) {
+func (a RemoteCommandAdapter) HandleRemotecommand(
+    ctx context.Context, req *cmdremote.Request,
+) (*cmdremote.Response, error) {
     entry, err := a.S.Enqueue(ctx, req.DeviceID, req.CommandType, req.Payload)
     if err != nil {
         return nil, err
     }
-    return &cmdenqueue.Response{Data: toCommandEnqueueResponseData(entry)}, nil
+    return &cmdremote.Response{Data: toRemoteCommandResponseData(entry)}, nil
 }
 ```
 
@@ -136,7 +136,7 @@ if c.commandRegistry == nil {
         "devicecell requires a command registry; from the composition root, "+
             "call WithCommandRegistry(command.NewRegistry())")
 }
-if err := cmdenqueue.Register(c.commandRegistry, devicecommand.EnqueueCommandAdapter{S: pubSvc}); err != nil {
+if err := cmdremote.Register(c.commandRegistry, devicecommand.RemoteCommandAdapter{S: pubSvc}); err != nil {
     return fmt.Errorf("devicecommand register: %w", err)
 }
 ```
@@ -165,7 +165,7 @@ The async path also wires the generated dispatcher into the outbox relay:
 ```go
 // examples/iotdevice/run.go
 relay.WithCommandDispatch(commandReg, map[commandruntime.CommandID]commandruntime.AsyncDispatchFunc{
-    cmdenqueue.DispatchID: cmdenqueue.DispatchAsync,
+    cmdremote.DispatchID: cmdremote.DispatchAsync,
 }, claimer)
 ```
 
@@ -179,7 +179,7 @@ redelivery.
 A trusted in-process caller invokes the operation through the same registry:
 
 ```go
-resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
+resp, err := cmdremote.Dispatch(ctx, commandReg, &cmdremote.Request{
     DeviceID:    "dev-1",
     CommandType: "reboot",
     Payload:     "now",
@@ -204,17 +204,17 @@ resp, err := cmdenqueue.Dispatch(ctx, commandReg, &cmdenqueue.Request{
 > request value constraints before calling `Dispatch`.
 
 There is still no production code that directly calls synchronous
-`cmdenqueue.Dispatch`; that path is exercised by wiring tests. Production command
+`cmdremote.Dispatch`; that path is exercised by wiring tests. Production command
 traffic for device enqueue is async:
 
 - HTTP `http.device.command.enqueue-async.v1` validates the incoming request and
   calls `Service.EnqueueAsync`, which emits through
-  `cmdenqueue.EmitAsyncFromIdempotencyKey`.
+  `cmdremote.EmitAsyncFromIdempotencyKey`.
 - `devicebootstrap` reacts to `event.device-registered.v1` and emits the generated
-  command with `cmdenqueue.EmitAsync`.
+  command with `cmdremote.EmitAsync`.
 - `devicecertrenewal` uses the same generated emit path for reconcile-driven
   certificate rotation commands.
-- the relay dispatches matching command entries through `cmdenqueue.DispatchAsync`,
+- the relay dispatches matching command entries through `cmdremote.DispatchAsync`,
   which validates the outbox payload bytes before restoring context and invoking
   the registered `Handler`.
 

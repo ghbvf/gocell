@@ -31,7 +31,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 // pendingSort defines the default sort for command listings (FIFO).
@@ -101,7 +101,7 @@ type Service struct {
 	onEnqueue func(context.Context, command.Entry)
 
 	// emitter is the writer-backed CellEmitter EnqueueAsync uses to emit a
-	// cmdenqueue async command (the #1610 cross-cell idempotency consumer). Nil
+	// cmdremote async command (the #1610 cross-cell idempotency consumer). Nil
 	// disables the async path (EnqueueAsync fail-fasts). Set via WithCommandEmitter
 	// by the composition root only for the public devicecommand slice; the internal
 	// and gRPC Services leave it nil.
@@ -193,7 +193,7 @@ func WithSliceName(name string) Option {
 }
 
 // WithCommandEmitter wires the writer-backed CellEmitter EnqueueAsync uses to emit
-// the cmdenqueue async command (the #1610 cross-cell idempotency consumer). Only
+// the cmdremote async command (the #1610 cross-cell idempotency consumer). Only
 // the public devicecommand slice needs it; the internal/gRPC Services leave it
 // nil and never call EnqueueAsync. Accumulative: a nil emitter leaves the prior
 // value in place.
@@ -316,7 +316,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	return entry, nil
 }
 
-// EnqueueAsync emits the cmdenqueue command through the outbox so the relay's
+// EnqueueAsync emits the cmdremote command through the outbox so the relay's
 // Claimer wrap deduplicates the dispatch by DeriveCommandKey(tenant, deviceID,
 // commandID): the SAME logical command, submitted via HTTP with the same
 // Idempotency-Key across different cells / listeners / pods, lands in a SINGLE
@@ -324,7 +324,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 // consumer). It is the async sibling of Enqueue (which writes Pending directly).
 //
 // The commandID is sourced from the request's validated Idempotency-Key in ctx by
-// the generated cmdenqueue.EmitAsyncFromIdempotencyKey wrapper (which bakes in
+// the generated cmdremote.EmitAsyncFromIdempotencyKey wrapper (which bakes in
 // DispatchID and delegates to runtime commandruntime.EmitAsyncFromIdempotencyKey)
 // — NOT a parameter here — so the subject/commandID transpose footgun is
 // structurally inexpressible. The
@@ -348,9 +348,9 @@ func (s *Service) EnqueueAsync(ctx context.Context, deviceID, commandType, paylo
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
 		return fmt.Errorf(errLookupDeviceFmt, err)
 	}
-	req := cmdenqueue.Request{DeviceID: deviceID, CommandType: commandType, Payload: payload}
+	req := cmdremote.Request{DeviceID: deviceID, CommandType: commandType, Payload: payload}
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		return cmdenqueue.EmitAsyncFromIdempotencyKey(
+		return cmdremote.EmitAsyncFromIdempotencyKey(
 			txCtx, s.clock, s.emitter, deviceID, &req)
 	}); err != nil {
 		return err

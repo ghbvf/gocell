@@ -17,7 +17,7 @@ package main
 //
 // Both this file and command_dedup_e2e_test.go are package main, so under
 // `-tags=integration` they compile together and this file reuses the demo's
-// dedupEnqueueHandler / sourceEvent helpers verbatim (zero duplication).
+// dedupRemoteCommandHandler / sourceEvent helpers verbatim (zero duplication).
 //
 // Single-pod note: buildCommandRelaySubsystem's durable branch refuses an
 // in-memory command Claimer unless GOCELL_IOTDEVICE_DURABLE_SINGLE_POD
@@ -47,7 +47,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -81,8 +81,8 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 	t.Run("DedupOnEventRedelivery", func(t *testing.T) {
 		truncateOutbox(t, pool)
 		reg := command.NewRegistry()
-		h := &dedupEnqueueHandler{}
-		require.NoError(t, enqueue.Register(reg, h))
+		h := &dedupRemoteCommandHandler{}
+		require.NoError(t, cmdremote.Register(reg, h))
 
 		crs, err := buildCommandRelaySubsystem(clk, &kout.DiscardPublisher{}, reg, pool)
 		require.NoError(t, err)
@@ -136,13 +136,13 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx := context.Background()
-		req := enqueue.Request{DeviceID: "d2", CommandType: "bootstrap", Payload: "{}"}
+		req := cmdremote.Request{DeviceID: "d2", CommandType: "bootstrap", Payload: "{}"}
 		errBoom := errors.New("durable tx rollback boom")
 
 		// Rollback: the PG outbox writer writes inside the device-bootstrap tx, so
 		// a tx that emits then fails must leave NO command entry.
 		rbErr := crs.bootstrapTxManager.RunInTx(ctx, func(txCtx context.Context) error {
-			if e := enqueue.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
+			if e := cmdremote.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
 				"d2", "evt-rollback", &req); e != nil {
 				return e
 			}
@@ -155,7 +155,7 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 
 		// Commit: the same emit with a tx that succeeds → exactly one entry persists.
 		require.NoError(t, crs.bootstrapTxManager.RunInTx(ctx, func(txCtx context.Context) error {
-			return enqueue.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
+			return cmdremote.EmitAsync(txCtx, clk, crs.bootstrapEmitter,
 				"d2", "evt-commit", &req)
 		}))
 		n, err = outboxCount(ctx, pool, "")
@@ -167,8 +167,8 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 	t.Run("FailClosedOnMissingIdentity_DeadLetter", func(t *testing.T) {
 		truncateOutbox(t, pool)
 		reg := command.NewRegistry()
-		h := &dedupEnqueueHandler{}
-		require.NoError(t, enqueue.Register(reg, h))
+		h := &dedupRemoteCommandHandler{}
+		require.NoError(t, cmdremote.Register(reg, h))
 
 		crs, err := buildCommandRelaySubsystem(clk, &kout.DiscardPublisher{}, reg, pool)
 		require.NoError(t, err)
@@ -177,9 +177,9 @@ func TestCommandRelay_Durable_PG(t *testing.T) {
 		// Identity-less command entry: schema-valid payload but no AggregateID and
 		// no command_id metadata → ClaimKeyFromEntry returns ok=false. EmitAsync
 		// always stamps a command_id, so seed via the raw PG writer instead.
-		payload, err := json.Marshal(enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
+		payload, err := json.Marshal(cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
 		require.NoError(t, err)
-		bad, err := kout.NewEntry(clk, ctx, string(enqueue.DispatchID), payload)
+		bad, err := kout.NewEntry(clk, ctx, string(cmdremote.DispatchID), payload)
 		require.NoError(t, err)
 		writer := adapterpg.NewOutboxWriter(clk)
 		require.NoError(t, crs.bootstrapTxManager.RunInTx(ctx, func(txCtx context.Context) error {

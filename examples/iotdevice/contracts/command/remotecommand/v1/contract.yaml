@@ -2,7 +2,7 @@
 # Pre-GA wire-break window in .claude/rules/gocell/api-versioning.md §兼容窗口
 # (until 2026-12-31; no external wire consumers). After the window, breaking wire
 # changes rev the version dir.
-id: command.devicecommand.enqueue.v1
+id: command.remotecommand.v1
 kind: command
 ownerCell: devicecell
 consistencyLevel: L4

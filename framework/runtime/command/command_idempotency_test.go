@@ -29,7 +29,7 @@ func TestEmitAsync_EntryShape(t *testing.T) {
 	em := &captureEmitter{}
 	clk := clock.Real()
 	const (
-		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		dispatchID = CommandID("command.remotecommand.v1")
 		subject    = "device-7"
 		commandID  = "instance-abc"
 	)
@@ -74,7 +74,7 @@ func TestClaimKeyFromEntry_RoundTrip(t *testing.T) {
 
 	em := &captureEmitter{}
 	const (
-		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		dispatchID = CommandID("command.remotecommand.v1")
 		subject    = "device-7"
 		commandID  = "instance-abc"
 	)
@@ -102,7 +102,7 @@ func TestClaimKeyFromEntry_TenantlessUsesNoTenantSentinel(t *testing.T) {
 
 	em := &captureEmitter{}
 	const (
-		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		dispatchID = CommandID("command.remotecommand.v1")
 		subject    = "device-7"
 		commandID  = "source-event-1"
 	)
@@ -181,7 +181,7 @@ func TestEmitAsync_WithActiveUniqueness_WritesDeadlineMetadata(t *testing.T) {
 
 	em := &captureEmitter{}
 	const (
-		dispatchID = CommandID("command.devicecommand.enqueue.v1")
+		dispatchID = CommandID("command.remotecommand.v1")
 		subject    = "device-8"
 		commandID  = "instance-xyz"
 	)

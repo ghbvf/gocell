@@ -15,11 +15,11 @@ contractUsages:
     role: serve
   - contract: http.device.command.extend-lease.v1
     role: serve
-  - contract: command.devicecommand.enqueue.v1
+  - contract: command.remotecommand.v1
     role: handle
   # The async-commands HTTP endpoint also PRODUCES this command (EmitAsync); the
   # relay routes it back to the handle role above for cross-cell same-slot dedup.
-  - contract: command.devicecommand.enqueue.v1
+  - contract: command.remotecommand.v1
     role: invoke
   - contract: command.devicecommand.dequeue.v1
     role: handle
@@ -39,13 +39,13 @@ verify:
     - contract.http.device.command.report.v1.serve
     - contract.http.device.command.ack.v1.serve
     - contract.http.device.command.extend-lease.v1.serve
-    - contract.command.devicecommand.enqueue.v1.handle
+    - contract.command.remotecommand.v1.handle
     - contract.command.devicecommand.dequeue.v1.handle
     - contract.command.devicecommand.report.v1.handle
     - contract.command.devicecommand.ack.v1.handle
     - contract.command.devicecommand.extend-lease.v1.handle
   waivers:
-    - contract: command.devicecommand.enqueue.v1
+    - contract: command.remotecommand.v1
       owner: examples
       reason: >-
         invoke is a declaration-only role (no cellgen derivation, no executable

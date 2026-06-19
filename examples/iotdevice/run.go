@@ -41,7 +41,7 @@ import (
 	rtmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
 const envDurableSinglePod = "GOCELL_IOTDEVICE_DURABLE_SINGLE_POD"
@@ -286,7 +286,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 // into, the ConsumerBase that idempotency-guards the device-registered
 // subscriber, the relay that polls the outbox store and dispatches command
 // entries in-process, and the CellTxManager the bootstrap slice uses to wrap
-// cmdenqueue.EmitAsync in a real transaction in durable mode (#1698).
+// cmdremote.EmitAsync in a real transaction in durable mode (#1698).
 type commandRelaySubsystem struct {
 	bootstrapEmitter   outbox.CellEmitter
 	bootstrapTxManager persistence.CellTxManager
@@ -297,7 +297,7 @@ type commandRelaySubsystem struct {
 // buildCommandRelaySubsystem wires the async command-relay subsystem for the
 // resolved durability mode (mirrors examples/ssobff/app.go: NewOutboxStore +
 // NewOutboxWriter + NewRelay + ConsumerBase). The relay polls store, publishes
-// events to eb, and in-process-dispatches command.devicecommand.enqueue.v1
+// events to eb, and in-process-dispatches command.remotecommand.v1
 // entries to the registered handler — wrapped in the Claimer so an at-least-once
 // device-registered redelivery cannot enqueue the same bootstrap command twice.
 //
@@ -330,7 +330,7 @@ func buildCommandRelaySubsystem(
 	} else {
 		store = adapterpg.NewOutboxStore(pool.DB(), clk)
 		writer = adapterpg.NewOutboxWriter(clk)
-		// Durable mode: wrap PG TxManager so cmdenqueue.EmitAsync gets a real tx in
+		// Durable mode: wrap PG TxManager so cmdremote.EmitAsync gets a real tx in
 		// ctx — adapterpg.OutboxWriter.Write calls persistence.TxFromContext[pgx.Tx]
 		// and returns ErrAdapterPGNoTx without one.
 		bootstrapTxManager = persistence.WrapForCell(adapterpg.NewTxManager(pool))
@@ -354,9 +354,9 @@ func buildCommandRelaySubsystem(
 
 	relay := outboxruntime.NewRelay(clk, store, eb, outboxruntime.DefaultRelayConfig())
 	// First production WithCommandDispatch callsite: the map value MUST be the
-	// generated cmdenqueue.DispatchAsync direct symbol (COMMAND-ASYNC-DISPATCH-CALLER-01).
+	// generated cmdremote.DispatchAsync direct symbol (COMMAND-ASYNC-DISPATCH-CALLER-01).
 	relay.WithCommandDispatch(commandReg, map[commandruntime.CommandID]commandruntime.AsyncDispatchFunc{
-		cmdenqueue.DispatchID: cmdenqueue.DispatchAsync,
+		cmdremote.DispatchID: cmdremote.DispatchAsync,
 	}, claimer)
 
 	return commandRelaySubsystem{

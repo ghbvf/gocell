@@ -6,7 +6,7 @@ contractUsages:
   - contract: event.device-registered.v1
     role: subscribe
     handler: HandleDeviceRegistered
-  - contract: command.devicecommand.enqueue.v1
+  - contract: command.remotecommand.v1
     role: invoke
 verify:
   unit:
@@ -14,7 +14,7 @@ verify:
   contract:
     - contract.event.device-registered.v1.subscribe
   waivers:
-    - contract: command.devicecommand.enqueue.v1
+    - contract: command.remotecommand.v1
       owner: examples
       reason: >-
         invoke is a declaration-only role (no cellgen derivation, no executable
