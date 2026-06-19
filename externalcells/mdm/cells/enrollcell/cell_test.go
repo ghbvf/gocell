@@ -10,12 +10,21 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+
+	"github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status"
 )
 
-// TestEnrollCell_IdentityAndInit covers the empty cell's identity and that Init
+// nilStatusRepo is a no-op status.Repository for tests that don't exercise the repo.
+type nilStatusRepo struct{}
+
+func (nilStatusRepo) ActiveByDeviceID(_ context.Context, _ string) (status.CertRecord, bool, error) {
+	return status.CertRecord{}, false, nil
+}
+
+// TestEnrollCell_IdentityAndInit covers the cell's identity and that Init
 // is a clean no-op (BaseCell.Init only — no routes/slices/probes registered).
 func TestEnrollCell_IdentityAndInit(t *testing.T) {
-	c := NewEnrollCell()
+	c := NewEnrollCell(Deps{StatusRepo: nilStatusRepo{}})
 
 	if got := c.ID(); got != "enrollcell" {
 		t.Fatalf("ID() = %q, want %q", got, "enrollcell")
@@ -24,21 +33,16 @@ func TestEnrollCell_IdentityAndInit(t *testing.T) {
 		t.Fatalf("Type() = %q, want %q", got, cellvocab.CellTypeCore)
 	}
 
-	// BaseCell.Init ignores the Registrar (nil is acceptable for an empty cell
-	// that registers nothing); it only transitions lifecycle state.
+	// BaseCell.Init ignores the Registrar (nil is acceptable for a cell
+	// that registers nothing via Init); it only transitions lifecycle state.
 	if err := c.Init(context.Background(), nil); err != nil {
 		t.Fatalf("Init() error = %v", err)
 	}
 }
 
-// TestEnrollCell_Startup is the verify.smoke.enrollcell.startup target (gocell
-// verify cell resolves smoke.enrollcell.startup to -run Startup in this package).
-// It drives the cell through its full lifecycle — Init → Start → Ready → Stop —
-// which is the cell-level smoke; the composition-root HTTP boot smoke lives in
-// cmd/mdmd's TestRun_HealthReadyzGreen. An empty cell registers nothing, so a nil
-// Registrar suffices. Mirrors the canonical pattern in examples/iotdevice devicecell.
+// TestEnrollCell_Startup is the verify.smoke.enrollcell.startup target.
 func TestEnrollCell_Startup(t *testing.T) {
-	c := NewEnrollCell()
+	c := NewEnrollCell(Deps{StatusRepo: nilStatusRepo{}})
 	ctx := context.Background()
 
 	if err := c.Init(ctx, nil); err != nil {
@@ -48,21 +52,19 @@ func TestEnrollCell_Startup(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	if !c.Ready() {
-		t.Fatal("Ready() = false after Start, want true (cell never reached the started state)")
+		t.Fatal("Ready() = false after Start, want true")
 	}
 	if err := c.Stop(ctx); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 }
 
-// TestEnrollCell_Module covers the composition.CellModule surface: the module ID
-// matches the cell ID (composition.Build enforces this) and Provide returns the
-// constructed cell with no opts/resources. PR-0 Provide ignores SharedDeps, so nil
-// is a valid argument here.
+// TestEnrollCell_Module covers the NewModule(Deps) path: module ID matches cell ID,
+// Provide returns the constructed cell with no opts/resources.
 func TestEnrollCell_Module(t *testing.T) {
-	m := Module()
+	m := NewModule(Deps{StatusRepo: nilStatusRepo{}})
 	if got := m.ID(); got != cellID {
-		t.Fatalf("Module().ID() = %q, want %q", got, cellID)
+		t.Fatalf("NewModule().ID() = %q, want %q", got, cellID)
 	}
 
 	res, err := m.Provide(context.Background(), nil)
@@ -73,21 +75,31 @@ func TestEnrollCell_Module(t *testing.T) {
 		t.Fatal("Provide() returned a nil Cell")
 	}
 	if got := res.Cell.ID(); got != cellID {
-		t.Fatalf("provided cell ID = %q, want %q (composition.Build requires cell.ID()==module.ID())", got, cellID)
+		t.Fatalf("provided cell ID = %q, want %q", got, cellID)
 	}
 	if len(res.Opts) != 0 {
-		t.Errorf("empty cell should contribute no bootstrap opts, got %d", len(res.Opts))
+		t.Errorf("cell should contribute no bootstrap opts, got %d", len(res.Opts))
 	}
 	if len(res.Resources) != 0 {
-		t.Errorf("empty cell should open no managed resources, got %d", len(res.Resources))
+		t.Errorf("cell should open no managed resources, got %d", len(res.Resources))
 	}
 }
 
+// TestEnrollCell_AuthorizerNonNil verifies that Authorizer() returns a non-nil
+// auth.Authorizer that bootstrap.PrimaryAuthorizerOption can discover.
+func TestEnrollCell_AuthorizerNonNil(t *testing.T) {
+	c := NewEnrollCell(Deps{StatusRepo: nilStatusRepo{}})
+	a := c.Authorizer()
+	if a == nil {
+		t.Fatal("Authorizer() returned nil; PrimaryAuthorizerOption cannot discover it")
+	}
+	// Verify the returned value satisfies auth.Authorizer (return type already
+	// enforces this at compile time; the blank-use below documents the intent).
+	_ = a
+}
+
 // TestEnrollCell_MetadataMatchesYAML is the drift guard for the hand-written
-// cellMeta literal vs cell.yaml. PR-0 has no codegen, so the two are maintained by
-// hand; this asserts they stay byte-identical on the fields governance + runtime
-// both read, failing CI if a future edit updates one but not the other. (Removed
-// once codegen derives cellMeta from cell.yaml, MDM-PR1+.)
+// cellMeta literal vs cell.yaml.
 func TestEnrollCell_MetadataMatchesYAML(t *testing.T) {
 	raw, err := os.ReadFile("cell.yaml")
 	if err != nil {

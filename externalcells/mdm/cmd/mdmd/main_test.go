@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 // startupPollTimeout / shutdownTimeout are deliberately generous: a demo cold start
@@ -146,6 +149,151 @@ func TestRun_PropagatesBuildError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "build app") {
 		t.Errorf("error %q missing run's build-app context", err)
+	}
+}
+
+// ── Status endpoint integration tests ─────────────────────────────────────────
+
+// appTestEnv holds the JWT issuer and address for status integration tests.
+// buildAppFromShared is called with the SAME shared used here so JWT tokens
+// issued by env.jwtIssuer are verifiable by the running app.
+type appTestEnv struct {
+	jwtIssuer *auth.JWTIssuer
+	primary   string
+}
+
+// startDemoAppWithIssuer starts the demo app and returns the JWT issuer that the
+// running server will accept tokens from (same key pair — no separate key exchange
+// needed). The test may call cancel() to stop early; t.Cleanup handles shutdown.
+func startDemoAppWithIssuer(t *testing.T) appTestEnv {
+	t.Helper()
+	t.Setenv(demoOptInEnv, "1")
+
+	primaryLn := mustLoopbackListener(t)
+	internalLn := mustLoopbackListener(t)
+	healthLn := mustLoopbackListener(t)
+
+	addrs := listenerAddrs{
+		primary:  primaryLn.Addr().String(),
+		internal: internalLn.Addr().String(),
+		health:   healthLn.Addr().String(),
+	}
+
+	// Build shared deps ONCE in the test process; buildAppFromShared will use the
+	// SAME shared (same JWT key pair), so tokens issued via shared.JWTIssuer are
+	// accepted by the running app's verifier.
+	shared, err := buildMemSharedDeps(addrs)
+	if err != nil {
+		t.Fatalf("buildMemSharedDeps: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runErr := make(chan error, 1)
+	go func() {
+		app, appErr := buildAppFromShared(ctx, shared, prebuiltListeners{
+			primary:  primaryLn,
+			internal: internalLn,
+			health:   healthLn,
+		})
+		if appErr != nil {
+			runErr <- appErr
+			return
+		}
+		runErr <- app.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(startupPollTimeout)
+	if !pollGreen("http://"+addrs.health+"/healthz", deadline) {
+		cancel()
+		t.Fatal("app never became healthy within timeout")
+	}
+
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runErr:
+		case <-time.After(shutdownTimeout):
+			t.Errorf("app did not shut down within %s", shutdownTimeout)
+		}
+	})
+
+	return appTestEnv{jwtIssuer: shared.JWTIssuer, primary: addrs.primary}
+}
+
+// issueAppJWT signs a JWT with the given subject and roles using the app's JWT issuer.
+func issueAppJWT(t *testing.T, env appTestEnv, subject string, roles []string) string {
+	t.Helper()
+	tok, err := env.jwtIssuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+		Roles: roles,
+	})
+	if err != nil {
+		t.Fatalf("JWTIssuer.Issue(%q, roles=%v): %v", subject, roles, err)
+	}
+	return tok
+}
+
+// doStatusGET executes GET /api/v1/deviceidentity/status?deviceId=<deviceID>
+// against the primary listener, optionally with a Bearer token.
+func doStatusGET(t *testing.T, primaryAddr, deviceID, bearerToken string) *http.Response {
+	t.Helper()
+	url := fmt.Sprintf("http://%s/api/v1/deviceidentity/status?deviceId=%s", primaryAddr, deviceID)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	return resp
+}
+
+// TestRun_StatusEndpoint_401_Unauthenticated: no Authorization header → 401.
+func TestRun_StatusEndpoint_401_Unauthenticated(t *testing.T) {
+	env := startDemoAppWithIssuer(t)
+
+	resp := doStatusGET(t, env.primary, "dev-unknown", "")
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("want 401, got %d; body=%s", resp.StatusCode, body)
+	}
+}
+
+// TestRun_StatusEndpoint_403_NoRole: valid JWT but no mdm-admin/mdm-operator role → 403.
+// The JWT verifier accepts the token (correct key pair + iss/aud), but the enrollAuthorizer
+// PDP denies device:read because no recognized role is present.
+func TestRun_StatusEndpoint_403_NoRole(t *testing.T) {
+	env := startDemoAppWithIssuer(t)
+
+	tok := issueAppJWT(t, env, "user-no-role", []string{})
+	resp := doStatusGET(t, env.primary, "dev-unknown", tok)
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("want 403 (no role), got %d; body=%s", resp.StatusCode, body)
+	}
+}
+
+// TestRun_StatusEndpoint_404_UnknownDevice: valid JWT with mdm-admin role + empty repo → 404.
+// PDP allows the request (admin role → device:read allow), service looks up the
+// in-memory repo (starts empty) and returns 404.
+func TestRun_StatusEndpoint_404_UnknownDevice(t *testing.T) {
+	env := startDemoAppWithIssuer(t)
+
+	tok := issueAppJWT(t, env, "admin-1", []string{"mdm-admin"})
+	resp := doStatusGET(t, env.primary, "non-existent-device", tok)
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("want 404 (unknown device), got %d; body=%s", resp.StatusCode, body)
 	}
 }
 

@@ -1,0 +1,17 @@
+id: status
+belongsToCell: enrollcell
+# L0: pure in-memory read, no external I/O or transactions.
+consistencyLevel: L0
+lifecycle: experimental
+# framework-owned contract http.deviceidentity.status.v1 is served by the
+# composition root via bootstrap.WithFrameworkHTTPServing (ADR-1939 D4), not via
+# cell contractUsage. slice.yaml keeps contractUsages empty; the route is mounted
+# from cmd/mdmd/main.go using the FrameworkServedRoute returned by Service.FrameworkRoute().
+contractUsages: []
+verify:
+  unit:
+    - unit.status.service
+  contract: []
+  waivers: []
+allowedFiles:
+  - "cells/enrollcell/slices/status/**"
