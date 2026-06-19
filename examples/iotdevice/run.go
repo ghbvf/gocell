@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/auth"
 
@@ -101,6 +102,10 @@ func buildDirectPublisher(
 		)
 	}
 	return directPub, mqttBootstrapOpts, nil
+}
+
+func envTrue(key string) bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
 }
 
 // readyzVerboseHealthOpts gates /readyz?verbose (PR-A35 + PR269 round-3): the

@@ -227,40 +227,12 @@ func TestCellGroup(t *testing.T) {
 	})
 }
 
-// TestSameGroup covers the co-location predicate used by governance TOPO-13.
-func TestSameGroup(t *testing.T) {
-	cells := []string{"alpha", "beta", "gamma"}
-
-	t.Run("empty topology => all co-located", func(t *testing.T) {
-		asm := assemblyWith(cells, metadata.TopologyMeta{})
-		assert.True(t, metadata.SameGroup(asm, "alpha", "gamma"),
-			"no groups => single-process default => co-located")
-	})
-
-	asm := assemblyWith(cells, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
-		group("core", "core.svc:9000", "alpha", "beta"),
-		group("edge", "edge.svc:9001", "gamma"),
-	}})
-
-	t.Run("same group => true", func(t *testing.T) {
-		assert.True(t, metadata.SameGroup(asm, "alpha", "beta"))
-	})
-	t.Run("different group => false", func(t *testing.T) {
-		assert.False(t, metadata.SameGroup(asm, "alpha", "gamma"))
-	})
-	t.Run("unknown cell => false (fail-closed)", func(t *testing.T) {
-		assert.False(t, metadata.SameGroup(asm, "alpha", "delta"))
-	})
-}
-
 // TestTopologyMeta_ZeroValue confirms the zero value means "empty" / all-colocated.
 func TestTopologyMeta_ZeroValue(t *testing.T) {
 	var topo metadata.TopologyMeta
 	assert.Nil(t, topo.Groups)
 
 	asm := assemblyWith([]string{"alpha", "beta"}, topo)
-	assert.True(t, metadata.SameGroup(asm, "alpha", "beta"),
-		"zero-value topology treats all cells as co-located")
 	_, ok := metadata.CellGroup(asm, "alpha")
 	assert.False(t, ok, "zero-value topology assigns no explicit group")
 }

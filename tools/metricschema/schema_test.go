@@ -1041,25 +1041,24 @@ func TestOBS01CoverageRequiresSatellites_AntiVacuity(t *testing.T) {
 //     production / never a production-shippable layer).
 //
 // The set is fail-closed in BOTH directions (see
-// TestModuleRootMembersCoverGoWorkProductionRoots): a new PRODUCTION single-module
+// TestModuleRootMembersCoverGoWorkProductionRoots): a new PRODUCTION module
 // root missing from topLevelDirs surfaces as uncovered → CI red; a new NON-production
 // module root missing from this set is NOT pruned by goWorkProductionModuleRoots, so it
 // enters `required` while topLevelDirs lacks it → "required but uncovered" → CI red →
-// a human adds it here with a reason. `tests` needs no entry: it IS a module root
-// (tests/go.mod), but it is ALSO a MULTI-MEMBER parent (tests/integration carries its
-// own go.mod), and goWorkProductionModuleRoots' !HasNestedModuleRoot filter prunes it
-// before this set is consulted (a multi-member parent is never a single-module root).
+// a human adds it here with a reason. `tests` is listed explicitly because it is
+// non-production test scope and already excluded from OBS-01 production coverage by path.
 var moduleRootCoverageExcluded = map[string]bool{
 	"framework": true,
 	"generated": true,
+	"tests":     true,
 	"tools":     true,
 }
 
 // goWorkProductionModuleRoots derives, from the AUTHORITATIVE go.work member list
 // (NOT from prodscan.topLevelDirs — that would be circular), the depth-1 members that
-// are top-level single-module PRODUCTION roots: own go.mod (IsModuleRoot), no nested
-// member (!HasNestedModuleRoot → not a multi-member parent), one path segment, and not
-// in moduleRootCoverageExcluded. corecells/cellmodules are the post-#1559/#1560 members.
+// are top-level PRODUCTION module roots: own go.mod (IsModuleRoot), one path segment,
+// and not in moduleRootCoverageExcluded. corecells/cellmodules are the post-#1559/#1560
+// members.
 func goWorkProductionModuleRoots(t *testing.T, root string) []string {
 	t.Helper()
 	mods, err := workspace.Modules(root)
@@ -1068,10 +1067,10 @@ func goWorkProductionModuleRoots(t *testing.T, root string) []string {
 	for _, m := range mods {
 		dir := filepath.ToSlash(filepath.Clean(m.Dir))
 		if dir == "." || dir == "" || strings.Contains(dir, "/") {
-			continue // root or nested (multi-member child) — not a depth-1 single-module root
+			continue // root or nested child — not a depth-1 module root
 		}
 		abs := filepath.Join(root, dir)
-		if !prodscan.IsModuleRoot(abs) || prodscan.HasNestedModuleRoot(abs) {
+		if !prodscan.IsModuleRoot(abs) {
 			continue
 		}
 		if moduleRootCoverageExcluded[dir] {
@@ -1103,9 +1102,9 @@ func uncoveredModuleRoots(required []string, covered map[string]bool) []string {
 // module roots, so it passes vacuously for them).
 //
 // It cross-checks the two INDEPENDENT sources fail-closed: every depth-1 production
-// single-module root the AUTHORITATIVE go.work declares MUST be covered by
+// module root the AUTHORITATIVE go.work declares MUST be covered by
 // ModuleRootMemberPatterns (derived from topLevelDirs). A future top-level
-// single-module module added to go.work but not topLevelDirs is uncovered → CI red.
+// module added to go.work but not topLevelDirs is uncovered → CI red.
 // The check is non-circular: `required` comes from go.work, `covered` from
 // topLevelDirs — drift between them is machine-detectable.
 func TestModuleRootMembersCoverGoWorkProductionRoots(t *testing.T) {
@@ -1116,10 +1115,10 @@ func TestModuleRootMembersCoverGoWorkProductionRoots(t *testing.T) {
 	// real members so a refactor that stops yielding them (e.g. go.work parse change)
 	// fails here rather than passing trivially.
 	require.GreaterOrEqual(t, len(required), 2,
-		"go.work must yield ≥2 production single-module roots (corecells, cellmodules) — guard would be vacuous otherwise")
+		"go.work must yield ≥2 production module roots (corecells, cellmodules) — guard would be vacuous otherwise")
 	for _, want := range []string{"corecells", "cellmodules"} {
 		assert.Containsf(t, required, want,
-			"go.work production single-module roots must include %q (anti-vacuity)", want)
+			"go.work production module roots must include %q (anti-vacuity)", want)
 	}
 
 	covered := prodscan.PatternTopLevels(prodscan.ModuleRootMemberPatterns(root))
@@ -1149,7 +1148,7 @@ func TestUncoveredModuleRootsDetectsGap(t *testing.T) {
 
 // TestOBS01CoverageRequiresModuleRootMembers is the #2164 module-root counterpart of
 // TestOBS01CoverageRequiresSatellites: it asserts the independent, hardcoded fact that
-// the top-level single-module roots (corecells/cellmodules) MUST be OBS-01-covered, via
+// the top-level module roots (corecells/cellmodules) MUST be OBS-01-covered, via
 // two checks that do NOT depend on each other:
 //
 //  1. the OBS-01 production pattern set's top-levels include corecells/cellmodules; and
@@ -1163,7 +1162,7 @@ func TestOBS01CoverageRequiresModuleRootMembers(t *testing.T) {
 	covered := prodscan.PatternTopLevels(obs01ProductionPatterns(root))
 	for _, mod := range []string{"corecells", "cellmodules"} {
 		assert.Truef(t, covered[mod],
-			"OBS-01 production scan must cover top-level single-module root %q (#2164)", mod)
+			"OBS-01 production scan must cover top-level module root %q (#2164)", mod)
 	}
 
 	// (2) load-witness: the module-root patterns load non-empty through OBS-01's loader.

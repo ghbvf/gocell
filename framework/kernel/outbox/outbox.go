@@ -6,6 +6,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -924,6 +925,18 @@ func (e *PermanentError) Unwrap() error {
 // NewPermanentError wraps an error as a PermanentError.
 func NewPermanentError(err error) *PermanentError {
 	return &PermanentError{Err: err}
+}
+
+// IsPermanent reports whether err is or wraps a *PermanentError — the single
+// source of the "this must not be retried; route it to the dead-letter sink"
+// classification. Both projection drivers consume it: the push-delivered
+// Coordinator (classify → DispositionReject → broker DLX) and the pull-tailing
+// saga-journal Tailer (record to the dead-letter table + advance the checkpoint
+// past the poison event). Defined here, next to PermanentError, so the predicate
+// does not fork per call site.
+func IsPermanent(err error) bool {
+	var pe *PermanentError
+	return errors.As(err, &pe)
 }
 
 // ---------------------------------------------------------------------------

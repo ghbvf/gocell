@@ -6,16 +6,20 @@
 //
 // # Durable store + tenant scope (303-US6, #2237)
 //
-// List calls ports.Registry.List directly via query.ExecutePagedQuery. The store
-// receives the tenant extracted from the request context so cross-tenant rows are
-// structurally unreachable. The mem implementation (NewRegistry) is used in the
-// demo/no-PG topology; the PG implementation is wired at composition root.
+// List runs ports.Registry.List inside a tenant-scoped transaction via
+// scopedread.Do. The store receives the tenant extracted from the request context
+// so cross-tenant rows are structurally unreachable. The mem implementation
+// (NewRegistry) is used in the demo/no-PG topology; the PG implementation is wired
+// at composition root.
 //
-// # RLS tx wrapping (NOT in this batch)
+// # RLS-safe scoped reads (#2392)
 //
-// RLS-safe scoped-read transaction wrapping (scopedread.Do) is tracked in #2392.
-// The mem store does not require it; the PG store is not yet composed in this
-// worktree, so the raw store.List call is correct for the current scope.
+// Under migration 066 FORCE ROW LEVEL SECURITY a SELECT on contract_registrations
+// returns 0 rows unless the app.tenant_id GUC is set, and that GUC is injected
+// (SET LOCAL) only inside TxManager.RunInTx. List therefore wraps its read in
+// scopedread.Do (tenant.WithScope + RunInTx) — the sole production caller of
+// tenant.WithScope in registrycore, pinned by TENANT-TXSCOPE-WRITE-CALLER-01. The
+// mem store ignores the ambient tx; the PG serving role reads correctly under RLS.
 package registryread
 
 import (
@@ -26,7 +30,9 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/scopedread"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -48,26 +54,36 @@ var registrySort = []query.SortColumn{
 // It sources tenant from the request context and delegates pagination to
 // query.ExecutePagedQuery with the shared HMAC CursorCodec.
 type Service struct {
-	store   ports.Registry     `gocell:"required"`
-	codec   *query.CursorCodec `gocell:"required"`
-	runMode query.RunMode
-	logger  *slog.Logger
+	store    ports.Registry            `gocell:"required"`
+	txRunner persistence.CellTxManager `gocell:"required" gocellErr:"registryread: TxRunner required (RLS reads run in a tenant-scoped tx)"` //nolint:lll // R2-approved: struct tag for required-dep funnel cannot be split
+	codec    *query.CursorCodec        `gocell:"required"`
+	runMode  query.RunMode
+	logger   *slog.Logger
 }
 
-// NewService constructs the list service. store and codec are required;
+// NewService constructs the list service. store, txRunner, and codec are required;
 // runMode controls cursor-decode fail-open vs fail-closed (pass
 // query.RunModeForDemo(true) for demo/in-mem topology, RunModeProd otherwise);
 // validateRequired returns a structured error on nil so cell Init() can
 // propagate it instead of panicking. logger is optional (nil → slog.Default()).
-func NewService(store ports.Registry, codec *query.CursorCodec, runMode query.RunMode, logger *slog.Logger) (*Service, error) {
+// txRunner scopes each read in a tenant tx (scopedread.Do) so PG FORCE RLS sees
+// SET LOCAL app.tenant_id; demo topology passes outbox.DemoCellTxManager().
+func NewService(
+	store ports.Registry,
+	txRunner persistence.CellTxManager,
+	codec *query.CursorCodec,
+	runMode query.RunMode,
+	logger *slog.Logger,
+) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
-		store:   store,
-		codec:   codec,
-		runMode: runMode,
-		logger:  logger,
+		store:    store,
+		txRunner: txRunner,
+		codec:    codec,
+		runMode:  runMode,
+		logger:   logger,
 	}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
@@ -107,30 +123,27 @@ func (s *Service) List(ctx context.Context, req *list.Request) (list.ListRespons
 		Limit:  int(req.Limit),
 	}
 
-	// BLOCKING: PG store MUST wrap this call in scopedread.Do (tenant GUC injection
-	// via SET LOCAL inside TxManager.RunInTx) before the cellmodule composes the PG
-	// implementation. Without scopedread.Do the PG serving role's FORCE RLS policy
-	// silently returns 0 rows or rejects writes — an unscoped read bypasses RLS and
-	// is a data-isolation failure. See #2392.
-	//
-	// The mem store is tenant-partitioned at the in-memory level; no PG transaction
-	// is required for the demo/no-PG topology used in this worktree.
+	// RLS-safe read (#2392): run the paged query inside a tenant-scoped tx so the
+	// PG serving role sees SET LOCAL app.tenant_id = t before the SELECT (else FORCE
+	// RLS → 0 rows). The mem store ignores the ambient tx.
 	//
 	// cursor-state binding: QueryCtx includes the state value so a cursor issued
 	// for state=A cannot be replayed under state=B (scope mismatch → cursor invalid).
-	result, err := query.ExecutePagedQuery(ctx, query.PagedQueryConfig[registry.ContractRegistration]{
-		Codec:      s.codec,
-		PageParams: pageReq,
-		Sort:       registrySort,
-		QueryCtx:   query.QueryContext("endpoint", "registryread", "state", req.State),
-		Fetch: func(ctx context.Context, params query.ListParams) ([]registry.ContractRegistration, error) {
-			return s.store.List(ctx, t, params, filter)
-		},
-		Extract: func(r registry.ContractRegistration) []any {
-			return []any{r.ID}
-		},
-		OnCursorErr: query.LogCursorError(s.logger, "registryread"),
-		RunMode:     s.runMode,
+	result, err := scopedread.Do(ctx, s.txRunner, t, func(txCtx context.Context) (query.PageResult[registry.ContractRegistration], error) {
+		return query.ExecutePagedQuery(txCtx, query.PagedQueryConfig[registry.ContractRegistration]{
+			Codec:      s.codec,
+			PageParams: pageReq,
+			Sort:       registrySort,
+			QueryCtx:   query.QueryContext("endpoint", "registryread", "state", req.State),
+			Fetch: func(ctx context.Context, params query.ListParams) ([]registry.ContractRegistration, error) {
+				return s.store.List(ctx, t, params, filter)
+			},
+			Extract: func(r registry.ContractRegistration) []any {
+				return []any{r.ID}
+			},
+			OnCursorErr: query.LogCursorError(s.logger, "registryread"),
+			RunMode:     s.runMode,
+		})
 	})
 	if err != nil {
 		return nil, err

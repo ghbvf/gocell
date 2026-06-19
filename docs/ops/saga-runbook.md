@@ -175,14 +175,14 @@ ORDER BY updated_at ASC LIMIT 20;
 
 ## 场景 5：投影 tailer 停滞（#1609 PR-04）
 
-对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，per-(cellID, projectionID) 粒度——两个 cell 可合法共用同一 projectionID，故 key 必须带 cellID；区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
+对应告警 `GoCellSagaTailerStalled` / `GoCellSagaTailerLagHigh` / `GoCellSagaTailerDrainErrors` / `GoCellSagaTailerLockAcquireFailures` / `GoCellSagaTailerCheckpointAdvanceFailures`（`docs/ops/alerting-rules.md`）。`runtime/saga/tailer.Tailer` 是 saga 终态 model-A 投影的 catch-up 驱动；与场景 4 的 saga Coordinator 是**独立组件、独立 distlock key**（`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，per-(cellID, projectionID) 粒度——两个 cell 可合法共用同一 projectionID，故 key 必须带 cellID；区别于 Coordinator 的 per-instance `saga:<len>:<def>:<inst>`）。PR-05 已将 Tailer 接入 bootstrap phase6 drain（声明式 `projectionSource: saga-journal`）；告警在部署了 saga-journal 投影的 assembly 上即生效。接入真实消费者（orderfulfillment，PR-06）后可预期首次实际触发。
 
 **症状**：读投影读到陈旧 saga 终态；`last_success_timestamp` 不前进 / `pending_events` 持续增长。
 
 **根因（按概率）**：
 
 1. **无 leader 在跑**：没有 tailer pod 抢到 per-projection distlock（部署缩到 0 副本 / 全部副本崩溃）。
-2. **drain 反复失败**：`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——apply 路径或 checkpoint 事务故障；`drain_total{result="head_error"}` 持续 >0——saga journal Head 读取失败（journal / DB 不可达），drain 在 replay 前即中止。
+2. **drain 反复失败**：`drain_total{result="head_error"}` 持续 >0——saga journal Head 读取失败（journal / DB 不可达），drain 在 replay 前即中止，`pending_events` 可能停留在上次干净 tick 的旧值，`GoCellSagaTailerLagHigh` 不一定触发；`drain_total{result="store_error"}` 持续 >0——checkpoint `LoadOffset` 失败；`drain_total{result="apply_error"}` 或 `checkpoint_advance_total{result="error"}` 持续 >0——**transient** apply 故障（DB 超时等）或 checkpoint 事务故障（permanent apply error 自 #2110 起不再走这里，改为 `poison_skip`，见 §5b）。
 3. **distlock 后端故障**：`lock_acquire_failed_total{reason="backend_error"}` 持续 >0（Redis 不可达），fail-closed → 无 drain。
 
 **诊断**：
@@ -211,6 +211,47 @@ WHERE cell_id = '<cell>' AND projection_id = '<projection>';
 - 根因 3：恢复 distlock 后端（同场景 4b）。
 - **`stale_owner` 不是故障**：`checkpoint_advance_total{result="stale_owner"}` 在 leader 交接窗口出现是设计预期（旧 leader 被 CAS fence，ADR D5(b)），不需处置；只有 `result="error"` 才是真故障。
 - **重复 apply 提示**：leader 交接窗口可能产生有界重复 apply（投影 Apply 幂等兜底，非 exactly-once；完整 monotonic fencing 待 PR-PG PG owner 列）——若读模型出现重复，确认 Apply 实现幂等，不要手工改 checkpoint。
+
+### 5b：poison event 被跳过（permanent apply error，#2110）
+
+`checkpoint_advance_total{result="poison_skip"}` 自增 + Warn 日志 `saga tailer: poison event skipped past`。
+**这不是停滞**：自 #2110 起，permanent apply error（坏 payload / 未知 kind / 坏 EventID——`outbox.IsPermanent`）**不再**冻结 checkpoint，而是把该事件记入 dead-letter 表 `saga_projection_dead_letters` 并把 checkpoint 推过它，投影继续前进。`drain_total{result="apply_error"}` 只剩 **transient** 故障（DB 超时等，根因 2，会停摆重试）。`poison_skip` 持续 >0 = 上游在产坏事件，需修，但读模型不被单个坏事件锁死。
+
+**诊断**：按 global_seq 定位被跳过的事件 + 原因（error_type/error_message 已脱敏）：
+
+```sql
+SELECT global_seq, event_id, error_type, error_message, recorded_at
+FROM saga_projection_dead_letters
+WHERE cell_id = $1 AND projection_id = $2
+ORDER BY global_seq;
+```
+
+**恢复**（Tailer 无 rebuild 路径——靠 Apply 幂等重放收敛）：
+
+1. 修复根因（producer 侧坏事件 / consumer 侧 `FoldStatus` 缺 kind 等）。
+2. **手动 rewind checkpoint** 到 poison `global_seq` 之前——Apply 终态吸收 + 幂等，重放安全。
+   执行前须确认无其它 leader 在推进该 projection，以免与 fenced advance 产生竞态：
+
+   a. **查 distlock key**（场景 4a 格式：`saga-journal-tailer:<len>:<cell>:<len>:<proj>`，`<len>` 为紧跟字段的字节长度）：
+      ```
+      # Redis CLI（或 redis-py / ioredis）
+      EXISTS saga-journal-tailer:<cellLen>:<cell>:<projLen>:<proj>
+      TTL   saga-journal-tailer:<cellLen>:<cell>:<projLen>:<proj>
+      ```
+      - key **不存在** → 无 tailer 持锁，可安全执行 rewind。
+      - key **存在** → 有 tailer 持锁：等 TTL 过期（最稳，≤ `LeaseDuration`），或确认持锁 pod 进程已停止后再执行。**不要在持锁 pod 存活时强删 key**（会打开双驱动窗口；journal fencing CAS 兜底正确性，但应优先让 TTL 自然收敛）。
+
+   b. 确认安全后执行 rewind：
+      ```sql
+      UPDATE projection_checkpoints
+         SET offset_seq = <poison_global_seq - 1>
+       WHERE cell_id = $1 AND projection_id = $2;
+      ```
+3. Tailer 下个 tick 从该点重放，现已修复的 Apply 正确处理原 poison 事件。
+4. 重放收敛后，**admin** 清理该区间已恢复的 dead-letter 行（serving role 无 DELETE 权限，纵深防御）：
+   `DELETE FROM saga_projection_dead_letters WHERE cell_id = $1 AND projection_id = $2 AND global_seq <= <recovered_max>;`
+
+> programmatic replay/evict 工具（按 dead-letter 行批量重投 / 永久丢弃，对标 Marten replay / Axon `processAny`+`evict`）尚未实现，归 EPIC #1609 后续。当前恢复 = 上述手动 rewind。
 
 ---
 

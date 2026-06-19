@@ -71,19 +71,14 @@ const (
 	// by a cell in an assembly must have its provider cell reachable (Local or Remote).
 	// A provider that is Missing (∉ colocated ∪ remote) is a deployment-time error.
 	codeTOPO11 RuleCode = "TOPO-11"
-	// TOPO-13: broker-mandatory static gate (Epic #1423 US3, production-reachable
-	// since TOPO-12 was removed in US5 #1966). For an assembly with a split
-	// topology, an event contract whose publisher cell and a subscriber cell fall
-	// on opposite sides of the process boundary (one Local, one Remote) requires a
-	// real broker — the in-memory EventBus cannot deliver across processes. Medium,
-	// permanent ceiling (Hard unreachable: bus is a runtime-injected instance, not
-	// statically expressible — ADR 1423 §214-219).
-	// Blind-spot: Structural-only — asserts cross-process pub/sub, cannot verify a
-	// broker is wired (runtime concern, enforced by the bootstrap runtime gate);
-	// thus fail-closed and over-constrains future broker-backed split (US7 #1967
-	// reconciliation tracked separately).
-	codeTOPO13 RuleCode = "TOPO-13"
-
+	// TOPO-13 (broker-mandatory static gate) was REMOVED in #2196. The static rule
+	// could only assert cross-process pub/sub, never verify a broker is wired (the
+	// bus is a runtime-injected instance), so it over-constrained legal broker-backed
+	// splits. The broker-mandatory check is now a SINGLE codegen-derived fact
+	// (assembly.collectCrossProcessBrokerEventRoles → bootstrap
+	// DeploymentTopology.RequiresBrokerForCrossProcessEvents) enforced solely by the
+	// bootstrap runtime gate (validateSplitTopologyBroker). The code "TOPO-13" is
+	// retired and must not be reused.
 	// TOPO-14: split-topology mTLS endpoint gate (#2263). In a split assembly,
 	// every NON-loopback remote cell endpoint must use the https scheme: transport
 	// mTLS is mandatory across a real network boundary (no private-network plaintext

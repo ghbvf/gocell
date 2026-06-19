@@ -159,7 +159,7 @@ func buildGRPCListenerOption(t *testing.T, cells []cell.Cell, asm *assembly.Core
 	require.NoError(t, err)
 	collector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
 	require.NoError(t, err)
-	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+	grpcServer, err := grpclistener.ServerFromEnv(grpclistener.PlatformEnv, outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
 		Verifier:        l2TestNoopGRPCVerifier{},
 		Clock:           clock.Real(),
 		Collector:       collector,

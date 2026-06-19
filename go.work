@@ -16,6 +16,7 @@ use (
 	./adapters/vault
 	./adapters/websocket
 	./cellmodules
+	./cellmodules/grpclistener
 	./cmd/corebundle
 	./cmd/gocell
 	./corecells

@@ -26,7 +26,7 @@ import (
 //     single member and is pruned by HasNestedModuleRoot from THIS base scan — it is
 //     re-emitted ONLY by SatelliteParentPatterns, which callers compose in when they
 //     want satellite coverage (the shared loader expands it to the members).
-//     cellmodules/corecells are TOP-LEVEL single-module roots → pruned from the base by
+//     cellmodules/corecells are TOP-LEVEL module roots → pruned from the base by
 //     IsModuleRoot, and re-emitted by ModuleRootMemberPatterns (the sibling increment)
 //     for callers that opt into module-root coverage (OBS-01, the duration gates).
 //   - Single-module fixture: framework/<layer> doesn't exist (pruned); the bare
@@ -124,10 +124,10 @@ func PatternsExtended(root string) []string {
 // single-sourced satellite increment. It is DERIVED from the same
 // HasNestedModuleRoot predicate Patterns prunes on (not a hand-maintained list), so
 // a future fourth multi-member parent is picked up automatically; it re-includes
-// ONLY multi-member parents (plain module-root dirs cellmodules/, corecells/ stay
-// excluded by !IsModuleRoot — they are addressed by their own member pattern, not an
-// expandable parent prefix). A single-module fixture has no nested go.mod, so the
-// increment is EMPTY there.
+// ONLY multi-member parents (module-root dirs cellmodules/, corecells/ stay excluded
+// by !IsModuleRoot — they are addressed by their own member pattern, not an expandable
+// parent prefix). A single-module fixture has no nested go.mod, so the increment is
+// EMPTY there.
 //
 // The emitted prefixes are owned by no single go.work member and are loadable ONLY
 // through the shared satellite-aware loader packagesload.LoadWorkspace, which expands
@@ -150,25 +150,26 @@ func SatelliteParentPatterns(root string) []string {
 	return patterns
 }
 
-// ModuleRootMemberPatterns returns the TOP-LEVEL single-module-root prefixes
+// ModuleRootMemberPatterns returns the TOP-LEVEL module-root prefixes
 // ("./corecells/...", "./cellmodules/...") that Patterns prunes — the SIBLING of
 // SatelliteParentPatterns and the second class of satellite increment (#2164). It is
 // DERIVED from the same predicates Patterns prunes on (not a hand-maintained list): it
-// re-includes ONLY dirs that ARE module roots themselves but hold NO nested member
-// (IsModuleRoot && !HasNestedModuleRoot), the complement of SatelliteParentPatterns'
-// multi-member parents (!IsModuleRoot && HasNestedModuleRoot). A future fifth top-level
-// single-module root listed in topLevelDirs is picked up automatically.
+// re-includes ONLY dirs that ARE module roots themselves (IsModuleRoot), the complement
+// of SatelliteParentPatterns' multi-member parents (!IsModuleRoot && HasNestedModuleRoot).
+// A future fifth top-level module root listed in topLevelDirs is picked up automatically.
 //
 // The two increments cover the two distinct go.work shapes a top-level dir can take:
 //
 //   - SatelliteParentPatterns: a MULTI-MEMBER PARENT (cmd/, adapters/, examples/) —
 //     "./<dir>/..." owned by no single member, expanded to its members by the loader.
-//   - ModuleRootMemberPatterns: a TOP-LEVEL SINGLE-MODULE ROOT (corecells/, cellmodules/)
-//     — "./<dir>/..." owned by exactly that member; the satellite-aware loader resolves
-//     it as a normal workspace member (expandParentPrefix bails on an exact-member dir,
-//     so matchWorkspaceMember handles it). The platform core lives in the framework
-//     module but is scanned via its framework/{kernel,runtime,pkg} sub-layers in the
-//     base Patterns, so bare "framework" is not in topLevelDirs and is never re-emitted here.
+//   - ModuleRootMemberPatterns: a TOP-LEVEL MODULE ROOT (corecells/, cellmodules/)
+//     — "./<dir>/..." owned by that member; the satellite-aware loader resolves it as a
+//     normal workspace member (expandParentPrefix bails on an exact-member dir, so
+//     matchWorkspaceMember handles it). Nested helper modules under such a root are
+//     separate go.work members; they do not make the parent an expandable parent prefix.
+//     The platform core lives in the framework module but is scanned via its
+//     framework/{kernel,runtime,pkg} sub-layers in the base Patterns, so bare "framework"
+//     is not in topLevelDirs and is never re-emitted here.
 //
 // Like SatelliteParentPatterns the prefixes are loadable ONLY through the shared
 // satellite-aware loader packagesload.LoadWorkspace; a single-module fixture has no
@@ -177,8 +178,8 @@ func SatelliteParentPatterns(root string) []string {
 // the module-root analog of SatelliteParentPatterns' SATELLITE-PARENT-PREFIX-SCAN-01:
 //
 //   - TestModuleRootMembersCoverGoWorkProductionRoots (anti-drift): fails when a
-//     top-level single-module root in go.work is missing from topLevelDirs (#2164's
-//     recurrence guard — coverage completeness).
+//     top-level module root in go.work is missing from topLevelDirs (#2164's recurrence
+//     guard — coverage completeness).
 //   - TestOBS01CoverageRequiresModuleRootMembers (load-witness) +
 //     TestCheckOBS01DetectsModuleRootMemberLeak (scan-witness): fail if "./corecells/..."
 //     / "./cellmodules/..." stop resolving to non-empty packages through LoadWorkspace —
@@ -189,7 +190,7 @@ func ModuleRootMemberPatterns(root string) []string {
 	var patterns []string
 	for _, dir := range topLevelDirs {
 		full := filepath.Join(root, dir)
-		if dirExists(full) && IsModuleRoot(full) && !HasNestedModuleRoot(full) {
+		if dirExists(full) && IsModuleRoot(full) {
 			patterns = append(patterns, "./"+dir+"/...")
 		}
 	}
@@ -198,8 +199,8 @@ func ModuleRootMemberPatterns(root string) []string {
 
 // PatternsWithSatellites widens PatternsExtended(root) — Patterns plus tests/ and
 // tools/ — with BOTH satellite increments: the multi-member satellite parent prefixes
-// (SatelliteParentPatterns) and the top-level single-module roots
-// (ModuleRootMemberPatterns, #2164). It is the production-scan source-of-record for the
+// (SatelliteParentPatterns) and the top-level module roots (ModuleRootMemberPatterns,
+// #2164). It is the production-scan source-of-record for the
 // typeseval-backed duration gates (TEST-TIME-LITERAL-01, PROD-DURATION-CONST-01), whose
 // broad invariant covers production + test/tool support packages + satellites.
 //
@@ -250,6 +251,9 @@ func IsModuleRoot(dir string) bool {
 // fixture has no nested go.mod under cmd/pkg/…, so this is false there and the fixture
 // dir is kept in Patterns directly.
 func HasNestedModuleRoot(dir string) bool {
+	if IsModuleRoot(dir) {
+		return false
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false

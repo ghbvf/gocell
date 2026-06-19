@@ -352,6 +352,27 @@ SELECT only). Regression guards: `runtime/audit/ledger/storetest`
 RLS role-boundary integration test, `schema_guard` role-present/absent + unexpected-policy
 tests, and `auditquery` super-admin 200/501 + single-FR-007-audit handler tests.
 
+## Amendment 2026-06-19 — admin full per-tenant chain verify tool shipped (#1755)
+
+The "Startup tail-verify coverage narrows" item in *Deliberate scoping* above (and
+the parallel "Still deferred (NOT in #1810)" note in the 2026-06-13 amendment)
+deferred the **admin full-chain verify tool** to backlog: the relay namespace's
+per-tenant sub-chains were never integrity-verified because the NOBYPASSRLS serving
+role cannot enumerate tenants. That deferral is now **resolved** by #1755 (ADR
+`202606191724-1755`), built on #1810's `gocell_audit_admin` admin pool.
+
+An on-demand operator endpoint (`POST /admin/v1/audit/chains/verify`) enumerates
+every `(namespace, tenant)` chain via the admin pool and full-chain verifies each,
+surfacing per-chain verdicts as a report + aggregate metrics. The startup verifiers
+are UNCHANGED — they still cover only the `''` system chain by design; full
+per-tenant verify is the on-demand tool's job, NOT every-boot work.
+
+**Threat-matrix re-evaluation:** no cell flips. #1755 is a SELECT-only integrity read
+on the EXISTING admin pool (no new role/grant/migration). It carries no
+`CrossTenantVisibility` obligation because it returns only integrity verdicts, never
+audit row content (Hard by its result type's field set) — so the #1760 sealed funnel
+is not widened. The serving-role TENANT boundary and the Write surface are unaffected.
+
 ## References
 
 - Migration: `adapters/postgres/migrations/055_audit_entries_per_tenant_rls.sql`,

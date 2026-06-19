@@ -3,6 +3,7 @@ package contractgen
 import (
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,8 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/fileutil"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/slogcapture"
+	"github.com/ghbvf/gocell/framework/pkg/testutil/sloghelper"
 )
 
 // TestArtifactsForKind locks the kind × artifact matrix — the single source
@@ -118,6 +121,45 @@ func TestContractArtifacts_NamingConvention(t *testing.T) {
 	}
 }
 
+// TestContractGenDesignBreadcrumbLogs_Removed locks #1603's decision: the
+// artifact matrix and docs are the design source, not runtime Debug breadcrumbs.
+func TestContractGenDesignBreadcrumbLogs_Removed(t *testing.T) {
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	webhookRoot, webhookProject := setupWebhookRoot(t)
+	if _, err := Generate(webhookRoot, webhookProject, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"}); err != nil {
+		t.Fatalf("Generate webhook: %v", err)
+	}
+	if _, err := RenderContractArtifacts(
+		webhookRoot, webhookProject, "webhook.stripe.payment-events.v1", "github.com/ghbvf/gocell",
+	); err != nil {
+		t.Fatalf("RenderContractArtifacts webhook: %v", err)
+	}
+
+	grpcRoot, grpcProject := setupGRPCMinimalRoot(t)
+	if _, err := Generate(grpcRoot, grpcProject, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"}); err != nil {
+		t.Fatalf("Generate grpc: %v", err)
+	}
+	if _, err := RenderContractArtifacts(grpcRoot, grpcProject, "grpc.device.command.v1", "github.com/ghbvf/gocell"); err != nil {
+		t.Fatalf("RenderContractArtifacts grpc: %v", err)
+	}
+
+	projectionRoot, projectionProject, projectionID := setupProjectionRoot(t)
+	if _, err := Generate(projectionRoot, projectionProject, Options{Scope: ScopeAll{}, ModulePath: "github.com/ghbvf/gocell"}); err != nil {
+		t.Fatalf("Generate projection: %v", err)
+	}
+	if _, err := RenderContractArtifacts(projectionRoot, projectionProject, projectionID, "github.com/ghbvf/gocell"); err != nil {
+		t.Fatalf("RenderContractArtifacts projection: %v", err)
+	}
+
+	logs := buf.String()
+	if strings.Contains(logs, "contractgen: contract emits zero artifacts by design") ||
+		strings.Contains(logs, "contractgen: projection contract emits types/iface only by design") {
+		t.Fatalf("contractgen must not emit design breadcrumb Debug logs, got:\n%s", logs)
+	}
+}
+
 // --- helpers ------------------------------------------------------------------
 
 // copyDirIntoTemp copies the entire directory tree under src into dst,
@@ -163,6 +205,16 @@ func copyFile(src, dst string) error {
 	return copyErr
 }
 
+func goArtifactBaseNames(paths []string) []string {
+	var out []string
+	for _, path := range paths {
+		if strings.HasSuffix(path, ".go") {
+			out = append(out, filepath.Base(path))
+		}
+	}
+	return out
+}
+
 // synthHTTPMinimalFixture returns the absolute path to the synth_http_minimal fixture.
 func synthHTTPMinimalFixture(t *testing.T) string {
 	t.Helper()
@@ -202,6 +254,32 @@ func setupHTTPMinimalRoot(t *testing.T) (string, *metadata.ProjectMeta) {
 		t.Fatalf("parse synth_http_minimal from tmp: %v", err)
 	}
 	return root, p
+}
+
+// setupProjectionRoot returns a minimal in-memory projection contract rooted at
+// a temp directory. Projection contracts need no schema files for contractgen's
+// types/iface-only artifact path.
+func setupProjectionRoot(t *testing.T) (string, *metadata.ProjectMeta, string) {
+	t.Helper()
+	const id = "projection.device.inventory.v1"
+	root := t.TempDir()
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			id: {
+				ID:               id,
+				Kind:             "projection",
+				ConsistencyLevel: "L3",
+				Codegen:          true,
+				Transports:       []string{"internal"},
+				File:             "contracts/projection/device/inventory/v1/contract.yaml",
+			},
+		},
+	}
+	return root, p, id
 }
 
 // setupEventRoot copies the synth_event fixture into a fresh t.TempDir()
@@ -668,6 +746,44 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 		if !fileNames[want] {
 			t.Errorf("missing artifact: %s", want)
 		}
+	}
+}
+
+// TestGenerate_Projection_GoArtifactsRemainTypesIfaceOnly verifies #1603 only
+// removes Debug breadcrumbs; projection Go artifact behavior remains unchanged.
+func TestGenerate_Projection_GoArtifactsRemainTypesIfaceOnly(t *testing.T) {
+	t.Parallel()
+	root, p, projectionID := setupProjectionRoot(t)
+
+	res, err := Generate(root, p, Options{Scope: ScopeContracts{projectionID}, ModulePath: "github.com/ghbvf/gocell"})
+	if err != nil {
+		t.Fatalf("Generate projection: %v", err)
+	}
+	got := goArtifactBaseNames(res.Generated)
+	want := []string{"types_gen.go", "iface_gen.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("projection Generate Go artifacts = %v, want %v", got, want)
+	}
+}
+
+// TestRenderContractArtifacts_Projection_GoArtifactsRemainTypesIfaceOnly mirrors
+// Generate for the in-memory render path.
+func TestRenderContractArtifacts_Projection_GoArtifactsRemainTypesIfaceOnly(t *testing.T) {
+	t.Parallel()
+	root, p, projectionID := setupProjectionRoot(t)
+
+	artifacts, err := RenderContractArtifacts(root, p, projectionID, "github.com/ghbvf/gocell")
+	if err != nil {
+		t.Fatalf("RenderContractArtifacts projection: %v", err)
+	}
+	var paths []string
+	for _, a := range artifacts {
+		paths = append(paths, a.Path)
+	}
+	got := goArtifactBaseNames(paths)
+	want := []string{"types_gen.go", "iface_gen.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("projection RenderContractArtifacts Go artifacts = %v, want %v", got, want)
 	}
 }
 

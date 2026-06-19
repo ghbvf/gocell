@@ -243,10 +243,11 @@ func circuitProbeOutcome(statusCode int, transportErr error) error {
 // URL — does not fast-fail deliveries from other tenants or to healthy targets.
 // The map is bounded (circuitGateMaxEndpoints) as a DoS guard.
 type circuitGate struct {
-	clk      clock.Clock
-	settings CircuitBreakerSettings
-	mu       sync.Mutex
-	breakers map[string]*circuitbreaker.Breaker
+	clk        clock.Clock
+	settings   CircuitBreakerSettings
+	newBreaker func(circuitbreaker.Config, clock.Clock) (*circuitbreaker.Breaker, error)
+	mu         sync.Mutex
+	breakers   map[string]*circuitbreaker.Breaker
 }
 
 // newCircuitGate builds an enabled circuit gate. clk is the dispatcher's clock,
@@ -254,7 +255,12 @@ type circuitGate struct {
 // tests drive. settings must have been validated before calling newCircuitGate.
 func newCircuitGate(clk clock.Clock, settings CircuitBreakerSettings) *circuitGate {
 	clock.MustHaveClock(clk, "webhook.newCircuitGate")
-	return &circuitGate{clk: clk, settings: settings, breakers: make(map[string]*circuitbreaker.Breaker)}
+	return &circuitGate{
+		clk:        clk,
+		settings:   settings,
+		newBreaker: circuitbreaker.New,
+		breakers:   make(map[string]*circuitbreaker.Breaker),
+	}
 }
 
 // Allow gates a delivery for key. It returns allowed=true and a done callback
@@ -262,8 +268,12 @@ func newCircuitGate(clk clock.Clock, settings CircuitBreakerSettings) *circuitGa
 // circuit is closed or admits a half-open probe; allowed=false and a nil done
 // when the circuit is open.
 func (g *circuitGate) Allow(key circuitEndpointKey) (allowed bool, done func(err error)) {
-	b := g.breakerFor(key)
+	b, err := g.breakerFor(key)
 	if b == nil {
+		errText := "<nil>"
+		if err != nil {
+			errText = err.Error()
+		}
 		// Unreachable: breakerFor returns nil only if breaker construction
 		// failed, which happens solely on an empty Name — and logName always
 		// yields a non-empty "<host>#<fingerprint>". Kept as a defensive,
@@ -271,7 +281,9 @@ func (g *circuitGate) Allow(key circuitEndpointKey) (allowed bool, done func(err
 		// construction bug degrades to "no breaker protection", never to
 		// "delivery blocked". Log at Error (correctness failure).
 		slog.Error("webhook: circuit breaker construction failed, failing open",
-			slog.String("warning", "endpoint circuit breaker unavailable"))
+			slog.String("tenant", key.tenant),
+			slog.String("endpoint", key.logName()),
+			slog.String("error", errText))
 		return true, func(error) {}
 	}
 	return b.Allow()
@@ -290,12 +302,12 @@ func (g *circuitGate) size() int {
 // at circuitGateMaxEndpoints distinct (tenant, endpoint) pairs the victim choice
 // is not correctness-critical — a re-observed pair simply rebuilds its breaker,
 // the worst case being one lost open-state that re-trips on the next failure burst.
-func (g *circuitGate) breakerFor(key circuitEndpointKey) *circuitbreaker.Breaker {
+func (g *circuitGate) breakerFor(key circuitEndpointKey) (*circuitbreaker.Breaker, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	rk := key.registryKey()
 	if b, ok := g.breakers[rk]; ok {
-		return b
+		return b, nil
 	}
 	if len(g.breakers) >= circuitGateMaxEndpoints {
 		for k := range g.breakers { // evict one arbitrary entry
@@ -303,15 +315,15 @@ func (g *circuitGate) breakerFor(key circuitEndpointKey) *circuitbreaker.Breaker
 			break
 		}
 	}
-	b, err := circuitbreaker.New(circuitbreaker.Config{
+	b, err := g.newBreaker(circuitbreaker.Config{
 		Name:        key.logName(),                     // safe log label: host#fingerprint, no path/query
 		MaxRequests: uint32(g.settings.HalfOpenProbes), //nolint:gosec // validated > 0
 		Timeout:     g.settings.OpenTimeout,
 		ReadyToTrip: makeCircuitReadyToTrip(g.settings.TripThreshold),
 	}, g.clk)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	g.breakers[rk] = b
-	return b
+	return b, nil
 }

@@ -56,6 +56,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/otel.MetricProvider":                "stateless-adapter: emits metrics through caller-owned SDK/provider",
 	"adapters/otel.Tracer":                        "stateless-adapter: tracer facade, provider lifecycle is caller-owned",
 	"adapters/otel.TracerConfig":                  "config: construction input value",
+	"adapters/postgres.AuditChainVerifyStore":     "subresource-not-owner: chain-verify facade over caller-owned admin pool (#1755)",
 	"adapters/postgres.AuditCrossTenantStore":     "subresource-not-owner: storage facade over caller-owned admin pool",
 	"adapters/postgres.Config":                    "config: construction input value",
 	"adapters/postgres.DestructiveDownPermit":     "value-object: explicit migration rollback permit",

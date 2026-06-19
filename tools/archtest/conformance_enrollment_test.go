@@ -151,12 +151,13 @@ func TestConformanceEnrollmentFoldEquivalence01(t *testing.T) {
 		t.Parallel()
 		for _, spec := range []repoConformanceSpec{
 			policyRepoConformanceSpec(), roleRepoConformanceSpec(), userRepoConformanceSpec(),
+			registryRepoConformanceSpec(),
 		} {
 			patterns := repoConformanceLoadPatterns(root)
 			_, newSet, _ := loadConformanceEnrollmentImpls(
-				t, patterns, FlatNonDefaultTags(), repoPortsPkg, spec.ifaceName,
+				t, patterns, FlatNonDefaultTags(), spec.portsPkg, spec.ifaceName,
 				true /*exportedOnly*/, false /*collectFromIfacePkg*/)
-			old := oldFoldImplSet(t, patterns, repoPortsPkg, spec.ifaceName, true, false)
+			old := oldFoldImplSet(t, patterns, spec.portsPkg, spec.ifaceName, true, false)
 			assertImplSetEqual(t, spec.ruleID, old, newSet)
 		}
 	})

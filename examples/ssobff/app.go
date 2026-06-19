@@ -891,8 +891,8 @@ func buildSSOBFFAssembly(clk clock.Clock, p ssobffBuildParams) (
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("ssobff: grpc metrics collector: %w", err)
 	}
-	grpcAddr := grpclistener.AddrFromEnv()
-	grpcServer, err := grpclistener.ServerFromEnv(ssobffGRPCDurability(p.adapterMode), grpcAddr, interceptor.Deps{
+	grpcAddr := grpclistener.AddrFromEnv(grpclistener.PlatformEnv)
+	grpcServer, err := grpclistener.ServerFromEnv(grpclistener.PlatformEnv, ssobffGRPCDurability(p.adapterMode), grpcAddr, interceptor.Deps{
 		Verifier:        p.jwtVerifier,
 		Clock:           clk,
 		Collector:       grpcCollector,

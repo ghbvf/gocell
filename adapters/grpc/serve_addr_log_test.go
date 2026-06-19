@@ -9,6 +9,7 @@ package grpc_test
 import (
 	"context"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -57,4 +58,44 @@ func TestServeAddr_LogsBoundAddr(t *testing.T) {
 	case <-time.After(testtime.D5s):
 		t.Fatal("Worker.Start did not return after ctx cancel")
 	}
+}
+
+// TestServe_LogsResolvedAddrOnLifecycle drives the listener-injection path and
+// asserts both start and drain lifecycle logs carry the resolved listener addr.
+func TestServe_LogsResolvedAddrOnLifecycle(t *testing.T) {
+	buf := sloghelper.NewSyncBuffer()
+	slogcapture.InstallDefault(t, slog.New(slog.NewJSONHandler(buf, nil)))
+
+	srv, err := adaptersgrpc.New(withReg(adaptersgrpc.Config{
+		Addr: "127.0.0.1:0",
+		TLS:  adaptersgrpc.TLSConfig{AllowInsecure: true},
+	}))
+	require.NoError(t, err)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	resolvedAddr := lis.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, lis) }()
+
+	testwait.External(t, "grpc-server-started-serving-log", func() bool {
+		return sloghelper.FindLogEntry(buf.String(), "server started serving") != nil
+	}, testtime.D2s, testtime.MediumPoll, "expected a 'server started serving' log line")
+
+	startEntry := sloghelper.FindLogEntry(buf.String(), "server started serving")
+	require.NotNil(t, startEntry)
+	assert.Equal(t, resolvedAddr, startEntry["addr"])
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(testtime.D5s):
+		t.Fatal("Serve did not return after ctx cancel")
+	}
+
+	drainEntry := sloghelper.FindLogEntry(buf.String(), "draining")
+	require.NotNil(t, drainEntry)
+	assert.Equal(t, resolvedAddr, drainEntry["addr"])
 }

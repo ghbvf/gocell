@@ -14,7 +14,7 @@ import (
 var sliceMeta = &metadata.SliceMeta{
 	ID:               "registryread",
 	BelongsToCell:    "registrycore",
-	ConsistencyLevel: "L0",
+	ConsistencyLevel: "L1",
 	Lifecycle:        "asset",
 	ContractUsages: []metadata.ContractUsage{
 		{Contract: "http.registry.contract.list.v1", Role: "serve"},

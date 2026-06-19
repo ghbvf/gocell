@@ -22,7 +22,7 @@ require (
 	github.com/docker/go-connections v0.7.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
-	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -71,6 +71,7 @@ require (
 	github.com/ghbvf/gocell/adapters/adapterutil v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
+	github.com/ghbvf/gocell/cellmodules/grpclistener v0.0.0
 	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0 // indirect
 	github.com/ghbvf/gocell/tests v0.0.0
@@ -120,3 +121,5 @@ replace github.com/ghbvf/gocell/framework => ../../framework
 replace github.com/ghbvf/gocell/tests => ../../tests
 
 replace github.com/ghbvf/gocell/adapters/softca => ../../adapters/softca
+
+replace github.com/ghbvf/gocell/cellmodules/grpclistener => ../../cellmodules/grpclistener

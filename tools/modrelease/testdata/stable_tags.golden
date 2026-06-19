@@ -16,6 +16,7 @@ adapters/softca/v1.2.3
 adapters/vault/v1.2.3
 adapters/websocket/v1.2.3
 cellmodules/v1.2.3
+cellmodules/grpclistener/v1.2.3
 corecells/v1.2.3
 framework/v1.2.3
 generated/v1.2.3
