@@ -2,59 +2,57 @@ package main
 
 import (
 	"testing"
+
+	"github.com/ghbvf/gocell/framework/kernel/clock"
+
+	"github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status"
+	statusmem "github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status/mem"
 )
 
 // TestFrameworkServingContracts_DriftGuard is a Medium drift guard: it asserts that
-// mustServeFrameworkContracts() (the hand-authored must-serve set fed to
-// assembly.Config.FrameworkContracts) is exactly the same set of ContractIDs
-// as the wired FrameworkServedRoute returned by the status service.
+// mustServeFrameworkContracts() (Source A: the hand-authored must-serve set fed to
+// assembly.Config.FrameworkContracts) and status.NewService(...).FrameworkRoute().ContractID
+// (Source B: the runtime wiring path) agree on the single framework-contract ID.
 //
-// Without this test, a rename in mustServeFrameworkContracts() or the ContractID
-// const in service.go would silently create a startup fail-fast at runtime but
-// would not be caught at compile time. The test makes the drift visible in CI
-// (ADR-1939 §AI-robust plan §II "hand-authored []string must be paired with a
-// drift test to count as Medium").
+// Both sources are machine-read: Source A via mustServeFrameworkContracts(), Source B via
+// constructing a real status.Service and calling FrameworkRoute(). Neither is a
+// hard-coded literal, so any rename in either path causes this test to fail rather
+// than silently diverging until a runtime startup fail-fast.
 //
 // Hard-ization path: replace mustServeFrameworkContracts() with a codegen-derived
 // function (MDM epic M2, #2299).
 func TestFrameworkServingContracts_DriftGuard(t *testing.T) {
-	const wantContractID = "http.deviceidentity.status.v1"
-
-	// The must-serve set (source A).
+	// Source A: the hand-authored must-serve set (references status.ContractID via const).
 	mustServe := mustServeFrameworkContracts()
 	if len(mustServe) != 1 {
 		t.Fatalf("mustServeFrameworkContracts() has %d entries, want exactly 1", len(mustServe))
 	}
-	if mustServe[0] != wantContractID {
-		t.Errorf("mustServeFrameworkContracts()[0] = %q, want %q", mustServe[0], wantContractID)
-	}
 
-	// The wired ContractID (source B) — derived from the status.Service stub.
-	// We import the status package indirectly via the service constant exposed by
-	// the module. We check the constant directly rather than calling FrameworkRoute
-	// (which requires a real clock/repo) to keep this test lightweight.
-	//
-	// The statusContractID constant in service.go is the canonical value; we assert
-	// it matches the wantContractID above. The generated handler contract spec uses
-	// the same literal, so any three-way drift (service const / mustServe / generated)
-	// is caught here.
-	//
-	// NOTE: statusContractID is unexported from the status package, so we compare
-	// via the wantContractID literal (the triple-equality invariant is: mustServe[0]
-	// == wantContractID == "http.deviceidentity.status.v1"). The service_test.go
-	// already asserts route.ContractID == statusContractID within the status package.
+	// Source B: the runtime wiring path — construct a real status.Service and read
+	// FrameworkRoute().ContractID. Uses an in-memory repo and a real clock so no
+	// mocking is required; the call is lightweight and does not start a server.
+	clk := clock.Real()
+	repo := statusmem.New(clk)
+	svc := status.NewService(repo, clk)
+	wiredContractID := svc.FrameworkRoute().ContractID
+
+	// Both sources must agree: if mustServeFrameworkContracts() or ContractID drift,
+	// bootstrap's validateFrameworkServing will fail-fast at startup — this test
+	// makes that drift visible in CI long before a binary is built.
+	if mustServe[0] != wiredContractID {
+		t.Errorf("drift detected: mustServeFrameworkContracts()[0]=%q != FrameworkRoute().ContractID=%q",
+			mustServe[0], wiredContractID)
+	}
 }
 
 // TestMustServeFrameworkContracts_ContainsStatus is an explicit membership check
 // verifying the must-serve set contains the status contract ID, even if the set
 // grows in future PRs. This guards against accidental removal.
 func TestMustServeFrameworkContracts_ContainsStatus(t *testing.T) {
-	const wantContractID = "http.deviceidentity.status.v1"
-
 	for _, id := range mustServeFrameworkContracts() {
-		if id == wantContractID {
+		if id == status.ContractID {
 			return
 		}
 	}
-	t.Errorf("mustServeFrameworkContracts() does not contain %q", wantContractID)
+	t.Errorf("mustServeFrameworkContracts() does not contain status.ContractID (%q)", status.ContractID)
 }

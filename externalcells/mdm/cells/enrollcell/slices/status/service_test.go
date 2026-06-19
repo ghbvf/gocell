@@ -65,8 +65,8 @@ func newMux(t *testing.T, repo Repository, authorizer auth.Authorizer) http.Hand
 	t.Helper()
 	svc := NewService(repo, clockmock.New(fixedNow))
 	route := svc.FrameworkRoute()
-	if route.ContractID != statusContractID {
-		t.Fatalf("FrameworkRoute ContractID=%q, want %q", route.ContractID, statusContractID)
+	if route.ContractID != ContractID {
+		t.Fatalf("FrameworkRoute ContractID=%q, want %q", route.ContractID, ContractID)
 	}
 	mux := celltest.NewTestMux()
 	if err := route.Group.Register(mux); err != nil {
@@ -249,23 +249,30 @@ func TestStatus_OK_RenewalTimeNull(t *testing.T) {
 
 // TestStatus_StateEnumMapping: verifies that each certlifecycle.State maps to the
 // correct ResponseDataStatus enum value in the response body.
+// The zero/unknown State case verifies the default branch returns "" (empty string),
+// NOT the internal s.String() representation — preventing internal state strings
+// from leaking to the wire.
 func TestStatus_StateEnumMapping(t *testing.T) {
 	cases := []struct {
+		name     string
 		state    certlifecycle.State
 		wantEnum string
 	}{
-		{certlifecycle.StateRequested(), "requested"},
-		{certlifecycle.StateIssued(), "issued"},
-		{certlifecycle.StateActive(), "active"},
-		{certlifecycle.StateNearExpiry(), "near-expiry"},
-		{certlifecycle.StateRenewing(), "renewing"},
-		{certlifecycle.StateRotated(), "rotated"},
-		{certlifecycle.StateRevoked(), "revoked"},
-		{certlifecycle.StateExpired(), "expired"},
+		{"requested", certlifecycle.StateRequested(), "requested"},
+		{"issued", certlifecycle.StateIssued(), "issued"},
+		{"active", certlifecycle.StateActive(), "active"},
+		{"near-expiry", certlifecycle.StateNearExpiry(), "near-expiry"},
+		{"renewing", certlifecycle.StateRenewing(), "renewing"},
+		{"rotated", certlifecycle.StateRotated(), "rotated"},
+		{"revoked", certlifecycle.StateRevoked(), "revoked"},
+		{"expired", certlifecycle.StateExpired(), "expired"},
+		// Zero-value State must map to empty string — not the internal String() output.
+		{"zero-value", certlifecycle.State{}, ""},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.wantEnum, func(t *testing.T) {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
 			repo := newInMemRepo()
 			repo.put(CertRecord{
 				DeviceID:  "dev-state",
@@ -286,8 +293,17 @@ func TestStatus_StateEnumMapping(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d; body=%s", rec.Code, rec.Body.String())
 			}
-			if !strings.Contains(rec.Body.String(), `"`+tc.wantEnum+`"`) {
-				t.Errorf("status field: want %q in body, got %s", tc.wantEnum, rec.Body.String())
+			body := rec.Body.String()
+			if tc.wantEnum == "" {
+				// Zero/unknown state: status field must be "" (JSON empty string),
+				// not absent and not an internal representation.
+				if !strings.Contains(body, `"status":""`) {
+					t.Errorf("zero-value state: want status=\"\" in body, got %s", body)
+				}
+			} else {
+				if !strings.Contains(body, `"`+tc.wantEnum+`"`) {
+					t.Errorf("status field: want %q in body, got %s", tc.wantEnum, body)
+				}
 			}
 		})
 	}

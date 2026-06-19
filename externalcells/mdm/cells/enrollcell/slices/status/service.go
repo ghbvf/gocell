@@ -15,11 +15,13 @@ import (
 	statusv1 "github.com/ghbvf/gocell/generated/contracts/http/deviceidentity/status/v1"
 )
 
-// statusContractID mirrors the generated contractSpec.ID. It is restated here
-// so the FrameworkServedRoute ContractID field matches without importing unexported
-// generated internals. The drift test in cmd/mdmd/framework_serving_test.go
-// cross-checks this value against mustServeFrameworkContracts() at compile time.
-const statusContractID = "http.deviceidentity.status.v1"
+// ContractID mirrors the generated contractSpec.ID for http.deviceidentity.status.v1.
+// Exported so cmd/mdmd/main.go can reference it in mustServeFrameworkContracts()
+// and the drift test in cmd/mdmd/framework_serving_test.go can obtain Source-B from
+// status.NewService(...).FrameworkRoute().ContractID without duplicating the literal.
+// (ADR-1939 §AI-robust: hand-authored []string must pair with a real Source-B assertion
+// to qualify as Medium guard.)
+const ContractID = "http.deviceidentity.status.v1"
 
 // Service implements the generated statusv1.Service for http.deviceidentity.status.v1.
 // It is the L0 status read layer: reads from the in-memory cert repository,
@@ -49,6 +51,12 @@ func NewService(repo Repository, clk clock.Clock) *Service {
 //     RFC3339 times, renewalTime null when nil)
 //
 // The 400 (missing deviceId) case is handled upstream by the generated handler.
+//
+// 404 vs 403 information boundary: admin/operator coarse reads return 404 (not found)
+// when a device is unknown; this is intentional for fleet-operations visibility
+// (operators need to know whether a device exists). PR-2 device-self reads must
+// re-evaluate whether 404 leaks existence to the requesting device — at that point
+// the decision is whether to return 404 or 403 for non-existent-or-not-owned resources.
 func (s *Service) Status(ctx context.Context, req *statusv1.Request) (statusv1.StatusResponseObject, error) {
 	rec, ok, err := s.repo.ActiveByDeviceID(ctx, req.DeviceID)
 	if err != nil {
@@ -95,7 +103,7 @@ func (s *Service) Status(ctx context.Context, req *statusv1.Request) (statusv1.S
 func (s *Service) FrameworkRoute() bootstrap.FrameworkServedRoute {
 	h := statusv1.NewHandler(s, auth.RequirePermission(authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{
-		ContractID: statusContractID,
+		ContractID: ContractID,
 		Group: kcell.RouteGroup{
 			Listener: kcell.PrimaryListener,
 			Register: func(mux kcell.RouteMux) error { return h.RegisterRoutes(mux) },

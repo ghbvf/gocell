@@ -42,6 +42,10 @@ func certStateToEnum(s certlifecycle.State) statusv1.ResponseDataStatus {
 		// Zero or unknown state: return empty string (zero value for the enum type).
 		// The handler will surface this as an empty status field; future callers
 		// should use ParseState when hydrating from persistence.
-		return statusv1.ResponseDataStatus(s.String())
+		// NOTE: we do NOT return s.String() here — that would leak internal state
+		// representation strings to the wire for unknown values. An empty string is
+		// the safe sentinel that callers can detect and handle without exposing
+		// implementation details.
+		return statusv1.ResponseDataStatus("")
 	}
 }

@@ -78,10 +78,13 @@ func (c *EnrollCell) Authorizer() auth.Authorizer {
 	return c.authorizer
 }
 
-// Init is a clean no-op beyond BaseCell.Init: the framework-owned status contract
-// is NOT registered here (composition root mounts it via WithFrameworkHTTPServing).
-// /healthz and /readyz turn green from BaseCell's own Health()/Ready() once
-// bootstrap transitions the cell to the started state.
+// Init delegates entirely to BaseCell.Init.
+//
+// No routes, subscribers, or probes are registered here: the framework-owned contract
+// http.deviceidentity.status.v1 is mounted by the composition root via
+// bootstrap.WithFrameworkHTTPServing (ADR-1939 D4), not via cell Init.
+// /healthz and /readyz turn green automatically once bootstrap transitions the cell
+// to the started state via BaseCell's own Health()/Ready() probes.
 func (c *EnrollCell) Init(ctx context.Context, reg cell.Registrar) error {
 	return c.BaseCell.Init(ctx, reg)
 }

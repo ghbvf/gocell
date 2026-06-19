@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/certlifecycle"
+
+	"github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status"
+	statusmem "github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status/mem"
 )
 
 // startupPollTimeout / shutdownTimeout are deliberately generous: a demo cold start
@@ -154,17 +160,22 @@ func TestRun_PropagatesBuildError(t *testing.T) {
 
 // ── Status endpoint integration tests ─────────────────────────────────────────
 
-// appTestEnv holds the JWT issuer and address for status integration tests.
-// buildAppFromShared is called with the SAME shared used here so JWT tokens
-// issued by env.jwtIssuer are verifiable by the running app.
+// appTestEnv holds the JWT issuer, address, and status repository for status
+// integration tests. buildAppFromShared is called with the SAME shared used here so
+// JWT tokens issued by env.jwtIssuer are verifiable by the running app.
+// statusRepo is the live repository seeded by the test before requests are issued.
 type appTestEnv struct {
-	jwtIssuer *auth.JWTIssuer
-	primary   string
+	jwtIssuer  *auth.JWTIssuer
+	primary    string
+	statusRepo *statusmem.Repository
 }
 
 // startDemoAppWithIssuer starts the demo app and returns the JWT issuer that the
 // running server will accept tokens from (same key pair — no separate key exchange
 // needed). The test may call cancel() to stop early; t.Cleanup handles shutdown.
+//
+// The returned appTestEnv.statusRepo is the live repository: tests can seed records
+// into it before (or after) issuing HTTP requests to the running app.
 func startDemoAppWithIssuer(t *testing.T) appTestEnv {
 	t.Helper()
 	t.Setenv(demoOptInEnv, "1")
@@ -187,11 +198,15 @@ func startDemoAppWithIssuer(t *testing.T) appTestEnv {
 		t.Fatalf("buildMemSharedDeps: %v", err)
 	}
 
+	// Construct the repository here (composition root owns topology-dependent resources)
+	// so the test can seed records before requests are issued.
+	repo := statusmem.New(shared.Clock)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	runErr := make(chan error, 1)
 	go func() {
-		app, appErr := buildAppFromShared(ctx, shared, prebuiltListeners{
+		app, appErr := buildAppFromShared(ctx, shared, repo, prebuiltListeners{
 			primary:  primaryLn,
 			internal: internalLn,
 			health:   healthLn,
@@ -218,7 +233,7 @@ func startDemoAppWithIssuer(t *testing.T) appTestEnv {
 		}
 	})
 
-	return appTestEnv{jwtIssuer: shared.JWTIssuer, primary: addrs.primary}
+	return appTestEnv{jwtIssuer: shared.JWTIssuer, primary: addrs.primary, statusRepo: repo}
 }
 
 // issueAppJWT signs a JWT with the given subject and roles using the app's JWT issuer.
@@ -294,6 +309,72 @@ func TestRun_StatusEndpoint_404_UnknownDevice(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("want 404 (unknown device), got %d; body=%s", resp.StatusCode, body)
+	}
+}
+
+// TestRun_StatusEndpoint_200_FoundDevice: valid JWT with mdm-admin role + seeded
+// CertRecord → 200 with response body containing "data" and correct deviceId field.
+// This is the happy-path integration test: proves the full request pipeline from JWT
+// auth through PDP to service to JSON response.
+func TestRun_StatusEndpoint_200_FoundDevice(t *testing.T) {
+	env := startDemoAppWithIssuer(t)
+
+	// Seed the repository with a known CertRecord before issuing the request.
+	clk := clock.Real()
+	now := clk.Now()
+	env.statusRepo.Put(status.CertRecord{
+		DeviceID:  "dev-seed-1",
+		Issuer:    "CN=MDM-TestCA",
+		Serial:    "BEEF0001",
+		State:     certlifecycle.StateActive(),
+		NotBefore: now.Add(-24 * time.Hour),
+		NotAfter:  now.Add(364 * 24 * time.Hour),
+		Epoch:     1,
+	})
+
+	tok := issueAppJWT(t, env, "admin-test", []string{"mdm-admin"})
+	resp := doStatusGET(t, env.primary, "dev-seed-1", tok)
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("want 200, got %d; body=%s", resp.StatusCode, body)
+	}
+
+	// Parse enough of the response to assert the core fields are present.
+	var envelope struct {
+		Data struct {
+			DeviceID string `json:"deviceId"`
+			Status   string `json:"status"`
+		} `json:"data"`
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("unmarshal 200 body: %v; body=%s", err, body)
+	}
+	if envelope.Data.DeviceID != "dev-seed-1" {
+		t.Errorf("data.deviceId: got %q, want %q", envelope.Data.DeviceID, "dev-seed-1")
+	}
+	if envelope.Data.Status != "active" {
+		t.Errorf("data.status: got %q, want %q", envelope.Data.Status, "active")
+	}
+}
+
+// TestRun_StatusEndpoint_401_InvalidToken: a malformed/garbage Bearer token → 401.
+// This verifies the primary listener JWT verifier enforces signature validation, not
+// just presence of a token. Distinct from the unauthenticated (no header) case.
+func TestRun_StatusEndpoint_401_InvalidToken(t *testing.T) {
+	env := startDemoAppWithIssuer(t)
+
+	resp := doStatusGET(t, env.primary, "dev-any", "not-a-valid-jwt-token")
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("want 401 (invalid token), got %d; body=%s", resp.StatusCode, body)
 	}
 }
 

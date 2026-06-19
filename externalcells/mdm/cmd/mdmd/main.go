@@ -127,7 +127,7 @@ func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error 
 		slog.String("internal", addrs.internal),
 		slog.String("health", addrs.health),
 		slog.String("status_endpoint", "GET "+addrs.primary+"/api/v1/deviceidentity/status?deviceId=<id>"),
-		slog.String("auth", "JWT Bearer; roles: mdm-admin or mdm-operator for device:read"),
+		slog.String("auth", "JWT Bearer; roles: "+enrollcell.RoleMDMAdmin+" or "+enrollcell.RoleMDMOperator+" for device:read"),
 	)
 	return app.Run(ctx)
 }
@@ -140,19 +140,33 @@ func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error 
 //   - proveCertBaseLive smoke-validates the resolved Signer (non-nil TrustBundle).
 //   - The Signer/RevStore are NOT injected into enrollcell (PR-1 only reads status;
 //     enroll/revoke injection lands in PR-2 when those paths are consumed).
+//
+// The status repository is constructed here (composition root owns topology-dependent
+// resources) and passed into buildAppFromShared so integration tests can seed it
+// before starting the server.
 func buildApp(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) (*composition.App, error) {
 	shared, err := buildMemSharedDeps(addrs)
 	if err != nil {
 		return nil, fmt.Errorf("build shared deps: %w", err)
 	}
-	return buildAppFromShared(ctx, shared, lns)
+	repo := statusmem.New(shared.Clock)
+	return buildAppFromShared(ctx, shared, repo, lns)
 }
 
-// buildAppFromShared assembles the app from a pre-built SharedDeps. Extracted so
-// the startup smoke test can inject the same SharedDeps (and hence the same JWT
-// key pair) that the running server uses — enabling integration tests to issue
-// valid tokens without a separate key-exchange mechanism.
-func buildAppFromShared(ctx context.Context, shared *composition.SharedDeps, lns prebuiltListeners) (*composition.App, error) {
+// buildAppFromShared assembles the app from a pre-built SharedDeps and an already-
+// constructed status repository. Extracted so the startup smoke test can inject the
+// same SharedDeps (and hence the same JWT key pair) that the running server uses —
+// enabling integration tests to issue valid tokens and seed records without a
+// separate key-exchange mechanism.
+//
+// The repo parameter is owned by the caller: the composition root (buildApp) constructs
+// statusmem.New per topology; tests may pass a pre-seeded repository.
+//
+// PR-15 note: the postgres topology should branch in buildApp to a different
+// buildXxxSharedDeps path; this function remains topology-agnostic.
+func buildAppFromShared(
+	ctx context.Context, shared *composition.SharedDeps, repo *statusmem.Repository, lns prebuiltListeners,
+) (*composition.App, error) {
 	// Prove the cert-signing bottom layer is live (CERTDEPS smoke, epic §0).
 	// demo topology → softca dev CA (ephemeral trust anchor, in-memory ledger).
 	// postgres topology → fail-closed (durable CA not yet wired, by design).
@@ -164,8 +178,7 @@ func buildAppFromShared(ctx context.Context, shared *composition.SharedDeps, lns
 		return nil, fmt.Errorf("certdeps smoke: %w", err)
 	}
 
-	// Build the status in-memory repository and service.
-	repo := statusmem.New(shared.Clock)
+	// Build the status service from the caller-supplied repository.
 	statusSvc := status.NewService(repo, shared.Clock)
 
 	// Build the cell module with status repo injected.
@@ -191,7 +204,7 @@ func proveCertBaseLive(ctx context.Context, cd certdeps.CertDeps) error {
 	if len(bundle) == 0 {
 		return fmt.Errorf("cert base live: TrustBundle returned empty bundle (dev CA not initialized)")
 	}
-	slog.Debug("mdmd: cert base live", slog.Int("trust_bundle_certs", len(bundle)))
+	slog.Info("mdmd: cert base live", slog.Int("trust_bundle_certs", len(bundle)))
 	return nil
 }
 
@@ -201,9 +214,12 @@ func proveCertBaseLive(ctx context.Context, cd certdeps.CertDeps) error {
 // cmd/mdmd/framework_serving_test.go cross-checks this against the wired
 // FrameworkServedRoute ContractIDs (Medium guard, ADR-1939 §AI-robust).
 //
+// References status.ContractID (exported const) so any rename in the status package
+// causes a compile error here — eliminating the silent-literal-drift vector.
+//
 // Hard-ization path: replace this with a codegen-derived function (M2, epic #2299).
 func mustServeFrameworkContracts() []string {
-	return []string{"http.deviceidentity.status.v1"}
+	return []string{status.ContractID}
 }
 
 // buildMemSharedDeps constructs a fully-populated SharedDeps in dev/memory mode.
@@ -212,7 +228,14 @@ func mustServeFrameworkContracts() []string {
 // in-memory / single-pod variant. When this module moves to the postgres topology,
 // the Publisher/Subscriber, ConsumerClaimer, and NonceStore MUST be re-resolved via
 // the topology-gated resolvers (cellmodules/eventtransport.Resolve +
-// replaydeps.Resolve) and devServiceSecret via env.
+// replaydeps.Resolve) and devServiceSecret MUST be sourced from env.
+//
+// Internal listener note: the internal listener is wired with HMAC service-token auth
+// (InternalServiceKeyring) but PR-1 has no /internal/v1/ routes. If PR-2 adds internal
+// routes, the same PR must declare a caller-allowlist per runtime-api.md §"Internal endpoint".
+//
+// postgres (PR-15) note: devServiceSecret must be replaced by an env-sourced per-cell
+// secret; VerboseDisabled must be replaced by a token-gated VerboseToken.
 func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 	clk := clock.Real()
 
@@ -225,9 +248,10 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		slog.String("jwt", "ephemeral RSA keys; tokens invalid on restart"),
 		slog.String("jwt_issuer", devJWTIssuer),
 		slog.String("jwt_audience", devJWTAudience),
-		slog.String("service_secret", "hardcoded demo secret; production must source per-cell secret from env"),
+		slog.String("service_token_auth", "HMAC keyring backed by hardcoded demo key; production must source per-cell secret from env"),
 		slog.String("metrics", "NopProvider (metrics disabled)"),
 		slog.String("status", "GET /api/v1/deviceidentity/status?deviceId=<id> requires JWT with mdm-admin or mdm-operator role"),
+		slog.String("verbose_readyz", "disabled (VerboseDisabled=true; postgres topology enables it)"),
 	)
 
 	eb := eventbus.New(clk)
