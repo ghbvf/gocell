@@ -13,7 +13,7 @@
 //   - TestOwnerScopedGate_ExactSet_01 (scan) — the STILL-hand-wired gates: the
 //     iotdevice/todoorder examples (PR-10d #1894, auth.SelfOr → RequirePermissionForResource)
 //     AND the composition-root cellmodules/deviceserving framework-owned devicestate gate
-//     (#2351). Frozen against ownerScopedGateExpectedSet. As these migrate (#2355 续波) they
+//     (#2351). Frozen against ownerScopedGateExpectedSet. As these migrate (#2355 续波 #2486) they
 //     move to the contract-derived arm.
 //
 // An owner-scoped endpoint (one whose resource ownership the PDP
@@ -54,7 +54,7 @@
 // the guarded handler files and asserts the collected set EQUALS the frozen set. NOT Hard:
 // nothing in the type system forces an owner endpoint to choose RequirePermissionForResource
 // over RequirePermission (both type-check); only this scan rejects the wrong choice. These
-// migrate to the contract-derived (Hard) arm as #2355 续波 lands.
+// migrate to the contract-derived (Hard) arm as #2355 续波 (#2486 examples, #2487 auditcore-list) lands.
 //
 // # Anti-vacuity
 //
