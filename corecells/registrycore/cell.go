@@ -62,10 +62,14 @@ func New(clk clock.Clock) *RegistryCore {
 }
 
 // registryCursorDevKey is the development HMAC signing key for list cursors in
-// the memory/demo topology. It is NOT a secret: in this MVP registrycore is only
-// runnable in the in-mem topology (it is not yet composed into corebundle). When
-// the cellmodule lands (follow-up composition issue), the PG topology injects a
-// real key via cellsecrets and fail-closes when it is absent. 39 bytes ≥ the
+// the memory/demo topology. It is NOT a secret and MUST NOT be used in
+// production.
+//
+// DEV/DEMO ONLY: this key is public in the source tree and is only safe
+// because registrycore is not yet composed into corebundle for PG topology.
+// When the cellmodule lands (follow-up composition issue), the PG topology MUST
+// inject a real key via cellsecrets.BuildCursorCodec and MUST fail-closed when
+// the env key is absent — never fall back to this dev key. 39 bytes ≥ the
 // query.CursorCodec 32-byte minimum.
 var registryCursorDevKey = []byte("registrycore-list-cursor-dev-key-0001!!")
 
@@ -80,11 +84,13 @@ var registryCursorDevKey = []byte("registrycore-list-cursor-dev-key-0001!!")
 // slice reads back. The submit service validates each declaration through the US3
 // governance gate (gate.Check) before persisting; the gate is constructed over a
 // throwaway in-mem ContractRegistrar because Check is side-effect-free — only
-// gate.Submit (which this path never calls) would touch that registrar, so it
-// stays empty. The L1 store write is wrapped by a demo CellTxManager (PG-ready: a
-// cellmodule injects a real TxManager in the PG topology). The list cursor uses
-// the shared HMAC codec.
-func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
+// gate.Submit (the sole writer of that registrar) would touch it, and gate.Submit
+// is never called from the persistent store path (persistence goes through
+// ports.Registry.Create); this binding is enforced by archtest
+// REGISTRAR-SUBMIT-CALLER-01. The L1 store write is wrapped by a demo
+// CellTxManager (PG-ready: a cellmodule injects a real TxManager in the PG
+// topology). The list cursor uses the shared HMAC codec.
+func (c *RegistryCore) initInternal(_ context.Context, reg cell.Registrar) error {
 	store := mem.NewRegistry(c.clk)
 	gate := governance.NewRegistrationGate(registry.NewContractRegistrar(c.clk), c.clk)
 	codec, err := query.NewCursorCodec(registryCursorDevKey)
@@ -96,7 +102,11 @@ func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
 	if err != nil {
 		return fmt.Errorf("registrycore: build registrywrite service: %w", err)
 	}
-	readSvc, err := registryread.NewService(store, codec, nil)
+	// RunModeForDemo(true): this cell is wired with the in-mem store (demo
+	// topology); stale cursors after process restart should fail-open to page 1
+	// rather than returning 500. The PG cellmodule will pass RunModeForDemo(false)
+	// (i.e. RunModeProd) for fail-closed cursor validation.
+	readSvc, err := registryread.NewService(store, codec, query.RunModeForDemo(true), nil)
 	if err != nil {
 		return fmt.Errorf("registrycore: build registryread service: %w", err)
 	}
@@ -109,5 +119,10 @@ func (c *RegistryCore) initInternal(_ context.Context, _ cell.Registrar) error {
 	// slice set and the cell's runtime inventory stay in sync.
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(registrywrite.SliceMetadata()))
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(registryread.SliceMetadata()))
-	return nil
+
+	// Register the in-mem repo readiness probe via the cellgen-generated typed
+	// funnel (PROBENAME-SEALED-FUNNEL-01). mem.Registry.RepoReady always returns
+	// nil (in-memory store is always ready); the PG implementation will perform a
+	// real connectivity check.
+	return RegisterReadiness(reg, store)
 }

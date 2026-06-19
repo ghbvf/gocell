@@ -143,3 +143,7 @@ func (r *Registry) History(_ context.Context, t tenant.TenantID, id string) ([]r
 	evs, _ := r.registrarFor(t).Events(id)
 	return evs, nil
 }
+
+// RepoReady implements healthz.RepoProber. The in-memory store holds no external
+// resource and is always ready; this always returns nil.
+func (r *Registry) RepoReady(_ context.Context) error { return nil }

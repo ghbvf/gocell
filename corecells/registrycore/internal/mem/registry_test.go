@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
+	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -30,6 +31,22 @@ func newRegistry(t *testing.T) (*Registry, *clockmock.FakeClock) {
 	t.Helper()
 	clk := clockmock.New(testEpoch)
 	return NewRegistry(clk), clk
+}
+
+// TestRegistry_RepoReady verifies the in-memory Registry always reports ready
+// (MemStore convention — no external dependency).
+func TestRegistry_RepoReady(t *testing.T) {
+	r, _ := newRegistry(t)
+	assert.NoError(t, r.RepoReady(context.Background()), "in-memory RepoReady must always return nil")
+}
+
+// TestRegistry_RepoReady_Conformance enrolls the mem Registry in the single-source
+// readiness-conformance harness (CELL-REPO-READYZ-PROBE-01). broken=nil signals
+// "no differentiated failure domain" — the in-mem store has no unreachable state,
+// so the harness skips the broken sub-test.
+func TestRegistry_RepoReady_Conformance(t *testing.T) {
+	r, _ := newRegistry(t)
+	celltest.RunRepoReadinessConformance(t, "registrycore-mem", r, nil)
 }
 
 func mustCreate(t *testing.T, r *Registry, tn tenant.TenantID, id, kind, submitter string) registry.ContractRegistration {

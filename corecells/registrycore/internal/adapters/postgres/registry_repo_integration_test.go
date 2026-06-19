@@ -186,6 +186,55 @@ func TestRegistryPG_Integration_CrossTenantIsolation(t *testing.T) {
 	assert.Equal(t, "bob", gotB.Submitter)
 }
 
+// TestRegistryPG_Integration_List_StateFilter verifies the WHERE state=$N SQL path in
+// List. The mem-layer has TestRegistry_List_StateFilter_* coverage; this test
+// exercises the PG-specific pgquery.AppendKeyset + b.AppendIf(state) branch on a
+// real Postgres instance.
+func TestRegistryPG_Integration_List_StateFilter(t *testing.T) {
+	repo, txMgr := setupRegistryPG(t)
+	ctx := context.Background()
+
+	// Seed: two registrations under the same tenant.
+	createInTx(t, repo, txMgr, itTenantA, registry.SubmitInput{ID: "sf.one", Kind: "http", Submitter: "alice"})
+	createInTx(t, repo, txMgr, itTenantA, registry.SubmitInput{ID: "sf.two", Kind: "http", Submitter: "bob"})
+
+	// Advance sf.two to probing — sf.one stays submitted.
+	_, err := transitionInTx(t, repo, txMgr, itTenantA, registry.AdvanceInput{ID: "sf.two", To: registry.StateProbing(), Actor: "system"})
+	require.NoError(t, err)
+
+	listParams := query.ListParams{Limit: 50, Sort: []query.SortColumn{{Name: "id", Direction: query.SortASC}}}
+
+	t.Run("MatchSubmitted", func(t *testing.T) {
+		got, err := repo.List(ctx, itTenantA, listParams, ports.ListFilter{State: registry.StateSubmitted()})
+		require.NoError(t, err)
+		require.Len(t, got, 1, "only sf.one should be submitted")
+		assert.Equal(t, "sf.one", got[0].ID)
+		assert.Equal(t, registry.StateSubmitted(), got[0].State)
+	})
+
+	t.Run("MatchProbing", func(t *testing.T) {
+		got, err := repo.List(ctx, itTenantA, listParams, ports.ListFilter{State: registry.StateProbing()})
+		require.NoError(t, err)
+		require.Len(t, got, 1, "only sf.two should be probing")
+		assert.Equal(t, "sf.two", got[0].ID)
+		assert.Equal(t, registry.StateProbing(), got[0].State)
+	})
+
+	t.Run("NoMatch", func(t *testing.T) {
+		// Filter for approved — no rows match, must return empty slice not error.
+		got, err := repo.List(ctx, itTenantA, listParams, ports.ListFilter{State: registry.StateApproved()})
+		require.NoError(t, err)
+		assert.Empty(t, got, "filter approved must return empty when no approved rows exist")
+	})
+
+	t.Run("NoFilter", func(t *testing.T) {
+		// Omitting state filter returns all rows.
+		got, err := repo.List(ctx, itTenantA, listParams, ports.ListFilter{})
+		require.NoError(t, err)
+		assert.Len(t, got, 2, "no filter must return both rows")
+	})
+}
+
 func TestRegistryPG_Integration_EmptyTenantGuard(t *testing.T) {
 	repo, txMgr := setupRegistryPG(t)
 	zero := tenant.TenantID("")

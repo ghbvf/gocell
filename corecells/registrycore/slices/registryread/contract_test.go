@@ -65,7 +65,7 @@ func newMuxOver(t *testing.T, store ports.Registry) http.Handler {
 	if err != nil {
 		t.Fatalf("NewCursorCodec: %v", err)
 	}
-	svc, err := NewService(store, c, nil)
+	svc, err := NewService(store, c, query.RunModeDemo, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

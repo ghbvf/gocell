@@ -32,9 +32,11 @@ func mustCodec(t *testing.T) *query.CursorCodec {
 }
 
 // newSvc builds a Service backed by the given store and a fresh test codec.
+// RunModeDemo is used so stale cursors fail-open in unit tests (same as demo
+// cell wiring).
 func newSvc(t *testing.T, store ports.Registry) *Service {
 	t.Helper()
-	svc, err := NewService(store, mustCodec(t), nil)
+	svc, err := NewService(store, mustCodec(t), query.RunModeDemo, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -104,14 +106,14 @@ func itemField(t *testing.T, item projection.ResourceProjection, key string) str
 
 // TestNewService_NilStore pins the required-dep fail-fast for store.
 func TestNewService_NilStore(t *testing.T) {
-	if _, err := NewService(nil, mustCodec(t), nil); err == nil {
+	if _, err := NewService(nil, mustCodec(t), query.RunModeDemo, nil); err == nil {
 		t.Fatal("NewService(nil store) must error (gocell:\"required\")")
 	}
 }
 
 // TestNewService_NilCodec pins the required-dep fail-fast for codec.
 func TestNewService_NilCodec(t *testing.T) {
-	if _, err := NewService(newMemStore(t), nil, nil); err == nil {
+	if _, err := NewService(newMemStore(t), nil, query.RunModeDemo, nil); err == nil {
 		t.Fatal("NewService(nil codec) must error (gocell:\"required\")")
 	}
 }

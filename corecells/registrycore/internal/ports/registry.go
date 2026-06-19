@@ -1,7 +1,7 @@
 // Package ports defines the driven-side interfaces for registrycore (303-US5,
 // #2236). The Registry interface is the durable contract_registrations store
 // behind which both the in-memory (internal/mem) and PostgreSQL
-// (internal/adapters/postgres) implementations sit; US6 (#2245) swaps the cell's
+// (internal/adapters/postgres) implementations sit; US6 (#2237) swaps the cell's
 // submit/list services from the bare in-mem kernel ContractRegistrar onto this
 // interface (mem in demo/no-PG topology, PG when composed).
 package ports
@@ -59,7 +59,7 @@ type ListFilter struct {
 // the way the bound service wires reads through a scopedread funnel à la
 // configcore/internal/scopedread. The typed tenant param is the primary isolation;
 // RLS is the DB-Hard backstop the caller must keep effective by scoping reads. That
-// service-side funnel is wired in US6 (#2245) — tracked separately.
+// service-side funnel is wired in US6 (#2237) — tracked separately.
 type Registry interface {
 	// Create records a new submission in the submitted state plus its initial
 	// migration event (From = zero sentinel, To = submitted), atomically, scoped to

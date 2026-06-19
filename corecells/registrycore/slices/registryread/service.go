@@ -4,7 +4,7 @@
 // id-ordered, HMAC-cursor-paginated view of all registrations. The route is
 // gated by the registry:read permission.
 //
-// # Durable store + tenant scope (303-US6, #2245)
+// # Durable store + tenant scope (303-US6, #2237)
 //
 // List calls ports.Registry.List directly via query.ExecutePagedQuery. The store
 // receives the tenant extracted from the request context so cross-tenant rows are
@@ -47,22 +47,26 @@ var registrySort = []query.SortColumn{
 // It sources tenant from the request context and delegates pagination to
 // query.ExecutePagedQuery with the shared HMAC CursorCodec.
 type Service struct {
-	store  ports.Registry     `gocell:"required"`
-	codec  *query.CursorCodec `gocell:"required"`
-	logger *slog.Logger
+	store   ports.Registry     `gocell:"required"`
+	codec   *query.CursorCodec `gocell:"required"`
+	runMode query.RunMode
+	logger  *slog.Logger
 }
 
 // NewService constructs the list service. store and codec are required;
+// runMode controls cursor-decode fail-open vs fail-closed (pass
+// query.RunModeForDemo(true) for demo/in-mem topology, RunModeProd otherwise);
 // validateRequired returns a structured error on nil so cell Init() can
 // propagate it instead of panicking. logger is optional (nil → slog.Default()).
-func NewService(store ports.Registry, codec *query.CursorCodec, logger *slog.Logger) (*Service, error) {
+func NewService(store ports.Registry, codec *query.CursorCodec, runMode query.RunMode, logger *slog.Logger) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	s := &Service{
-		store:  store,
-		codec:  codec,
-		logger: logger,
+		store:   store,
+		codec:   codec,
+		runMode: runMode,
+		logger:  logger,
 	}
 	if err := s.validateRequired(); err != nil {
 		return nil, err
@@ -102,9 +106,14 @@ func (s *Service) List(ctx context.Context, req *list.Request) (list.ListRespons
 		Limit:  int(req.Limit),
 	}
 
-	// RLS-safe scoped-read tx wrapping (scopedread.Do) is deferred to #2392.
-	// The mem store is tenant-partitioned at the in-memory level and does not
-	// require a PG transaction. PG store is not yet composed in this worktree.
+	// BLOCKING: PG store MUST wrap this call in scopedread.Do (tenant GUC injection
+	// via SET LOCAL inside TxManager.RunInTx) before the cellmodule composes the PG
+	// implementation. Without scopedread.Do the PG serving role's FORCE RLS policy
+	// silently returns 0 rows or rejects writes — an unscoped read bypasses RLS and
+	// is a data-isolation failure. See #2392.
+	//
+	// The mem store is tenant-partitioned at the in-memory level; no PG transaction
+	// is required for the demo/no-PG topology used in this worktree.
 	//
 	// cursor-state binding: QueryCtx includes the state value so a cursor issued
 	// for state=A cannot be replayed under state=B (scope mismatch → cursor invalid).
@@ -120,7 +129,7 @@ func (s *Service) List(ctx context.Context, req *list.Request) (list.ListRespons
 			return []any{r.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "registryread"),
-		RunMode:     query.RunModeProd,
+		RunMode:     s.runMode,
 	})
 	if err != nil {
 		return nil, err
@@ -182,7 +191,6 @@ func parseStateFilter(stateParam string) (ports.ListFilter, error) {
 	if !ok {
 		return ports.ListFilter{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			msgInvalidStateParam,
-			errcode.WithDetails(errcode.PublicString("state", stateParam)),
 		)
 	}
 	return ports.ListFilter{State: state}, nil

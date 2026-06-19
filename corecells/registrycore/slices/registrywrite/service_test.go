@@ -255,6 +255,44 @@ func (s *spyPortsRegistry) History(_ context.Context, _ tenant.TenantID, _ strin
 	return nil, nil
 }
 
+// TestSubmit_GateUnavailable_NoStore_AIHard asserts that when the governance
+// gate returns ReasonValidatorUnavailable (triggered here by a pre-canceled
+// context — gate.runRules checks ctx.Err() between rules), the service
+// propagates a non-nil Go error (5xx bubble) AND the store's Create is never
+// called. This guards the invariant: "5xx path never persists to the store".
+//
+// The canceled-context trigger is the most stable mechanism (no stub gate
+// required): gate.go:runRules honors ctx.Err() between each declaration rule,
+// returning a non-nil error that evaluate() maps to ReasonValidatorUnavailable.
+func TestSubmit_GateUnavailable_NoStore_AIHard(t *testing.T) {
+	clk := clockmock.New(testEpoch)
+	gate := governance.NewRegistrationGate(registry.NewContractRegistrar(clk), clk)
+
+	spy := &spyPortsRegistry{}
+	svc, err := NewService(spy, gate, WithTxManager(persistence.WrapForCell(noopTxRunner{})))
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	// Pre-cancel the context: gate.runRules checks ctx.Err() before each rule
+	// and returns a non-nil error → evaluate() → ReasonValidatorUnavailable.
+	ctx, cancel := context.WithCancel(principalCtx("unavail-test"))
+	cancel()
+
+	resp, err := svc.Submit(ctx, validSubmitReq())
+	// S6: must bubble a non-nil Go error (5xx, not a typed response).
+	if err == nil {
+		t.Fatalf("Submit with canceled ctx must return non-nil error (5xx bubble), got resp=%T", resp)
+	}
+	if resp != nil {
+		t.Fatalf("Submit with canceled ctx must return nil resp, got %T", resp)
+	}
+	// AI-HARD assertion: 5xx path must not call store.Create.
+	if spy.createCalls != 0 {
+		t.Fatalf("validator-unavailable path called store.Create %d times, want 0", spy.createCalls)
+	}
+}
+
 // TestSubmit_GateMustPrecedeStore_AIHard is the AI-HARD behavior invariant:
 // when the gate rejects a contract declaration, the store's Create method is
 // NEVER called. A spy registry records every Create invocation; asserting

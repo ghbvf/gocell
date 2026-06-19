@@ -51,7 +51,8 @@ func TestNew_Identity(t *testing.T) {
 // both slice handlers the generated route group references.
 func TestInitInternal_WiresHandlers(t *testing.T) {
 	c := newCell()
-	if err := c.initInternal(context.Background(), nil); err != nil {
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
 	if c.writeHandler == nil || c.readHandler == nil {
@@ -115,7 +116,8 @@ func (a allowAuthorizer) Authorize(context.Context, string, string, string) (aut
 // proof (spec US4 "最小可用面") that submit and list share one in-mem registrar.
 func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	c := newCell()
-	if err := c.initInternal(context.Background(), nil); err != nil {
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
 	mux := celltest.NewTestMux()

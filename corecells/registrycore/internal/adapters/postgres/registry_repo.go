@@ -46,12 +46,15 @@ func NewRegistry(pool *pgxpool.Pool, clk clock.Clock) *Registry {
 
 // resolveRead returns the DBTX for read paths (ambient tx if present, else pool).
 //
-// RLS caller obligation (#2236 review F1): under FORCE ROW LEVEL SECURITY + the
-// restricted serving role, a pool read with no app.tenant_id GUC fail-closes to 0
-// rows. The GUC is set only inside TxManager.RunInTx, so the bound service MUST run
-// tenant-scoped reads within a tenant.WithScope + RunInTx (scopedread funnel, US6) —
-// the pool fallback here is for superuser/test paths and bootstrap reads only. See
-// the ports.Registry godoc "Read scoping under RLS".
+// Pool fallback scope: the pool fallback (no ambient tx) is ONLY safe for
+// superuser / integration-test paths and mem-topology bootstrap reads where no
+// FORCE ROW LEVEL SECURITY policy is active.  In a production PG tenant-scoped
+// read the GUC app.tenant_id MUST be set via TxManager.RunInTx before any query
+// touches contract_registrations; without it the restricted serving role returns
+// 0 rows under FORCE RLS — the read fail-closes silently (no error, no data
+// leak, but also no correct tenant data).  See #2392 (scopedread wiring) for the
+// planned funnel that will make ambient-tx mandatory on the read path and
+// eliminate the pool fallback for tenant-scoped reads.
 func (r *Registry) resolveRead(ctx context.Context) DBTX {
 	if r.session != nil {
 		return r.session.resolve(ctx)
@@ -69,7 +72,8 @@ func (r *Registry) resolveWrite(ctx context.Context) (DBTX, error) {
 }
 
 const (
-	colsProjection = `kind, payload_schema, submitter, approver, state, created_at, updated_at`
+	colsProjection   = `kind, payload_schema, submitter, approver, state, created_at, updated_at`
+	msgInvalidTenant = "registry repo: invalid tenant"
 )
 
 func (r *Registry) Create(ctx context.Context, t tenant.TenantID, in registry.SubmitInput) (registry.ContractRegistration, error) {
@@ -345,7 +349,7 @@ func scanRegistrationRow(rows Rows) (registry.ContractRegistration, error) {
 }
 
 func invalidTenant(err error) error {
-	return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "registry repo: invalid tenant", err)
+	return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgInvalidTenant, err)
 }
 
 func dupErr(id string) error {

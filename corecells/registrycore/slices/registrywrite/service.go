@@ -8,6 +8,7 @@ package registrywrite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -64,7 +65,7 @@ func WithLogger(l *slog.Logger) Option {
 // MVP boundary: ownerCell / endpoints / schemaRefs are used by the gate for
 // governance validation only and are NOT persisted to the durable store in this
 // slice. The store only records id / kind / payloadSchema / submitter. Full
-// declaration persistence is a subsequent issue (decl-store activiation).
+// declaration persistence is a subsequent issue (decl-store activation).
 type Service struct {
 	store    ports.Registry               `gocell:"required"`
 	gate     *governance.RegistrationGate `gocell:"required"`
@@ -127,7 +128,7 @@ func (s *Service) Submit(ctx context.Context, req *submit.Request) (submit.Submi
 	// Step 4: governance gate (dry-run check only; submitter handled separately).
 	res := s.gate.Check(ctx, tnt, &meta)
 	if !res.Allowed {
-		return gateErrorResponse(res, submitter)
+		return gateErrorResponse(res, submitter, s.logger, ctx)
 	}
 
 	// Step 5: persist via durable store in a transaction.
@@ -142,7 +143,7 @@ func (s *Service) Submit(ctx context.Context, req *submit.Request) (submit.Submi
 		})
 		return storeErr
 	}); err != nil {
-		return submitErrorResponse(err)
+		return submitErrorResponse(err, s.logger, ctx)
 	}
 
 	return submit.Submit201JSONResponse{Data: toSubmitData(reg)}, nil
@@ -184,25 +185,40 @@ func decodeRequestToMeta(req *submit.Request) metadata.ContractMeta {
 
 // gateErrorResponse maps a denied GovernanceGateResult to the submit
 // contract's typed 4xx envelope. Per MESSAGE-CONST-LITERAL-01, the errcode
-// message is always a const literal; runtime data (rule code, field, message)
-// flows through WithDetails typed channels.
-func gateErrorResponse(res governance.GovernanceGateResult, submitter string) (submit.SubmitResponseObject, error) {
+// message is always a const literal; structured bounded fields (rule code,
+// field) flow through WithDetails typed channels. Free-form finding messages
+// are kept server-side only (slog Warn) — never placed on the wire (S1).
+func gateErrorResponse(
+	res governance.GovernanceGateResult,
+	submitter string,
+	logger *slog.Logger,
+	ctx context.Context,
+) (submit.SubmitResponseObject, error) {
 	switch res.Reason {
 	case governance.ReasonValidationFailed(), governance.ReasonInvalidInput():
+		// Log full findings (including Message) server-side as the primary diagnostic
+		// channel (observability.md §日志 Warn=降级运行). Never forwarded to the wire.
+		for i, f := range res.Result {
+			logger.WarnContext(ctx, "registrywrite: contract declaration failed governance validation",
+				slog.String("finding_rule", fmt.Sprintf("[%d] %s", i, string(f.Code))),
+				slog.String("finding_message", fmt.Sprintf("[%d] %s", i, f.Message)),
+				slog.String("finding_field", f.Field),
+			)
+		}
 		var opts []errcode.Option
 		for _, f := range res.Result {
+			// Wire details carry only bounded structured fields (MESSAGE-CONST-LITERAL-01,
+			// S1): rule code and field path. Free-form Message is never sent to clients.
 			opts = append(opts,
 				errcode.WithDetails(
 					errcode.PublicString("rule", string(f.Code)),
 					errcode.PublicString("field", f.Field),
-					errcode.PublicString("message", f.Message),
 				),
 			)
 		}
 		if res.Reason == governance.ReasonInvalidInput() && submitter == "" {
 			opts = append(opts, errcode.WithDetails(
 				errcode.PublicString("field", "submitter"),
-				errcode.PublicString("message", "authenticated principal required"),
 			))
 		}
 		return submit.Submit400ErrorResponse{Body: *errcode.New(
@@ -213,16 +229,21 @@ func gateErrorResponse(res governance.GovernanceGateResult, submitter string) (s
 			errcode.KindInvalid, errcode.ErrValidationFailed, msgGateTenantInvalid,
 		)}, nil
 	default:
-		// ReasonValidatorUnavailable or unknown: 5xx, bubble as undeclared framework error.
-		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrRegistrationRepoQuery, msgGateUnavailable)
+		// ReasonValidatorUnavailable or unknown: 5xx degraded-mode, log and bubble.
+		// ErrServiceUnavailable is the correct 503-class code (KindUnavailable →
+		// HTTP 503); ErrRegistrationRepoQuery (repo query failure) would misrepresent
+		// a governance validator outage as a storage error.
+		logger.WarnContext(ctx, "registrywrite: governance validator unavailable or unknown gate reason",
+			slog.String("reason", res.Reason.String()))
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, msgGateUnavailable)
 	}
 }
 
 // submitErrorResponse maps a store.Create error to the contract's typed 4xx
 // envelope: duplicate id → 409, validation failure → 400. Anything else
 // bubbles as an undeclared framework 5xx (cell-patterns.md §Typed response
-// envelope).
-func submitErrorResponse(err error) (submit.SubmitResponseObject, error) {
+// envelope). Unknown 5xx errors are logged server-side (observability.md §Warn).
+func submitErrorResponse(err error, logger *slog.Logger, ctx context.Context) (submit.SubmitResponseObject, error) {
 	var ce *errcode.Error
 	if errors.As(err, &ce) {
 		switch ce.Code {
@@ -232,6 +253,9 @@ func submitErrorResponse(err error) (submit.SubmitResponseObject, error) {
 			return submit.Submit400ErrorResponse{Body: *ce}, nil
 		}
 	}
+	// Unknown store error: 5xx degraded-mode (observability.md §Warn=降级运行).
+	logger.WarnContext(ctx, "registrywrite: unexpected store error on contract create",
+		slog.String("error", err.Error()))
 	return nil, err
 }
 
