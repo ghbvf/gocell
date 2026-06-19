@@ -592,6 +592,22 @@ func (b *Bootstrap) ManagedResourceRegistrationOrder() []string {
 	return out
 }
 
+// ConfiguredListeners returns the cell.ListenerRefs registered via WithListener,
+// sorted by canonical name. listenerConfigs is populated at option-apply time, so
+// this is meaningful on a freshly built Bootstrap before Run. Read-only; intended for
+// composition-root tests that assert which listeners a wiring layer declares — e.g.
+// corebundle's operator-credential block registering cell.AdminListener (#1755 F4),
+// an IDENTITY assertion stronger than an option count. Mirrors
+// ManagedResourceRegistrationOrder.
+func (b *Bootstrap) ConfiguredListeners() []cell.ListenerRef {
+	out := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
+	for ref := range b.listenerConfigs {
+		out = append(out, ref)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
 // Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //
