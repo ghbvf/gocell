@@ -155,6 +155,14 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 	return func(c *DeviceCell) { c.metricsProvider = mp }
 }
 
+// WithMaxPendingPerDevice sets the per-device Pending command cap (F-S-005
+// #822). The composition root supplies it from
+// GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE; an unset/zero value leaves the
+// devicecmd.NewService default (defaultMaxPendingPerDevice) in place.
+func WithMaxPendingPerDevice(n int) Option {
+	return func(c *DeviceCell) { c.maxPendingPerDevice = n }
+}
+
 // DeviceCell is the devicecell Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=
 // +cell:listener:ref=cell.InternalListener,prefix=
@@ -176,6 +184,11 @@ type DeviceCell struct {
 	reconcileMetrics   reconcile.Metrics        // shared by both reconcile.Loops; registered once via reconcileLoopMetrics
 	reconcileMetricsOK bool                     // true once reconcileMetrics is registered (provider was wired)
 	clk                clock.Clock              // injected from reg.Config during initInternal
+
+	// maxPendingPerDevice is the per-device Pending command cap (F-S-005 #822),
+	// set from GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE by the composition root.
+	// Zero (unset) leaves the devicecmd.NewService default in place.
+	maxPendingPerDevice int
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *registercontract.Handler
@@ -486,6 +499,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		devicecmd.WithCommandTxManager(c.bootstrapTxManager),
 		// #1795: notify active WatchCommands streams of newly-enqueued commands.
 		devicecmd.WithOnEnqueue(cmdNotifier.Notify),
+		// F-S-005 #822: per-device Pending cap. Zero (unset) keeps the service
+		// default; a configured positive value overrides it.
+		devicecmd.WithPendingLimit(c.maxPendingPerDevice),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
@@ -514,6 +530,8 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		devicecmd.WithSliceName("devicecommandrpc"),
 		// #1795: commands enqueued via gRPC also reach watchers.
 		devicecmd.WithOnEnqueue(cmdNotifier.Notify),
+		// F-S-005 #822: gRPC IssueCommand enqueues too, so it shares the cap.
+		devicecmd.WithPendingLimit(c.maxPendingPerDevice),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command-grpc: %w", err)
