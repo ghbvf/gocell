@@ -180,6 +180,7 @@ func buildTailer(
 		src,
 		src,
 		deps.OwnerStore,
+		deps.DeadLetters,
 		deps.TxRunner,
 		apply,
 		deps.Locker,

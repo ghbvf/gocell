@@ -73,7 +73,10 @@ const (
 type DrainResult string
 
 const (
-	// DrainOK means the drain applied ≥1 event and advanced the checkpoint cleanly.
+	// DrainOK means the drain applied OR skipped-past (dead-lettered) ≥1 event and
+	// advanced the checkpoint. A drain that only skips poison events via
+	// skipPoisonEvent (#2110) also counts as DrainOK because drained++ is
+	// incremented on both the clean-apply and poison-skip paths.
 	DrainOK DrainResult = "ok"
 	// DrainHeadError means the head-bound fetch (replay.Head) failed, so the tick's
 	// replay upper bound is unknown and the drain aborts before any replay — no
@@ -103,6 +106,12 @@ const (
 	AdvanceStaleOwner AdvanceResult = "stale_owner"
 	// AdvanceError means the advance failed for another reason (tx/storage fault).
 	AdvanceError AdvanceResult = "error"
+	// AdvancePoisonSkip means the checkpoint advanced PAST a poison event (a
+	// permanent apply error) that was recorded to the dead-letter sink instead of
+	// applied (#2110). The advance succeeded; this value distinguishes "skipped a
+	// dead-lettered event" from "applied an event" (AdvanceOK) so operators alert
+	// on saga_journal_tailer_checkpoint_advance_total{result="poison_skip"} > 0.
+	AdvancePoisonSkip AdvanceResult = "poison_skip"
 )
 
 // NopObserver is the zero-cost default Observer. All methods are no-ops.

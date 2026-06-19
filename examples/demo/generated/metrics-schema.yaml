@@ -318,7 +318,7 @@ metrics:
       file: framework/runtime/observability/metrics/saga.go
     - name: saga_journal_tailer_checkpoint_advance_total
       type: counter
-      help: Total saga-journal tailer checkpoint AdvanceIfOwner attempts, labeled by result (ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault). Alert on result=error; exclude result=stale_owner.
+      help: Total saga-journal tailer checkpoint AdvanceIfOwner attempts, labeled by result (ok = committed; stale_owner = deposed-leader fence, benign; error = tx/storage fault; poison_skip = dead-lettered poison event, checkpoint advanced past it (#2110)). Alert on result=error; exclude result=stale_owner.
       labels:
         - cell
         - projection
