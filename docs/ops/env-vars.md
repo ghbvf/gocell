@@ -334,7 +334,7 @@ dumps.
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
 | `GOCELL_ENV` | Deployment environment label surfaced in the system information response | `unknown` | No | Free-form operator label such as `dev`, `staging`, or `prod`; it is TrimSpace-normalized and does not change startup mode or security posture. |
-| `GOCELL_DEPLOYED_AT` | Deployment timestamp surfaced in the system information response | — | No | Use an RFC 3339 timestamp such as `2026-06-19T08:30:00Z`. When unset, the endpoint reports deployment metadata as unavailable instead of guessing. |
+| `GOCELL_DEPLOYED_AT` | Deployment timestamp surfaced in the system information response | — | No | Use an RFC 3339 timestamp such as `2026-06-19T08:30:00Z`. When unset, the endpoint reports deployment metadata as unavailable instead of guessing. Invalid timestamps are also reported as unavailable with source `invalid:GOCELL_DEPLOYED_AT`; the raw invalid value is not exposed. |
 
 ## Adapter Mode
 

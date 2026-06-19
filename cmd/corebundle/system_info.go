@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"strings"
+	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
@@ -39,13 +41,18 @@ func systemInfoConfig(shared *composition.SharedDeps, asm *assembly.CoreAssembly
 }
 
 func deploymentInfoFromEnv() sysinfo.DeploymentInfo {
-	deployedAt := os.Getenv("GOCELL_DEPLOYED_AT")
+	deployedAt := strings.TrimSpace(os.Getenv("GOCELL_DEPLOYED_AT"))
 	if deployedAt == "" {
 		return sysinfo.DeploymentInfo{Available: false, Source: "unavailable"}
 	}
+	parsed, err := time.Parse(time.RFC3339Nano, deployedAt)
+	if err != nil {
+		return sysinfo.DeploymentInfo{Available: false, Source: "invalid:GOCELL_DEPLOYED_AT"}
+	}
+	normalized := parsed.UTC().Format(time.RFC3339Nano)
 	return sysinfo.DeploymentInfo{
 		Available:      true,
-		LastDeployedAt: &deployedAt,
+		LastDeployedAt: &normalized,
 		Source:         "env:GOCELL_DEPLOYED_AT",
 	}
 }

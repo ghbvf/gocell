@@ -77,7 +77,7 @@ func TestSystemView_ContextRoundTrip(t *testing.T) {
 
 func TestNormalizeEnv(t *testing.T) {
 	tests := map[string]string{
-		"":           EnvDev,
+		"":           EnvUnknown,
 		"dev":        EnvDev,
 		"staging":    EnvStaging,
 		"prod":       EnvProd,

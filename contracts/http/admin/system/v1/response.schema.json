@@ -136,6 +136,7 @@
             },
             "lastDeployedAt": {
               "type": ["string", "null"],
+              "format": "date-time",
               "description": "RFC3339 deployment timestamp when injected by the deployment platform."
             },
             "source": {

@@ -118,8 +118,10 @@ func (v *view) Report(context.Context) Report {
 // NormalizeEnv collapses deployment env input to the wire enum.
 func NormalizeEnv(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case EnvDev, "":
+	case EnvDev:
 		return EnvDev
+	case "":
+		return EnvUnknown
 	case EnvStaging:
 		return EnvStaging
 	case "production", EnvProd:

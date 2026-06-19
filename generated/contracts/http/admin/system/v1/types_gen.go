@@ -65,7 +65,8 @@ type ResponseDataEnvironment struct {
 
 // ResponseDataDeployment is a generated DTO for contract http.admin.system.v1.
 type ResponseDataDeployment struct {
-	Available      bool    `json:"available"`
+	Available bool `json:"available"`
+	// format: date-time
 	LastDeployedAt *string `json:"lastDeployedAt"`
 	Source         string  `json:"source"`
 }

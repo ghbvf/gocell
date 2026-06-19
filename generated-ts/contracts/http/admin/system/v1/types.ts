@@ -48,6 +48,6 @@ export interface ResponseDataEnvironment {
 
 export interface ResponseDataDeployment {
   available: boolean;
-  lastDeployedAt: string;
+  lastDeployedAt: string | null;
   source: string;
 }
