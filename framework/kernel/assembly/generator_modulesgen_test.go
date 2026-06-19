@@ -485,11 +485,14 @@ func brokerCellsFnBody(t *testing.T, content string) string {
 		t.Fatal("generatedBrokerCells() not found")
 	}
 	body := content[idx:]
-	end := strings.Index(body, "}")
+	// Match on the col-0 "\n}" so the span is the WHOLE function body (the first
+	// bare "}" would close the inner []string{...} literal, not the func), mirroring
+	// the FrameworkServedContracts helper.
+	end := strings.Index(body, "\n}")
 	if end < 0 {
 		t.Fatal("generatedBrokerCells() body not closed")
 	}
-	return body[:end+1]
+	return body[:end+2]
 }
 
 // TestGenerateModulesGen_CompositionForm_BrokerCellsEmitted verifies the composition
@@ -544,6 +547,48 @@ func TestGenerateModulesGen_CompositionForm_NoBrokerCells(t *testing.T) {
 	assert.Contains(t, content, "func generatedBrokerCells() []string")
 	assert.Contains(t, brokerCellsFnBody(t, content), "return nil",
 		"no amqp-transported usage → broker cells nil")
+}
+
+// TestGenerateModulesGen_CompositionForm_BrokerCellsDedupsMultiSlice verifies a cell
+// with amqp contractUsages spread across MULTIPLE slices appears exactly once
+// (cellSet dedup), exercising the cross-slice dedup branch.
+func TestGenerateModulesGen_CompositionForm_BrokerCellsDedupsMultiSlice(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	addBrokerTestContract(project, "event.session.created.v1", "event", "amqp")
+	addBrokerTestContract(project, "event.user.locked.v1", "event", "amqp")
+	// accesscore touches amqp via TWO distinct slices — must still appear once.
+	addBrokerTestSlice(project, "sessionlogin", "accesscore", "event.session.created.v1", "publish")
+	addBrokerTestSlice(project, "identitymanage", "accesscore", "event.user.locked.v1", "publish")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	body := brokerCellsFnBody(t, string(out))
+
+	assert.Equal(t, 1, strings.Count(body, `"accesscore"`),
+		"a cell with amqp usages across multiple slices must be listed exactly once")
+}
+
+// TestGenerateModulesGen_CompositionForm_BrokerCellsSkipsUnknownContract verifies a
+// contractUsage referencing a contract absent from the registry is skipped (no panic,
+// cell excluded) — the framework-wide skip pattern (deriveEventSubscribers).
+func TestGenerateModulesGen_CompositionForm_BrokerCellsSkipsUnknownContract(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// auditcore's only usage references a contract that was never registered.
+	addBrokerTestSlice(project, "auditappend", "auditcore", "event.does.not.exist.v1", "subscribe")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err, "unknown contract reference must not fail generation")
+	body := brokerCellsFnBody(t, string(out))
+
+	assert.NotContains(t, body, `"auditcore"`,
+		"a cell whose only usage references an unregistered contract is not a broker cell")
+	assert.Contains(t, body, "return nil", "no resolvable amqp usage → broker cells nil")
 }
 
 // ---------------------------------------------------------------------------

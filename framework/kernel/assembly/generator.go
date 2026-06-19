@@ -162,7 +162,10 @@ type modulesCompositionContext struct {
 	// contractUsages' referenced contract Transports, NOT from cell.yaml `requires`
 	// nor a role subset. Single source for the composition root's per-cell broker
 	// URL resolution (cmd/corebundle shared_deps → eventtransport.Resolve), replacing
-	// the former reuse of PostgresCells (#2365). The template ALWAYS emits
+	// the former reuse of PostgresCells (#2365). For example, a postgres-only cell with
+	// no amqp contractUsage is excluded (and never required to set
+	// GOCELL_<CELL>_AMQP_URL), while adding an event/command contractUsage auto-enrolls
+	// the cell on the next `gocell generate assembly`. The template ALWAYS emits
 	// generatedBrokerCells() (nil when empty) so the composition root can call it
 	// unconditionally.
 	BrokerCells []string
@@ -625,8 +628,15 @@ func (g *Generator) collectPostgresCells(cellRefs []metadata.AssemblyCellRef) []
 // role subset. Single source for cmd/corebundle's per-cell broker URL resolution
 // (#2365, replacing the former reuse of collectPostgresCells): a DB-only cell with no
 // amqp contract is correctly excluded, and a cell that gains an amqp contract is
-// auto-enrolled. Unknown contract references are skipped (validation raises them
-// elsewhere); the parser guarantees a non-empty Transports for every parsed contract.
+// auto-enrolled. It scans every project slice (filtered to this assembly's cells)
+// rather than iterating cellRefs because slice.yaml contractUsages are keyed by
+// sliceID, not cell — there is no cell-indexed usage view to walk, same as
+// collectOutboxProjectionTopics. Unknown contract references are skipped, consistent
+// with the framework's subscription derivation (metadata.deriveEventSubscribers, which
+// likewise skips usages of unregistered contracts): contract-reference validity is a
+// `gocell validate` concern, and a dangling usage wires no runtime pub/sub, so skipping
+// it here cannot orphan broker traffic. The parser guarantees a non-empty Transports
+// for every parsed contract.
 func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) []string {
 	inAssembly := make(map[string]bool, len(cellRefs))
 	for _, ref := range cellRefs {

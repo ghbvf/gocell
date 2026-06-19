@@ -78,10 +78,17 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// Colocated assemblies share one GOCELL_AMQP_URL → one connection (behavior-
 	// preserving); distinct per-cell URLs are fail-closed (egress-only — a single
 	// subscriber cannot consume N brokers).
-	brokerCells := make(map[string]string, len(generatedBrokerCells()))
-	for _, cellID := range generatedBrokerCells() {
+	brokerCellIDs := generatedBrokerCells()
+	brokerCells := make(map[string]string, len(brokerCellIDs))
+	for _, cellID := range brokerCellIDs {
 		brokerCells[cellID] = LoadBrokerURL(strings.ToUpper(cellID))
 	}
+	// Surface the codegen-derived broker cell set at startup so multi-cell broker
+	// deployments are diagnosable (which cells were classified broker cells). cell IDs
+	// are a non-sensitive closed set; the AMQP URLs (which carry credentials) are NOT
+	// logged — eventtransport redacts them (AMQP-URL-REDACTION-FUNNEL-01).
+	slog.InfoContext(ctx, "corebundle: broker cells (codegen-derived from amqp contractUsages)",
+		slog.Any("broker_cells", brokerCellIDs))
 	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: brokerCells})
 	if err != nil {
 		return nil, nil, err
