@@ -157,19 +157,36 @@ func TestDeviceIdentityRevoke_V1(t *testing.T) {
 func TestDeviceIdentityStatus_V1(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), "http.deviceidentity.status.v1")
 
-	// normal response (certRef issuer+serial)
+	// normal response — full column set: renewalTime is required (#2359) and nullable;
+	// its schema-valid "no value" is JSON null (not yet scheduled / unknown).
 	c.ValidateResponse(t, []byte(`{
 		"data": {
 			"deviceId": "dev-1", "certRef": {"issuer": "softca", "serial": "01ab"}, "status": "active",
-			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z", "epoch": 0
+			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z", "epoch": 0,
+			"renewalTime": null
+		}
+	}`))
+	// renewalTime carrying a scheduled timestamp (the non-null branch)
+	c.ValidateResponse(t, []byte(`{
+		"data": {
+			"deviceId": "dev-1", "certRef": {"issuer": "softca", "serial": "01ab"}, "status": "near-expiry",
+			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z", "epoch": 0,
+			"renewalTime": "2027-05-13T00:00:00Z"
 		}
 	}`))
 	c.MustRejectResponse(t, []byte(`{
 		"data": {
 			"deviceId": "dev-1", "certRef": {"issuer": "softca", "serial": "01ab"}, "status": "bogus",
+			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z", "epoch": 0,
+			"renewalTime": null
+		}
+	}`)) // bad status enum
+	c.MustRejectResponse(t, []byte(`{
+		"data": {
+			"deviceId": "dev-1", "certRef": {"issuer": "softca", "serial": "01ab"}, "status": "active",
 			"notBefore": "2026-06-13T00:00:00Z", "notAfter": "2027-06-13T00:00:00Z", "epoch": 0
 		}
-	}`))
+	}`)) // missing renewalTime (now required, #2359)
 
 	// query param validation (FMT-25 maxLength). Status is keyed solely by deviceId:
 	// serial/issuer are not query params (a bare serial is never a lookup key — epic #1895

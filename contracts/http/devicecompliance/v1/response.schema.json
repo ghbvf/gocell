@@ -15,7 +15,8 @@
         "antivirus",
         "patch",
         "firewall",
-        "observedAt"
+        "observedAt",
+        "tenantId"
       ],
       "properties": {
         "deviceId": {

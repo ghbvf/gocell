@@ -11,7 +11,7 @@
           "id": { "type": "string" },
           "label": { "type": "string" }
         },
-        "required": ["id"]
+        "required": ["id", "label"]
       }
     },
     "nextCursor": { "type": "string" },
