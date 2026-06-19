@@ -7,7 +7,8 @@ import (
 
 // RuntimeScopeConfig is the resolved, per-run scope context that bundles the
 // workspace root, target module path, framework/platform module paths, and
-// platform-cell scan directories into a single sealed value.
+// platform-cell scan directories into a single value whose fields are all
+// unexported.
 //
 // # Motivation and single-source guarantee
 //
@@ -20,12 +21,20 @@ import (
 // lock test (TestDefaultScopeConfig_ReproducesGoCellDefaults) pins each field
 // to its pre-#2329 value so behavior is byte-identical.
 //
-// # Sealed construction
+// # Construction (no out-of-package POPULATED value)
 //
-// All fields are unexported and the struct embeds the unexported [scopeConfigSeal]
-// marker field, which makes composite-literal construction outside this package a
-// compile error — the only legitimate mint site is the constructors in this file
-// (a Hard governance property per the ai-robust framework).
+// Every field is unexported, so an external package cannot populate a
+// RuntimeScopeConfig: both keyed (RuntimeScopeConfig{workspaceRoot: …}) and
+// positional composite literals fail to compile outside this package. The only
+// way to obtain a usable value is [DefaultScopeConfig] (the single mint site).
+// That closes the forgery threat — external code cannot fabricate a config with
+// an attacker-chosen targetModulePath.
+//
+// This is NOT an absolute construction ban: the zero value RuntimeScopeConfig{}
+// is still constructible anywhere (Go permits T{} for any struct), but it is
+// inert — every accessor returns ""/nil and it is never a valid config (see
+// TestRuntimeScopeConfig_ZeroValueIsInert). So the guarantee is "no forged
+// POPULATED value" (Hard, via the unexported fields), not "no value at all".
 //
 // # Relation to ConfigForExternalCell and future issues
 //
@@ -46,14 +55,7 @@ type RuntimeScopeConfig struct {
 	platformModulePath      string
 	platformCellsModulePath string
 	platformCellScanDirs    []string
-	_                       scopeConfigSeal
 }
-
-// scopeConfigSeal is the unexported marker that prevents package-external
-// composite-literal construction of [RuntimeScopeConfig]. Any attempt to
-// write archtest.RuntimeScopeConfig{…} outside this package produces a
-// compile error because the blank identifier field _ cannot be named.
-type scopeConfigSeal struct{}
 
 // WorkspaceRoot returns the resolved go.work workspace root (or the module
 // root for a single-module consumer repo). This is the same value returned by

@@ -97,3 +97,33 @@ func TestScopeConfig_ScanDirsDefensiveCopy(t *testing.T) {
 		t.Errorf("PlatformCellScanDirs() is not a defensive copy: caller mutation leaked, got %q want %q", again[0], PlatformCellsDir)
 	}
 }
+
+// TestRuntimeScopeConfig_ZeroValueIsInert documents the construction guarantee
+// honestly: the zero value RuntimeScopeConfig{} IS constructible anywhere (Go
+// permits T{} for any struct, even with all-unexported fields), but it is inert —
+// every accessor returns its empty zero, so it is never a usable config. Only
+// DefaultScopeConfig mints a populated value. The forgery guarantee that DOES
+// hold — external code cannot POPULATE a RuntimeScopeConfig with chosen field
+// values — is a compile-time property of the unexported fields, not assertable
+// here at runtime.
+func TestRuntimeScopeConfig_ZeroValueIsInert(t *testing.T) {
+	var zero RuntimeScopeConfig
+	if got := zero.WorkspaceRoot(); got != "" {
+		t.Errorf("zero.WorkspaceRoot() = %q, want empty", got)
+	}
+	if got := zero.TargetModulePath(); got != "" {
+		t.Errorf("zero.TargetModulePath() = %q, want empty", got)
+	}
+	if got := zero.FrameworkModulePath(); got != "" {
+		t.Errorf("zero.FrameworkModulePath() = %q, want empty", got)
+	}
+	if got := zero.PlatformModulePath(); got != "" {
+		t.Errorf("zero.PlatformModulePath() = %q, want empty", got)
+	}
+	if got := zero.PlatformCellsModulePath(); got != "" {
+		t.Errorf("zero.PlatformCellsModulePath() = %q, want empty", got)
+	}
+	if got := zero.PlatformCellScanDirs(); len(got) != 0 {
+		t.Errorf("zero.PlatformCellScanDirs() = %v, want empty", got)
+	}
+}

@@ -1,9 +1,10 @@
 # 049 archtest 可移植规则分类口径 + 迁移 roadmap（#1878-A）
 
-> **真值源指针**：本文档是时间点迁移计划，**不是**维护中的全量映射。  
-> 权威活口径 = #2330 代码注册表（`StandardCellRules()` 函数 + 外部安全 API）；  
-> 架构背景 ADR = `docs/architecture/202606041600-1555-adr-archtest-workspace-root-model.md`、`docs/architecture/202605281200-adr-cell-development-external-repo.md`；  
-> Epic = GitHub #1878；相关 issue = #2329（RuntimeScopeConfig）、#2330（注册表 API）、#2333（batch-1 迁移 PR）。
+> **真值源指针**：本文档是时间点迁移计划，**不是**维护中的全量映射。
+>
+> - 权威活口径 = #2330 代码注册表（`StandardCellRules()` 函数 + 外部安全 API）
+> - 架构背景 ADR = `docs/architecture/202606041600-1555-adr-archtest-workspace-root-model.md`、`docs/architecture/202605281200-adr-cell-development-external-repo.md`
+> - Epic = GitHub #1878；相关 issue = #2329（RuntimeScopeConfig）、#2330（注册表 API）、#2333（batch-1 迁移 PR）
 
 ---
 
@@ -108,34 +109,36 @@ scan dirs 四维合并为单一密封值，是规则迁移的运行时载体：
 
 ## 4. 迁移 roadmap
 
-### 4.1 Batch-1（近期，~10–15 条，供 #2333 直接执行）
+### 4.1 Batch-1 候选（**须经 §2 源码信号实证**后方可注册，供 #2333 起步）
 
-**标准**：已有 importable Check*，allowlist 为 GoCell-internal 包（`isGoCellPlatformPkgPath`
-绑定），在消费仓内 allowlist 为空，故整规则是纯 ban，可直接注册无副作用。
+**入选硬标准**（缺一不可，须**逐条按 §2 信号实证**——"importable + 未注册" 仅必要非充分）：
+① 规则逻辑在非 test `.go`（external module 可编译）；② 平台符号路径全派生自 `Platform*` const；
+③ allowlist **全部**经 `isGoCellPlatformPkgPath(pkgPath)` 绑定（消费仓内 allowlist 运行时为空 → 整规则退化纯 ban）；
+④ scan target = running module 自身——**无** `corecells/`/`generated/`/`contracts/` 路径域字面量、**无** reflect
+平台类型 / AST-parse 平台源 / conformance enrollment。
 
-以下是从 signal 判定口径（§2）和已有规则源码派生出的候选 rule-id。这是 **短暂性工作列表**，
-由 #2333 消费后失去维护价值，以实际 PR 合并结果为准：
+下表是从 §2 信号**初筛**的候选——**均未确认 ready**，#2333 须先逐条核源码（尤其标准④）再注册。这是 **短暂性
+工作列表**，以实际 PR 合并结果为准：
 
-| Rule ID | 当前状态 | 迁移阻力 | 备注 |
-|---|---|---|---|
-| `CLOCK-POSITIONAL-INJECTION-01` | importable，未注册 | 低 | allowlist = composition-root carve-outs（GoCell-internal）→ 外部仓无豁免位，纯 ban；godoc 注明"vacuous/false-red 外部"但实为 allowlist 全空 = 纯 ban 而非假通过，须复核 |
-| `BCRYPT-COST-FUNNEL-01` A1 臂 | importable，未注册 | 中 | A1 callee-location 绑 `credential/hasher.go`（GoCell-internal）→ 纯 ban；A2 allowlist 含 GoCell 测试路径，注册时考虑拆臂 |
-| `AUTHZ-MUTATION-APPLY-FUNNEL-01` | importable，未注册 | 中 | allowlist 绑 `PlatformCellsModulePath/accesscore/internal/...`（isGoCellPlatformPkgPath 派生），外部仓无豁免 → 纯 ban；须确认 scan target = 消费仓模块 |
-| `DOMAIN-AUTHZ-FIELD-PRIVATE-01` | importable，未注册 | 中 | 扫 domain.User 类型，allowlist 绑 accesscore internal，外部仓 → 消费仓如无同名 domain.User 则 vacuous-green，须标注此盲区 |
-| `AFTERCOMMIT-HOOK-PURE-TRANSIENT-01` | importable，未注册 | 中-高 | A3 drain-caller allowlist 含 GoCell-internal TxRunner 路径；注册前须支持 `ConfigForExternalCell.ExtraAllowlist` 或改为纯 ban（`RegisterAfterCommit` 调用即报，无豁免）—— 二选一 |
-| `ERRCODE-PREFIX-OWNERSHIP-01` | importable，未注册 | 高 | 扫 `pkg/errcode/testdata/prefix_set.golden`（GoCell-internal 文件），外部仓该文件不存在 → false-red；需 `RuntimeScopeConfig` 参数化 golden 路径才可迁移；归 conditional 桶或 batch-2 |
+| Rule ID | 当前状态 | 待实证项（注册前 #2333 须核） |
+|---|---|---|
+| `BCRYPT-COST-FUNNEL-01` A1 臂 | importable，未注册 | A1 callee-location 绑 `credential/hasher.go`（GoCell-internal）疑似纯 ban；A2 allowlist 含 GoCell 测试路径 → 须**拆臂**后单独注册 A1 |
+| `AUTHZ-MUTATION-APPLY-FUNNEL-01` | importable，未注册 | allowlist 绑 `PlatformCellsModulePath/accesscore/internal/...`（isGoCellPlatformPkgPath 派生）疑似纯 ban；**须核** scan target = 消费仓模块而非硬编码平台路径 |
 
-> **注**：上表为派生候选，不是冻结清单。`CLOCK-POSITIONAL-INJECTION-01`
-> 须在 #2333 中实证：若 carve-out allowlist 经 `isGoCellPlatformPkgPath` 绑定，则为纯 ban；
-> 若为路径字面量，则归 conditional 桶先行参数化。
+> **移出 batch-1 → batch-2 conditional（须先参数化，非零改动）**：
+> `ERRCODE-PREFIX-OWNERSHIP-01`（扫 `pkg/errcode/testdata/prefix_set.golden`，外部仓无该文件 → false-red，须
+> `RuntimeScopeConfig` 参数化 golden 路径）；`AFTERCOMMIT-HOOK-PURE-TRANSIENT-01`（A3 drain-caller allowlist 含
+> GoCell-internal TxRunner 路径，须支持 `ConfigForExternalCell.ExtraAllowlist` 或改纯 ban）。
 >
-> **对比反例（不进 batch-1）**：`DISTLOCK-LOCK-NOT-CONTEXT-01` 经 §2 信号判定归 gocell-internal
-> ——self-check（`runtime/distlock.Lock` 不 implement `context.Context`），scan scope = GoCell
-> framework module，消费仓无该目标类型 → vacuous-green，不可迁移。列此仅示口径如何排除 self-check
-> 类规则，**不是** batch-1 工作项。
+> **排除（§2 信号判定为 gocell-internal，永不迁移）**——示范口径如何过滤 vacuous-green / self-check 类：
+> `CLOCK-POSITIONAL-INJECTION-01`（`tools/archtest/clock_invariants.go` 硬编码 GoCell carve-out，外部仓
+> vacuous-green）；`DOMAIN-AUTHZ-FIELD-PRIVATE-01`（`domain_authz_mutation_funnel_invariants.go` 硬编码
+> `./corecells/accesscore/internal/domain`，消费仓无同名 `domain.User` → vacuous-green）；
+> `DISTLOCK-LOCK-NOT-CONTEXT-01`（self-check `runtime/distlock.Lock` 不 implement `context.Context`，消费仓无
+> 该目标类型 → vacuous-green）。
 
-**真正适合 batch-1 的核心条件**：allowlist 要么为空（纯 ban），要么全部经 `isGoCellPlatformPkgPath`
-绑定（消费仓无对应包 → allowlist 运行时为空 → 等价纯 ban）。满足此条件的规则零改动可注册。
+**核心闭环**：候选**不靠 "importable+未注册" 入选**，而须按 §2 机读信号（尤其标准③④）实证为消费仓纯 ban——
+未过实证者归 batch-2 参数化或排除，避免 #2333 从含 vacuous-green 的错误工作列表起步。
 
 ### 4.2 Batch-2（signal-category，conditional 类，不逐一枚举）
 
