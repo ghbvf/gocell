@@ -1,6 +1,8 @@
 package assembly
 
 import (
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +13,11 @@ import (
 )
 
 const acmePayModule = "github.com/acme/payment-cell"
+
+// zzzExtraModule sorts AFTER github.com/ghbvf/gocell/framework/runtime/* (z > g),
+// so its cellmodule import must render after the framework imports — the case the
+// acme fixture (acme < ghbvf) cannot exercise. Used by #2429's sort-order test.
+const zzzExtraModule = "github.com/zzz/extra-cell"
 
 // buildCrossModuleProject builds a compositionAPI assembly that mixes a
 // same-module cell (configcore) and a cross-module cell (payment, sourced from
@@ -126,4 +133,84 @@ func TestModuleOfAndImportPath(t *testing.T) {
 		cellModuleImportPath(g.moduleOf(same), same.ID))
 	assert.Equal(t, acmePayModule+"/cellmodules/payment",
 		cellModuleImportPath(g.moduleOf(cross), cross.ID))
+}
+
+// TestGenerateModulesGen_CrossModuleImportPathSortOrder is #2429's anti-vacuity
+// guard for the WHOLE-block path sort: compositionImportLines must order the
+// import block by import PATH, including a cross-module cellmodule path that sorts
+// AFTER the framework runtime imports. The acme fixture (github.com/acme/... <
+// github.com/ghbvf/...) only exercises a cellmodule that sorts BEFORE framework, so
+// it cannot prove the after-framework case the helper's godoc relies on. Against
+// the pre-#2429 generator (cellmodule imports sorted as one leading block, then
+// framework imports hardcoded last) the zzz cellmodule would render BEFORE
+// composition — so this test is genuinely red there.
+func TestGenerateModulesGen_CrossModuleImportPathSortOrder(t *testing.T) {
+	const currentModule = "github.com/ghbvf/gocell"
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			metadatatest.CellIDConfigCore:   {ID: metadatatest.CellIDConfigCore},
+			metadatatest.NewCellID("extra"): {ID: metadatatest.NewCellID("extra")},
+		},
+		Slices:    make(map[string]*metadata.SliceMeta),
+		Contracts: make(map[string]*metadata.ContractMeta),
+		Journeys:  make(map[string]*metadata.JourneyMeta),
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"zzzbundle": {
+				ID: "zzzbundle",
+				Cells: []metadata.AssemblyCellRef{
+					{ID: metadatatest.CellIDConfigCore},
+					{ID: metadatatest.NewCellID("extra"), Module: zzzExtraModule},
+				},
+				Build: metadata.BuildMeta{CompositionAPI: true},
+				File:  "assemblies/zzzbundle/assembly.yaml",
+			},
+		},
+	}
+	// Require a capability so all three framework imports are present — the sort
+	// must interleave bootstrap/capability/composition AND the after-framework
+	// cross-module cellmodule into one ascending block.
+	project.Cells[metadatatest.CellIDConfigCore].Requires = []string{"postgres"}
+
+	out, err := NewGenerator(project, currentModule, "").GenerateModulesGen("zzzbundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	posComposition := indexOfStr(content, `"github.com/ghbvf/gocell/framework/runtime/composition"`)
+	posZzz := indexOfStr(content, zzzExtraModule+"/cellmodules/extra")
+	require.GreaterOrEqual(t, posComposition, 0, "composition import must be present")
+	require.GreaterOrEqual(t, posZzz, 0, "cross-module extra import must be present")
+	assert.Less(t, posComposition, posZzz,
+		"a cross-module cellmodule path sorting after framework/* must render AFTER composition (#2429 whole-block path sort)")
+
+	// Stronger anti-vacuity teeth: the entire import block must be in strict
+	// ascending import-path order — this also re-catches the original
+	// capability-before-bootstrap defect.
+	assertImportBlockSorted(t, content)
+}
+
+// assertImportBlockSorted extracts the single import(...) block from generated Go
+// and asserts the import paths are in ascending order (gofumpt's ordering for a
+// single import group). Each line is either `alias "path"` or bare `"path"`; the
+// path is the quoted segment.
+func assertImportBlockSorted(t *testing.T, content string) {
+	t.Helper()
+	open := indexOfStr(content, "import (")
+	require.GreaterOrEqual(t, open, 0, "generated file must have an import block")
+	rest := content[open+len("import ("):]
+	closeIdx := strings.IndexByte(rest, ')')
+	require.GreaterOrEqual(t, closeIdx, 0, "import block must be closed")
+	var paths []string
+	for _, line := range strings.Split(rest[:closeIdx], "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		q1 := strings.IndexByte(line, '"')
+		q2 := strings.LastIndexByte(line, '"')
+		require.True(t, q1 >= 0 && q2 > q1, "import line must carry a quoted path: %q", line)
+		paths = append(paths, line[q1+1:q2])
+	}
+	require.NotEmpty(t, paths, "import block must list at least one import")
+	assert.True(t, sort.StringsAreSorted(paths),
+		"import block must be in ascending path order (gofumpt-canonical), got: %v", paths)
 }

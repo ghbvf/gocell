@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
@@ -68,7 +69,7 @@ func newMuxOver(t *testing.T, store ports.Registry) http.Handler {
 	if err != nil {
 		t.Fatalf("NewCursorCodec: %v", err)
 	}
-	svc, err := NewService(store, c, query.RunModeDemo, nil)
+	svc, err := NewService(store, outbox.DemoCellTxManager(), c, query.RunModeDemo, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

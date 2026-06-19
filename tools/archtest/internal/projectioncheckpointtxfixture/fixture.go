@@ -42,3 +42,25 @@ func (b *badCheckpointStore) SaveOffset(ctx context.Context, cellID, projectionI
 
 // compile-time interface check.
 var _ projection.CheckpointStore = (*badCheckpointStore)(nil)
+
+// badDeadLetterStore is a fake projection.DeadLetterStore that illegally
+// holds a *pgxpool.Pool field instead of going through an ambient-tx funnel.
+// VIOLATION: struct field of type *pgxpool.Pool in a DeadLetterStore impl.
+// PROJECTION-CHECKPOINT-TX-BOUND-01 must fire on the pool field.
+type badDeadLetterStore struct {
+	pool *pgxpool.Pool // VIOLATION: raw *pgxpool.Pool field in DeadLetterStore impl
+}
+
+// Record inserts a dead-letter row by calling pool.Exec directly instead of
+// using an ambient tx. VIOLATION: raw pool.Exec call bypasses ambient transaction.
+func (b *badDeadLetterStore) Record(ctx context.Context, dl projection.DeadLetter) error {
+	_, err := b.pool.Exec(
+		ctx,
+		"INSERT INTO saga_dead_letters(cell_id, projection_id, global_seq) VALUES($1,$2,$3)",
+		dl.CellID, dl.ProjectionID, dl.GlobalSeq,
+	)
+	return err
+}
+
+// compile-time interface check.
+var _ projection.DeadLetterStore = (*badDeadLetterStore)(nil)

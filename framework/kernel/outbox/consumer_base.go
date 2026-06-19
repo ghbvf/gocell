@@ -370,14 +370,16 @@ func deliveryFrom(r HandleResult) DeliveryOutcome {
 // by exponential backoff + jitter. Safe from duplicates, but all consumption
 // stops until the idempotency backend recovers.
 //
-// Rules:
+// Rules for normal subscriptions:
 //   - handler returns DispositionAck -> pass through as Ack
-//   - handler returns DispositionRequeue -> pass through as Requeue
-//   - handler returns DispositionReject -> pass through as Reject
-//   - handler returns error with non-Ack disposition -> retry with backoff
-//   - DispositionReject (handler-explicit) -> Reject (broker routes to DLX)
+//   - handler returns DispositionReject -> pass through as Reject (broker routes to DLX)
+//   - handler returns DispositionRequeue or any non-Ack transient result -> retry with backoff
 //   - retry budget exhausted -> Reject with ProcessReason="retry_exhausted"
 //   - ctx canceled / shutdown -> Requeue
+//
+// Rules for broker-delay subscriptions (BrokerDelaySchedule non-empty):
+// ConsumerBase runs the handler exactly once and passes Ack / Requeue / Reject
+// through verbatim because the transport owns retry timing and budget.
 //
 // Wrap lifts a business EntryHandler into a SubscriberHandler that includes
 // idempotency claim/release and retry logic. The returned SubscriberHandler

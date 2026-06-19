@@ -94,7 +94,7 @@ func TestSagaTailerCollector_ObserveDrainAndAdvance(t *testing.T) {
 		c.ObserveDrain(context.Background(), tlProj, r)
 	}
 	advanceResults := []tailer.AdvanceResult{
-		tailer.AdvanceOK, tailer.AdvanceStaleOwner, tailer.AdvanceError,
+		tailer.AdvanceOK, tailer.AdvanceStaleOwner, tailer.AdvanceError, tailer.AdvancePoisonSkip,
 	}
 	for _, r := range advanceResults {
 		c.ObserveCheckpointAdvance(context.Background(), tlProj, r)

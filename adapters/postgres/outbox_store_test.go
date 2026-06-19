@@ -609,12 +609,20 @@ func TestPGOutboxStore_OldestEligibleAt_Found(t *testing.T) {
 	t.Parallel()
 	want := time.Now().UTC().Truncate(time.Second)
 	for _, tc := range []struct {
-		name   string
-		status kout.State
-		colSub string // substring expected in the generated SQL column name
+		name      string
+		status    kout.State
+		wantQuery string
 	}{
-		{"published", kout.StatePublished, "published_at"},
-		{"dead", kout.StateDead, "dead_at"},
+		{
+			name:      "published",
+			status:    kout.StatePublished,
+			wantQuery: "SELECT MIN(published_at) FROM outbox_entries WHERE status = $1",
+		},
+		{
+			name:      "dead",
+			status:    kout.StateDead,
+			wantQuery: "SELECT MIN(dead_at) FROM outbox_entries WHERE status = $1",
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -632,8 +640,7 @@ func TestPGOutboxStore_OldestEligibleAt_Found(t *testing.T) {
 
 			require.Len(t, db.queryRowSQLs, 1)
 			qc := db.queryRowSQLs[0]
-			assert.Contains(t, qc.sql, tc.colSub, "SQL must select the right column for %s", tc.name)
-			assert.Contains(t, qc.sql, "status = $1", "SQL must filter by status parameter")
+			assert.Equal(t, tc.wantQuery, qc.sql)
 			assert.Equal(t, tc.status.String(), qc.args[0], "status arg must be the wire string")
 		})
 	}

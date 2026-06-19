@@ -41,7 +41,7 @@ func TestDiscoverTests_ReturnsNames(t *testing.T) {
 			require.Contains(t, args, "-list", "discover should pass -list")
 			return []byte("TestAlpha\nTestBeta\nTestGamma\nok  ./tools/archtest\t0.001s\n"), nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	tests, err := e.discoverTests(context.Background(), t.TempDir())
@@ -54,7 +54,7 @@ func TestDiscoverTests_ZeroDiscovered_Error(t *testing.T) {
 		exec: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
 			return []byte("ok  ./tools/archtest\t0.001s\n"), nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	_, err := e.discoverTests(context.Background(), t.TempDir())
@@ -67,7 +67,7 @@ func TestDiscoverTests_RunError_Error(t *testing.T) {
 		exec: func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
 			return nil, errors.New("go tool not found")
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	_, err := e.discoverTests(context.Background(), t.TempDir())
@@ -84,7 +84,7 @@ func TestExecGoTest_PassesTimeoutAndRunFlag(t *testing.T) {
 			capturedArgs = args
 			return []byte(`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}`), nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	req := Request{WorkspaceRoot: t.TempDir(), Timeout: "3m"}
@@ -133,7 +133,7 @@ func TestLayerA(t *testing.T) {}
 	)
 	e := engine{
 		exec:    fakeExec("TestLayerA\n", execOut, nil),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
@@ -175,7 +175,7 @@ func TestLayerB(t *testing.T) {}
 	fakeExitErr := &exec.ExitError{}
 	e := engine{
 		exec:    fakeExec("TestLayerA\nTestLayerB\n", execOut, fakeExitErr),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	report, err := e.run(context.Background(), Request{WorkspaceRoot: root})
@@ -214,7 +214,7 @@ func TestFoo(t *testing.T) {}
 	infraErr := errors.New("context deadline exceeded")
 	e := engine{
 		exec:    fakeExec("TestFoo\n", nil, infraErr),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	_, err := e.run(context.Background(), Request{WorkspaceRoot: root})
@@ -254,7 +254,7 @@ func TestFoo(t *testing.T) {}
 	fakeExitErr := &exec.ExitError{}
 	e := engine{
 		exec:    fakeExec("TestFoo\n", buildFailOutput, fakeExitErr),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	_, err := e.run(context.Background(), Request{WorkspaceRoot: root})
@@ -291,7 +291,7 @@ func TestFoo(t *testing.T) {}
 	)
 	e := engine{
 		exec:    fakeExec("TestFoo\n", buildFailOutput, &exec.ExitError{}),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
@@ -330,7 +330,7 @@ func TestFoo(t *testing.T) {}
 	)
 	e := engine{
 		exec:    fakeExec("TestFoo\n", execOut, nil),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
@@ -372,7 +372,7 @@ func TestFoo(t *testing.T) {}
 	// Stub returns empty output — simulates a subprocess that wrote nothing.
 	e := engine{
 		exec:    fakeExec("TestFoo\n", []byte{}, nil),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
@@ -408,7 +408,7 @@ func TestFoo(t *testing.T) {}
 	execOut := []byte(`{"Action":"pass","Test":"TestFoo","Elapsed":0.1}` + "\n")
 	e := engine{
 		exec:    fakeExec("TestFoo\n", execOut, nil),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	// Path under a nonexistent directory — os.Create must fail.
@@ -451,7 +451,7 @@ func TestLayerOnly(t *testing.T) {}
 			t.Error("execGoTest should not be called when selection is empty")
 			return nil, nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	req := Request{WorkspaceRoot: root, Rule: "LAYER-05"}
@@ -492,7 +492,7 @@ func TestLayerOnly(t *testing.T) {}
 			t.Error("execGoTest should not be called when selection is empty")
 			return nil, nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	jsonOutPath := filepath.Join(t.TempDir(), "events.json")
@@ -523,7 +523,7 @@ func TestListTests_ReturnsSelectedNames(t *testing.T) {
 			t.Error("execGoTest must not be called from ListTests")
 			return nil, nil
 		},
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	names, err := e.listTests(context.Background(), Request{WorkspaceRoot: root})
@@ -543,7 +543,7 @@ func TestListTests_WithShard(t *testing.T) {
 	// shard 0: [TestBeta, TestGamma].
 	e := engine{
 		exec:    fakeDiscoverExec("TestAlpha", "TestBeta", "TestGamma", "TestDelta"),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	names, err := e.listTests(context.Background(), Request{
@@ -614,8 +614,9 @@ func TestAlphaX(t *testing.T) {}
 	assert.False(t, execCalled, "exec subprocess must not be called when changed set is empty")
 }
 
-// TestApplyFilters_Changed_Subset verifies that Changed=true with a subset of
-// archtest files intersects correctly with the discovered tests.
+// TestApplyFilters_Changed_Subset verifies the full run path under source-aware
+// --changed: a change confined to one rule's scan domain selects that rule and
+// excludes a rule scoped to an unrelated area.
 func TestApplyFilters_Changed_Subset(t *testing.T) {
 	if os.Getenv("GOWORK") == "off" {
 		t.Skip("GOWORK=off")
@@ -630,7 +631,7 @@ package archtest
 
 import "testing"
 
-func TestAlphaX(t *testing.T) {}
+func TestAlphaX(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil) }
 `,
 		"beta_test.go": `//go:build archtest
 
@@ -640,7 +641,7 @@ package archtest
 
 import "testing"
 
-func TestBetaX(t *testing.T) {}
+func TestBetaX(t *testing.T) { Run(t, Typed(TypedOpts{}, []string{"./framework/kernel/..."}), nil) }
 `,
 	})
 
@@ -650,9 +651,9 @@ func TestBetaX(t *testing.T) {}
 	)
 	e := engine{
 		exec: fakeExec("TestAlphaX\nTestBetaX\n", execOut, nil),
-		// Only alpha_test.go changed — BetaX must be excluded.
+		// A source change under adapters/redis affects only the redis-scoped rule.
 		changed: func(_ context.Context, _ string) ([]string, error) {
-			return []string{"tools/archtest/alpha_test.go"}, nil
+			return []string{"adapters/redis/client.go"}, nil
 		},
 	}
 
@@ -661,7 +662,7 @@ func TestBetaX(t *testing.T) {}
 	require.NoError(t, err)
 	assert.True(t, report.Passed)
 	assert.Equal(t, []string{"TestAlphaX"}, report.Selected,
-		"only tests from changed files should be selected")
+		"only rules whose scan domain contains the changed source should be selected")
 }
 
 // ---- resolveSelected via seam: rule-based selection ----
@@ -697,7 +698,7 @@ func TestBetaX(t *testing.T) {}
 
 	e := engine{
 		exec:    fakeDiscoverExec("TestAlphaX", "TestBetaX"),
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 
 	// Verify rule-based selection.

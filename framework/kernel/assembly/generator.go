@@ -533,39 +533,71 @@ func cellModuleImportPath(module, cellID string) string {
 	return module + "/cellmodules/" + cellID
 }
 
-// generateModulesGenComposition emits the composition.CellModule form used by
-// platform assemblies (assembly.yaml build.compositionAPI: true).
-// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
-func (g *Generator) generateModulesGenComposition(
-	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
-) ([]byte, error) {
-	moduleCalls := make([]string, 0, len(asm.Cells))
-	importLines := make([]string, 0, len(asm.Cells))
-	seen := make(map[string]bool, len(asm.Cells))
-	for _, ref := range asm.Cells {
-		cm := g.cells.Get(ref.ID)
-		if cm == nil {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
+// compositionImportLines builds the rendered import lines and the Module() call
+// list for the composition modules_gen.go. The import block is sorted by import
+// PATH (not by the rendered line) so it is gofumpt-canonical regardless of
+// cell-declaration order AND regardless of whether a cross-module (#1083)
+// cellmodule path sorts before or after the framework runtime imports: cellmodule
+// lines carry an alias while the framework imports are bare, so a plain string
+// sort over the rendered lines would put every bare `"..."` line ahead of any
+// aliased line and break path order — the defect behind #2429. moduleCalls stay
+// in assembly.yaml cell order for deterministic output; that order is NOT
+// runtime-significant (the former auditcore→accesscore BootstrapLedgerStore
+// handoff was removed in #1423 — cross-cell wiring is now event-driven).
+func (g *Generator) compositionImportLines(
+	assemblyID string, cells []metadata.AssemblyCellRef, hasCapabilities bool,
+) (importLines, moduleCalls []string, err error) {
+	type genImport struct{ path, line string }
+	imports := make([]genImport, 0, len(cells)+3)
+	moduleCalls = make([]string, 0, len(cells))
+	seen := make(map[string]bool, len(cells))
+	for _, ref := range cells {
+		if g.cells.Get(ref.ID) == nil {
+			return nil, nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				msgAssemblyUnknownCell,
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		alias := "cellmodules" + ref.ID
 		if !seen[ref.ID] {
 			seen[ref.ID] = true
-			importLines = append(importLines, fmt.Sprintf("%s %q",
-				alias, cellModuleImportPath(g.moduleOf(ref), ref.ID)))
+			path := cellModuleImportPath(g.moduleOf(ref), ref.ID)
+			imports = append(imports, genImport{path: path, line: fmt.Sprintf("%s %q", alias, path)})
 		}
 		moduleCalls = append(moduleCalls, alias+".Module()")
 	}
-	// Sort import lines by their (alias, path) string so the rendered import
-	// block is gofmt-clean regardless of cell declaration order. The alias is
-	// "platform"+cellID and the path ends in /cellmodules/cellID, so string-sorting
-	// the import lines matches gofmt's path-based ordering. moduleCalls stay in
-	// cell (assembly.yaml) order for deterministic, predictable output — that
-	// order is NOT runtime-significant: the former auditcore→accesscore
-	// BootstrapLedgerStore handoff was removed in #1423 (cross-cell wiring is now
-	// event-driven), so module Provide order carries no runtime dependency.
-	sort.Strings(importLines)
+	// bootstrap (TopologyGroup) and composition (CellModule) are always referenced
+	// by the template body; capability only when the assembly has a non-empty
+	// capability union — emitting it unconditionally would be an unused import for
+	// cap-less assemblies, so it is gated on the same condition as
+	// generatedCapabilities().
+	frameworkImports := []string{
+		"github.com/ghbvf/gocell/framework/runtime/bootstrap",
+		"github.com/ghbvf/gocell/framework/runtime/composition",
+	}
+	if hasCapabilities {
+		frameworkImports = append(frameworkImports, "github.com/ghbvf/gocell/framework/runtime/capability")
+	}
+	for _, p := range frameworkImports {
+		imports = append(imports, genImport{path: p, line: fmt.Sprintf("%q", p)})
+	}
+	sort.Slice(imports, func(i, j int) bool { return imports[i].path < imports[j].path })
+	importLines = make([]string, len(imports))
+	for i, imp := range imports {
+		importLines[i] = imp.line
+	}
+	return importLines, moduleCalls, nil
+}
+
+// generateModulesGenComposition emits the composition.CellModule form used by
+// platform assemblies (assembly.yaml build.compositionAPI: true).
+// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
+func (g *Generator) generateModulesGenComposition(
+	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
+) ([]byte, error) {
+	importLines, moduleCalls, err := g.compositionImportLines(assemblyID, asm.Cells, len(capConsts) > 0)
+	if err != nil {
+		return nil, err
+	}
 	projTopics, err := g.collectOutboxProjectionTopics(asm.Cells)
 	if err != nil {
 		return nil, err

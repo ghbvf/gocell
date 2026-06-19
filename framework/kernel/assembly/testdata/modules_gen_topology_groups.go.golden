@@ -7,6 +7,7 @@ import (
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
@@ -15,6 +16,18 @@ func generatedCellModules() []composition.CellModule {
 		cellmodulesaccesscore.Module(),
 		cellmodulesauditcore.Module(),
 		cellmodulesconfigcore.Module(),
+	}
+}
+
+// generatedCapabilities lists the assembly-level shared infrastructure
+// capabilities — the sorted union of the assembly cells' cell.yaml `requires`.
+// The composition root provisions each once and injects the resulting
+// runtime/capability provider into consuming modules. Emitted iff the union is
+// non-empty: an assembly whose cells require nothing has no provisioner to call
+// it, so the function (and its capability import) are omitted to avoid dead code.
+func generatedCapabilities() []capability.Kind {
+	return []capability.Kind{
+		capability.Postgres,
 	}
 }
 
@@ -41,7 +54,9 @@ func generatedProjectionSourceTopics() []string {
 // unconditionally. Derived by `gocell generate assembly`; `--verify` red-flags stale
 // output (#1964 per-cell infra seam).
 func generatedPostgresCells() []string {
-	return nil
+	return []string{
+		"accesscore",
+	}
 }
 
 // generatedBrokerCells is the sorted list of cell IDs that produce or consume at

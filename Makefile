@@ -259,6 +259,7 @@ test-integration:
 		./accesscore/... \
 		./configcore/... \
 		./auditcore/... \
+		./registrycore/... \
 		-count=1 -timeout 15m -v
 
 # ---------------------------------------------------------------------------

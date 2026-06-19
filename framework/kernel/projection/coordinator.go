@@ -2,7 +2,6 @@ package projection
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -401,19 +400,16 @@ func (c *Coordinator) openGate() {
 	}
 }
 
-// classify maps an error to the appropriate HandleResult disposition.
+// classify maps an error to the appropriate HandleResult disposition. The
+// permanent-vs-transient predicate is outbox.IsPermanent — the single source
+// shared with the saga-journal Tailer, so the two projection drivers cannot
+// drift on what "permanent" means.
 func classify(err error) outbox.HandleResult {
 	if err == nil {
 		return outbox.Ack()
 	}
-	if isPermanent(err) {
+	if outbox.IsPermanent(err) {
 		return outbox.Reject(err)
 	}
 	return outbox.Requeue(err)
-}
-
-// isPermanent reports whether err is or wraps an *outbox.PermanentError.
-func isPermanent(err error) bool {
-	var pe *outbox.PermanentError
-	return errors.As(err, &pe)
 }
