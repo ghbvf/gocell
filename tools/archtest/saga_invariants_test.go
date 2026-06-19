@@ -3902,12 +3902,8 @@ func TestSagaTailerDrainErrorsAlertCoversAllNonOKDrainResults(t *testing.T) {
 	require.Contains(t, alerting, "by (cell, projection, result)",
 		"result must remain a grouping label so head/store/apply failures are directly actionable")
 
-	for _, result := range sagaTailerNonOKDrainResults() {
-		require.Contains(t, alerting, result,
-			"GoCellSagaTailerDrainErrors must cover non-ok drain result %q", result)
-	}
-	require.NotContains(t, alerting, `result=~"ok`,
-		"the drain-error alert must not page on healthy ok drains")
+	require.Equal(t, sagaTailerNonOKDrainResults(), sagaAlertResultMatcherValues(t, alerting),
+		"GoCellSagaTailerDrainErrors must match exactly DrainResult - {ok}")
 }
 
 func TestSagaTailerDrainErrorsRunbookCoversAllNonOKDrainResults(t *testing.T) {
@@ -3929,6 +3925,19 @@ func sagaTailerNonOKDrainResults() []string {
 	out = slices.DeleteFunc(out, func(v string) bool { return v == "ok" })
 	sort.Strings(out)
 	return out
+}
+
+func sagaAlertResultMatcherValues(t *testing.T, alertSection string) []string {
+	t.Helper()
+	const marker = `result=~"`
+	start := strings.Index(alertSection, marker)
+	require.NotEqual(t, -1, start, "missing result regex matcher")
+	start += len(marker)
+	end := strings.Index(alertSection[start:], `"`)
+	require.NotEqual(t, -1, end, "unterminated result regex matcher")
+	values := strings.Split(alertSection[start:start+end], "|")
+	sort.Strings(values)
+	return values
 }
 
 func sagaDocSection(t *testing.T, doc, heading string) string {
