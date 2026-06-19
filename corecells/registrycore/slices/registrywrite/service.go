@@ -277,9 +277,13 @@ type Handler struct {
 	h *submit.Handler
 }
 
-// NewHandler builds the route handler with the registry:submit permission policy.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{h: submit.NewHandler(svc, auth.RequirePermission(authz.PermRegistrySubmit()))}
+// NewHandler builds the route handler. Authorization is contract-derived
+// (#2205, 303-US7 migration): the cell-level authz.MethodPolicyResolver is built
+// by cellgen from endpoints.http.permission (registry:submit) and injected by the
+// composition root, replacing the previously hand-wired
+// auth.RequirePermission(authz.PermRegistrySubmit()) policy.
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
+	return &Handler{h: submit.NewHandler(svc, resolver)}
 }
 
 // RegisterRoutes mounts the contract on mux via the generated handler.

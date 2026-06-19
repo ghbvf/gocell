@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 var _ cell.Cell = (*RegistryCore)(nil)
@@ -30,6 +31,19 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.registry.contract.approve.v1": "registry:approve",
+	"http.registry.contract.list.v1":    "registry:read",
+	"http.registry.contract.reject.v1":  "registry:reject",
+	"http.registry.contract.retire.v1":  "registry:retire",
+	"http.registry.contract.submit.v1":  "registry:submit",
+})
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *RegistryCore) Init(ctx context.Context, reg cell.Registrar) error {
@@ -54,6 +68,7 @@ func (c *RegistryCore) Init(ctx context.Context, reg cell.Registrar) error {
 			mux.Route("/contracts", func(s cell.RouteMux) {
 				captureErr(c.writeHandler.RegisterRoutes(s))
 				captureErr(c.readHandler.RegisterRoutes(s))
+				captureErr(c.adminHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

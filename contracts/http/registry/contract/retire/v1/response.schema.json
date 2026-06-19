@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.retire.v1.response",
+  "description": "The contract registration after the retire transition, projected from the kernel ContractRegistration (state advanced to 'retired', a terminal state).",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "submitter",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "Lifecycle state; the sealed RegistrationState wire spelling (after retire: 'retired')."
+        },
+        "submitter": {
+          "type": "string",
+          "description": "Authenticated principal subject that submitted the registration."
+        },
+        "approver": {
+          "type": "string",
+          "description": "Authenticated admin subject that approved the registration before it was activated and retired."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

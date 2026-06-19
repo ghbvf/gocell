@@ -32,6 +32,7 @@ endpoints:
         type: string
         required: false
         maxLength: 32
+    permission: registry:read
     successStatus: 200
     auth:
       responses:

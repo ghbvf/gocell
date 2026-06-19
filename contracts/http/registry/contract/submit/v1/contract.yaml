@@ -10,6 +10,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/registry/contracts
+    permission: registry:submit
     successStatus: 201
     auth:
       responses:
