@@ -2,15 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"os"
 	"time"
 
@@ -23,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/certsigning"
 	"github.com/ghbvf/gocell/framework/runtime/certsigning/pdpauthz"
-	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 )
 
 const (
@@ -47,12 +38,6 @@ const (
 	// (9091) listener ports. Operators expose it on a routable address via
 	// deviceMTLSAddrEnv in real deployments.
 	deviceMTLSDefaultAddr = "127.0.0.1:9092"
-
-	// ephemeralServerCertTTL bounds the lifetime of the self-signed device-mTLS
-	// server certificate. The certificate is regenerated on every process start
-	// (it is never persisted), matching the ephemeral dev soft-CA whose trust
-	// anchor also rotates on restart.
-	ephemeralServerCertTTL = 365 * 24 * time.Hour
 )
 
 // deviceIdentityServingOptions builds the framework-owned device-identity EST
@@ -124,36 +109,15 @@ func deviceIdentityServingOptions(
 }
 
 // deviceMTLSListenerOption builds the bootstrap option for the device-mTLS
-// (renew) listener: AuthMTLS auth scheme + a server *tls.Config whose client-CA
-// pool is the issuing CA trust bundle (so only certificates this CA minted pass
-// the handshake) and whose server identity is an ephemeral self-signed cert
-// regenerated each start.
+// (renew) listener: AuthMTLS auth scheme + the server *tls.Config built by the
+// sanctioned device-identity mTLS-material helper (deviceidentity.NewDeviceMTLSServerConfig,
+// CELLTLS-MATERIAL-FUNNEL-01 #1904) — the composition root delegates mTLS-material
+// construction rather than calling tlsutil directly.
 func deviceMTLSListenerOption(ctx context.Context, clk clock.Clock, signer certsigning.Signer, addr string) (bootstrap.Option, error) {
-	bundle, err := signer.TrustBundle(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch CA trust bundle: %w", err)
-	}
-	if len(bundle) == 0 {
-		return nil, fmt.Errorf("CA trust bundle is empty; cannot verify device client certificates")
-	}
-	caPEMs := make([][]byte, 0, len(bundle))
-	for _, der := range bundle {
-		caPEMs = append(caPEMs, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-	}
-	clientCAs, err := tlsutil.NewClientCAPool(caPEMs...)
-	if err != nil {
-		return nil, fmt.Errorf("build device client-CA pool: %w", err)
-	}
-
-	certPEM, keyPEM, err := newEphemeralServerCert(clk)
-	if err != nil {
-		return nil, fmt.Errorf("generate device-mTLS server cert: %w", err)
-	}
-	tlsCfg, err := tlsutil.NewServerMTLSConfig(certPEM, keyPEM, clientCAs)
+	tlsCfg, err := deviceidentity.NewDeviceMTLSServerConfig(ctx, clk, signer)
 	if err != nil {
 		return nil, fmt.Errorf("build device-mTLS server config: %w", err)
 	}
-
 	return bootstrap.WithListener(
 		cell.DeviceMTLSListener, addr,
 		[]kauth.ListenerAuth{kauth.AuthMTLS{}},
@@ -168,45 +132,4 @@ func deviceMTLSAddrFromEnv() string {
 		return addr
 	}
 	return deviceMTLSDefaultAddr
-}
-
-// newEphemeralServerCert mints a fresh self-signed ECDSA P-256 server
-// certificate (loopback SANs) for the device-mTLS listener and returns its PEM
-// cert + key blocks. It is regenerated on every process start and never
-// persisted — the listener verifies DEVICE client certificates against the CA
-// pool; the server's own identity is trusted out-of-band in dev (matching the
-// ephemeral soft-CA). Operators front this listener with a real server cert /
-// TLS-terminating proxy in production.
-func newEphemeralServerCert(clk clock.Clock) (certPEM, keyPEM []byte, err error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate key: %w", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate serial: %w", err)
-	}
-	now := clk.Now()
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "gocell-device-mtls"},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(ephemeralServerCertTTL),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create certificate: %w", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshal key: %w", err)
-	}
-	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return certPEM, keyPEM, nil
 }

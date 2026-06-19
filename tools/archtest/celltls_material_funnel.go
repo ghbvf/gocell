@@ -32,6 +32,11 @@
 //     server TLSConfig, independent of the HTTP cross-cell transport. Calls
 //     NewServerMTLSConfig only; NewClientIdentity is NOT used here (the gRPC
 //     transport-layer does not build the ClientIdentity sealed bundle).
+//   - cellmodules/deviceidentity (NewDeviceMTLSServerConfig, #1904) — the
+//     device-mTLS (renew) listener verifies DEVICE client certificates against
+//     the issuing CA trust bundle (RFC 7030 device cert renewal). A third
+//     legitimate mTLS server site, device-facing rather than cell-to-cell. Calls
+//     NewServerMTLSConfig only; NewClientIdentity is celltls-only.
 //
 // Every other production caller is a violation.
 //
@@ -91,6 +96,14 @@ const (
 	// caller (adapters/grpc). Calls NewServerMTLSConfig only (not
 	// NewClientIdentity). Verified by repo scan on 2026-06-17 / #2263.
 	cellTLSSanctionedGRPCPkg = PlatformModulePath + "/adapters/grpc"
+
+	// cellTLSSanctionedDeviceIdentityPkg is the import path of the device-identity
+	// mTLS-material site (cellmodules/deviceidentity.NewDeviceMTLSServerConfig,
+	// #1904). The device-mTLS (renew) listener verifies DEVICE client certificates
+	// against the issuing CA trust bundle — a third legitimate mTLS server site,
+	// parallel to celltls (cell-to-cell) and adapters/grpc (gRPC transport). Calls
+	// NewServerMTLSConfig only (no cross-cell NewClientIdentity).
+	cellTLSSanctionedDeviceIdentityPkg = PlatformModulePath + "/cellmodules/deviceidentity"
 )
 
 // cellTLSBannedCtors is the closed set of tlsutil mTLS-material constructors
@@ -107,8 +120,9 @@ var cellTLSBannedCtors = map[string]struct{}{
 // server config (NewServerMTLSConfig) and must NOT mint a cross-cell client
 // identity (NewClientIdentity is celltls-only). Any other (pkg, ctor) is a hit.
 var cellTLSSanctionedCalls = map[string]map[string]struct{}{
-	cellTLSSanctionedCellTLSPkg: {"NewClientIdentity": {}, "NewServerMTLSConfig": {}},
-	cellTLSSanctionedGRPCPkg:    {"NewServerMTLSConfig": {}},
+	cellTLSSanctionedCellTLSPkg:        {"NewClientIdentity": {}, "NewServerMTLSConfig": {}},
+	cellTLSSanctionedGRPCPkg:           {"NewServerMTLSConfig": {}},
+	cellTLSSanctionedDeviceIdentityPkg: {"NewServerMTLSConfig": {}},
 }
 
 // CheckCellTLSMaterialFunnel enforces CELLTLS-MATERIAL-FUNNEL-01: the
