@@ -74,6 +74,7 @@ func TestIsTestCode(t *testing.T) {
 		{"auditcoretest builders", "corecells/auditcore/auditcoretest/builders.go", true},
 		{"accesscoretest builders", "corecells/accesscore/accesscoretest/builders.go", true},
 		{"accesscoretest fixture", "corecells/accesscore/accesscoretest/fixture.go", true},
+		{"tlsutiltest helper", "runtime/http/tlsutil/tlsutiltest/tlsutiltest.go", true},
 
 		{"production main", "cmd/corebundle/main.go", false},
 		{"production code", "kernel/outbox/consumer_base.go", false},

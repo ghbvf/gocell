@@ -1,19 +1,9 @@
 package celltls_test
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
-	"math/big"
 	"net/url"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,58 +11,18 @@ import (
 	"github.com/ghbvf/gocell/cellmodules/celltls"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 )
-
-// testCAValidity is the validity window for test CA certs (TEST-TIME-LITERAL-01:
-// site-specific test deadline as a file-local const, not an inline literal).
-const testCAValidity = 2 * time.Hour
 
 // writeCellMaterial generates a CA + a cell leaf (with a SPIFFE URI SAN) and
 // writes cert/key/ca PEM files into a temp dir, returning their paths.
 func writeCellMaterial(t *testing.T) (certFile, keyFile, caFile string) {
 	t.Helper()
-	dir := t.TempDir()
-
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(testCAValidity),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	require.NoError(t, err)
-	caCert, err := x509.ParseCertificate(caDER)
-	require.NoError(t, err)
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	uri, _ := url.Parse("spiffe://example.org/cell/accesscore")
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "accesscore"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		URIs:         []*url.URL{uri},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	require.NoError(t, err)
-	leafKeyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
-	require.NoError(t, err)
-
-	certFile = filepath.Join(dir, "cell.crt")
-	keyFile = filepath.Join(dir, "cell.key")
-	caFile = filepath.Join(dir, "ca.crt")
-	require.NoError(t, os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), 0o600))
-	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: leafKeyDER}), 0o600))
-	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o600))
-	return certFile, keyFile, caFile
+	ca := tlsutiltest.NewCA(t)
+	leaf := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		URIs: []*url.URL{tlsutiltest.SPIFFEURI(t, "spiffe://example.org/cell/accesscore")},
+	})
+	return leaf.WriteFiles(t, t.TempDir(), ca)
 }
 
 func topo(t *testing.T, remotes ...bootstrap.RemoteCellEndpoint) bootstrap.DeploymentTopology {

@@ -5,20 +5,13 @@ package mqtt
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"math/big"
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
@@ -27,11 +20,9 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil/tlsutiltest"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
-
-// TEST-TIME-LITERAL-01: file-local const prevents bare time.Duration literals in test bodies.
-const tlsTestCertValidity = time.Hour
 
 // mqttTLSChain holds PEM-encoded server materials and a ready-to-use client
 // tls.Certificate for a full mTLS round-trip test against a mosquitto broker.
@@ -44,93 +35,28 @@ type mqttTLSChain struct {
 
 // genMQTTTLSChain produces a self-signed CA + server leaf (SAN: 127.0.0.1 +
 // localhost) + client leaf (ExtKeyUsageClientAuth). Uses ECDSA P-256.
-//
-// Ported from adapters/grpc/cert_test.go::genIntegChain with naming adapted
-// for the MQTT TLS context.
 func genMQTTTLSChain(t *testing.T) mqttTLSChain {
 	t.Helper()
 
-	// Root CA.
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: root CA key: %v", err)
-	}
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "mqtt-test-root"},
-		NotBefore:             time.Now().Add(-tlsTestCertValidity),
-		NotAfter:              time.Now().Add(tlsTestCertValidity),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: root CA cert: %v", err)
-	}
-	rootCert, err := x509.ParseCertificate(rootDER)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: parse root CA: %v", err)
-	}
-	caCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
+	ca := tlsutiltest.NewCA(t)
 
 	// Server leaf — SAN includes 127.0.0.1 + localhost for TLS dial verification.
-	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: server key: %v", err)
-	}
-	serverTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "mqtt-test-server"},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    time.Now().Add(-tlsTestCertValidity),
-		NotAfter:     time.Now().Add(tlsTestCertValidity),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, rootCert, &serverKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: server cert: %v", err)
-	}
-	serverCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
-	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: marshal server key: %v", err)
-	}
-	serverKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER})
+	server := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		DNSNames: []string{"localhost"},
+		IPs:      []net.IP{net.ParseIP("127.0.0.1")},
+		EKU:      []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	})
 
 	// Client leaf — ExtKeyUsageClientAuth required for mTLS peer verification.
-	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: client key: %v", err)
-	}
-	clientTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "mqtt-test-client"},
-		NotBefore:    time.Now().Add(-tlsTestCertValidity),
-		NotAfter:     time.Now().Add(tlsTestCertValidity),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}
-	clientDER, err := x509.CreateCertificate(rand.Reader, clientTmpl, rootCert, &clientKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: client cert: %v", err)
-	}
-	clientLeaf, err := x509.ParseCertificate(clientDER)
-	if err != nil {
-		t.Fatalf("genMQTTTLSChain: parse client cert: %v", err)
-	}
+	client := ca.IssueLeaf(t, tlsutiltest.LeafOptions{
+		EKU: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
 
 	return mqttTLSChain{
-		caCertPEM:     caCertPEM,
-		serverCertPEM: serverCertPEM,
-		serverKeyPEM:  serverKeyPEM,
-		clientCert: tls.Certificate{
-			Certificate: [][]byte{clientDER},
-			PrivateKey:  clientKey,
-			Leaf:        clientLeaf,
-		},
+		caCertPEM:     ca.CertPEM,
+		serverCertPEM: server.CertPEM,
+		serverKeyPEM:  server.KeyPEM,
+		clientCert:    client.TLSCert,
 	}
 }
 
