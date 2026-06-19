@@ -47,23 +47,33 @@ import (
 //
 //	*_repo_conformance_enrollment.go detector files) ────────────────────────
 const (
-	rulePolicyRepoConformanceEnrollment01 = "POLICYREPO-CONFORMANCE-ENROLLMENT-01"
-	ruleRoleRepoConformanceEnrollment01   = "ROLEREPO-CONFORMANCE-ENROLLMENT-01"
-	ruleUserRepoConformanceEnrollment01   = "USERREPO-CONFORMANCE-ENROLLMENT-01"
+	rulePolicyRepoConformanceEnrollment01   = "POLICYREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleRoleRepoConformanceEnrollment01     = "ROLEREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleUserRepoConformanceEnrollment01     = "USERREPO-CONFORMANCE-ENROLLMENT-01"
+	ruleRegistryRepoConformanceEnrollment01 = "REGISTRY-CONFORMANCE-ENROLLMENT-01"
 
-	// repoConformancePkg is the shared ports/conformance package: all three
-	// repo conformance suites (RunPolicyRepoConformance / RunRoleRepoConformance /
-	// RunUserRepoConformance) live here.
+	// repoPortsPkg / repoConformancePkg are the accesscore ports + shared
+	// ports/conformance packages: the three accesscore repo conformance suites
+	// (RunPolicyRepoConformance / RunRoleRepoConformance / RunUserRepoConformance)
+	// live in repoConformancePkg. registrycore (#2388) is a SECOND cell with its
+	// own ports + conformance packages, so each repoConformanceSpec carries its
+	// own portsPkg/conformancePkg rather than the check body hardcoding the
+	// accesscore pair.
 	repoPortsPkg       = PlatformCellsModulePath + "/accesscore/internal/ports"
 	repoConformancePkg = PlatformCellsModulePath + "/accesscore/internal/ports/conformance"
 
-	policyRepoIfaceName = "PolicyRepository"
-	roleRepoIfaceName   = "RoleRepository"
-	userRepoIfaceName   = "UserRepository"
+	registryPortsPkg       = PlatformCellsModulePath + "/registrycore/internal/ports"
+	registryConformancePkg = PlatformCellsModulePath + "/registrycore/internal/ports/conformance"
 
-	policyConformanceFunc = "RunPolicyRepoConformance"
-	roleConformanceFunc   = "RunRoleRepoConformance"
-	userConformanceFunc   = "RunUserRepoConformance"
+	policyRepoIfaceName   = "PolicyRepository"
+	roleRepoIfaceName     = "RoleRepository"
+	userRepoIfaceName     = "UserRepository"
+	registryRepoIfaceName = "Registry"
+
+	policyConformanceFunc   = "RunPolicyRepoConformance"
+	roleConformanceFunc     = "RunRoleRepoConformance"
+	userConformanceFunc     = "RunUserRepoConformance"
+	registryConformanceFunc = "RunRegistryConformance"
 )
 
 // enrollPass captures, during the single Tests=true load, the per-package data the
@@ -307,9 +317,13 @@ func flagUnenrolledByImplKey(
 
 // ─── repo family ────────────────────────────────────────────────────────────
 
-// repoConformanceSpec parameterizes the three ports.*Repository enrollment rules.
+// repoConformanceSpec parameterizes the ports.*Repository / ports.Registry
+// enrollment rules. portsPkg / conformancePkg are per-member (accesscore and
+// registrycore are distinct cells with their own ports + conformance packages).
 type repoConformanceSpec struct {
 	ruleID          string
+	portsPkg        string // import path of the interface's ports package
+	conformancePkg  string // import path of the package holding conformanceFunc
 	ifaceName       string
 	conformanceFunc string
 	humanIface      string // e.g. "ports.PolicyRepository" for messages
@@ -320,6 +334,8 @@ type repoConformanceSpec struct {
 func policyRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          rulePolicyRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       policyRepoIfaceName,
 		conformanceFunc: policyConformanceFunc,
 		humanIface:      "ports.PolicyRepository",
@@ -331,6 +347,8 @@ func policyRepoConformanceSpec() repoConformanceSpec {
 func roleRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          ruleRoleRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       roleRepoIfaceName,
 		conformanceFunc: roleConformanceFunc,
 		humanIface:      "ports.RoleRepository",
@@ -342,11 +360,28 @@ func roleRepoConformanceSpec() repoConformanceSpec {
 func userRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          ruleUserRepoConformanceEnrollment01,
+		portsPkg:        repoPortsPkg,
+		conformancePkg:  repoConformancePkg,
 		ifaceName:       userRepoIfaceName,
 		conformanceFunc: userConformanceFunc,
 		humanIface:      "ports.UserRepository",
 		emptyImplHint:   "Expect at least mem.UserRepository and postgres.PGUserRepo.",
 		callSuffix:      "(t, factory, features)",
+	}
+}
+
+// registryRepoConformanceSpec is the registrycore member (#2388): ports.Registry
+// has mem + PG implementations that must both enroll in conformance.RunRegistryConformance.
+func registryRepoConformanceSpec() repoConformanceSpec {
+	return repoConformanceSpec{
+		ruleID:          ruleRegistryRepoConformanceEnrollment01,
+		portsPkg:        registryPortsPkg,
+		conformancePkg:  registryConformancePkg,
+		ifaceName:       registryRepoIfaceName,
+		conformanceFunc: registryConformanceFunc,
+		humanIface:      "ports.Registry",
+		emptyImplHint:   "Expect at least mem.Registry and postgres.Registry.",
+		callSuffix:      "(t, factory)",
 	}
 }
 
@@ -366,15 +401,15 @@ func checkRepoConformanceEnrollment(t *testing.T, spec repoConformanceSpec, cfg 
 
 	iface, implSet, passes := loadConformanceEnrollmentImpls(
 		t, repoConformanceLoadPatterns(root), cfg.BuildTags,
-		repoPortsPkg, spec.ifaceName, true /*exportedOnly*/, false /*collectFromIfacePkg*/)
+		spec.portsPkg, spec.ifaceName, true /*exportedOnly*/, false /*collectFromIfacePkg*/)
 
 	if iface == nil {
-		return []Diagnostic{{Rel: repoPortsPkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.portsPkg, Message: fmt.Sprintf(
 			"%s: failed to resolve %s interface; check import path %s",
-			spec.ruleID, spec.humanIface, repoPortsPkg)}}
+			spec.ruleID, spec.humanIface, spec.portsPkg)}}
 	}
 	if len(implSet) == 0 {
-		return []Diagnostic{{Rel: repoPortsPkg, Message: fmt.Sprintf(
+		return []Diagnostic{{Rel: spec.portsPkg, Message: fmt.Sprintf(
 			"%s: zero %s implementations collected — likely a type-universe regression "+
 				"(iface and impls must share one packages.Load). %s",
 			spec.ruleID, spec.ifaceName, spec.emptyImplHint)}}
@@ -383,7 +418,7 @@ func checkRepoConformanceEnrollment(t *testing.T, spec repoConformanceSpec, cfg 
 	enrolledPkgs := map[string]bool{}
 	for _, pd := range passes {
 		for _, f := range pd.testFiles {
-			if hasConformanceCallTo(f, pd.info, repoConformancePkg, spec.conformanceFunc) {
+			if hasConformanceCallTo(f, pd.info, spec.conformancePkg, spec.conformanceFunc) {
 				enrolledPkgs[canonicalPkgPath(pd.pkgPath)] = true
 			}
 		}
