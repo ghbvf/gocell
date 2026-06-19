@@ -21,7 +21,7 @@
 // count the Journal does not hold. A caller reconstructs the exact cursor by
 // folding the event log from Load.
 //
-// # Event model (fully event-sourced, 9 kinds)
+// # Event model (fully event-sourced, 11 kinds)
 //
 // Every lifecycle move has a corresponding [EventKind], so the append-only log
 // alone replays the complete history — including WHICH terminal state was reached
@@ -36,14 +36,15 @@
 //     so a leader handoff mid-rollback reads Compensating, not Running.
 //     Advances Running→Compensating; Pending→Compensating is illegal.
 //
-//   - KindStepCompensated: carry a StepName; legal ONLY while Compensating
-//     (status unchanged); rejected in any other phase.
+//   - KindStepCompensated / KindStepCompensationFailed: carry a StepName;
+//     legal ONLY while Compensating (status unchanged); rejected in any other
+//     phase.
 //
 //   - Terminal kinds (KindSagaSucceeded / KindSagaFailed / KindSagaCompensated /
-//     KindSagaExpired): appended ONLY via MarkTerminal, atomically with the
-//     projection's terminal status flip. The terminal status is encoded in the
-//     kind itself, so the log alone replays the final state — no separate
-//     terminal-status field is needed.
+//     KindSagaExpired / KindSagaCompensationFailed): appended ONLY via
+//     MarkTerminal, atomically with the projection's terminal status flip. The
+//     terminal status is encoded in the kind itself, so the log alone replays
+//     the final state — no separate terminal-status field is needed.
 //
 // The projection is a deterministic fold of these kinds in order; an
 // out-of-phase event is rejected without mutation (fail-closed).
@@ -59,7 +60,8 @@
 //	                    step events (StepStarted/Completed/Failed) → Pending→Running,
 //	                      no-op while Running, rejected while Compensating;
 //	                    KindCompensationStarted → Running→Compensating;
-//	                    KindStepCompensated → no-op while Compensating, rejected elsewhere.
+//	                    KindStepCompensated / KindStepCompensationFailed →
+//	                      no-op while Compensating, rejected elsewhere.
 //	MarkTerminal      commits a terminal status + the matching terminal event kind
 //	                  atomically, releases lease.
 //
@@ -68,9 +70,9 @@
 //	  Pending ──(forward step)──► Running ──(CompensationStarted)──► Compensating
 //	     │                           │                                     │
 //	     │ MarkTerminal              │ MarkTerminal                        │ MarkTerminal
-//	     │ (Failed/Expired)          │ (Succeeded/Failed/Expired)          │ (Compensated/Failed/Expired)
+//	     │ (Failed/Expired)          │ (Succeeded/Failed/Expired)          │ (Compensated/CompensationFailed/Expired)
 //	     ▼                           ▼                                     ▼
-//	  [KindSagaFailed/Expired]   [KindSagaSucceeded/Failed/Expired]   [KindSagaCompensated/Failed/Expired]
+//	  [KindSagaFailed/Expired]   [KindSagaSucceeded/Failed/Expired]   [KindSagaCompensated/KindSagaCompensationFailed/KindSagaExpired]
 //
 // # Lease fencing (asymmetric returns)
 //

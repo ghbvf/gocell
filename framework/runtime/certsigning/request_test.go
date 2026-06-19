@@ -56,6 +56,10 @@ func testCertDER(t *testing.T, serial *big.Int, notAfter time.Time) []byte {
 		NotBefore:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:     notAfter,
 	}
+	// x509.CreateCertificate here is intentional and sanctioned by
+	// TLS-TEST-MATERIAL-FUNNEL-01: this is the cert-signing pipeline under test,
+	// so the cert is system-under-test input, not a reusable cell-identity
+	// fixture — do NOT migrate to tlsutiltest (that would be circular).
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		t.Fatalf("create cert: %v", err)

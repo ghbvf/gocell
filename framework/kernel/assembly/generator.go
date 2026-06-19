@@ -15,11 +15,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/framework/kernel/assembly/gentpl"
+	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -155,6 +157,18 @@ type modulesCompositionContext struct {
 	// The template ALWAYS emits generatedPostgresCells() (nil when empty) so the
 	// composition root can call it unconditionally (#1964 per-cell infra seam).
 	PostgresCells []string
+	// BrokerCells is the sorted list of cell IDs that produce OR consume at least
+	// one broker-transported (amqp) contract — derived from the cells' slice.yaml
+	// contractUsages' referenced contract Transports, NOT from cell.yaml `requires`
+	// nor a role subset. Single source for the composition root's per-cell broker
+	// URL resolution (cmd/corebundle shared_deps → eventtransport.Resolve), replacing
+	// the former reuse of PostgresCells (#2365). For example, a postgres-only cell with
+	// no amqp contractUsage is excluded (and never required to set
+	// GOCELL_<CELL>_AMQP_URL), while adding an event/command contractUsage auto-enrolls
+	// the cell on the next `gocell generate assembly`. The template ALWAYS emits
+	// generatedBrokerCells() (nil when empty) so the composition root can call it
+	// unconditionally.
+	BrokerCells []string
 	// FrameworkServedContracts is the sorted list of framework-owned contract ids
 	// (ownerCell: _framework) this assembly explicitly opts in to serving, sourced
 	// directly from assembly.yaml `frameworkContracts`. A framework-owned contract
@@ -562,6 +576,10 @@ func (g *Generator) generateModulesGenComposition(
 	}
 	topoData := buildTopologyGroupsData(asm.Topology)
 	postgresCells := g.collectPostgresCells(asm.Cells)
+	brokerCells, err := g.collectBrokerCells(asm.Cells)
+	if err != nil {
+		return nil, err
+	}
 	frameworkServed := append([]string(nil), asm.FrameworkContracts...)
 	sort.Strings(frameworkServed)
 	ctx := modulesCompositionContext{
@@ -573,6 +591,7 @@ func (g *Generator) generateModulesGenComposition(
 		ProjectionSourceTopics:   projTopics,
 		TopologyGroups:           topoData,
 		PostgresCells:            postgresCells,
+		BrokerCells:              brokerCells,
 		FrameworkServedContracts: frameworkServed,
 	}
 	return g.executeTemplate("modules_gen_composition.go.tpl", ctx)
@@ -599,6 +618,92 @@ func (g *Generator) collectPostgresCells(cellRefs []metadata.AssemblyCellRef) []
 	}
 	sort.Strings(cells)
 	return cells
+}
+
+// collectBrokerCells returns the sorted cell IDs in the assembly that produce OR
+// consume at least one broker-transported (amqp) contract, derived from the cells'
+// slice.yaml contractUsages. A cell is a broker cell iff some contractUsage
+// references a contract whose RESOLVED Transports include amqp — the authoritative,
+// role-agnostic signal (publish, subscribe, invoke, handle … all count) anchored to
+// the closed cellvocab.Transport vocabulary. This intentionally does NOT key off
+// cell.yaml `requires` (which would be a Soft "remember to declare" input, and a
+// subscriber needs the broker yet does not obviously "require" it) nor a hand-listed
+// role subset. Single source for cmd/corebundle's per-cell broker URL resolution
+// (#2365, replacing the former reuse of collectPostgresCells): a DB-only cell with no
+// amqp contract is correctly excluded, and a cell that gains an amqp contract is
+// auto-enrolled. It scans every project slice (filtered to this assembly's cells)
+// rather than iterating cellRefs because slice.yaml contractUsages are keyed by
+// sliceID, not cell — there is no cell-indexed usage view to walk, same as
+// collectOutboxProjectionTopics. Unknown contract references are skipped, consistent
+// with the framework's subscription derivation (metadata.deriveEventSubscribers, which
+// likewise skips usages of unregistered contracts): contract-reference validity is a
+// `gocell validate` concern, and a dangling usage wires no runtime pub/sub, so skipping
+// it here cannot orphan broker traffic. A REGISTERED contract with an empty Transports
+// set, by contrast, fails generation closed (mirroring collectOutboxProjectionTopics's
+// fail-closed posture): the parser only defaults Transports when the `transports` key is
+// ABSENT (parser.go), so an explicit `transports: []` stays empty for FMT-39 to reject —
+// but codegen does not run FMT-39, so such a malformed contract would otherwise be
+// SILENTLY excluded from the broker set. Refusing here keeps the derived set honest
+// rather than fail-open.
+func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) ([]string, error) {
+	inAssembly := make(map[string]bool, len(cellRefs))
+	for _, ref := range cellRefs {
+		inAssembly[ref.ID] = true
+	}
+	cellSet := make(map[string]struct{})
+	for _, s := range g.project.Slices {
+		if s == nil || !inAssembly[s.BelongsToCell] {
+			continue
+		}
+		uses, err := g.sliceUsesBrokerContract(s)
+		if err != nil {
+			return nil, err
+		}
+		if uses {
+			cellSet[s.BelongsToCell] = struct{}{}
+		}
+	}
+	var cells []string
+	for id := range cellSet {
+		cells = append(cells, id)
+	}
+	sort.Strings(cells)
+	return cells, nil
+}
+
+// sliceUsesBrokerContract reports whether s has a contractUsage referencing an
+// amqp-transported (broker) contract. A registered contract with an empty Transports
+// set fails closed (the fail-open hazard explained on collectBrokerCells); an
+// unregistered reference is skipped.
+func (g *Generator) sliceUsesBrokerContract(s *metadata.SliceMeta) (bool, error) {
+	for _, cu := range s.ContractUsages {
+		c := g.contracts.Get(cu.Contract)
+		if c == nil {
+			continue // unregistered contract: skip (validation raises it; wires no runtime pub/sub)
+		}
+		if len(c.Transports) == 0 {
+			return false, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"contractUsage references a contract with an empty transports set",
+				errcode.WithInternal(errcode.InternalAttr("_",
+					fmt.Sprintf("slice=%q contract=%q", s.ID, cu.Contract))))
+		}
+		if contractIsBrokerTransported(c) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// contractIsBrokerTransported reports whether c is carried over the broker (amqp).
+// The signal is the contract's resolved Transports set (single-sourced from
+// contract.yaml `transports`, defaulted per-kind — event/command → amqp — by
+// metadata.defaultTransportsForKind), so a new contract kind that defaults to amqp
+// auto-enrolls its cell. Anchored to cellvocab.TransportAMQP (closed transport
+// vocabulary, FMT-39-guarded). mqtt is deliberately excluded: cmd/corebundle's broker
+// consumer (eventtransport.dedupBrokerURL) is AMQP-specific (GOCELL_<CELL>_AMQP_URL);
+// mqtt joins when its own consumer is wired, alongside its env seam.
+func contractIsBrokerTransported(c *metadata.ContractMeta) bool {
+	return slices.Contains(c.Transports, string(cellvocab.TransportAMQP))
 }
 
 // buildTopologyGroupsData translates the metadata.TopologyMeta into the flattened

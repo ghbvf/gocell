@@ -64,6 +64,24 @@ func generatedPostgresCells() []string {
 	}
 }
 
+// generatedBrokerCells is the sorted list of cell IDs that produce or consume at
+// least one broker-transported (amqp) contract, derived from the assembly cells'
+// slice.yaml contractUsages (the referenced contract's resolved Transports include
+// amqp) — NOT from cell.yaml `requires` nor a role subset. Single-sourced; consumed
+// by the composition root's per-cell broker URL resolution (cmd/corebundle
+// shared_deps → eventtransport.Resolve), replacing the former reuse of
+// generatedPostgresCells (#2365). A DB-only cell with no amqp contract is correctly
+// excluded; a cell that gains an amqp contract auto-enrolls on the next
+// `gocell generate assembly`, and `--verify` red-flags stale output. ALWAYS emitted
+// (nil when no broker cells) so the composition root can call it unconditionally.
+func generatedBrokerCells() []string {
+	return []string{
+		"accesscore",
+		"auditcore",
+		"configcore",
+	}
+}
+
 // generatedFrameworkServedContracts is the sorted list of framework-owned
 // contract ids (ownerCell: _framework) this assembly serves, single-sourced from
 // assembly.yaml `frameworkContracts`. A framework-owned contract has no cell so

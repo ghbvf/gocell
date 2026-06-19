@@ -1260,8 +1260,6 @@ func journalPackageLocalNames(file *ast.File) map[string]bool {
 	return names
 }
 
-// journalInterfaceAliasName returns the aliased name if ts is a type alias to
-// one of the three journal interfaces, using journalLocalNames for resolution.
 // journalInterfaceAliasName reports the journal interface name aliased by ts if
 // ts is `type X = <localName>.{Journal,JournalCore,Heartbeater}` where localName
 // is any local binding of the journal package (journalLocalNames), else
