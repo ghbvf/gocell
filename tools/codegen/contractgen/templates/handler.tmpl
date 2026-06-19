@@ -155,6 +155,12 @@ var contractSpec = contractspec.ContractSpec{
 	Transport: {{printf "%q" (index .Transports 0)}},
 	Method:    "{{.Endpoint.Method}}",
 	Path:      "{{.Endpoint.Path}}",
+{{- if ne .Endpoint.Resource ""}}
+	Resource:  "{{.Endpoint.Resource}}",
+{{- end}}
+{{- if .Endpoint.SelfScoped}}
+	SelfScoped: true,
+{{- end}}
 {{- if .Endpoint.Clients}}
 	Clients: []string{ {{- range $i, $c := .Endpoint.Clients}}{{if $i}}, {{end}}"{{$c}}"{{end}} },
 {{- end}}
@@ -262,12 +268,14 @@ func NewHandler(svc Service) *Handler {
 {{- else if ne .Endpoint.Permission ""}}
 // NewHandler creates a Handler for {{.ContractID}}.
 //
-// Authorization is contract-derived (#2205): endpoints.http.permission is
-// {{.Endpoint.Permission}}. NewHandler takes the cell-level
+// Authorization is contract-derived (#2205/#2355): endpoints.http.permission is
+// {{.Endpoint.Permission}}{{if ne .Endpoint.Resource ""}}, owner-scoped on path param {{.Endpoint.Resource}}{{else if .Endpoint.SelfScoped}}, self-scoped (caller's own subject){{end}}. NewHandler takes the cell-level
 // authz.MethodPolicyResolver (built by cellgen from the cell's served-contract
-// permission overlays) and constructs the route gate via
-// auth.RequirePermissionForContract(contractSpec.ID, resolver) — the HTTP sibling of
-// the gRPC interceptor's resolver lookup, replacing a hand-wired
+// permission overlays) and constructs the route gate via the single
+// auth.RequirePermissionForContract(contractSpec, resolver) funnel — which dispatches
+// on contractSpec.Resource / contractSpec.SelfScoped to RequirePermissionForResource /
+// RequirePermissionForSelf / RequirePermission — the HTTP sibling of the gRPC
+// interceptor's resolver + resource lookup, replacing a hand-wired
 // auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
 // construction (composition root must inject the cell resolver).
 func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
@@ -277,7 +285,7 @@ func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
 		// so PANIC-REGISTERED-01 stays clean.
 		panic(panicregister.Approved("{{.PanicReasonResolverNil}}", errcode.Assertion("generated handler {{.ContractID}}: resolver must not be nil (endpoints.http.permission contracts require the cell authz.MethodPolicyResolver; composition root must inject the cellgen-built resolver)")))
 	}
-	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec.ID, resolver)}
+	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec, resolver)}
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {

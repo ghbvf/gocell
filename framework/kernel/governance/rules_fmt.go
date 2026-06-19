@@ -1144,6 +1144,8 @@ func (v *Validator) validateFMT41PasswordResetExempt(c *metadata.ContractMeta, f
 // permission overlay field (endpoints.http.permission, #2205).
 const (
 	fieldEndpointsHTTPPermission = "endpoints.http.permission"
+	fieldEndpointsHTTPResource   = "endpoints.http.resource"
+	fieldEndpointsHTTPSelfScoped = "endpoints.http.selfScoped"
 	fieldEndpointsHTTPAuth       = "endpoints.http.auth"
 	fieldEndpointsHTTPAuthReason = "endpoints.http.auth.reason"
 )
@@ -1192,7 +1194,57 @@ func (v *Validator) validateFMT42() []ValidationResult {
 		if h != nil && h.Permission != "" {
 			results = append(results, v.validateFMT42ForContract(c, h)...)
 		}
+		if h != nil {
+			results = append(results, v.validateFMT42ResourceShape(c, h)...)
+		}
 		results = append(results, v.validateFMT42AuthMode(c)...)
+	}
+	return results
+}
+
+// validateFMT42ResourceShape runs the #2355 owner-scoped / self-scoped overlay guards
+// for a single http contract: endpoints.http.resource (owner-scoped path param) and
+// endpoints.http.selfScoped (self-scoped subject). The structural mutexes are the Hard
+// primary at the schema layer (contract.schema.json if/then); this is the Medium
+// defense-in-depth arm, surfaced at `gocell validate` with a field-anchored fix. Runs
+// for every http contract (not gated on permission) so resource/selfScoped-without-
+// permission is caught.
+//
+// DELIBERATE non-port of gRPC FMT-41: there is NO "owner-scoped permission ⇒ resource
+// required" guard. The same action (e.g. user:write) gates BOTH owner routes (with
+// resource) and admin routes (without) — see
+// TestFMT42_OwnerScopedPermissionWithoutResource_OK. resource presence is a per-route
+// authoring choice, not permission-derived.
+//
+// The resource⊕opt-out and selfScoped⊕opt-out mutexes are enforced transitively
+// (resource/selfScoped⇒permission here + permission⊕opt-out in validateFMT42ForContract),
+// so they are not re-checked here (no double-report).
+func (v *Validator) validateFMT42ResourceShape(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) []ValidationResult {
+	file := contractFile(c)
+	var results []ValidationResult
+	if h.Resource != "" && h.Permission == "" {
+		results = append(results, v.newError(
+			codeFMT42, IssueRequired, file, fieldEndpointsHTTPResource,
+			fmt.Sprintf("http contract %q sets endpoints.http.resource %q without endpoints.http.permission; "+
+				"an owner-scoped gate still requires an action", c.ID, h.Resource),
+			"add endpoints.http.permission with the registered authz action this owner gate enforces (e.g. user:read)",
+		))
+	}
+	if h.SelfScoped && h.Permission == "" {
+		results = append(results, v.newError(
+			codeFMT42, IssueRequired, file, fieldEndpointsHTTPSelfScoped,
+			fmt.Sprintf("http contract %q sets endpoints.http.selfScoped without endpoints.http.permission; "+
+				"a self-scoped gate still requires an action", c.ID),
+			"add endpoints.http.permission with the registered authz action this self-scoped gate enforces (e.g. access:decide)",
+		))
+	}
+	if h.Resource != "" && h.SelfScoped {
+		results = append(results, v.newError(
+			codeFMT42, IssueInvalid, file, fieldEndpointsHTTPResource,
+			fmt.Sprintf("http contract %q sets both endpoints.http.resource and endpoints.http.selfScoped, which are "+
+				"mutually exclusive (owner-scoped path-param resource vs self-scoped subject)", c.ID),
+			"keep exactly one: endpoints.http.resource for a path-param-owned resource, or selfScoped for the caller's own subject",
+		))
 	}
 	return results
 }

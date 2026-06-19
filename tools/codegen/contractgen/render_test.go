@@ -746,6 +746,18 @@ func TestRender_Golden_Synth_HTTPAuthModes(t *testing.T) {
 		// Policy: h.policy (resolver-derived) AND PasswordResetExempt: true, proving the
 		// two are additive rather than mutually exclusive.
 		{"http.sample.permissionpre.v1", "synth_http_auth_modes_permissionpre"},
+		// permissionresource (#2355): byte-locks the owner-scoped gate branch. A route
+		// declaring endpoints.http.permission + endpoints.http.resource renders the
+		// generated contractSpec literal with Resource: "<param>" and routes the gate
+		// through the single auth.RequirePermissionForContract(contractSpec, resolver)
+		// funnel — which dispatches to RequirePermissionForResource. A regression that
+		// drops the Resource literal (re-coarsening the gate to URL.Path) trips the golden.
+		{"http.sample.permissionresource.v1", "synth_http_auth_modes_permissionresource"},
+		// permissionself (#2355): byte-locks the self-scoped gate branch. A route
+		// declaring endpoints.http.permission + endpoints.http.selfScoped renders the
+		// contractSpec literal with SelfScoped: true so the funnel dispatches to
+		// RequirePermissionForSelf (caller's own subject as resource, no path param).
+		{"http.sample.permissionself.v1", "synth_http_auth_modes_permissionself"},
 		// idempotencyexempt: passwordResetExempt+idempotencyExempt proves ADDITIVE emission.
 		// The generated RegisterRoutes must emit BOTH PasswordResetExempt:true and
 		// IdempotencyExempt:true (additive, not alternative) — golden byte-locks this.

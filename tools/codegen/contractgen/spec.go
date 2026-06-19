@@ -331,11 +331,24 @@ type httpEndpointSpec struct {
 	// (#2205) — non-empty only for contract-derived gated routes. When set, the
 	// generated NewHandler takes a resolver authz.MethodPolicyResolver argument
 	// (instead of policy auth.Policy) and constructs the gate via
-	// auth.RequirePermissionForContract(contractSpec.ID, resolver); when empty, the legacy
+	// auth.RequirePermissionForContract(contractSpec, resolver); when empty, the legacy
 	// hand-wired policy-arg path is generated unchanged. Mutually exclusive with the
 	// no-gate auth modes (AuthPublic/AuthBootstrap/AuthClientsOnly/AuthServiceOwned);
 	// may accompany a standard route or AuthPasswordResetExempt.
 	Permission string
+	// Resource is the path-param name from contract.yaml endpoints.http.resource
+	// (#2355) — non-empty only for owner-scoped routes. Rendered into the generated
+	// contractSpec literal (alongside Method/Path) so the single
+	// auth.RequirePermissionForContract funnel dispatches to
+	// RequirePermissionForResource(<param>, perm). Requires Permission; mutually
+	// exclusive with SelfScoped and the no-gate auth modes.
+	Resource string
+	// SelfScoped is contract.yaml endpoints.http.selfScoped (#2355) — true only for
+	// self-introspection routes (the caller's own subject IS the resource, no path
+	// param). Rendered into the generated contractSpec literal so the funnel
+	// dispatches to RequirePermissionForSelf(perm). Requires Permission; mutually
+	// exclusive with Resource and the no-gate auth modes.
+	SelfScoped bool
 	// IdempotencyExempt is true when contract.yaml endpoints.http.idempotency.exempt
 	// is set. A first-class endpoint concern (sibling of auth, #1469 review F7), not
 	// an auth flag; emits auth.Route{IdempotencyExempt: true}. The idempotency

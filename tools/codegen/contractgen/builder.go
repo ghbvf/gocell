@@ -627,6 +627,8 @@ func buildHTTPEndpointSpec(
 		AuthClientsOnly:         http.Auth.ClientsOnly,
 		AuthServiceOwned:        http.Auth.ServiceOwned,
 		Permission:              http.Permission,
+		Resource:                http.Resource,
+		SelfScoped:              http.SelfScoped,
 		IdempotencyExempt:       http.Idempotency.Exempt,
 		ResponseProjection:      http.ResponseProjection,
 	}

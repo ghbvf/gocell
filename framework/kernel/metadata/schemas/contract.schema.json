@@ -372,6 +372,16 @@
                     "minLength": 1,
                     "description": "ABAC action this route's PDP gate requires (e.g. config:read), #2205 — the HTTP sibling of endpoints.grpc.methods[].permission. cellgen derives a cell-level contractID→permission resolver from it and the generated handler resolves through authz.MethodPolicyResolver (runtime/auth.RequirePermissionForContract), replacing slice hand-wiring of auth.RequirePermission(authz.PermX()). Must be a member of the closed authz registry (governance validates membership via authz.IsKnownPermissionString). Mutually exclusive with auth.public/bootstrap/clientsOnly/serviceOwned (those modes have no RequirePermission gate); may accompany a standard route or a passwordResetExempt route. #2020: a standard route (no opt-out flag) MUST declare this permission — a modeless route is rejected at codegen (metadata.ClassifyHTTPAuthMode) unless its contract id is on the frozen migration ledger draining via #2355/#2358."
                   },
+                  "resource": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Name of the path parameter whose value identifies the owner-scoped resource for the PDP ownership check (e.g. \"id\" for /api/v1/access/users/{id}), #2355 — the HTTP sibling of endpoints.grpc.methods[].resource. When set, the generated auth.RequirePermissionForContract funnel dispatches to auth.RequirePermissionForResource(<param>, perm), forwarding the canonicalized path-param value to the PDP so the identity-ownership baseline (subject.sub == resource.id) can fire. REQUIRES permission; mutually exclusive with selfScoped and with the no-gate opt-out modes (transitively, via resource⇒permission + permission⊕opt-out). DELIBERATE divergence from gRPC FMT-41: presence is a per-route authoring choice, NOT derivable from the permission's owner-scoped-ness — the same action (e.g. user:write) gates both owner routes (with resource) and admin routes (without)."
+                  },
+                  "selfScoped": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Marks a self-introspection route whose resource IS the caller's own authenticated subject (no path parameter), #2355. When true the generated auth.RequirePermissionForContract funnel dispatches to auth.RequirePermissionForSelf(perm), forwarding the caller's canonical subject to the PDP so the identity-ownership baseline evaluates the caller against themselves (canonical use: POST /api/v1/access/decide, #1863). REQUIRES permission; mutually exclusive with resource and with the no-gate opt-out modes."
+                  },
                   "auth": {
                     "type": "object",
                     "description": "Route-level authentication overrides for contractgen. Omit for standard authenticated routes. Mutex enforced by value-true (if/then const:true) so explicit `false` is equivalent to omission and never triggers conflict — see metadata.AuthComboLegal for the single oracle.",
@@ -504,6 +514,21 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "description": "endpoints.http.resource (owner-scoped path param, #2355) requires a permission — an owner gate still needs an action. resource⊕opt-out is enforced transitively (resource⇒permission + permission⊕opt-out).",
+                    "if": { "required": ["resource"] },
+                    "then": { "required": ["permission"] }
+                  },
+                  {
+                    "description": "endpoints.http.selfScoped=true (#2355) requires a permission — a self-scoped gate still needs an action.",
+                    "if": { "properties": { "selfScoped": { "const": true } }, "required": ["selfScoped"] },
+                    "then": { "required": ["permission"] }
+                  },
+                  {
+                    "description": "endpoints.http.resource and selfScoped are mutually exclusive (#2355): owner-scoped path-param resource vs self-scoped subject are distinct gate shapes.",
+                    "if": { "required": ["resource"] },
+                    "then": { "properties": { "selfScoped": { "not": { "const": true } } } }
                   }
                 ]
               }

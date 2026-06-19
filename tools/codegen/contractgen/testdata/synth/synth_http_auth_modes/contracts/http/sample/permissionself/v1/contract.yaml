@@ -1,0 +1,22 @@
+id: http.sample.permissionself.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  http:
+    method: POST
+    path: /api/v1/sample/permissionself
+    permission: config:read
+    selfScoped: true
+    successStatus: 204
+    noContent: true
+    responses:
+      400:
+        description: Bad Request
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      500:
+        description: Internal Server Error
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

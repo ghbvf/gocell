@@ -66,11 +66,21 @@ RLS policy shape 由 schema guard 检查。app-serving role 必须非 owner 且�
 
 ## Resource ownership
 
-path-param 标识的 resource ownership 是 PDP ABAC 决策，不是 handler 短路。
-owner-scoped 端点用 `auth.RequirePermissionForResource(pathParam, perm)`，将 canonical
-resource id 转发给 PDP。
+path-param 标识的 resource ownership 是 PDP ABAC 决策，不是 handler 短路。owner-scoped /
+self-scoped gate **contract-derived**（#2355）：契约声明 `endpoints.http.resource:
+<pathParam>`（owner-scoped）或 `endpoints.http.selfScoped: true`（self-scoped），生成
+handler 经单一 `auth.RequirePermissionForContract(contractSpec, resolver)` funnel 派生
+`RequirePermissionForResource(pathParam, perm)` / `RequirePermissionForSelf(perm)`——业务
+slice 不手写 gate。`resource`/`selfScoped` 各 ⇒ permission、二者互斥（schema + FMT-42 +
+ContractSpec.Validate 三重）。owner-scoped gate 把 canonical resource id（self-scoped 把
+调用者自身 subject）转发给 PDP。
 
 - baseline ownership 用 `subject.sub == resource.id` 判定。
+- **owner vs admin 同 permission**：同一 owner-scoped action（如 `user:write`）既用于带
+  resource 的 owner 路由（改自己），也用于不带 resource 的 admin 路由（coarse，改任意）。
+  故 HTTP **不照搬** gRPC FMT-41 的「owner-scoped permission ⇒ resource 必填」（会误拒 admin
+  路由）；`resource` 是 per-route 授权选择，不从 permission 派生。详见 ADR
+  `202606201500-2355`。
 - 空或非 canonical path-param 不等于 self；resource 不可解析时规则不命中并
   fail-closed。
 - delegated ownership 用 `subject.sub == resource.owner`，owner 由 PIP lookup 供给。
@@ -121,7 +131,9 @@ RLS 维护 tenant 边界。
 
 HTTP route gate 与 gRPC 同源。HTTP route -> permission 由契约
 `endpoints.http.permission` overlay 派生，生成 handler 通过
-`auth.RequirePermissionForContract` 解析并进入同一 PDP 路径。
+`auth.RequirePermissionForContract(contractSpec, resolver)` 解析并进入同一 PDP 路径。owner-scoped
+（`endpoints.http.resource`）/ self-scoped（`endpoints.http.selfScoped`）由该同一 funnel 按
+`contractSpec.{Resource,SelfScoped}` 三分支派生，见 §Resource ownership 与 ADR `202606201500-2355`。
 
 每个 `lifecycle: active` 且 `codegen` 的 HTTP 契约必须声明恰好一个 AuthZ mode：
 

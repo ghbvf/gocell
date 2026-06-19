@@ -51,6 +51,18 @@ type ContractSpec struct {
 	Method string // upper-case HTTP verb
 	Path   string // path template, e.g. "/api/v1/auth/login"
 
+	// Resource and SelfScoped carry the owner-scoped / self-scoped HTTP authz
+	// shape (#2355); both are HTTP-only (rejected for other kinds, like Method/Path).
+	// Resource names the path parameter whose value the route gate forwards to the
+	// PDP as the ownership resource (e.g. "id"); SelfScoped marks a route whose
+	// resource is the caller's own subject. They are mutually exclusive. Either
+	// implies a contract-derived permission gate (the permission itself is carried
+	// by the cell resolver, not this struct). auth.RequirePermissionForContract
+	// reads these to pick the gate shape: Resource → RequirePermissionForResource,
+	// SelfScoped → RequirePermissionForSelf, neither → coarse RequirePermission.
+	Resource   string
+	SelfScoped bool
+
 	// Event-specific fields; required when Kind == "event", rejected
 	// otherwise. Topic is the broker destination name.
 	Topic string
@@ -147,6 +159,10 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
+	if s.Resource != "" && s.SelfScoped {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: Resource and SelfScoped are mutually exclusive "+
+			"(owner-scoped path-param resource vs self-scoped subject)", s.ID)
+	}
 	isInternalPath := strings.HasPrefix(s.Path, cellvocab.InternalPathPrefix) ||
 		s.Path == strings.TrimSuffix(cellvocab.InternalPathPrefix, "/")
 	if isInternalPath && len(s.Clients) == 0 {
@@ -175,6 +191,9 @@ func (s ContractSpec) validateEvent() error {
 	if s.Method != "" || s.Path != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
+	if s.Resource != "" || s.SelfScoped {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: event kind must not carry http Resource/SelfScoped", s.ID)
+	}
 	return nil
 }
 
@@ -194,6 +213,9 @@ func (s ContractSpec) validateGRPC() error {
 	}
 	if s.Method != "" || s.Path != "" || s.Topic != "" {
 		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Method/Path or event Topic", s.ID)
+	}
+	if s.Resource != "" || s.SelfScoped {
+		return fmt.Errorf("contractspec.ContractSpec[%s]: grpc kind must not carry http Resource/SelfScoped", s.ID)
 	}
 	return nil
 }

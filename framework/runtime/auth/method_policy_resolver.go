@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"github.com/ghbvf/gocell/framework/kernel/contractspec"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
@@ -56,28 +57,43 @@ func NewStaticMethodPolicyResolver(byKeyAction map[string]string) authz.MethodPo
 	return staticMethodPolicyResolver{byKey: byKey}
 }
 
-// RequirePermissionForContract returns the contract-derived HTTP route gate: it resolves
-// contractID through the cell-level authz.MethodPolicyResolver ONCE at construction
-// (Mount/Init time) and delegates to RequirePermission(perm) — the SOLE PDP route
-// entry, so this adds no second PDP path (PR-10a D5 holds). It only changes WHERE the
-// permission comes from: a contract-derived resolver instead of a hand-wired
-// authz.PermX() literal in slice code.
+// RequirePermissionForContract returns the contract-derived HTTP route gate. It is the
+// SINGLE funnel for all three HTTP PDP gate shapes (#2355): it resolves the contract's
+// permission through the cell-level authz.MethodPolicyResolver ONCE at construction
+// (Mount/Init time), then dispatches on the gate shape carried by the ContractSpec —
 //
-// It is the HTTP sibling of the gRPC interceptor's PermissionResolver lookup (#2205):
-// both transports source the route/method permission through an
-// authz.MethodPolicyResolver backed by contract metadata, unifying the two onto one
-// contract-derived origin.
+//   - spec.Resource != "" → RequirePermissionForResource(spec.Resource, perm): owner-scoped,
+//     forwards the named path param's value to the PDP as the ownership resource.
+//   - spec.SelfScoped      → RequirePermissionForSelf(perm): self-scoped, forwards the
+//     caller's own subject (no path param).
+//   - neither              → RequirePermission(perm): coarse allow/deny.
 //
-// A resolver miss is codegen drift — the generated handler carries this gate only
-// when its contract declares endpoints.http.permission, and cellgen enrolls every
-// such contract in the cell resolver — so it fails fast at construction (mirroring
-// the gRPC registration-time fail-fast) rather than surfacing a mystery 403 on first
-// request.
+// All three delegate to enforcePermission — the SOLE PDP route entry — so this adds no
+// second PDP path (PR-10a D5 holds). It only changes WHERE the permission and the
+// ownership resource come from: contract metadata (resolver + ContractSpec) instead of a
+// hand-wired authz.PermX() + RequirePermissionForResource("id", …) literal in slice code.
+//
+// It is the HTTP sibling of the gRPC interceptor's PermissionResolver + resource-field
+// lookup (#2205/#2355): both transports source the route/method permission AND the
+// owner-scoped resource shape through contract metadata, unifying the two onto one
+// contract-derived origin. Unlike the resolver-carried permission, the resource path
+// param and self-scoped flag live on the generated ContractSpec literal (golden-locked,
+// alongside Method/Path) — the resolver interface stays transport-neutral (permission-only).
+//
+// Taking the whole ContractSpec rather than the bare ID is deliberate: the resource/
+// self-scoped shape is then read from the single generated truth source, with no second
+// helper and no per-route codegen branch (a baked literal in the call would duplicate the
+// resource that already lives in the ContractSpec).
+//
+// A resolver miss is codegen drift — the generated handler carries this gate only when its
+// contract declares endpoints.http.permission, and cellgen enrolls every such contract in
+// the cell resolver — so it fails fast at construction (mirroring the gRPC registration-time
+// fail-fast) rather than surfacing a mystery 403 on first request.
 //
 // AI-robust Grade: Medium — the gate is callable code, locked to generated callers by
-// HTTP-PERMISSION-GATE-WIRING-FUNNEL-01; the contract→permission binding it reads is
-// golden-locked at codegen (Hard).
-func RequirePermissionForContract(contractID string, resolver authz.MethodPolicyResolver) Policy {
+// HTTP-PERMISSION-GATE-WIRING-FUNNEL-01; the contract→permission binding it reads, and the
+// resource/selfScoped shape it dispatches on, are golden-locked at codegen (Hard).
+func RequirePermissionForContract(spec contractspec.ContractSpec, resolver authz.MethodPolicyResolver) Policy {
 	// Exported-helper self-defense: the generated handler is the only sanctioned
 	// caller (HTTP-PERMISSION-GATE-WIRING-FUNNEL-01), but this func is exported, so it
 	// guards its own resolver contract here rather than relying on the caller. A nil
@@ -89,14 +105,21 @@ func RequirePermissionForContract(contractID string, resolver authz.MethodPolicy
 		panic(panicregister.Approved("http-permission-nil-resolver",
 			errcode.Assertion("RequirePermissionForContract: resolver must not be nil for contract %q (the cell "+
 				"authz.MethodPolicyResolver must be injected by cellgen-wired NewHandler; a nil/typed-nil resolver "+
-				"is a wiring bug)", contractID)))
+				"is a wiring bug)", spec.ID)))
 	}
-	perm, ok := resolver.PermissionForMethod(contractID)
+	perm, ok := resolver.PermissionForMethod(spec.ID)
 	if !ok {
 		panic(panicregister.Approved("http-permission-unmapped",
 			errcode.Assertion("RequirePermissionForContract: contract %q has no permission mapping in the cell "+
 				"MethodPolicyResolver (codegen drift — the contract must declare endpoints.http.permission and "+
-				"cellgen must enroll it; regenerate via gocell generate cell)", contractID)))
+				"cellgen must enroll it; regenerate via gocell generate cell)", spec.ID)))
 	}
-	return RequirePermission(perm)
+	switch {
+	case spec.Resource != "":
+		return RequirePermissionForResource(spec.Resource, perm)
+	case spec.SelfScoped:
+		return RequirePermissionForSelf(perm)
+	default:
+		return RequirePermission(perm)
+	}
 }
