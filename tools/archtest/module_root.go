@@ -17,6 +17,7 @@ const frameworkSubdir = "framework"
 // It delegates to [workspace.WorkspaceRoot] (go.work-first, single-module
 // go.mod fallback) and returns an error rather than calling t.Fatalf, so it is
 // safe to call from non-test contexts such as TestMain.
+// Composed by [RuntimeScopeConfig] (the runtime scope-config single source, #2329).
 //
 // go.work-first means the GoCell monorepo always anchors to the WORKSPACE root
 // — never to a nested module's go.mod when archtest runs from a subdirectory,
@@ -56,6 +57,7 @@ func findModuleRoot(t testing.TB) string {
 // symbol paths as <prefix>+"/framework/kernel/…" (post-#1565 split). The set of
 // ALL workspace modules (production scan / classification) comes from
 // [findWorkspaceModules], not this function.
+// Composed by [RuntimeScopeConfig] (the runtime scope-config single source, #2329).
 //
 // Resolution (never hardcoded, so a module rename / /v2 bump is caught by
 // TestPlatformModulePathMatchesGoMod):

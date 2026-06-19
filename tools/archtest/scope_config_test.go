@@ -1,0 +1,81 @@
+//go:build archtest
+
+package archtest
+
+// INVARIANT: ARCHTEST-SCOPE-CONFIG-UNIT-01
+//
+// scope_config_test.go is the defaults-lock unit-coverage anchor for the runtime
+// scope-config single source ([RuntimeScopeConfig] / [DefaultScopeConfig], #2329):
+// it pins each resolved field to its pre-#2329 path default so the helper-layer
+// convergence is byte-for-byte behavior-preserving for GoCell's own dogfood.
+// ARCHTEST-SCOPE-CONFIG-UNIT-01 is a unit-coverage anchor (same convention as
+// ARCHTEST-EXTERNAL-SURFACE-01 / ARCHTEST-PASS-DRIVER-UNIT-01), not a production
+// invariant gate.
+
+import (
+	"reflect"
+	"testing"
+)
+
+// TestDefaultScopeConfig_ReproducesGoCellDefaults locks the default values of
+// RuntimeScopeConfig to the legacy path defaults, satisfying #2329's
+// requirement: "用单测锁定旧路径默认值".
+//
+// This is the regression anchor: if any default path drifts, this test turns
+// red immediately, before the 370-rule suite has a chance to surface the gap.
+func TestDefaultScopeConfig_ReproducesGoCellDefaults(t *testing.T) {
+	cfg, err := DefaultScopeConfig()
+	if err != nil {
+		t.Fatalf("DefaultScopeConfig() error: %v", err)
+	}
+
+	root, err := lookupModuleRoot()
+	if err != nil {
+		t.Fatalf("lookupModuleRoot() error: %v", err)
+	}
+	if got := cfg.WorkspaceRoot(); got != root {
+		t.Errorf("WorkspaceRoot() = %q, want %q (lookupModuleRoot)", got, root)
+	}
+
+	want, err := moduleImportPath(root)
+	if err != nil {
+		t.Fatalf("moduleImportPath() error: %v", err)
+	}
+	if got := cfg.TargetModulePath(); got != want {
+		t.Errorf("TargetModulePath() = %q, want %q (moduleImportPath)", got, want)
+	}
+
+	// In GoCell's own dogfood the target module == the platform module.
+	if got := cfg.TargetModulePath(); got != PlatformModulePath {
+		t.Errorf("TargetModulePath() = %q, want PlatformModulePath %q", got, PlatformModulePath)
+	}
+
+	if got := cfg.FrameworkModulePath(); got != PlatformFrameworkModulePath {
+		t.Errorf("FrameworkModulePath() = %q, want PlatformFrameworkModulePath %q", got, PlatformFrameworkModulePath)
+	}
+
+	if got := cfg.PlatformModulePath(); got != PlatformModulePath {
+		t.Errorf("PlatformModulePath() = %q, want PlatformModulePath %q", got, PlatformModulePath)
+	}
+
+	if got := cfg.PlatformCellsModulePath(); got != PlatformCellsModulePath {
+		t.Errorf("PlatformCellsModulePath() = %q, want PlatformCellsModulePath %q", got, PlatformCellsModulePath)
+	}
+
+	if got := cfg.PlatformCellScanDirs(); !reflect.DeepEqual(got, []string{PlatformCellsDir}) {
+		t.Errorf("PlatformCellScanDirs() = %v, want %v", got, []string{PlatformCellsDir})
+	}
+}
+
+// TestScopeConfig_ScanDirsSingleSource asserts that RuntimeScopeConfig.PlatformCellScanDirs()
+// and the standalone platformCellScanDirs() helper return the same slice, proving
+// they share a single source (platformCellScanDirsDefault).
+func TestScopeConfig_ScanDirsSingleSource(t *testing.T) {
+	cfg, err := DefaultScopeConfig()
+	if err != nil {
+		t.Fatalf("DefaultScopeConfig() error: %v", err)
+	}
+	if got, want := cfg.PlatformCellScanDirs(), platformCellScanDirs(); !reflect.DeepEqual(got, want) {
+		t.Errorf("cfg.PlatformCellScanDirs() = %v, want %v (platformCellScanDirs)", got, want)
+	}
+}
