@@ -48,8 +48,9 @@ func DeviceURISAN(scope CertScope) *url.URL {
 // certificate's URI SANs can skip unrelated URIs and fail-closed when none match.
 //
 // The returned tenant is the raw host string; the caller validates it as a
-// canonical tenant (e.g. via [NewCertScope], which rejects a non-canonical
-// tenant). The device id is path-unescaped to invert [DeviceURISAN]'s escaping.
+// canonical tenant (e.g. via [tenant.ParseTenantID], the untrusted-input
+// boundary that normalizes case and rejects nil UUID). The device id is
+// path-unescaped to invert [DeviceURISAN]'s escaping.
 func ParseDeviceURISAN(u *url.URL) (tenantID string, deviceID string, ok bool) {
 	if u == nil || u.Scheme != deviceURISANScheme || u.Host == "" {
 		return "", "", false

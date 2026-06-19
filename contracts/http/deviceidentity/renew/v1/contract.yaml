@@ -1,12 +1,13 @@
 id: http.deviceidentity.renew.v1
 kind: http
 ownerCell: _framework
-consistencyLevel: L2
+consistencyLevel: L1
 lifecycle: active
 description: |
   Device identity certificate renewal — reissues a certificate for an existing device.
   ref: RFC 7030 §4.2 simplereenroll
   ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+  注：同步签发前端；cert-issued outbox emit（升 L2）随 PR-9 #1905 落地。
 endpoints:
   server: _framework
   clients: []

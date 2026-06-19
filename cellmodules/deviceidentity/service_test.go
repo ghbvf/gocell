@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"errors"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -839,6 +840,164 @@ func TestParseTTL(t *testing.T) {
 			}
 			if got != tc.wantTTL {
 				t.Errorf("TTL = %v, want %v", got, tc.wantTTL)
+			}
+		})
+	}
+}
+
+// ─── Renew error paths (symmetric to Enroll) ─────────────────────────────────
+
+func TestRenew_BadBase64CSR_Returns400(t *testing.T) {
+	t.Parallel()
+	clk := testClk(t)
+	_, ver := newTestEnrollmentScheme(t, clk)
+	svc := newService(t, clk, &fakeSigner{issued: testIssuedCert(t)}, newGrantedAuthorizer(t), ver)
+
+	ctx := peerCtxWithDeviceURI(t)
+	resp, err := svc.Renew(ctx, &renew.Request{Csr: "!!not-valid-base64!!"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(renew.Renew400ErrorResponse); !ok {
+		t.Errorf("expected 400, got %T", resp)
+	}
+}
+
+func TestRenew_EmailAddresses_Returns422(t *testing.T) {
+	t.Parallel()
+	clk := testClk(t)
+	_, ver := newTestEnrollmentScheme(t, clk)
+	svc := newService(t, clk, &fakeSigner{issued: testIssuedCert(t)}, newGrantedAuthorizer(t), ver)
+
+	ctx := peerCtxWithDeviceURI(t)
+	resp, err := svc.Renew(ctx, &renew.Request{
+		Csr: testCSRB64(t),
+		SubjectAltNames: &renew.RequestSubjectAltNames{
+			EmailAddresses: []string{"user@example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(renew.Renew422ErrorResponse); !ok {
+		t.Errorf("expected 422 for email SANs, got %T", resp)
+	}
+}
+
+func TestRenew_UnknownUsage_Returns422(t *testing.T) {
+	t.Parallel()
+	clk := testClk(t)
+	_, ver := newTestEnrollmentScheme(t, clk)
+	svc := newService(t, clk, &fakeSigner{issued: testIssuedCert(t)}, newGrantedAuthorizer(t), ver)
+
+	ctx := peerCtxWithDeviceURI(t)
+	resp, err := svc.Renew(ctx, &renew.Request{
+		Csr:    testCSRB64(t),
+		Usages: []string{"unknown-usage"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(renew.Renew422ErrorResponse); !ok {
+		t.Errorf("expected 422 for unknown usage, got %T", resp)
+	}
+}
+
+func TestRenew_AuthorizerUnavailable_Returns503(t *testing.T) {
+	t.Parallel()
+	clk := testClk(t)
+	_, ver := newTestEnrollmentScheme(t, clk)
+	unavailErr := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "authorizer down")
+	authorizer := &fakeAuthorizer{err: unavailErr}
+	svc := newService(t, clk, &fakeSigner{issued: testIssuedCert(t)}, authorizer, ver)
+
+	ctx := peerCtxWithDeviceURI(t)
+	resp, err := svc.Renew(ctx, &renew.Request{Csr: testCSRB64(t)})
+	if err != nil {
+		t.Fatalf("unexpected Go error: %v", err)
+	}
+	if _, ok := resp.(renew.Renew503ErrorResponse); !ok {
+		t.Errorf("expected 503, got %T", resp)
+	}
+}
+
+func TestRenew_NotGranted_Returns403(t *testing.T) {
+	t.Parallel()
+	clk := testClk(t)
+	_, ver := newTestEnrollmentScheme(t, clk)
+	authorizer := &fakeAuthorizer{granted: false}
+	svc := newService(t, clk, &fakeSigner{issued: testIssuedCert(t)}, authorizer, ver)
+
+	ctx := peerCtxWithDeviceURI(t)
+	resp, err := svc.Renew(ctx, &renew.Request{Csr: testCSRB64(t)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(renew.Renew403ErrorResponse); !ok {
+		t.Errorf("expected 403, got %T", resp)
+	}
+}
+
+// ─── buildSANs edge cases ─────────────────────────────────────────────────────
+
+func TestBuildSANs_MalformedIP_Returns400(t *testing.T) {
+	t.Parallel()
+	scope := testCertScope(t)
+	fac := enrollErrFactory{}
+	_, err := buildSANs(fac, scope, nil, []string{"not-an-ip"}, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for malformed IP SAN, got nil")
+	}
+	var typed enrollTypedErr
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected enrollTypedErr, got %T", err)
+	}
+	if _, ok := typed.resp.(enroll.Enroll400ErrorResponse); !ok {
+		t.Errorf("expected 400 response, got %T", typed.resp)
+	}
+}
+
+func TestBuildSANs_MalformedURI_Returns400(t *testing.T) {
+	t.Parallel()
+	scope := testCertScope(t)
+	fac := enrollErrFactory{}
+	// "://bad" is rejected by url.Parse as a scheme-only URL with no host.
+	// However url.Parse is lenient — use a truly invalid URI that has a parse error.
+	// "\x00" in a URI causes url.Parse to return an error.
+	_, err := buildSANs(fac, scope, nil, nil, []string{"http://\x00bad"}, nil)
+	if err == nil {
+		t.Fatal("expected error for malformed URI SAN, got nil")
+	}
+	var typed enrollTypedErr
+	if !errors.As(err, &typed) {
+		t.Fatalf("expected enrollTypedErr, got %T", err)
+	}
+	if _, ok := typed.resp.(enroll.Enroll400ErrorResponse); !ok {
+		t.Errorf("expected 400 response, got %T", typed.resp)
+	}
+}
+
+// ─── epochInt64 ──────────────────────────────────────────────────────────────
+
+func TestEpochInt64(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input uint64
+		want  int64
+	}{
+		{"zero", 0, 0},
+		{"maxInt64", uint64(math.MaxInt64), math.MaxInt64},
+		{"maxInt64_plus_one_clamped", uint64(math.MaxInt64) + 1, math.MaxInt64},
+		{"maxUint64_clamped", math.MaxUint64, math.MaxInt64},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := epochInt64(tc.input)
+			if got != tc.want {
+				t.Errorf("epochInt64(%d) = %d, want %d", tc.input, got, tc.want)
 			}
 		})
 	}

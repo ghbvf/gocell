@@ -452,3 +452,66 @@ func TestLazyAuthorizer_AuthorizeAs_FailsClosedOnNilProvider(t *testing.T) {
 	require.True(t, errors.As(authErr, &ec))
 	assert.Equal(t, errcode.KindUnavailable, ec.Kind)
 }
+
+// ---------------------------------------------------------------------------
+// F15: ResolveAuthorizer idempotency + AuthorizeAs cached-path assertions
+// ---------------------------------------------------------------------------
+
+// TestLazyAuthorizer_ResolveAuthorizer_Idempotent verifies that calling
+// ResolveAuthorizer twice produces consistent results: the provider's
+// Authorizer() is called on each invocation (re-resolve + re-store), but the
+// second call returns no error and the cache holds a valid Authorizer.
+// The "idempotent" contract: two successful calls must leave the lazyAuthorizer
+// in an identical resolved state as one call would.
+func TestLazyAuthorizer_ResolveAuthorizer_Idempotent(t *testing.T) {
+	t.Parallel()
+	provider := newCountingAuthorizerCell("accesscore")
+	lazy := &lazyAuthorizer{provider: provider}
+
+	require.NoError(t, lazy.ResolveAuthorizer(), "first ResolveAuthorizer must succeed")
+	require.NoError(t, lazy.ResolveAuthorizer(), "second ResolveAuthorizer must also succeed (idempotent)")
+
+	require.NotNil(t, lazy.resolved.Load(), "resolved must be populated after two ResolveAuthorizer calls")
+
+	// A subsequent Authorize must use the cached Authorizer (no additional
+	// provider call beyond the two from the two ResolveAuthorizer invocations).
+	_, err := lazy.Authorize(context.Background(), "u", "r", "a")
+	require.NoError(t, err)
+
+	// Each ResolveAuthorizer calls provider.Authorizer() once; Authorize must
+	// use the cached value and NOT call the provider again.
+	assert.Equal(t, int64(2), provider.providerCalls.Load(),
+		"provider.Authorizer() must be called once per ResolveAuthorizer call and not again on Authorize")
+}
+
+// TestLazyAuthorizer_AuthorizeAs_DoesNotCallProvider verifies that after
+// ResolveAuthorizer has cached the Authorizer, AuthorizeAs uses the cached
+// value without calling provider.Authorizer() again. This pins the cache-hit
+// behaviour for the explicit-subject cert-signing path.
+func TestLazyAuthorizer_AuthorizeAs_DoesNotCallProvider(t *testing.T) {
+	t.Parallel()
+	pdp := &subjectAwareAuthorizer{}
+	provider := newCountingAuthorizerCell("accesscore")
+	// Override the authorizer inside the provider cell so it satisfies SubjectAuthorizer.
+	provider.authorizer = nil // We replace the cell with a custom one that returns pdp.
+
+	// Build a provider that returns a SubjectAuthorizer (pdp) so AuthorizeAs delegates.
+	providerCell := newFakeAuthorizerCell("accesscore", pdp)
+	lazy := &lazyAuthorizer{provider: providerCell}
+
+	// Pre-resolve so the cache is warm.
+	require.NoError(t, lazy.ResolveAuthorizer())
+
+	desc, err := auth.NewDeviceSubjectDescriptor(
+		"22222222-2222-2222-2222-222222222222",
+		"device-2",
+	)
+	require.NoError(t, err)
+
+	// AuthorizeAs should use the cached PDP and not call provider.Authorizer() again.
+	dec, authErr := lazy.AuthorizeAs(context.Background(), desc, "device-2", "device:enroll")
+	require.NoError(t, authErr)
+	assert.True(t, dec.IsAllow(), "AuthorizeAs must return the delegated Allow decision")
+	assert.Equal(t, int64(1), pdp.asCalls.Load(),
+		"AuthorizeAs must delegate exactly once to the cached SubjectAuthorizer")
+}

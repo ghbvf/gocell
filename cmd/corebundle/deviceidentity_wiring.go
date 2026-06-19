@@ -11,6 +11,7 @@ import (
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/certsigning"
@@ -68,7 +69,11 @@ func deviceIdentityServingOptions(
 	// explicit-subject decisions would silently disable device enrollment.
 	pdp, ok := authorizer.(auth.SubjectAuthorizer)
 	if !ok {
-		return nil, nil, fmt.Errorf("primary authorizer does not implement auth.SubjectAuthorizer")
+		return nil, nil, errcode.New(
+			errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"primary authorizer does not implement auth.SubjectAuthorizer",
+			errcode.WithInternal(errcode.InternalAttr("authorizer_type", fmt.Sprintf("%T", authorizer))),
+		)
 	}
 	certDeps, err := certdeps.Resolve(clk, topo)
 	if err != nil {

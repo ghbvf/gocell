@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"time"
@@ -66,6 +67,8 @@ func NewDeviceMTLSServerConfig(ctx context.Context, clk clock.Clock, signer cert
 	if err != nil {
 		return nil, fmt.Errorf("build device-mTLS server config: %w", err)
 	}
+	notAfter := clk.Now().Add(ephemeralServerCertTTL)
+	slog.Info("device-mTLS server cert generated", slog.Time("not_after", notAfter))
 	return cfg, nil
 }
 

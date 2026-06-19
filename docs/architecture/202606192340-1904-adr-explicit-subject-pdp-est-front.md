@@ -33,9 +33,10 @@ Epic #1895 把设备证书/PKI 转为**框架能力**。PR-8b 交付 EST(RFC 703
 ### D1 — sealed `auth.SubjectDescriptor`（Hard：privileged 不可铸）
 
 显式 subject 描述符（≈ k8s `user.Info` + Cedar `EntityUid`）：unexported 字段（kind/sub/tenant），
-构造器注入式。**仅** `NewDeviceSubjectDescriptor(tenant, deviceID)`（kind=device，fail-closed 校验
-canonical tenant + 非空 sub）与（背景 system 用）`NewSystemSubjectDescriptor` 两个构造器——
-**无 admin/super-admin 构造器**。privileged subject 经此路径**编译不出**（sealed construction 范本）。
+构造器注入式。**无 admin/super-admin 构造器**；privileged subject 经此路径**编译不出**（sealed
+construction 范本）。本 PR 仅交付 `NewDeviceSubjectDescriptor(tenant, deviceID)`（kind=device，
+fail-closed 校验 canonical tenant + 非空 sub）；`NewSystemSubjectDescriptor`（certlifecycle/background
+reconcile 用）延至 PR-7 #1903，届时遵循同一 Hard 约束（无 admin/super-admin 构造器）。
 
 ### D2 — segregated `auth.SubjectAuthorizer.AuthorizeAs`（ISP）
 

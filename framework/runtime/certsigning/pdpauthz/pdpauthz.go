@@ -73,12 +73,6 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/certsigning"
 )
 
-// KindInvalid is the errcode kind used for construction-time validation failures.
-const KindInvalid = errcode.KindInvalid
-
-// ErrValidationFailed is the errcode code used for construction-time validation failures.
-const ErrValidationFailed = errcode.ErrValidationFailed
-
 // Const-literal messages (MESSAGE-CONST-LITERAL-01).
 const (
 	errMsgNilPDP         = "pdpauthz: SubjectAuthorizer must not be nil"
@@ -115,10 +109,10 @@ var _ certsigning.Authorizer = (*Authorizer)(nil)
 // nil in that case.
 func New(pdp auth.SubjectAuthorizer, maxTTL time.Duration) (*Authorizer, error) {
 	if validation.IsNilInterface(pdp) {
-		return nil, errcode.New(KindInvalid, ErrValidationFailed, errMsgNilPDP)
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, errMsgNilPDP)
 	}
 	if maxTTL <= 0 {
-		return nil, errcode.New(KindInvalid, ErrValidationFailed, errMsgNonPositiveTTL)
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, errMsgNonPositiveTTL)
 	}
 	return &Authorizer{pdp: pdp, maxTTL: maxTTL}, nil
 }
@@ -186,7 +180,8 @@ func (a *Authorizer) AuthorizeEnroll(ctx context.Context, claim certsigning.Enro
 	// Baseline obligations are zero, so the normal device:enroll path is
 	// unaffected.
 	if obl := dec.Obligations(); !obl.IsZero() {
-		slog.WarnContext(ctx, "pdpauthz: device:enroll Allow carries non-zero obligation; denying cert (cert PEP cannot enforce obligation)",
+		slog.WarnContext(
+			ctx, "pdpauthz: device:enroll Allow carries non-zero obligation; denying cert (cert PEP cannot enforce obligation)",
 			slog.String("device_id", deviceID.String()),
 			slog.String("tenant_id", tenantID.String()),
 		)
