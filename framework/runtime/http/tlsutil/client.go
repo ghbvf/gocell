@@ -110,7 +110,8 @@ func verifyPeerCellIdentity(rootCAs *x509.CertPool, expectedPeerID spiffeid.Cell
 
 		peerSet, err := spiffeid.CellSetFromURIs(leaf.URIs)
 		if err != nil {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyMixedTD)
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyMixedTD,
+				errcode.WithInternal(errcode.InternalAttr("peer_subject", leaf.Subject.String())))
 		}
 		if peerSet.IsEmpty() {
 			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyNoCellID)
@@ -118,7 +119,7 @@ func verifyPeerCellIdentity(rootCAs *x509.CertPool, expectedPeerID spiffeid.Cell
 		if !peerSet.Contains(expectedPeerID) {
 			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyPeerIDMismatch,
 				errcode.WithInternal(
-					errcode.InternalAttr("expected", expectedPeerID.String()),
+					errcode.InternalAttr("expected_id", expectedPeerID.String()),
 					errcode.InternalAttr("peer_set", peerSet.String()),
 				))
 		}

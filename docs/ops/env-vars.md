@@ -295,7 +295,7 @@ topology 含非 loopback group endpoint 时 `celltls.Resolve` 启动 fail-fast�
 - 四变量全设但无 remote cell → 仍 honor（loopback remote 亦升 mTLS）。
 - cert chain 验证失败 → TLS 握手拒绝（连接终止）。
 - server cert cell 集合不含 targetCell → TLS 握手拒绝（client 侧 `VerifyConnection` 集合成员判定失败，#2297）。
-- client cert cell 集合不含 service-token callerCell → **401**（server 侧 cross-bind middleware，`CellSet.Contains`，#2297）。
+- client cert cell 集合不含 service-token callerCell → **403**（server 侧 cross-bind middleware `verifyCrossBind`，`CellSet.Contains`，#2297）；**401 仅出现在无 peer 证书时**（cross-bind 前 peer 层未携带 cert）。
 
 > **Warning — loopback remote 亦强制 mTLS（反直觉行为）：**
 > 即使 remote peer 端点是 loopback 地址（`localhost` / `127.x.x.x` / `::1`），只要四个 TLS

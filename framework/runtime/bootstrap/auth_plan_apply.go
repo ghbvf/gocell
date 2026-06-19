@@ -35,6 +35,10 @@ const (
 		" the cross-bind guard needs the server cert's SPIFFE trust domain (set WithListenerTLS with a cell cert)"
 	msgCrossBindServerCertNoID = "bootstrap: listener server certificate carries no cell SPIFFE ID" +
 		" (URI SAN spiffe://<td>/cell/<cell>); the cross-bind guard cannot derive the expected peer trust domain"
+	// msgCrossBindServerCertMixedTD は混合 trust domain 情况（cert 携带了来自 ≥2 个不同 trust
+	// domain 的 cell SPIFFE ID）的专用错误消息，与无 cell SPIFFE ID 的情况（msgCrossBindServerCertNoID）区分。
+	msgCrossBindServerCertMixedTD = "bootstrap: listener server certificate carries cell SPIFFE IDs from more than one trust domain;" +
+		" a workload cert must belong to exactly one trust domain (the cross-bind guard requires a single peer trust domain)"
 )
 
 // kauth.AuthProvider is the kernel-defined interface for auth provider cells.
@@ -180,7 +184,12 @@ func serverCertTrustDomain(tlsCfg *tls.Config) (string, error) {
 		leaf = parsed
 	}
 	set, err := spiffeid.CellSetFromURIs(leaf.URIs)
-	if err != nil || set.IsEmpty() {
+	if err != nil {
+		// cert 携带了来自 ≥2 个不同 trust domain 的 cell SPIFFE ID（混合 TD）——独立根因。
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertMixedTD)
+	}
+	if set.IsEmpty() {
+		// cert 不含任何 cell SPIFFE ID URI SAN。
 		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertNoID)
 	}
 	return set.TrustDomain(), nil

@@ -185,7 +185,8 @@ func (s CellSet) Contains(id CellID) bool {
 }
 
 // TrustDomain returns the common trust domain of the set's cells, or "" for the
-// empty set.
+// empty set. 仅用于诊断或传给 [ForCell] / [ValidateTrustDomain] 等调用；不要在包外直接
+// 比较返回的字符串——成员判定走 [CellSet.Contains](CellID)。
 func (s CellSet) TrustDomain() string { return s.trustDomain }
 
 // Len returns the number of distinct cells in the set.
@@ -218,7 +219,26 @@ func (c CellID) String() string {
 	return scheme + "://" + c.trustDomain + cellPathPrefix + c.cell
 }
 
-// TrustDomain returns the trust-domain part.
+// Cells returns the sorted slice of CellIDs in the set. The zero-value / empty set
+// returns nil (no allocation). The returned slice is a snapshot — mutations to the
+// set after this call are not reflected. Callers should use the returned []CellID
+// only for diagnostics and error reporting; membership checks must go through
+// [CellSet.Contains] (which takes a CellID, not a bare string).
+func (s CellSet) Cells() []CellID {
+	if s.IsEmpty() {
+		return nil
+	}
+	ids := make([]CellID, 0, len(s.cells))
+	for cell := range s.cells {
+		ids = append(ids, CellID{trustDomain: s.trustDomain, cell: cell})
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].cell < ids[j].cell })
+	return ids
+}
+
+// TrustDomain returns the trust-domain part. 仅用于诊断 / 传给 [ForCell] /
+// [ValidateTrustDomain] 使用；不要在包外直接比较返回值——成员判定走
+// [CellSet.Contains](CellID)。
 func (c CellID) TrustDomain() string { return c.trustDomain }
 
 // Cell returns the cell part.

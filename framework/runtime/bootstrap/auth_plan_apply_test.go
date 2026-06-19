@@ -264,6 +264,15 @@ func TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind(t *testing.T) 
 		require.Error(t, err, "cross-bind cannot derive a trust domain → fail closed at wiring")
 	})
 
+	// F10: cert 携带来自两个不同 trust domain 的 cell SPIFFE ID（混合 TD）→ 独立错误分支。
+	t.Run("fails closed: server cert has mixed trust domains", func(t *testing.T) {
+		t.Parallel()
+		b := bootstrapWithListener(ref, chain, mtlsConfigWithMixedTD(t))
+		b.clock = clock.Real()
+		_, _, _, err := b.applyListenerAuthChain(ref, chain)
+		require.Error(t, err, "cross-bind cannot handle a mixed-trust-domain server cert → fail closed at wiring")
+	})
+
 	t.Run("fails closed: no server TLS config", func(t *testing.T) {
 		t.Parallel()
 		b := bootstrapWithListener(ref, chain, nil)
@@ -271,6 +280,24 @@ func TestApplyListenerAuthChain_MTLSServiceToken_AppendsCrossBind(t *testing.T) 
 		_, _, _, err := b.applyListenerAuthChain(ref, chain)
 		require.Error(t, err)
 	})
+}
+
+// mtlsConfigWithMixedTD builds a *tls.Config whose server certificate's parsed Leaf
+// carries cell SPIFFE IDs from TWO different trust domains — used to exercise the
+// F10 mixed-trust-domain error branch in serverCertTrustDomain.
+func mtlsConfigWithMixedTD(t *testing.T) *tls.Config {
+	t.Helper()
+	u1, err := url.Parse("spiffe://example.org/cell/accesscore")
+	require.NoError(t, err)
+	u2, err := url.Parse("spiffe://other.org/cell/configcore")
+	require.NoError(t, err)
+	leaf := &x509.Certificate{URIs: []*url.URL{u1, u2}}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    x509.NewCertPool(),
+		Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}, Leaf: leaf}},
+	}
 }
 
 // mtlsConfigWithCellURI builds a *tls.Config whose server certificate's parsed

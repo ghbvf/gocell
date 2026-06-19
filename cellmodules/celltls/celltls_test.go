@@ -155,10 +155,11 @@ func TestResolve_MultiCellSharedEndpoint_Succeeds(t *testing.T) {
 func TestResolve_CertColocatedExactMatch(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		certCells []string
-		colocated []string
-		wantErr   bool
+		name        string
+		certCells   []string
+		colocated   []string
+		trustDomain string // 若为空则默认使用 example.org（cert 的 trust domain）
+		wantErr     bool
 	}{
 		{name: "exact match single", certCells: []string{"accesscore"}, colocated: []string{"accesscore"}},
 		{
@@ -173,12 +174,25 @@ func TestResolve_CertColocatedExactMatch(t *testing.T) {
 			name:      "cert carries an unhosted extra cell -> fail",
 			certCells: []string{"accesscore", "configcore"}, colocated: []string{"accesscore"}, wantErr: true,
 		},
+		{
+			// F5: cert 用 example.org 签发，但 cfg.TrustDomain 设为 other.org；
+			// hosted cell 在 cert set 里 Contains 失败（TD 不符），期望 error。
+			name:        "cert trust domain != cfg.TrustDomain -> fail",
+			certCells:   []string{"accesscore"},
+			colocated:   []string{"accesscore"},
+			trustDomain: "other.org",
+			wantErr:     true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			certFile, keyFile, caFile := writeCellMaterialFor(t, tc.certCells...)
-			cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: "example.org"}
+			td := tc.trustDomain
+			if td == "" {
+				td = "example.org"
+			}
+			cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: td}
 			topo := topoColocated(t, tc.colocated,
 				bootstrap.RemoteCellEndpoint{CellID: "auditcore", Endpoint: "https://audit.svc:8443"})
 			_, err := celltls.Resolve(topo, cfg)
@@ -189,6 +203,22 @@ func TestResolve_CertColocatedExactMatch(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+// TestResolve_RemoteOnlySkipsCertCheck 固化「ColocatedCells 空 → 跳过精确匹配」设计（#2297）：
+// topology 只有 Remote（本进程不宣告 colocated cell），即使 cert 携带与 colocated 无关的多 SAN
+// 也应成功（精确匹配被跳过）。验证 ClientIdentity 非零 + ServerTLS 非 nil。
+func TestResolve_RemoteOnlySkipsCertCheck(t *testing.T) {
+	t.Parallel()
+	// cert 携带 accesscore + configcore，但 topology 仅声明 Remote（colocated 为空）。
+	certFile, keyFile, caFile := writeCellMaterialFor(t, "accesscore", "configcore")
+	cfg := celltls.Config{CertFile: certFile, KeyFile: keyFile, CAFile: caFile, TrustDomain: "example.org"}
+	// 不声明 Colocated，仅有 Remote endpoint。
+	splitTopo := topo(t, bootstrap.RemoteCellEndpoint{CellID: "auditcore", Endpoint: "https://audit.svc:8443"})
+	deps, err := celltls.Resolve(splitTopo, cfg)
+	require.NoError(t, err, "remote-only topology (colocated empty) must skip cert-SAN exact-match and succeed")
+	assert.False(t, deps.ClientIdentity.IsZero(), "ClientIdentity must be populated when TLS material is configured")
+	assert.NotNil(t, deps.ServerTLS, "ServerTLS must be non-nil when TLS material is configured")
 }
 
 func TestResolve_ErrorPaths(t *testing.T) {

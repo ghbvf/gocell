@@ -189,15 +189,33 @@ func validateCertCoversColocated(certPEM []byte, trustDomain string, topo bootst
 	}
 	// Exact match: every hosted cell present (no missing) AND no extra cell in the
 	// cert beyond the hosted set (cardinality equal).
-	if len(missing) > 0 || set.Len() != len(hosted) {
-		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertColocatedMismatch,
-			errcode.WithInternal(
-				errcode.InternalAttr("hosted_cells", strings.Join(hosted, ",")),
-				errcode.InternalAttr("cert_set", set.String()),
-				errcode.InternalAttr("missing", strings.Join(missing, ",")),
-			))
+	if len(missing) == 0 && set.Len() == len(hosted) {
+		return nil
 	}
-	return nil
+	return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertColocatedMismatch,
+		errcode.WithInternal(
+			errcode.InternalAttr("hosted_cells", strings.Join(hosted, ",")),
+			errcode.InternalAttr("cert_set", set.String()),
+			errcode.InternalAttr("missing", strings.Join(missing, ",")),
+			errcode.InternalAttr("extra", strings.Join(certExtraCells(set, hosted), ",")),
+		))
+}
+
+// certExtraCells returns the canonical SPIFFE IDs in set whose cell name is not in
+// the hosted list — the cells a workload cert carries BEYOND what the process
+// hosts (a least-privilege violation), for the mismatch diagnostic.
+func certExtraCells(set spiffeid.CellSet, hosted []string) []string {
+	hostedSet := make(map[string]struct{}, len(hosted))
+	for _, h := range hosted {
+		hostedSet[h] = struct{}{}
+	}
+	var extra []string
+	for _, id := range set.Cells() {
+		if _, ok := hostedSet[id.Cell()]; !ok {
+			extra = append(extra, id.String())
+		}
+	}
+	return extra
 }
 
 // certCellSet parses the leaf certificate from a PEM block and returns its cell

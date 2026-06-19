@@ -256,6 +256,90 @@ func TestCellSetFromURIs(t *testing.T) {
 	}
 }
 
+// TestCellSetString exercises CellSet.String(): 空集返回 "[]"；单元素返回带完整 URI
+// 的括号表示；两元素无论传入顺序如何，输出都按字母序排定（排序稳定性）。
+func TestCellSetString(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		uris    []*url.URL
+		wantStr string
+	}{
+		{
+			name:    "empty set -> []",
+			uris:    nil,
+			wantStr: "[]",
+		},
+		{
+			name:    "single element",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
+			wantStr: "[spiffe://example.org/cell/accesscore]",
+		},
+		{
+			// 两元素：无论传入顺序，输出都按 configcore < accesscore 的字母序排列。
+			name: "two elements sorted (input order: configcore first)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+			},
+			wantStr: "[spiffe://example.org/cell/accesscore spiffe://example.org/cell/configcore]",
+		},
+		{
+			// 相同两元素，换传入顺序，输出不变——验证排序稳定。
+			name: "two elements sorted (input order: accesscore first)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+			},
+			wantStr: "[spiffe://example.org/cell/accesscore spiffe://example.org/cell/configcore]",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			set, err := spiffeid.CellSetFromURIs(tc.uris)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStr, set.String())
+		})
+	}
+}
+
+// TestCellSetCells exercises CellSet.Cells(): 空集返回 nil；非空集返回排序后的 []CellID。
+func TestCellSetCells(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty set returns nil", func(t *testing.T) {
+		t.Parallel()
+		var empty spiffeid.CellSet
+		require.Nil(t, empty.Cells())
+	})
+
+	t.Run("single element", func(t *testing.T) {
+		t.Parallel()
+		set, err := spiffeid.CellSetFromURIs([]*url.URL{
+			mustURL(t, "spiffe://example.org/cell/accesscore"),
+		})
+		require.NoError(t, err)
+		cells := set.Cells()
+		require.Len(t, cells, 1)
+		require.Equal(t, "spiffe://example.org/cell/accesscore", cells[0].String())
+	})
+
+	t.Run("two elements are sorted", func(t *testing.T) {
+		t.Parallel()
+		// 传入顺序 configcore, accesscore；期望 Cells() 返回 accesscore, configcore（字母序）。
+		set, err := spiffeid.CellSetFromURIs([]*url.URL{
+			mustURL(t, "spiffe://example.org/cell/configcore"),
+			mustURL(t, "spiffe://example.org/cell/accesscore"),
+		})
+		require.NoError(t, err)
+		cells := set.Cells()
+		require.Len(t, cells, 2)
+		require.Equal(t, "spiffe://example.org/cell/accesscore", cells[0].String())
+		require.Equal(t, "spiffe://example.org/cell/configcore", cells[1].String())
+	})
+}
+
 // TestCellSetContains exercises the sole membership predicate (the go-spiffe
 // AuthorizeMemberOf analog): trust domain + cell must both match, the zero CellID
 // is never a member, and the empty set contains nothing.
