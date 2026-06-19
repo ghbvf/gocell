@@ -502,7 +502,7 @@ type RetryPolicySpec struct {
 // ADR (#1044).
 type CommandSpec struct {
 	// DispatchID is the contract id used as the command.Registry key const,
-	// e.g. "command.devicecommand.enqueue.v1".
+	// e.g. "command.remotecommand.v1".
 	DispatchID string
 	// HandlerMethod is the method name on the generated Handler interface:
 	// "Handle" + goPascalCase(domainLastSegment(id)).

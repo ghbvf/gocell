@@ -34,7 +34,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/framework/runtime/command"
-	cmdenqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
@@ -85,7 +85,7 @@ func WithCursorCodec(c *query.CursorCodec) Option {
 
 // WithCommandRegistry wires the process command.Registry into which the cell
 // registers its synchronous command-bus handlers (today:
-// command.devicecommand.enqueue.v1, via cmdenqueue.Register in initSlices).
+// command.remotecommand.v1, via cmdremote.Register in initSlices).
 //
 // REQUIRED, not optional: devicecell declares command handle contracts, so an
 // assembly that omits this fails fast in Init (initSlices) rather than silently
@@ -102,7 +102,7 @@ func WithCommandRegistry(reg *commandruntime.Registry) Option {
 }
 
 // WithBootstrapEmitter wires the writer-backed sealed CellEmitter the
-// devicebootstrap reactive slice uses to emit command.devicecommand.enqueue.v1
+// devicebootstrap reactive slice uses to emit command.remotecommand.v1
 // async command entries into the outbox store (where the relay polls them),
 // instead of the cell's direct-publish emitter (which fans out to the broker/eb
 // for device-registered events). Batch-3 (#1698): the command-relay subsystem
@@ -123,7 +123,7 @@ func WithBootstrapEmitter(e outbox.CellEmitter) Option {
 }
 
 // WithBootstrapTxManager sets the CellTxManager injected into the devicebootstrap
-// reactive slice. That slice wraps cmdenqueue.EmitAsync in txRunner.RunInTx so
+// reactive slice. That slice wraps cmdremote.EmitAsync in txRunner.RunInTx so
 // durable mode (PG outbox writer) gets a real transaction in ctx. The cell
 // defaults the field to outbox.DemoCellTxManager() (no-op) in NewDeviceCell, so
 // demo mode and tests work without wiring it.
@@ -395,7 +395,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(deviceregister.SliceMetadata()))
 
 	// device-bootstrap slice: event-reactive producer subscribing to
-	// event.device-registered.v1 and emitting a command.devicecommand.enqueue.v1
+	// event.device-registered.v1 and emitting a command.remotecommand.v1
 	// async command for each new device. Batch-3 (#1698): the emitter is the
 	// writer-backed CellEmitter (WithBootstrapEmitter) so the emitted command entry
 	// lands in the outbox store the relay polls — NOT the cell's direct-publish
@@ -430,7 +430,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return err
 	}
 	// The sync command-bus registry is required: devicecell declares command
-	// handle contracts (command.devicecommand.enqueue.v1), so the generated
+	// handle contracts (command.remotecommand.v1), so the generated
 	// funnel must be wired to a real handler. Fail fast rather than silently
 	// leaving it unregistered (the dead-but-compiles state #1580 fixes) — same
 	// "no soft fallback" rationale as the commandQueue guard above.
@@ -479,7 +479,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		devicecmd.WithSliceName("devicecommand"),
 		devicecmd.WithOnCommandResolved(c.certCompletionSvc.OnCommandResolved),
 		// #1610 cross-cell idempotency consumer: the async-commands HTTP endpoint
-		// emits cmdenqueue through the same writer-backed emitter + tx manager the
+		// emits cmdremote through the same writer-backed emitter + tx manager the
 		// reactive bootstrap slice uses, so the relay's Claimer wrap dedups the
 		// dispatch by DeriveCommandKey across cells/pods.
 		devicecmd.WithCommandEmitter(c.bootstrapEmitter),
@@ -524,13 +524,13 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	c.commandRPCServer = devicecommandrpc.NewServer(c.clk, grpcSvc, cmdNotifier)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecommandrpc.SliceMetadata()))
 	// Register the sync command-bus enqueue handler into the process registry.
-	// EnqueueCommandAdapter bridges the generated cmdenqueue.Handler to the same
-	// devicecmd.Service.Enqueue logic the HTTP enqueue path uses; cmdenqueue.Register
+	// RemoteCommandAdapter bridges the generated cmdremote.Handler to the same
+	// devicecmd.Service.Enqueue logic the HTTP enqueue path uses; cmdremote.Register
 	// is the sole sanctioned registration path (COMMAND-DISPATCH-REGISTER-CALLER-01).
 	// This import is what makes the generated command funnel a live entry point
 	// (#1580) rather than dead-but-compiles.
-	if err := cmdenqueue.Register(c.commandRegistry, devicecommand.EnqueueCommandAdapter{S: pubSvc}); err != nil {
-		return fmt.Errorf("device-command register (id=%s): %w", cmdenqueue.DispatchID, err)
+	if err := cmdremote.Register(c.commandRegistry, devicecommand.RemoteCommandAdapter{S: pubSvc}); err != nil {
+		return fmt.Errorf("device-command register (id=%s): %w", cmdremote.DispatchID, err)
 	}
 	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = devicecommandinternal.NewHandler(intSvc)
@@ -541,7 +541,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 		return err
 	}
 	// devicecertrenewal slice: declaration-only owner of the cell's second
-	// command.devicecommand.enqueue.v1 producer (the cert-renewal reconciler). It
+	// command.remotecommand.v1 producer (the cert-renewal reconciler). It
 	// has no routes/subscribers/grpc, so cell_gen.go does not reference it; the
 	// reconcile.Loop is lifecycle-registered in registerHealthAndLifecycle.
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicecertrenewal.SliceMetadata()))

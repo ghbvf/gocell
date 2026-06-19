@@ -37,17 +37,17 @@ import (
 	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
-// countingEnqueueHandler counts enqueue-command dispatches so the test can assert
+// countingRemoteCommandHandler counts enqueue-command dispatches so the test can assert
 // relay-level cross-cell deduplication (handler must fire exactly once). calls is
 // atomic because the relay may dispatch entries from a batch concurrently.
-type countingEnqueueHandler struct{ calls atomic.Int64 }
+type countingRemoteCommandHandler struct{ calls atomic.Int64 }
 
-func (h *countingEnqueueHandler) HandleEnqueue(_ context.Context, _ *enqueue.Request) (*enqueue.Response, error) {
+func (h *countingRemoteCommandHandler) HandleRemotecommand(_ context.Context, _ *cmdremote.Request) (*cmdremote.Response, error) {
 	h.calls.Add(1)
-	return &enqueue.Response{Data: &enqueue.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
+	return &cmdremote.Response{Data: &cmdremote.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
 }
 
 // newAsyncPod builds one "pod/cell": this slice's async-enqueue mux (device "d1"
@@ -93,7 +93,7 @@ func newAsyncRelay(t *testing.T, store *outboxtest.FakeStore, reg *runtimecomman
 			BaseRetryDelay: testtime.FastPoll,
 		}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[runtimecommand.CommandID]runtimecommand.AsyncDispatchFunc{
-		enqueue.DispatchID: enqueue.DispatchAsync,
+		cmdremote.DispatchID: cmdremote.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 	return relay
 }
@@ -106,8 +106,8 @@ func TestCrossCell_HTTPAsyncEnqueue_SameSlotDedup(t *testing.T) {
 	store := outboxtest.NewFakeStore() // shared command outbox = shared Redis
 
 	reg := runtimecommand.NewRegistry()
-	h := &countingEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &countingRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	podA := newAsyncPod(t, store)
 	podB := newAsyncPod(t, store)
@@ -153,8 +153,8 @@ func TestCrossCell_HTTPAsyncEnqueue_DifferentPayloadNotFolded(t *testing.T) {
 
 	store := outboxtest.NewFakeStore()
 	reg := runtimecommand.NewRegistry()
-	h := &countingEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &countingRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	podA := newAsyncPod(t, store)
 	podB := newAsyncPod(t, store)

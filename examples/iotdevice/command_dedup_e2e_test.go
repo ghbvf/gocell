@@ -4,7 +4,7 @@ package main
 //
 // Drives the full reactive loop: a device-registered event is "redelivered"
 // twice to the real devicebootstrap.HandleDeviceRegistered producer, which emits
-// a command.devicecommand.enqueue.v1 entry per delivery through a writer-emitter
+// a command.remotecommand.v1 entry per delivery through a writer-emitter
 // into a FakeStore the relay polls. Because command_id == source event entry.ID()
 // is deterministic across redelivery, the two emitted command entries carry the
 // SAME command_id (different store ids); the relay's Claimer-wrapped dispatch
@@ -31,21 +31,21 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
-// dedupEnqueueHandler counts how many times the enqueue handler runs so the test
+// dedupRemoteCommandHandler counts how many times the enqueue handler runs so the test
 // can assert relay-level deduplication (handler must fire exactly once even when
 // the source event is redelivered).
-type dedupEnqueueHandler struct {
+type dedupRemoteCommandHandler struct {
 	calls    int
-	lastReqs []*enqueue.Request
+	lastReqs []*cmdremote.Request
 }
 
-func (h *dedupEnqueueHandler) HandleEnqueue(_ context.Context, req *enqueue.Request) (*enqueue.Response, error) {
+func (h *dedupRemoteCommandHandler) HandleRemotecommand(_ context.Context, req *cmdremote.Request) (*cmdremote.Response, error) {
 	h.calls++
 	h.lastReqs = append(h.lastReqs, req)
-	return &enqueue.Response{Data: &enqueue.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
+	return &cmdremote.Response{Data: &cmdremote.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
 }
 
 const dedupSourceEventTopic = "event.device-registered.v1"
@@ -64,7 +64,7 @@ func newDedupRelay(t *testing.T, store *outboxtest.FakeStore, reg *command.Regis
 			BaseRetryDelay: testtime.FastPoll,
 		}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
-		enqueue.DispatchID: enqueue.DispatchAsync,
+		cmdremote.DispatchID: cmdremote.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 	return relay
 }
@@ -100,8 +100,8 @@ func sourceEvent(t *testing.T, deviceID, eventID string) kout.Entry {
 func TestCommandRelay_DedupOnEventRedelivery(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &dedupEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &dedupRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
 	// Producer side: a writer-emitter over the SAME store the relay polls — the
@@ -158,17 +158,17 @@ func TestCommandRelay_DedupOnEventRedelivery(t *testing.T) {
 func TestCommandRelay_FailClosedOnMissingIdentity(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &dedupEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &dedupRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
 	// Identity-less command entry: schema-valid payload but no AggregateID + no
 	// CommandIDMetadataKey → ClaimKeyFromEntry returns ok=false → MarkDead.
 	// commandType is required (#1694 F9), so it is set here to keep the payload
 	// schema-valid and isolate the missing-identity path from a schema failure.
-	payload, err := json.Marshal(enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
+	payload, err := json.Marshal(cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
 	require.NoError(t, err)
-	bad, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload)
+	bad, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID), payload)
 	require.NoError(t, err)
 	store.Seed(outbox.ClaimedEntry{Entry: bad})
 
@@ -188,8 +188,8 @@ func TestCommandRelay_FailClosedOnMissingIdentity(t *testing.T) {
 func TestCommandRelay_NormalCommitDispatch(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &dedupEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &dedupRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
 	we, err := kout.NewWriterEmitter(store)

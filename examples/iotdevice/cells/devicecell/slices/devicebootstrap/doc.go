@@ -1,8 +1,8 @@
 // Package devicebootstrap implements the device-bootstrap slice: an
 // event-reactive producer that subscribes to event.device-registered.v1 and,
 // for every newly registered device, reactively emits a
-// command.devicecommand.enqueue.v1 async command outbox entry (a "bootstrap"
-// command) via the generated cmdenqueue.EmitAsync wrapper.
+// command.remotecommand.v1 async command outbox entry (a "bootstrap"
+// command) via the generated cmdremote.EmitAsync wrapper.
 //
 // The slice owns no domain state: it decodes the source event payload, builds a
 // typed enqueue Request, and emits the command. The command_id carried in the
