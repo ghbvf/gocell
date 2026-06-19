@@ -7,14 +7,16 @@
 package mem
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -85,26 +87,47 @@ func (r *Registry) Get(_ context.Context, t tenant.TenantID, id string) (registr
 	return reg, ok, nil
 }
 
-func (r *Registry) List(_ context.Context, t tenant.TenantID, afterID string, limit int) ([]registry.ContractRegistration, error) {
+func (r *Registry) List(_ context.Context, t tenant.TenantID, params query.ListParams) ([]registry.ContractRegistration, error) {
 	if err := t.Validate(); err != nil {
 		return nil, invalidTenant(err)
 	}
 	reg := r.registrarFor(t)
-	ids := reg.AllIDs() // sorted ascending
-	start := 0
-	if afterID != "" {
-		start = sort.Search(len(ids), func(i int) bool { return ids[i] > afterID })
-	}
-	out := make([]registry.ContractRegistration, 0)
-	for _, id := range ids[start:] {
-		if limit > 0 && len(out) >= limit {
-			break
-		}
+	ids := reg.AllIDs() // sorted ascending by the kernel registrar
+	all := make([]registry.ContractRegistration, 0, len(ids))
+	for _, id := range ids {
 		if cr, ok := reg.Get(id); ok {
-			out = append(out, cr)
+			all = append(all, cr)
 		}
 	}
-	return out, nil
+
+	query.Sort(all, params.Sort, compareRegField)
+	result, err := query.ApplyCursor(all, params, regFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("registry-repo: list: %w", err)
+	}
+	return result, nil
+}
+
+// compareRegField compares a single field of two contract registrations.
+// Only "id" is supported (the fixed keyset sort column for this store).
+func compareRegField(a, b registry.ContractRegistration, field string) int {
+	switch field {
+	case "id":
+		return cmp.Compare(a.ID, b.ID)
+	default:
+		return 0
+	}
+}
+
+// regFieldValue extracts a cursor-comparable value from a contract registration.
+// Only "id" is supported (the fixed keyset sort column for this store).
+func regFieldValue(cr registry.ContractRegistration, field string) any {
+	switch field {
+	case "id":
+		return cr.ID
+	default:
+		return ""
+	}
 }
 
 func (r *Registry) History(_ context.Context, t tenant.TenantID, id string) ([]registry.RegistrationEvent, error) {

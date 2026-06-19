@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/framework/kernel/registry"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -70,10 +71,14 @@ type Registry interface {
 	// exists in tenant t.
 	Get(ctx context.Context, t tenant.TenantID, id string) (registry.ContractRegistration, bool, error)
 
-	// List returns up to limit registrations in tenant t whose id is strictly
-	// greater than afterID (empty afterID = first page), ordered by id ascending.
-	// The caller may request limit+1 to detect a further page (N+1 hasMore).
-	List(ctx context.Context, t tenant.TenantID, afterID string, limit int) ([]registry.ContractRegistration, error)
+	// List returns up to params.FetchLimit() registrations in tenant t using
+	// keyset pagination ordered by id ASC (the only supported sort column).
+	// params.CursorValues should be nil for the first page and contain the last
+	// seen id (as a string) on subsequent pages. The caller requests
+	// params.FetchLimit() = params.Limit+1 rows to detect a further page via the
+	// N+1 hasMore pattern; the caller trims the result to Limit before building
+	// the cursor.
+	List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]registry.ContractRegistration, error)
 
 	// History returns the append-only migration event stream for (t, id), ordered
 	// by Seq ascending. An empty result (nil or empty slice) means "no events" —

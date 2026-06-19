@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -172,7 +173,7 @@ func TestRegistryPG_Integration_CrossTenantIsolation(t *testing.T) {
 	_, ok, err := repo.Get(ctx, itTenantB, "shared.id")
 	require.NoError(t, err)
 	assert.False(t, ok)
-	page, err := repo.List(ctx, itTenantB, "", 50)
+	page, err := repo.List(ctx, itTenantB, query.ListParams{Limit: 50, Sort: []query.SortColumn{{Name: "id", Direction: query.SortASC}}})
 	require.NoError(t, err)
 	assert.Empty(t, page)
 

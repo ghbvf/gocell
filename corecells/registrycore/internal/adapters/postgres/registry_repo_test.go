@@ -15,8 +15,12 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
+
+// unitIDASC is the canonical sort for the registry list method.
+var unitIDASC = []query.SortColumn{{Name: "id", Direction: query.SortASC}}
 
 var unitTenant = tenant.TenantID("00000000-0000-0000-0000-000000000001")
 
@@ -247,7 +251,8 @@ func TestRegistry_List_Success(t *testing.T) {
 		append([]any{"b"}, projectionValues("event", "bob", "admin", "approved")...),
 	}}}
 	r := newRegistryFromDBTX(db)
-	out, err := r.List(context.Background(), unitTenant, "", 10)
+	params := query.ListParams{Limit: 10, Sort: unitIDASC}
+	out, err := r.List(context.Background(), unitTenant, params)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, "a", out[0].ID)
@@ -257,7 +262,7 @@ func TestRegistry_List_Success(t *testing.T) {
 
 func TestRegistry_List_QueryError(t *testing.T) {
 	r := newRegistryFromDBTX(&mockDB{queryErr: errors.New("boom")})
-	_, err := r.List(context.Background(), unitTenant, "", 10)
+	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC})
 	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
 }
 
@@ -320,7 +325,7 @@ func TestRegistry_List_CorruptState(t *testing.T) {
 		append([]any{"a"}, projectionValues("http", "alice", "", "bogus")...),
 	}}}
 	r := newRegistryFromDBTX(db)
-	_, err := r.List(context.Background(), unitTenant, "", 10)
+	_, err := r.List(context.Background(), unitTenant, query.ListParams{Limit: 10, Sort: unitIDASC})
 	assertCode(t, err, errcode.ErrRegistrationRepoQuery)
 }
 
@@ -329,7 +334,7 @@ func TestRegistry_AllMethods_InvalidTenant(t *testing.T) {
 	zero := tenant.TenantID("")
 	_, _, gErr := r.Get(context.Background(), zero, "x")
 	assertCode(t, gErr, errcode.ErrValidationFailed)
-	_, lErr := r.List(context.Background(), zero, "", 10)
+	_, lErr := r.List(context.Background(), zero, query.ListParams{Limit: 10, Sort: unitIDASC})
 	assertCode(t, lErr, errcode.ErrValidationFailed)
 	_, hErr := r.History(context.Background(), zero, "x")
 	assertCode(t, hErr, errcode.ErrValidationFailed)

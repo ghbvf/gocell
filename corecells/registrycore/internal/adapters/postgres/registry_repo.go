@@ -13,6 +13,8 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/framework/pkg/pgquery"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -214,19 +216,17 @@ func (r *Registry) Get(ctx context.Context, t tenant.TenantID, id string) (regis
 	return scanRegistration(row, id)
 }
 
-func (r *Registry) List(ctx context.Context, t tenant.TenantID, afterID string, limit int) ([]registry.ContractRegistration, error) {
+func (r *Registry) List(ctx context.Context, t tenant.TenantID, params query.ListParams) ([]registry.ContractRegistration, error) {
 	if err := t.Validate(); err != nil {
 		return nil, invalidTenant(err)
 	}
-	var limitArg any = limit
-	if limit <= 0 {
-		limitArg = nil // LIMIT NULL = unbounded (parity with the mem impl)
+	b := pgquery.NewBuilder()
+	b.AppendParam("SELECT id, "+colsProjection+" FROM contract_registrations WHERE tenant_id = ", t.String())
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, queryErr("list-keyset", err)
 	}
-	rows, err := r.resolveRead(ctx).Query(ctx,
-		`SELECT id, `+colsProjection+`
-		 FROM contract_registrations
-		 WHERE tenant_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3`,
-		t.String(), afterID, limitArg)
+	sqlStr, args := b.Build()
+	rows, err := r.resolveRead(ctx).Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, queryErr("list", err)
 	}
