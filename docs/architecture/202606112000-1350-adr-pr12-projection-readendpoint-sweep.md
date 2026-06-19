@@ -176,3 +176,67 @@ Omitting an empty column makes "key absent" distinguishable from "key present bu
 `<REDACTED>`", letting a reader infer the column was empty for masked rows — the
 presence side channel. Nullable-as-absent keeps the column present, so absence is
 never observable, while `null` keeps it schema-valid.
+
+## Amendment 2026-06-19 — #2359 (schema as the single source of the projection column contract)
+
+**Status: Accepted.** #1875 restored the full-column-set `ToMap()` and fixed the
+per-column `format` zero (occurredAt/renewalTime/lastSeenAt → nullable), but the
+"full column set" wire contract still lived **only in generated Go** — the JSON
+Schema `required` of 5 of the 16 `responseProjection` contracts still under-claimed
+it. A schema-validating client therefore could **not** rely on the column-presence
+property, which is the data-permission API's security property (presence never
+reveals whether a masked column held data). This amendment closes the schema side and
+re-evaluates the threat model per the AI-robust charter.
+
+### Decision
+
+1. **`required` = the full item column set (schema truth-source closure).** For a
+   `responseProjection` contract the item schema's `required` MUST list **every**
+   item property — there are **no optional (not-in-`required`) projection columns**.
+   The full-column-set `ToMap()` emits every key unconditionally, so an "optional"
+   projection column is a category error: its key is never absent on the wire, yet
+   the schema tells clients it MAY be, and its Go zero/nil (`""` / `null`) reaches the
+   wire where it can silently violate the schema. Value-optionality is expressed
+   **only** by `nullable` (`["scalar","null"]`, #1875), never by absence from
+   `required`. Closed the 5/6 gap: `deviceidentity.status`(renewalTime),
+   `devicestate`(lastSeenAt, tenantId), `devicecompliance`(tenantId),
+   `policy.{get,list}`(description, via the shared `policy.schema.json`).
+2. **Decision-2 framing fully retired.** The struck-out "optional ⇒ schema-valid"
+   claim is not patched per-column (#1875) but **eliminated**: projections have no
+   optional columns. This also subsumes #1875's `format`-nullable fix — a format
+   column is now either required-non-nullable (always stamped, e.g. notBefore /
+   notAfter / observedAt — #1875 §"Why not `timestamp`" confirms these need no
+   nullable) or required-nullable (empty-able, e.g. occurredAt).
+3. **`required` widening on the shared `policy.schema.json`** makes `description`
+   present in **every** Policy response (get/list **and** create/update responses) —
+   a coherent "the Policy object always carries description" closure. The create/update
+   **request** schemas are separate and unchanged (description stays optional on input).
+   Pre-GA wire window (api-versioning.md): in-place tightening, no version dir.
+   - **Consumer note**: an empty description now serializes as `"description": ""`
+     (present) rather than being omitted; likewise an empty audit `payload` serializes
+     as `null` (the `{}` true-schema accepts it). Consumers must treat empty-value as
+     equivalent to the former absent-key (in-repo `edge-bff` updates atomically; pre-GA,
+     no external consumers). This uniform "present, possibly-empty" shape is the same
+     security-positive stable column set Decision 2 / #1875 establish.
+
+### Enforcement (AI-robust) — two legs, one invariant
+
+- **Hard (primary, codegen build-fail):** `contractgen.applyResponseProjection`
+  (`requireProjectionItemFullColumnSet`) rejects a `responseProjection` item DTO with
+  any non-required column at GENERATE time — the drift cannot be materialized into
+  generated code.
+- **Medium (CI schema-file scan):** `PROJECTION-OPTIONAL-COLUMN-ZERO-SCHEMA-VALID-01`
+  (`tools/archtest`) verifies the SAME invariant directly on contract schema files
+  (resolved via `contractgen.Parse`), so it trips on a schema edit even before
+  re-generation, with RED/GREEN fixtures + anti-vacuity floor. Mirrors
+  `PROJECTION-TOMAP-FULL-COLUMN-SET-01`'s "golden Hard + archtest Medium" structure.
+
+### Threat matrix (re-evaluated; extends the #1875 matrix)
+
+| Threat | Post-#1875 | Post-#2359 (this amendment) |
+|---|---|---|
+| Schema-validating client cannot rely on column presence (security property invisible at schema layer) | **OPEN** (5 contracts under-claim `required`) | Closed (`required` = full column set, codegen Hard + archtest Medium) |
+| New projection contract adds an optional column whose zero is schema-invalid (`""`/`null`) | Prose-only follow-up (no guard) | Closed (optional projection column is build-fail + CI-red) |
+| Required non-nullable `array`/`object` whose producer emits nil → JSON `null` violates `type` | n/a | **Residual** — out of schema reach (`["array"/"object","null"]` rejected #2340 F1; no nil→`[]`/`{}` normalization, zero such column today). Tracked: codegen nil-normalization, gated on first such column. |
+| Required non-nullable `format` column whose producer emits `""` | n/a | **Residual** — authoring discipline: declare empty-able `format` columns nullable (as occurredAt). |
+| Tightening `required` on an **active** contract whose live producer cannot authoritatively supply the value | n/a | Caught by review (#2394 F1): `http.devicestate.v1` `tenantId` was made required, but `cellmodules/deviceserving` honestly omits it (no device→tenant binding source). **Resolved** by making `tenantId` nullable (`["string","null"]`) — key present, value `null` (honest no-binding), not a misleading `""`. **Lesson**: when tightening `required` on an active contract, reconcile the live producer (populate it, or make the column nullable). Dormant draft contracts (devicecompliance/deviceidentity) carry the same obligation at their draft→active gate. |

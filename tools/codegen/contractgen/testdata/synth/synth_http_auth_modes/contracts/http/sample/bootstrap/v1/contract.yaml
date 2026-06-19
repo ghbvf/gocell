@@ -12,6 +12,7 @@ endpoints:
     successStatus: 201
     auth:
       bootstrap: true
+      reason: "test fixture — exercises the bootstrap (OperatorOnly) codegen shape"
       responses:
         - 401
         - 429

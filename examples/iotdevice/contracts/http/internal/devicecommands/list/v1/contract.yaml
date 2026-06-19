@@ -16,6 +16,7 @@ endpoints:
     path: /internal/v1/devicecommands
     auth:
       clientsOnly: true
+      reason: "Internal /internal/v1 endpoint authorized solely by the service-token caller-cell allowlist, not JWT ABAC."
     queryParams:
       cursor:
         type: string

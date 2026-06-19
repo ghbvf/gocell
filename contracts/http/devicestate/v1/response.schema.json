@@ -11,7 +11,9 @@
       "required": [
         "deviceId",
         "state",
-        "observedAt"
+        "observedAt",
+        "lastSeenAt",
+        "tenantId"
       ],
       "properties": {
         "deviceId": {
@@ -39,8 +41,9 @@
           "description": "Last actual device contact time. null when the device has never been seen; the key is always present (stable column set, #1875)."
         },
         "tenantId": {
-          "type": "string",
-          "maxLength": 256
+          "type": ["string", "null"],
+          "maxLength": 256,
+          "description": "Device's tenant (framework-produced for multi-tenant routing). null until a device→tenant binding source supplies it — the serving producer honestly omits it rather than back-fill the caller's JWT tenant (the caller's tenant is not the device's). The key is always present (stable column set, #1875/#2359)."
         }
       }
     }

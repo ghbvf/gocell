@@ -1,9 +1,9 @@
 package main
 
 // commandbus_roundtrip_test.go — end-to-end exercise of the generated command-bus
-// funnel for command.device-command.enqueue.v1 (#1044 PR-1). This is the only test
-// that drives the REAL generated package (enqueue.Register / enqueue.Dispatch /
-// enqueue.Handler) through a runtime command.Registry, covering the three runtime
+// funnel for command.remotecommand.v1 (#1044 PR-1). This is the only test
+// that drives the REAL generated package (cmdremote.Register / cmdremote.Dispatch /
+// cmdremote.Handler) through a runtime command.Registry, covering the three runtime
 // branches the contractgen golden test cannot execute: success invoke, no-handler
 // (KindNotFound/ErrCommandNotFound), and the duplicate-registration guard.
 // examples/ may import generated/ + runtime/, so this is the natural home for an
@@ -28,30 +28,30 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/command"
 	"github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/outbox/outboxtest"
-	enqueue "github.com/ghbvf/gocell/generated/contracts/command/devicecommand/enqueue/v1"
+	cmdremote "github.com/ghbvf/gocell/generated/contracts/command/remotecommand/v1"
 )
 
-// fakeEnqueueHandler implements the generated enqueue.Handler interface.
-type fakeEnqueueHandler struct {
+// fakeRemoteCommandHandler implements the generated cmdremote.Handler interface.
+type fakeRemoteCommandHandler struct {
 	called  bool
-	lastReq *enqueue.Request
+	lastReq *cmdremote.Request
 	retErr  error
 }
 
-func (h *fakeEnqueueHandler) HandleEnqueue(_ context.Context, req *enqueue.Request) (*enqueue.Response, error) {
+func (h *fakeRemoteCommandHandler) HandleRemotecommand(_ context.Context, req *cmdremote.Request) (*cmdremote.Response, error) {
 	h.called = true
 	h.lastReq = req
 	if h.retErr != nil {
 		return nil, h.retErr
 	}
-	return &enqueue.Response{Data: &enqueue.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
+	return &cmdremote.Response{Data: &cmdremote.ResponseData{ID: "cmd-1", Status: "Pending"}}, nil
 }
 
 func TestCommandBus_Enqueue_RegisterDispatchRoundTrip(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &fakeEnqueueHandler{}
-	if err := enqueue.Register(reg, h); err != nil {
+	h := &fakeRemoteCommandHandler{}
+	if err := cmdremote.Register(reg, h); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -59,8 +59,8 @@ func TestCommandBus_Enqueue_RegisterDispatchRoundTrip(t *testing.T) {
 	// is a first-party trusted boundary and does NOT run schema value-validation
 	// (ADR 202606040550-1044 §D8). Only the async DispatchAsync path validates the
 	// untrusted payload (#1588). Adding DeviceID here would obscure that contract.
-	req := &enqueue.Request{CommandType: "reboot", Payload: "now"}
-	resp, err := enqueue.Dispatch(context.Background(), reg, req)
+	req := &cmdremote.Request{CommandType: "reboot", Payload: "now"}
+	resp, err := cmdremote.Dispatch(context.Background(), reg, req)
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -79,10 +79,10 @@ func TestCommandBus_Enqueue_HandlerErrorPropagates(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
 	sentinel := errors.New("downstream failure")
-	if err := enqueue.Register(reg, &fakeEnqueueHandler{retErr: sentinel}); err != nil {
+	if err := cmdremote.Register(reg, &fakeRemoteCommandHandler{retErr: sentinel}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	_, err := enqueue.Dispatch(context.Background(), reg, &enqueue.Request{Payload: "x"})
+	_, err := cmdremote.Dispatch(context.Background(), reg, &cmdremote.Request{Payload: "x"})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected handler error to propagate, got: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCommandBus_Enqueue_HandlerErrorPropagates(t *testing.T) {
 func TestCommandBus_Enqueue_DispatchWithoutHandler(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	_, err := enqueue.Dispatch(context.Background(), reg, &enqueue.Request{Payload: "x"})
+	_, err := cmdremote.Dispatch(context.Background(), reg, &cmdremote.Request{Payload: "x"})
 	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Kind != errcode.KindNotFound {
@@ -102,10 +102,10 @@ func TestCommandBus_Enqueue_DispatchWithoutHandler(t *testing.T) {
 func TestCommandBus_Enqueue_DuplicateRegistration(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	if err := enqueue.Register(reg, &fakeEnqueueHandler{}); err != nil {
+	if err := cmdremote.Register(reg, &fakeRemoteCommandHandler{}); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	err := enqueue.Register(reg, &fakeEnqueueHandler{})
+	err := cmdremote.Register(reg, &fakeRemoteCommandHandler{})
 	errcodetest.AssertCode(t, err, errcode.ErrConflict)
 }
 
@@ -113,9 +113,9 @@ func TestCommandBus_Enqueue_RegisterNilHandler(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
 	// Untyped nil and typed-nil both rejected by the generated Register guard.
-	errcodetest.AssertCode(t, enqueue.Register(reg, nil), errcode.ErrValidationFailed)
-	var typedNil *fakeEnqueueHandler
-	errcodetest.AssertCode(t, enqueue.Register(reg, typedNil), errcode.ErrValidationFailed)
+	errcodetest.AssertCode(t, cmdremote.Register(reg, nil), errcode.ErrValidationFailed)
+	var typedNil *fakeRemoteCommandHandler
+	errcodetest.AssertCode(t, cmdremote.Register(reg, typedNil), errcode.ErrValidationFailed)
 }
 
 // TestCommandBus_Enqueue_RegisterNilRegistry verifies the generated Register
@@ -123,7 +123,7 @@ func TestCommandBus_Enqueue_RegisterNilHandler(t *testing.T) {
 // on the receiver deref (#1578 F4).
 func TestCommandBus_Enqueue_RegisterNilRegistry(t *testing.T) {
 	t.Parallel()
-	errcodetest.AssertCode(t, enqueue.Register(nil, &fakeEnqueueHandler{}), errcode.ErrValidationFailed)
+	errcodetest.AssertCode(t, cmdremote.Register(nil, &fakeRemoteCommandHandler{}), errcode.ErrValidationFailed)
 }
 
 // TestCommandBus_Enqueue_DispatchNilRegistry verifies the generated Dispatch
@@ -131,7 +131,7 @@ func TestCommandBus_Enqueue_RegisterNilRegistry(t *testing.T) {
 // on the receiver deref (#1578 F4).
 func TestCommandBus_Enqueue_DispatchNilRegistry(t *testing.T) {
 	t.Parallel()
-	_, err := enqueue.Dispatch(context.Background(), nil, &enqueue.Request{Payload: "x"})
+	_, err := cmdremote.Dispatch(context.Background(), nil, &cmdremote.Request{Payload: "x"})
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -140,10 +140,10 @@ func TestCommandBus_Enqueue_DispatchNilRegistry(t *testing.T) {
 func TestCommandBus_Enqueue_DispatchNilRequest(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	if err := enqueue.Register(reg, &fakeEnqueueHandler{}); err != nil {
+	if err := cmdremote.Register(reg, &fakeRemoteCommandHandler{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	_, err := enqueue.Dispatch(context.Background(), reg, nil)
+	_, err := cmdremote.Dispatch(context.Background(), reg, nil)
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }
 
@@ -154,11 +154,11 @@ func TestCommandBus_Enqueue_DispatchNilRequest(t *testing.T) {
 // newCommandEntry builds a command outbox.Entry whose RoutingTopic == the enqueue
 // DispatchID, carrying req as the JSON payload — what a producer writes to the
 // outbox and the relay claims for in-process async dispatch.
-func newCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
+func newCommandEntry(t *testing.T, req cmdremote.Request) kout.Entry {
 	t.Helper()
 	payload, err := json.Marshal(req)
 	require.NoError(t, err)
-	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload)
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID), payload)
 	require.NoError(t, err)
 	return entry
 }
@@ -168,11 +168,11 @@ func newCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
 // subject, Metadata[CommandIDMetadataKey] = commandID), mirroring the shape
 // command.EmitAsync produces for an async command. The async relay end-to-end
 // test seeds this so ClaimKeyFromEntry derives a key instead of fail-closing.
-func newAsyncCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
+func newAsyncCommandEntry(t *testing.T, req cmdremote.Request) kout.Entry {
 	t.Helper()
 	payload, err := json.Marshal(req)
 	require.NoError(t, err)
-	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), payload,
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID), payload,
 		kout.WithAggregateID(req.DeviceID),
 		kout.WithMetadata(map[string]string{command.CommandIDMetadataKey: "cmd-" + req.DeviceID}))
 	require.NoError(t, err)
@@ -180,27 +180,27 @@ func newAsyncCommandEntry(t *testing.T, req enqueue.Request) kout.Entry {
 }
 
 // newRawCommandEntry builds a command entry from raw JSON bytes — needed for the
-// #1588 value-validation cases that can't be expressed via a typed enqueue.Request
+// #1588 value-validation cases that can't be expressed via a typed cmdremote.Request
 // (missing required field, additionalProperties), which json.Marshal of the struct
 // would never produce.
 func newRawCommandEntry(t *testing.T, rawJSON string) kout.Entry {
 	t.Helper()
-	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), []byte(rawJSON))
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID), []byte(rawJSON))
 	require.NoError(t, err)
 	return entry
 }
 
 // TestCommandBus_Enqueue_DispatchAsyncRoundTrip drives the REAL generated
-// enqueue.DispatchAsync: it decodes the entry payload into *Request and invokes
+// cmdremote.DispatchAsync: it decodes the entry payload into *Request and invokes
 // the registered Handler — the async sibling of the sync Dispatch round-trip.
 func TestCommandBus_Enqueue_DispatchAsyncRoundTrip(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &fakeEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &fakeRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
-	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
-	require.NoError(t, enqueue.DispatchAsync(context.Background(), reg, entry))
+	entry := newCommandEntry(t, cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})
+	require.NoError(t, cmdremote.DispatchAsync(context.Background(), reg, entry))
 
 	assert.True(t, h.called, "handler must be invoked")
 	require.NotNil(t, h.lastReq)
@@ -216,10 +216,10 @@ func TestCommandBus_Enqueue_DispatchAsyncHandlerError(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
 	sentinel := errors.New("downstream failure")
-	require.NoError(t, enqueue.Register(reg, &fakeEnqueueHandler{retErr: sentinel}))
+	require.NoError(t, cmdremote.Register(reg, &fakeRemoteCommandHandler{retErr: sentinel}))
 
-	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
-	err := enqueue.DispatchAsync(context.Background(), reg, entry)
+	entry := newCommandEntry(t, cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := cmdremote.DispatchAsync(context.Background(), reg, entry)
 	assert.ErrorIs(t, err, sentinel)
 }
 
@@ -228,12 +228,12 @@ func TestCommandBus_Enqueue_DispatchAsyncHandlerError(t *testing.T) {
 func TestCommandBus_Enqueue_DispatchAsyncBadPayload(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &fakeEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &fakeRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
-	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID), []byte("not json"))
+	entry, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID), []byte("not json"))
 	require.NoError(t, err)
-	errcodetest.AssertCode(t, enqueue.DispatchAsync(context.Background(), reg, entry), errcode.ErrValidationFailed)
+	errcodetest.AssertCode(t, cmdremote.DispatchAsync(context.Background(), reg, entry), errcode.ErrValidationFailed)
 	assert.False(t, h.called, "handler must not run on a malformed payload")
 }
 
@@ -263,10 +263,10 @@ func TestCommandBus_Enqueue_DispatchAsyncValueValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			reg := command.NewRegistry()
-			h := &fakeEnqueueHandler{}
-			require.NoError(t, enqueue.Register(reg, h))
+			h := &fakeRemoteCommandHandler{}
+			require.NoError(t, cmdremote.Register(reg, h))
 
-			err := enqueue.DispatchAsync(context.Background(), reg, newRawCommandEntry(t, tc.rawJSON))
+			err := cmdremote.DispatchAsync(context.Background(), reg, newRawCommandEntry(t, tc.rawJSON))
 
 			errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 			assert.False(t, h.called, "handler must not run on a schema-invalid payload")
@@ -283,8 +283,8 @@ func TestCommandBus_Enqueue_DispatchAsyncValueValidation(t *testing.T) {
 func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
-	err := enqueue.DispatchAsync(context.Background(), reg, entry)
+	entry := newCommandEntry(t, cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := cmdremote.DispatchAsync(context.Background(), reg, entry)
 	errcodetest.AssertCode(t, err, errcode.ErrCommandNotFound)
 	var ec *errcode.Error
 	if errors.As(err, &ec) {
@@ -297,22 +297,22 @@ func TestCommandBus_Enqueue_DispatchAsyncNoHandler(t *testing.T) {
 // is unambiguously the nil-registry one, not a schema violation.
 func TestCommandBus_Enqueue_DispatchAsyncNilRegistry(t *testing.T) {
 	t.Parallel()
-	entry := newCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
-	err := enqueue.DispatchAsync(context.Background(), nil, entry)
+	entry := newCommandEntry(t, cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "x"})
+	err := cmdremote.DispatchAsync(context.Background(), nil, entry)
 	errcodetest.AssertCode(t, err, errcode.ErrValidationFailed)
 }
 
 // TestCommandBus_Enqueue_AsyncRelayEndToEnd plays the composition root: it binds
-// the REAL generated enqueue.DispatchAsync into a relay (keyed by the generated
-// enqueue.DispatchID — the direct-symbol shape COMMAND-ASYNC-DISPATCH-CALLER-01
+// the REAL generated cmdremote.DispatchAsync into a relay (keyed by the generated
+// cmdremote.DispatchID — the direct-symbol shape COMMAND-ASYNC-DISPATCH-CALLER-01
 // requires), seeds a command outbox entry, starts the relay, and asserts the
 // entry is dispatched to the registered handler in-process and settles to
 // published (consumed) — the full in-proc → outbox → relay → handler async loop.
 func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &fakeEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &fakeRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
 	// The relay's command-dispatch path now wraps every dispatch in the Claimer
@@ -320,12 +320,12 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 	// slot (AggregateID = subject, Metadata[CommandIDMetadataKey] = commandID) — the
 	// exact shape command.EmitAsync produces. An identity-less entry is fail-closed
 	// (dead-lettered), so seed an identity-bearing entry here.
-	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, enqueue.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})})
+	store.Seed(outbox.ClaimedEntry{Entry: newAsyncCommandEntry(t, cmdremote.Request{DeviceID: "d1", CommandType: "reboot", Payload: "now"})})
 
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{PollInterval: testtime.FastPoll}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
-		enqueue.DispatchID: enqueue.DispatchAsync,
+		cmdremote.DispatchID: cmdremote.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
@@ -340,15 +340,15 @@ func TestCommandBus_Enqueue_AsyncRelayEndToEnd(t *testing.T) {
 
 // TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters is the end-to-end
 // proof of the #1588 settle classification: a schema-invalid command entry, once
-// claimed by the relay and dispatched to the REAL generated enqueue.DispatchAsync,
+// claimed by the relay and dispatched to the REAL generated cmdremote.DispatchAsync,
 // fails the value funnel with a PERMANENT error, so the relay routes it straight
 // to MarkDead (StateDead) — not MarkRetry, not published, and the handler never
 // runs. Mirrors AsyncRelayEndToEnd but with an invalid payload + dead terminal.
 func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
 	t.Parallel()
 	reg := command.NewRegistry()
-	h := &fakeEnqueueHandler{}
-	require.NoError(t, enqueue.Register(reg, h))
+	h := &fakeRemoteCommandHandler{}
+	require.NoError(t, cmdremote.Register(reg, h))
 
 	store := outboxtest.NewFakeStore()
 	// Identity-bearing (so it passes the #1698 Claimer wrap and reaches the REAL
@@ -356,7 +356,7 @@ func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
 	// proves the #1588 value funnel dead-letters AT DISPATCH — distinct from the
 	// #1698 missing-identity fail-closed, which would also dead-letter but BEFORE
 	// DispatchAsync (and its value funnel) ever runs.
-	invalidEntry, err := kout.NewEntry(clock.Real(), context.Background(), string(enqueue.DispatchID),
+	invalidEntry, err := kout.NewEntry(clock.Real(), context.Background(), string(cmdremote.DispatchID),
 		[]byte(`{"deviceId":"d1"}`),
 		kout.WithAggregateID("d1"),
 		kout.WithMetadata(map[string]string{command.CommandIDMetadataKey: "cmd-d1"}))
@@ -366,7 +366,7 @@ func TestCommandBus_Enqueue_AsyncRelayValueValidationDeadLetters(t *testing.T) {
 	relay := outbox.NewRelay(clock.Real(), store, &kout.DiscardPublisher{},
 		outbox.RelayConfig{PollInterval: testtime.FastPoll}.WithDefaults())
 	relay.WithCommandDispatch(reg, map[command.CommandID]command.AsyncDispatchFunc{
-		enqueue.DispatchID: enqueue.DispatchAsync,
+		cmdremote.DispatchID: cmdremote.DispatchAsync,
 	}, idempotency.NewInMemClaimer(clock.Real()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)

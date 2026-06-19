@@ -62,11 +62,15 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   canonical 化的 path-param 转发给 PDP 作 `resource`，由 baseline ownership 规则
   `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
   短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
-  delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
+  delegated ownership（owner ≠ id，如 user 拥有 device）用 `subject.sub == resource.owner`（owner 由 PIP lookup
+  供）；device 读**自身**状态是 **kind-gated** device-self `subject.kind == device AND subject.sub == resource.id`
+  （framework-owned devicestate，#2351 + #2400 F1——非 device 主体即便 id 相等也拒，与 user/role 的 kind-agnostic
+  self 规则不同）；delegated user-owns-device 待 device registry/PIP。
   owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
   owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
-  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。baseline owner-scoped action
-  （user:read/write、role:read）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
+  精确集（identitymanage / rbaccheck / framework-owned deviceserving—devicestate #2351，scan 含 `./cellmodules/...`）
+  与盲区见该 archtest godoc。baseline owner-scoped action（user:read/write、role:read、device:read #2351；
+  authoritative set 见 freeze test）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
   冻结：① 每条 owner self 规则须 = EffectAllow + 精确单 action + frozen owner condition
   （`subject.sub == resource.id`）；② 每个 owner action 的 allow 规则闭集恰为 `{1 owner, 1 admin}`。真正的
   owner→tenant widen 向量（PDP 跨规则 OR）——**新增一条 tenant 匹配 allow 规则**、替换 owner 条件、或扩
@@ -126,18 +130,39 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   + 非 PII metadata：method/permission，无 subject/token），客户端无需解析英文文本区分 no-mapping/not-wired/
   denied/obligation/unavailable。**PDP 决策指标同构**：gRPC PDP 决策经 `NewObservableAuthorizer` 包装（真实
   provider 时，`kernelmetrics.IsReal` 单源与 HTTP `hasRealMetricsProvider` 共用），落同一 `auth_pdp_decision_*`
-  series（无 transport 标签，registerOrReuse 共享 family）。机制/评级/威胁矩阵见 grpc-transport-adapter ADR
-  §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204" + §"Amendment 2026-06-18 — #2207"
-  + archtest `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` + 治理 `FMT-41`。
+  series（无 transport 标签，registerOrReuse 共享 family）。
+  **password-reset-exempt 第 4 契约派生维度（#1382）**：reset-required principal 默认在每个 gRPC 方法被
+  `auth.PasswordResetBlocked` 拦（fail-closed）；豁免口由 `endpoints.grpc.methods[].passwordResetExempt: true`
+  声明（与 `public` 互斥、与 `permission` 正交且必须共存——改密方法仍需 ABAC gate），经 cellgen 派生入
+  `GRPCServiceSpec.PasswordResetExemptMethods`，registrar `IsPasswordResetExemptMethod` 作运行时单源，
+  `chain.go` 装 `WithPasswordResetExempt(reg.…)`（OR-compose，与 public-method 同构）。与 public-method 同
+  载体链路：互斥/必带-permission 由 schema（Hard）+ 治理 `FMT-41` 双守，源单一性由 archtest
+  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01`（Medium，双维 + NegativeControl）守。机制/评级/威胁矩阵见
+  grpc-transport-adapter ADR §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204"
+  + §"Amendment 2026-06-18 — #2207" + §"Amendment 2026-06-18 — #1382" + archtest
+  `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` /
+  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01` + 治理 `FMT-41`。
 - **HTTP 授权 contract-derived 化（#2205）**：HTTP route gate 与 gRPC 同源——
   transport-neutral `authz.MethodPolicyResolver`（gRPC `ServiceRegistrar` 与 HTTP cell 级
   `auth.NewStaticMethodPolicyResolver` 双实现），HTTP route→permission 由契约 `endpoints.http.permission`
   overlay 经 cellgen 派生入 cell 级 resolver，生成 handler 经 `auth.RequirePermissionForContract`
   解析（复用 `RequirePermission` 单一 PDP 路径，不新增第二入口）。来源合法性由治理 `FMT-42` 验证
   （present-only：∈ closed authz registry + 与 public/bootstrap/clientsOnly/serviceOwned 互斥），
-  resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。overlay 现为
-  sparse optional（迁移期 transient，未迁路由保留手写 gate）；configcore 已全量迁移，其余 cell 迁移 +
-  「standard route MUST 声明 permission」mandatory 化见 #2355 / #2358。
+  resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。
+- **默认 ABAC + 强制 AuthZ mode 声明（#2020）**：每个 `lifecycle: active` + `codegen` 的 HTTP 契约**必须**声明
+  恰好一个 AuthZ mode——ABAC 默认（`endpoints.http.permission`）或显式 opt-out（`public`/`bootstrap`/
+  `clientsOnly`/`serviceOwned`）；缺失（modeless）= codegen generate-time 完整性预检拒绝（**Hard 主载体**，
+  与 gRPC `Completeness (#2008)` 同构）+ FMT-42 `gocell validate` 早报（Medium 纵深）。opt-out 必带非空
+  `endpoints.http.auth.reason`（ABAC 自证、不带 reason；reason-without-opt-out 亦 forbidden）。判定收口为单一共享
+  oracle `metadata.ClassifyHTTPAuthMode`，**不可绕 Hard 核心 = `contractgen.buildHTTPSpec`** 内对每个被渲染契约
+  跑 classifier（所有渲染路径 generate / verify codegen-* / verify generated / cellgen stage_render / 直接
+  RenderContractArtifacts 必经，对标 k8s apiextensions 对象级校验）；纵深层 = `cmd` 项目级 `ValidateProjectHTTPAuthModes`
+  （CLI 聚合 UX）+ cellgen serve-scan + FMT-42（validate Medium），同一 oracle 多处复用。冻结迁移 ledger 单源在
+  `kernel/metadata/authz_mode.go`（`httpAuthModeMigrationLedger`）；frozen-subset（ledger ⊆ 不可变 37-ID 集，挡
+  grow+swap）+ no-stale 由 metadata 测试 + archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守，随 #2355/#2358 迁移收敛到空后删豁免。
+  runtime `auth.Mount` 经评估**不承载**此约束（serviceOwned≡nil-policy 设计本意 / operator·internal 鉴权来自
+  listener·Mount 不可见 / ContractSpec 不带 mode），与 gRPC 同。机制/威胁矩阵/PR-10a 重评见 ADR
+  `docs/architecture/202606190847-2020-adr-authz-default-abac.md`。未迁路由的手写 gate 迁移本体归 #2355 / #2358。
 
 相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
 （`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。

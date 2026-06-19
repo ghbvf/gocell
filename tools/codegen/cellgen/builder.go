@@ -97,8 +97,6 @@ const (
 //   - subscribe CU handler field empty
 //   - subscribe CU references a contract not declared in project
 //   - fieldIndex missing entry for subscribing slice
-//
-//nolint:funlen // pipeline of independent build steps; each step is ≤10 lines; extraction adds more lines than it removes
 func BuildCellSpec(
 	p *metadata.ProjectMeta,
 	cellID string,
@@ -160,43 +158,96 @@ func BuildCellSpec(
 
 	spec.RouteGroups = buildRouteGroupsFromBundle(bundle.Routes, listenerOrder, listenerPrefix)
 
+	if err := buildSliceDerivedSpecs(p, cellID, fieldIndex, spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
+// buildSliceDerivedSpecs populates the slice-derived sections of spec (subscriptions,
+// webhooks, projections, grpc services, HTTP permission resolver) and runs the #2020
+// HTTP AuthZ-mode completeness gate. Extracted from BuildCellSpec to keep that function
+// within the cognitive-complexity budget.
+func buildSliceDerivedSpecs(p *metadata.ProjectMeta, cellID string, fieldIndex *CellFieldIndex, spec *CellGenSpec) error {
 	subs, err := buildSubscriptionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Subscriptions = subs
 
 	receivers, err := buildWebhookReceiversFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookReceivers = receivers
 
 	dispatches, err := buildWebhookDispatchesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.WebhookDispatches = dispatches
 
 	projections, err := buildProjectionsFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.Projections = projections
 
 	grpcServices, err := buildGrpcServicesFromSlices(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.GrpcServices = grpcServices
 
 	httpPerms, err := buildHTTPMethodPermissions(p, cellID, fieldIndex)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	spec.HTTPMethodPermissions = httpPerms
 
-	return spec, nil
+	return validateHTTPAuthModeCompleteness(p, cellID)
+}
+
+// validateHTTPAuthModeCompleteness is the per-cell SERVE-scoped defense arm of the #2020
+// mandatory-AuthZ-mode gate, run during BuildCellSpec over this cell's slice serve usages.
+// The UNBYPASSABLE Hard core is contractgen.buildHTTPSpec (every rendered contract, any
+// entry point); this serve-scan reuses the same metadata.ClassifyHTTPAuthMode oracle so a
+// cell build also fails closed early. Both mirror the gRPC #2008 completeness pre-pass.
+//
+// Failing here makes the violation unrepresentable in generated code: a standard route
+// that silently forgot its authz mode cannot ship (dead-default fail-closed).
+func validateHTTPAuthModeCompleteness(p *metadata.ProjectMeta, cellID string) error {
+	prefix := cellID + "/"
+	for key, s := range p.Slices {
+		if s == nil || !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if err := checkSliceServeAuthModes(p, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSliceServeAuthModes runs the #2020 mode gate over one slice's serve
+// contractUsages via the shared metadata.ClassifyHTTPAuthMode oracle (same judgment as
+// contractgen's comprehensive gate + governance FMT-42). Scope filtering (active/codegen/
+// http) and ledger exemption live in the classifier, which returns HTTPAuthModeOK for a
+// nil contract — so the c.ID dereference below only runs on a real violation.
+func checkSliceServeAuthModes(p *metadata.ProjectMeta, s *metadata.SliceMeta) error {
+	for _, cu := range s.ContractUsages {
+		if cu.Role != roleServe {
+			continue
+		}
+		c := p.Contracts[cu.Contract]
+		if v := metadata.ClassifyHTTPAuthMode(c); v != metadata.HTTPAuthModeOK {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen build http: "+v.Message(),
+				errcode.WithDetails(errcode.PublicString("contract", c.ID)))
+		}
+	}
+	return nil
 }
 
 // BuildSliceSpec returns the rendering input for slice.tmpl. Every slice in
@@ -990,16 +1041,17 @@ func buildGrpcServiceSpecFromCU(
 	// but the proto lives at "<moduleBase>/contracts/grpc/…" (#1151).
 	contract := p.Contracts[cu.Contract] // non-nil: validateGrpcContractEndpoint succeeded above
 	return GrpcServiceGenSpec{
-		ContractID:        cu.Contract,
-		SliceID:           sliceID,
-		HandlerField:      fieldName,
-		RegisterFunc:      "Register" + simpleName + "Server",
-		ListenerConst:     "cell.PrimaryListener",
-		ProtoRel:          metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
-		Service:           g.Service,
-		PublicMethods:     grpcPublicMethods(g),
-		MethodPermissions: grpcMethodPermissions(g),
-		MethodResources:   grpcMethodResources(g),
+		ContractID:                 cu.Contract,
+		SliceID:                    sliceID,
+		HandlerField:               fieldName,
+		RegisterFunc:               "Register" + simpleName + "Server",
+		ListenerConst:              "cell.PrimaryListener",
+		ProtoRel:                   metadata.GRPCProtoRepoRelPath(contract.File, g.Proto),
+		Service:                    g.Service,
+		PublicMethods:              grpcPublicMethods(g),
+		MethodPermissions:          grpcMethodPermissions(g),
+		MethodResources:            grpcMethodResources(g),
+		PasswordResetExemptMethods: grpcPasswordResetExemptMethods(g),
 	}, nil
 }
 
@@ -1057,6 +1109,23 @@ func grpcMethodResources(g *metadata.GRPCTransportMeta) []MethodResource {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FullMethod < out[j].FullMethod })
+	return out
+}
+
+// grpcPasswordResetExemptMethods composes the per-method password-reset-exempt
+// overlay (#1382) into FULL method names (/{Service}/{Method}) for the
+// passwordResetExempt:true entries, keyed identically to the runtime registrar's
+// attribution map so a declared-exempt method matches the served RPC exactly.
+// Referential integrity (each name ∈ the proto method set) is the contractgen
+// pre-pass's job; here we only compose. Returns nil when no method is exempt (the
+// fail-closed default), so the template omits the PasswordResetExemptMethods field.
+func grpcPasswordResetExemptMethods(g *metadata.GRPCTransportMeta) []string {
+	var out []string
+	for _, m := range g.Methods {
+		if m.PasswordResetExempt {
+			out = append(out, "/"+g.Service+"/"+m.Name)
+		}
+	}
 	return out
 }
 
@@ -1197,6 +1266,30 @@ func grpcMethodSimpleName(full string) string {
 //     same FullMethod), or the device owner is silently locked out (fullMethod never
 //     equals device-id, so the PDP ownership rule never fires). Conversely, a coarse
 //     permission must NOT declare a resource selector (it is ignored, a misconfiguration).
+//
+// validateGrpcExemptReferential checks each passwordResetExempt overlay entry (#1382)
+// names a real proto RPC. Exempt entries accumulate NOTHING (unlike public/permission,
+// which feed `covered`): a reset-exempt method is non-public and still requires a
+// permission — that permission is what covers it (#2008 completeness). Accumulating the
+// exempt entry into `covered` would mask a reset-exempt-only method with no permission
+// (a dead 403 at the ABAC gate). Pure referential guard, factored out of
+// validateGrpcMethodOverlayAgainstProto to keep that function under the
+// cognitive-complexity limit (the sibling of FMT-41's validateFMT41Resource split).
+func validateGrpcExemptReferential(gs *GrpcServiceGenSpec, protoMethods map[string]struct{}) error {
+	for _, full := range gs.PasswordResetExemptMethods {
+		name := grpcMethodSimpleName(full)
+		if _, ok := protoMethods[name]; !ok {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"cellgen enrich grpc-serve: endpoints.grpc.methods passwordResetExempt entry is not an RPC of the proto service",
+				errcode.WithDetails(
+					errcode.PublicString("contract", gs.ContractID),
+					errcode.PublicString("service", gs.Service),
+					errcode.PublicString("method", name)))
+		}
+	}
+	return nil
+}
+
 func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contractgen.ProtoServiceInfo) error {
 	protoMethods := make(map[string]struct{}, len(info.Methods))
 	for _, pm := range info.Methods {
@@ -1247,6 +1340,12 @@ func validateGrpcMethodOverlayAgainstProto(gs *GrpcServiceGenSpec, info contract
 					errcode.PublicString("method", name)))
 		}
 		resourceByFullMethod[mr.FullMethod] = mr.Field
+	}
+
+	// Referential check for passwordResetExempt entries (#1382). Factored into a helper
+	// to keep this function under the cognitive-complexity limit.
+	if err := validateGrpcExemptReferential(gs, protoMethods); err != nil {
+		return err
 	}
 
 	// Completeness (#2008): every proto RPC must be public or permissioned.

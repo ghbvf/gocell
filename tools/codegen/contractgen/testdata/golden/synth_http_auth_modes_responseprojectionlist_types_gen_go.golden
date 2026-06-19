@@ -28,7 +28,7 @@ type Response struct {
 // ResponseDataItem is a generated DTO for contract http.sample.responseprojectionlist.v1.
 type ResponseDataItem struct {
 	ID    string `json:"id"`
-	Label string `json:"label,omitempty"`
+	Label string `json:"label"`
 }
 
 // ToMap projects ResponseDataItem into the column map the masking funnel

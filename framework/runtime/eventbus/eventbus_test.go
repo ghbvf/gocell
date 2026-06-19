@@ -1879,20 +1879,26 @@ func TestNotifyRetryExhausted_LogsErrorWithContextualFields(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, bus.Publish(context.Background(), topic, env))
 
-	// Wait for the retry budget to exhaust and the dead-letter record to appear.
-	testwait.External(t, "eventbus-redelivery-attempted", func() bool {
-		return bus.DeadLetterLen() > 0
-	}, busEventually10x, testtime.MediumPoll, "dead letter must be populated after retries exhausted")
-
-	// Find the Error-level "retries exhausted" record.
+	// Wait for the Error-level "retries exhausted" log record to be captured. The
+	// dead-letter write and the log write are separate async steps on the exhaustion
+	// path, so synchronizing on DeadLetterLen alone races the log capture: the
+	// dead-letter can be populated a beat before the slog record lands in the
+	// capture, leaving the snapshot below empty (flaky require.NotNil). #1490 fixed
+	// the global-logger parallel race; this is the residual dead-letter-vs-log
+	// ordering race. Poll for the exact record the assertions read (the log is
+	// emitted on the same exhaustion path that routes to dead letter, so this
+	// subsumes the DeadLetterLen wait).
 	var exhaustedRecord *slog.Record
-	for _, r := range cap.Snapshot() {
-		if r.Level == slog.LevelError && strings.Contains(r.Message, "retries exhausted") {
-			rc := r
-			exhaustedRecord = &rc
-			break
+	testwait.External(t, "eventbus-retries-exhausted-logged", func() bool {
+		for _, r := range cap.Snapshot() {
+			if r.Level == slog.LevelError && strings.Contains(r.Message, "retries exhausted") {
+				rc := r
+				exhaustedRecord = &rc
+				return true
+			}
 		}
-	}
+		return false
+	}, busEventually10x, testtime.MediumPoll, "slog.Error 'retries exhausted' record must be captured after retries exhausted")
 	require.NotNil(t, exhaustedRecord, "slog.Error 'retries exhausted' record must be captured")
 
 	aggIDAttr, ok := findLogAttr(*exhaustedRecord, "aggregate_id")

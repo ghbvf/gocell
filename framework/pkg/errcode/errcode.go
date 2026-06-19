@@ -990,6 +990,11 @@ const (
 	// ErrSagaDuplicateInstance). The (kind,domain,version,owner) uniqueness
 	// quadruple is a separate concern owned by US15/FR-009.
 	ErrRegistrationDuplicate Code = "ERR_REGISTRATION_DUPLICATE"
+	// ErrRegistrationRepoQuery signals an infrastructure failure (DB query/scan)
+	// in the durable contract_registrations store (303-US5, #2236), distinct from
+	// the business errors above. Constructed with KindInternal → HTTP 500 (mirrors
+	// ErrConfigRepoQuery).
+	ErrRegistrationRepoQuery Code = "ERR_REGISTRATION_REPO_QUERY"
 )
 
 // PublicError is the structured projection shared by HTTP responses, CLI text

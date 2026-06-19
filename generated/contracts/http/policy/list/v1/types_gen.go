@@ -32,7 +32,7 @@ type Response struct {
 type ResponseDataItem struct {
 	ID          string                       `json:"id"`
 	Name        string                       `json:"name"`
-	Description string                       `json:"description,omitempty"`
+	Description string                       `json:"description"`
 	Version     int64                        `json:"version"`
 	Rules       []*ResponseDataItemRulesItem `json:"rules"`
 }

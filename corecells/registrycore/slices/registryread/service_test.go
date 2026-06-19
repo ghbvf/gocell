@@ -2,11 +2,13 @@ package registryread
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
+	"github.com/ghbvf/gocell/framework/pkg/projection"
 	list "github.com/ghbvf/gocell/generated/contracts/http/registry/contract/list/v1"
 )
 
@@ -18,12 +20,51 @@ func mustTime(s string) time.Time {
 	return ts
 }
 
+// decodeItem marshals a sealed ResourceProjection (the masked wire view, opaque
+// by design — populated only via the masking funnel) and decodes it back into the
+// readable wire DTO so direct service-level tests can assert field values.
+func decodeItem(t *testing.T, p projection.ResourceProjection) list.ResponseDataItem {
+	t.Helper()
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal projection: %v", err)
+	}
+	var it list.ResponseDataItem
+	if err := json.Unmarshal(b, &it); err != nil {
+		t.Fatalf("unmarshal projection: %v", err)
+	}
+	return it
+}
+
 func seed(t *testing.T, ids ...string) *registry.ContractRegistrar {
 	t.Helper()
 	r := registry.NewContractRegistrar(clockmock.New(testEpoch))
 	for _, id := range ids {
 		if _, err := r.Submit(registry.SubmitInput{ID: id, Kind: "http", Submitter: "cell-a"}); err != nil {
 			t.Fatalf("seed %q: %v", id, err)
+		}
+	}
+	return r
+}
+
+// seedApproved registers id with payloadSchema then drives it through the full
+// legal transition chain to StateApproved (the approving Actor is recorded as the
+// registration's Approver). It exercises the projection wire path for the
+// approver/payloadSchema columns, which moved optional→required in #2401
+// (full-column-set), so their non-empty values must survive serialize → mask
+// funnel → wire → schema validation.
+func seedApproved(t *testing.T, id, submitter, approver, payloadSchema string) *registry.ContractRegistrar {
+	t.Helper()
+	r := registry.NewContractRegistrar(clockmock.New(testEpoch))
+	if _, err := r.Submit(registry.SubmitInput{ID: id, Kind: "http", Submitter: submitter, PayloadSchema: payloadSchema}); err != nil {
+		t.Fatalf("submit %q: %v", id, err)
+	}
+	for _, to := range []registry.RegistrationState{
+		registry.StateProbing(), registry.StateConformant(),
+		registry.StatePendingApproval(), registry.StateApproved(),
+	} {
+		if _, err := r.Advance(registry.AdvanceInput{ID: id, To: to, Actor: approver}); err != nil {
+			t.Fatalf("advance %q -> %v: %v", id, to, err)
 		}
 	}
 	return r
@@ -75,7 +116,7 @@ func TestList_SingleItem(t *testing.T) {
 	if len(got.Data) != 1 {
 		t.Fatalf("len(Data) = %d, want 1", len(got.Data))
 	}
-	it := got.Data[0]
+	it := decodeItem(t, got.Data[0])
 	if it.ID != "http.example.foo.v1" || it.Kind != "http" || it.Submitter != "cell-a" {
 		t.Errorf("item = %+v, want id/kind/submitter http.example.foo.v1/http/cell-a", it)
 	}
@@ -94,11 +135,11 @@ func TestList_Pagination(t *testing.T) {
 	if len(first.Data) != 2 || !first.HasMore || first.NextCursor != "c2" {
 		t.Fatalf("page1 = %+v, want [c1,c2] hasMore=true nextCursor=c2", first)
 	}
-	if first.Data[0].ID != "c1" || first.Data[1].ID != "c2" {
-		t.Fatalf("page1 ids = %q,%q, want c1,c2", first.Data[0].ID, first.Data[1].ID)
+	if id0, id1 := decodeItem(t, first.Data[0]).ID, decodeItem(t, first.Data[1]).ID; id0 != "c1" || id1 != "c2" {
+		t.Fatalf("page1 ids = %q,%q, want c1,c2", id0, id1)
 	}
 	second := mustList(t, svc, &list.Request{Limit: 2, Cursor: first.NextCursor})
-	if len(second.Data) != 1 || second.HasMore || second.Data[0].ID != "c3" {
+	if len(second.Data) != 1 || second.HasMore || decodeItem(t, second.Data[0]).ID != "c3" {
 		t.Fatalf("page2 = %+v, want [c3] hasMore=false", second)
 	}
 }

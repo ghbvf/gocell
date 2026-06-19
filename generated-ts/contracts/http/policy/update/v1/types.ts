@@ -42,7 +42,7 @@ export interface Response {
 export interface ResponseData {
   id: string;
   name: string;
-  description?: string;
+  description: string;
   version: number;
   rules: ResponseDataRulesItem[];
 }

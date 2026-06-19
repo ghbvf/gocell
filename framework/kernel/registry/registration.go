@@ -73,21 +73,26 @@ type SubmitInput struct {
 	Submitter     string
 }
 
-// normalized returns a copy with the required identity fields trimmed, so padded
+// Normalized returns a copy with the required identity fields trimmed, so padded
 // values (" cell-a ") are stored canonically and a whitespace-only field is
-// caught by validate as missing. Optional free-form fields (PayloadSchema) are
+// caught by Validate as missing. Optional free-form fields (PayloadSchema) are
 // left untouched. Submit normalizes before validating and storing.
-func (in SubmitInput) normalized() SubmitInput {
+//
+// Exported (303-US5, #2236) so a durable ports.Registry implementation validates
+// and canonicalises submit input identically to the in-mem ContractRegistrar —
+// a single validation source, no mem/PG fork.
+func (in SubmitInput) Normalized() SubmitInput {
 	in.ID = strings.TrimSpace(in.ID)
 	in.Kind = strings.TrimSpace(in.Kind)
 	in.Submitter = strings.TrimSpace(in.Submitter)
 	return in
 }
 
-// validate rejects missing required fields with ErrValidationFailed, treating a
+// Validate rejects missing required fields with ErrValidationFailed, treating a
 // whitespace-only value as missing (TrimSpace) — a blank ID is a silent map-key
-// collision, and a blank Submitter is a phantom audit identity.
-func (in SubmitInput) validate() error {
+// collision, and a blank Submitter is a phantom audit identity. Exported for
+// durable-store reuse (see Normalized).
+func (in SubmitInput) Validate() error {
 	missing := ""
 	switch {
 	case strings.TrimSpace(in.ID) == "":
@@ -118,23 +123,25 @@ type AdvanceInput struct {
 	Reason string
 }
 
-// normalized returns a copy with the required identity fields (ID, Actor)
+// Normalized returns a copy with the required identity fields (ID, Actor)
 // trimmed so a padded actor is stored canonically and a whitespace-only one is
-// caught by validate. The optional free-form Reason is left untouched. Advance
-// normalizes before validating and storing.
-func (in AdvanceInput) normalized() AdvanceInput {
+// caught by Validate. The optional free-form Reason is left untouched. Advance
+// normalizes before validating and storing. Exported for durable-store reuse
+// (see SubmitInput.Normalized).
+func (in AdvanceInput) Normalized() AdvanceInput {
 	in.ID = strings.TrimSpace(in.ID)
 	in.Actor = strings.TrimSpace(in.Actor)
 	return in
 }
 
-// validate rejects missing required fields (ID, Actor) with ErrValidationFailed,
+// Validate rejects missing required fields (ID, Actor) with ErrValidationFailed,
 // treating a whitespace-only value as missing (TrimSpace). A non-blank Actor
 // closes the audit-attribution gap: an approve / retire transition must name who
 // performed it, symmetric with SubmitInput requiring a Submitter. To legality is
 // validated by Transition (an illegal/zero target surfaces as
-// ErrRegistrationInvalidTransition, not a missing-field error).
-func (in AdvanceInput) validate() error {
+// ErrRegistrationInvalidTransition, not a missing-field error). Exported for
+// durable-store reuse (see SubmitInput.Normalized).
+func (in AdvanceInput) Validate() error {
 	missing := ""
 	switch {
 	case strings.TrimSpace(in.ID) == "":

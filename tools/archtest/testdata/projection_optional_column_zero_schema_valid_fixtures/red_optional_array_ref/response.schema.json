@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "red.optional.array.ref.response",
+  "type": "object",
+  "required": ["data", "nextCursor", "hasMore"],
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "$ref": "item.schema.json"
+      }
+    },
+    "nextCursor": {
+      "type": "string"
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
+  }
+}

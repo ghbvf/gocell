@@ -927,6 +927,44 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 
 // --- BuildHTTPEndpointSpec HasBody tests ---
 
+// TestBuildHTTPSpec_ModelessRejected is the RED test for the #2020 mandatory-AuthZ-mode
+// Hard gate inside buildHTTPSpec. An active+codegen HTTP contract that declares no
+// endpoints.http.permission and no explicit opt-out flag is "modeless" — the gate
+// must reject it so no artifact is ever emitted regardless of entry point.
+// This proves ClassifyHTTPAuthMode→HTTPAuthModeModeless → error containing
+// "declares no AuthZ mode" before any template is rendered.
+func TestBuildHTTPSpec_ModelessRejected(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.synth.modeless.v1": {
+				ID:         "http.synth.modeless.v1",
+				Kind:       "http",
+				Lifecycle:  "active",
+				Codegen:    true,
+				Transports: []string{"http"},
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/api/v1/synth/modeless",
+						SuccessStatus: 200,
+						// Permission is intentionally empty; Auth has no opt-out flag.
+						// This is the modeless state the gate must reject.
+					},
+				},
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := buildContractSpec(root, p, "http.synth.modeless.v1")
+	if err == nil {
+		t.Fatal("expected buildContractSpec to reject a modeless HTTP contract, got nil error")
+	}
+	if !strings.Contains(err.Error(), "declares no AuthZ mode") {
+		t.Errorf("error should contain %q, got: %v", "declares no AuthZ mode", err)
+	}
+}
+
 // TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that
 // HasBody=false when the contract is POST but declares no schemaRefs.request.
 // This is the "body-less POST" case (path-param-only endpoints).
@@ -1045,6 +1083,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 				NoContent:     false,
 				Auth: metadata.HTTPAuthMeta{
 					Bootstrap: true,
+					Reason:    "bootstrap admin endpoint uses HTTP Basic credentials, not JWT",
 				},
 				Responses: map[int]metadata.HTTPResponseMeta{
 					400: {Description: "Bad Request"},
@@ -1893,6 +1932,75 @@ func TestBuildHTTPEndpointSpec_IdempotencyExempt_FieldPropagated(t *testing.T) {
 			}
 			if spec.AuthPasswordResetExempt != tc.wantPRExempt {
 				t.Errorf("AuthPasswordResetExempt: got %v, want %v", spec.AuthPasswordResetExempt, tc.wantPRExempt)
+			}
+		})
+	}
+}
+
+// TestValidateGeneratedClientEncodable pins the codegen funnel that keeps
+// "a cross-cell client was generated for endpoints.clients" honest (#2093, F3/F4):
+// the client must be able to send the full declared request and decode the
+// declared success. The guard rejects, at codegen, a clients contract that is
+// NoContent (204 — nothing to decode) or declares a custom request header other
+// than the tenant header (client.tmpl sends only path/query/body + the
+// SignInternalRequest tenant header, so any other header is silently dropped).
+// Without endpoints.clients no client is emitted, so neither arm applies.
+func TestValidateGeneratedClientEncodable(t *testing.T) {
+	const cid = "http.sample.guard.v1"
+	tenantHeader := []ParamSpec{{Name: tenantRequestHeader, GoName: "XTenantID", GoType: "string"}}
+	customHeader := []ParamSpec{{Name: "X-Trace-Id", GoName: "XTraceID", GoType: "string"}}
+
+	cases := []struct {
+		name    string
+		ep      *httpEndpointSpec
+		wantErr bool
+		// substrs are required fragments of the error message (only when wantErr).
+		substrs []string
+	}{
+		{
+			name: "no clients: guard skipped even when NoContent",
+			ep:   &httpEndpointSpec{Clients: nil, NoContent: true, HeaderParams: customHeader},
+		},
+		{
+			name: "clients + decodable body + tenant header only: ok",
+			ep:   &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: false, HeaderParams: tenantHeader},
+		},
+		{
+			name:    "clients + NoContent: rejected",
+			ep:      &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: true},
+			wantErr: true,
+			substrs: []string{"NoContent (204)", "endpoints.clients"},
+		},
+		{
+			name:    "clients + custom request header: rejected",
+			ep:      &httpEndpointSpec{Clients: []string{"accesscore"}, NoContent: false, HeaderParams: customHeader},
+			wantErr: true,
+			substrs: []string{"X-Trace-Id", "endpoints.clients"},
+		},
+		{
+			name: "clients + tenant header in any case: ok (case-insensitive allowlist)",
+			ep: &httpEndpointSpec{
+				Clients:      []string{"accesscore"},
+				HeaderParams: []ParamSpec{{Name: "x-tenant-id", GoName: "XTenantID", GoType: "string"}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateGeneratedClientEncodable(cid, tc.ep)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				for _, s := range tc.substrs {
+					if !strings.Contains(err.Error(), s) {
+						t.Errorf("error %q missing substring %q", err.Error(), s)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
