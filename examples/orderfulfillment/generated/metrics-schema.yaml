@@ -248,7 +248,7 @@ metrics:
       file: framework/kernel/outbox/emitter.go
     - name: outbox_pending_depth
       type: gauge
-      help: Current eligible pending outbox entries for the owner cell (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
+      help: Current eligible pending outbox entries for the relay's pool, labeled by DSN-group representative cell (in a partial-split pool this covers all cells sharing the pool) (status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). Set on each Relay reclaim tick.
       labels:
         - cell
       file: framework/runtime/observability/metrics/outbox.go
