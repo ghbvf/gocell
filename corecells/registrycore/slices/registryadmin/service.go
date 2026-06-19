@@ -31,6 +31,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	approve "github.com/ghbvf/gocell/generated/contracts/http/registry/contract/approve/v1"
@@ -99,8 +100,6 @@ func (s *Service) Approve(ctx context.Context, req *approve.Request) (approve.Ap
 		return approve.Approve403ErrorResponse{Body: *ce}, nil
 	case errNotFound:
 		return approve.Approve404ErrorResponse{Body: *ce}, nil
-	case errConflict:
-		return approve.Approve409ErrorResponse{Body: *ce}, nil
 	case errValidation:
 		return approve.Approve400ErrorResponse{Body: *ce}, nil
 	default:
@@ -122,8 +121,6 @@ func (s *Service) Reject(ctx context.Context, req *reject.Request) (reject.Rejec
 		return reject.Reject403ErrorResponse{Body: *ce}, nil
 	case errNotFound:
 		return reject.Reject404ErrorResponse{Body: *ce}, nil
-	case errConflict:
-		return reject.Reject409ErrorResponse{Body: *ce}, nil
 	case errValidation:
 		return reject.Reject400ErrorResponse{Body: *ce}, nil
 	default:
@@ -145,8 +142,6 @@ func (s *Service) Retire(ctx context.Context, req *retire.Request) (retire.Retir
 		return retire.Retire403ErrorResponse{Body: *ce}, nil
 	case errNotFound:
 		return retire.Retire404ErrorResponse{Body: *ce}, nil
-	case errConflict:
-		return retire.Retire409ErrorResponse{Body: *ce}, nil
 	case errValidation:
 		return retire.Retire400ErrorResponse{Body: *ce}, nil
 	default:
@@ -206,13 +201,16 @@ const (
 	errInternal   transitionErr = iota // undeclared 5xx (return raw err)
 	errTenant                          // missing/invalid tenant → 403
 	errNotFound                        // registration id absent → 404
-	errConflict                        // illegal state transition → 409
-	errValidation                      // missing/invalid advance input → 400
+	errValidation                      // bad input OR illegal transition → 400
 )
 
 // classifyTransitionErr maps a store/tenant error to its transitionErr bucket and
 // the underlying *errcode.Error for the wire body. A non-errcode or unrecognized
 // error classifies as errInternal (nil body), surfaced as a framework 5xx.
+//
+// ErrRegistrationInvalidTransition is KindInvalid → 400 (errcode godoc: "mirrors
+// saga.Transition"), NOT 409: an illegal lifecycle transition is a bad request in
+// this framework's convention, single-sourced by registration_codes_test.go.
 func classifyTransitionErr(err error) (transitionErr, *errcode.Error) {
 	var ce *errcode.Error
 	if !errors.As(err, &ce) {
@@ -223,9 +221,7 @@ func classifyTransitionErr(err error) (transitionErr, *errcode.Error) {
 		return errTenant, ce
 	case errcode.ErrRegistrationNotFound:
 		return errNotFound, ce
-	case errcode.ErrRegistrationInvalidTransition:
-		return errConflict, ce
-	case errcode.ErrValidationFailed:
+	case errcode.ErrRegistrationInvalidTransition, errcode.ErrValidationFailed:
 		return errValidation, ce
 	default:
 		return errInternal, nil
@@ -234,13 +230,20 @@ func classifyTransitionErr(err error) (transitionErr, *errcode.Error) {
 
 // logTransitionFailure records an unexpected (undeclared 5xx) transition error
 // server-side (observability.md §Warn=降级运行); the raw error never reaches the
-// wire (the handler's WriteError fallback derives a redacted 5xx body).
+// wire (the handler's WriteError fallback derives a redacted 5xx body). The error
+// is scrubbed via redaction.RedactError (fail-closed redaction, observability.md
+// §Redaction) and tenant_id is transcribed for operator correlation (the logging
+// handler does not auto-extract tenant from ctx).
 func (s *Service) logTransitionFailure(ctx context.Context, op, id string, err error) {
-	s.logger.WarnContext(ctx, "registryadmin: unexpected store error on contract transition",
+	attrs := []any{
 		slog.String("op", op),
 		slog.String("registration_id", id),
-		slog.String("error", err.Error()),
-	)
+		slog.Any("error", redaction.RedactError(err)),
+	}
+	if tnt, terr := tenant.FromContext(ctx); terr == nil {
+		attrs = append(attrs, slog.String("tenant_id", tnt.String()))
+	}
+	s.logger.WarnContext(ctx, "registryadmin: unexpected store error on contract transition", attrs...)
 }
 
 // toApproveData / toRejectData / toRetireData project the post-transition

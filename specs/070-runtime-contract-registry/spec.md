@@ -119,7 +119,9 @@ submit/list handler（typed response envelope 表达业务状态码）+ applicat
 
 ### User Story 7 - Admin 审批工作流：approve/reject/retire + RBAC（Priority: P2）
 
-`http.registry.contract.approve.v1` / `reject.v1` / `retire.v1` 契约 + handler + 路由门禁经 `auth.RequirePermission(authz.Permission)` 接 accesscore admin 决策（PDP，非硬编 role 字面量）+ 状态机不变式（approved 才能 active；reject 不可激活；retire 是 `active→retired` 终态迁移，触发数据面 remove 该契约的订阅/路由）。retire 与 approve/reject 同走 PDP admin + 审计（US8）+ `contract-retired` 事件（FR-001 闭合：submit/list/approve/reject/retire 五端点全覆盖）。
+`http.registry.contract.approve.v1` / `reject.v1` / `retire.v1` 契约 + handler + 路由门禁经契约 `endpoints.http.permission` overlay → `auth.RequirePermissionForContract` 接 accesscore admin 决策（permission-based ABAC/PDP，非硬编 role 字面量）+ 状态机不变式（approved 才能 active；reject 不可激活；retire 是 `active→retired` 终态迁移）。retire 与 approve/reject 同走 PDP admin（FR-001 闭合：submit/list/approve/reject/retire 五端点全覆盖）。
+
+> **范围边界（#2238 实现澄清）**：本 US 只交付三端点 + 状态机迁移。`contract-retired` 跨 cell 事件 + 审批审计落账由 **US8（#2239）** 与其 auditcore 消费者一起落地（事件一发即有消费方，避免死事件）；数据面 remove 该契约的订阅/路由由 **US11/US12** 消费 `contract-retired` 事件触发。本 US 的 retire 仅做状态迁移（store 已写 in-store migration-history 事件），不向跨 cell 发事件。
 
 **Why this priority**: 替代编译期 CI gate 的人工补偿控制；审批是产品硬需求。
 
@@ -130,7 +132,7 @@ submit/list handler（typed response envelope 表达业务状态码）+ applicat
 1. **Given** 非 admin principal，**When** 调 approve，**Then** PDP deny（路由门禁），不触碰状态机。
 2. **Given** admin 对 conformant 契约 approve，**When** 状态机推进，**Then** approved，可被 US11 数据面加载。
 3. **Given** 一个 rejected 契约，**When** 请求 activate，**Then** 状态机拒绝。
-4. **Given** admin 对一个 active 契约 retire，**When** `retire.v1` 调用，**Then** 状态机迁 `active→retired`、发 `contract-retired` 事件、触发数据面 remove 该订阅/路由（US11/US12 消费）；非 admin retire → PDP deny（fail-closed）。
+4. **Given** admin 对一个 active 契约 retire，**When** `retire.v1` 调用，**Then** 状态机迁 `active→retired`（本 US 交付）；非 admin retire → PDP deny（fail-closed）。`contract-retired` 跨 cell 事件由 US8（#2239）发出、数据面 remove 该订阅/路由由 US11/US12 消费——非本 US 验收项。
 
 ---
 

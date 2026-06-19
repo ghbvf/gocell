@@ -122,19 +122,6 @@ func (r Reject404ErrorResponse) visitRejectResponse(ctx context.Context, w http.
 	return nil
 }
 
-// Reject409ErrorResponse renders an HTTP 409 error response.
-// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
-// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
-// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type Reject409ErrorResponse struct {
-	Body errcode.Error
-}
-
-func (r Reject409ErrorResponse) visitRejectResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
-	return nil
-}
-
 // Reject413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json

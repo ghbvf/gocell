@@ -160,8 +160,8 @@ func seedTo(t *testing.T, store ports.Registry, target registry.RegistrationStat
 	t.Fatalf("seedTo: unreachable target state %s", target)
 }
 
-// decodeState extracts data.state from a 200 admin response body.
-func decodeState(t *testing.T, body []byte) string {
+// decodeData extracts data.state and data.approver from a 200 admin response body.
+func decodeData(t *testing.T, body []byte) (state, approver string) {
 	t.Helper()
 	var resp struct {
 		Data struct {
@@ -172,7 +172,7 @@ func decodeState(t *testing.T, body []byte) string {
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, body)
 	}
-	return resp.Data.State
+	return resp.Data.State, resp.Data.Approver
 }
 
 func approvePath(id string) string { return "/api/v1/registry/contracts/" + id + "/approve" }
@@ -203,8 +203,14 @@ func TestContractApproveServe_OK(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateHTTPResponseRecorder(t, rec)
-	if got := decodeState(t, rec.Body.Bytes()); got != registry.StateApproved().String() {
-		t.Fatalf("state = %q, want approved", got)
+	state, approver := decodeData(t, rec.Body.Bytes())
+	if state != registry.StateApproved().String() {
+		t.Fatalf("state = %q, want approved", state)
+	}
+	// Approver attribution: the authenticated admin subject (adminCtx → "admin-1"),
+	// not the seed actor ("system"). This is the core audit property of approve.
+	if approver != "admin-1" {
+		t.Fatalf("approver = %q, want admin-1 (authenticated admin subject)", approver)
 	}
 }
 
@@ -257,15 +263,16 @@ func TestContractApproveServe_NotFound(t *testing.T) {
 }
 
 // TestContractApproveServe_InvalidTransition: approving a submitted (not
-// pending-approval) registration ⇒ 409 (kernel rejects the illegal transition).
+// pending-approval) registration ⇒ 400 (kernel rejects the illegal transition;
+// ErrRegistrationInvalidTransition is KindInvalid → 400, mirrors saga.Transition).
 func TestContractApproveServe_InvalidTransition(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), approveContractID)
 	store := mem.NewRegistry(clockmock.New(testEpoch))
 	seedTo(t, store, registry.StateSubmitted())
 
 	rec := postAdmin(t, newAdminMux(t, store), adminCtx(allowAuthorizer()), approvePath(seedID), `{}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }
@@ -284,8 +291,8 @@ func TestContractRejectServe_OK(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateHTTPResponseRecorder(t, rec)
-	if got := decodeState(t, rec.Body.Bytes()); got != registry.StateRejected().String() {
-		t.Fatalf("state = %q, want rejected", got)
+	if state, _ := decodeData(t, rec.Body.Bytes()); state != registry.StateRejected().String() {
+		t.Fatalf("state = %q, want rejected", state)
 	}
 }
 
@@ -298,6 +305,45 @@ func TestContractRejectServe_Forbidden(t *testing.T) {
 	rec := postAdmin(t, newAdminMux(t, store), adminCtx(denyAuthorizer("no registry:reject")), rejectPath(seedID), `{}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractRejectServe_Unauthenticated: no principal ⇒ the route gate 401s.
+func TestContractRejectServe_Unauthenticated(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), rejectContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+	seedTo(t, store, registry.StatePendingApproval())
+
+	rec := postAdmin(t, newAdminMux(t, store), context.Background(), rejectPath(seedID), `{}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractRejectServe_NotFound: rejecting an unknown id ⇒ 404.
+func TestContractRejectServe_NotFound(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), rejectContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+
+	rec := postAdmin(t, newAdminMux(t, store), adminCtx(allowAuthorizer()), rejectPath("http.missing.v1"), `{}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractRejectServe_InvalidTransition: rejecting an active (past the
+// probing/pending-approval reject window) registration ⇒ 400 (illegal transition).
+func TestContractRejectServe_InvalidTransition(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), rejectContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+	seedTo(t, store, registry.StateActive())
+
+	rec := postAdmin(t, newAdminMux(t, store), adminCtx(allowAuthorizer()), rejectPath(seedID), `{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }
@@ -316,8 +362,8 @@ func TestContractRetireServe_OK(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateHTTPResponseRecorder(t, rec)
-	if got := decodeState(t, rec.Body.Bytes()); got != registry.StateRetired().String() {
-		t.Fatalf("state = %q, want retired", got)
+	if state, _ := decodeData(t, rec.Body.Bytes()); state != registry.StateRetired().String() {
+		t.Fatalf("state = %q, want retired", state)
 	}
 }
 
@@ -334,16 +380,41 @@ func TestContractRetireServe_Forbidden(t *testing.T) {
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }
 
+// TestContractRetireServe_Unauthenticated: no principal ⇒ the route gate 401s.
+func TestContractRetireServe_Unauthenticated(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), retireContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+	seedTo(t, store, registry.StateActive())
+
+	rec := postAdmin(t, newAdminMux(t, store), context.Background(), retirePath(seedID), `{}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
+// TestContractRetireServe_NotFound: retiring an unknown id ⇒ 404.
+func TestContractRetireServe_NotFound(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), retireContractID)
+	store := mem.NewRegistry(clockmock.New(testEpoch))
+
+	rec := postAdmin(t, newAdminMux(t, store), adminCtx(allowAuthorizer()), retirePath("http.missing.v1"), `{}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+}
+
 // TestContractRetireServe_InvalidTransition: retiring a pending-approval (not
-// active) registration ⇒ 409 (retire requires active).
+// active) registration ⇒ 400 (retire requires active; illegal transition).
 func TestContractRetireServe_InvalidTransition(t *testing.T) {
 	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), retireContractID)
 	store := mem.NewRegistry(clockmock.New(testEpoch))
 	seedTo(t, store, registry.StatePendingApproval())
 
 	rec := postAdmin(t, newAdminMux(t, store), adminCtx(allowAuthorizer()), retirePath(seedID), `{}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 	c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
 }

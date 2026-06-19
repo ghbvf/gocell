@@ -122,19 +122,6 @@ func (r Retire404ErrorResponse) visitRetireResponse(ctx context.Context, w http.
 	return nil
 }
 
-// Retire409ErrorResponse renders an HTTP 409 error response.
-// Body carries an errcode.Error whose Kind/Code/Message/Details follow the
-// canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
-// (5xx Details are stripped by Error.MarshalJSON; Internal never serializes).
-type Retire409ErrorResponse struct {
-	Body errcode.Error
-}
-
-func (r Retire409ErrorResponse) visitRetireResponse(ctx context.Context, w http.ResponseWriter) error {
-	httputil.WriteErrorWithStatus(ctx, w, 409, &r.Body)
-	return nil
-}
-
 // Retire413ErrorResponse renders an HTTP 413 error response.
 // Body carries an errcode.Error whose Kind/Code/Message/Details follow the
 // canonical wire schema in contracts/shared/errors/error-response-v1.schema.json
