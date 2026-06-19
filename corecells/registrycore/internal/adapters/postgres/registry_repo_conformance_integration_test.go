@@ -22,5 +22,7 @@ func TestPGRegistry_Conformance(t *testing.T) {
 func pgRegistryFactory(t *testing.T) (ports.Registry, persistence.TxRunner, func()) {
 	t.Helper()
 	repo, txMgr := setupRegistryPG(t)
+	// No-op cleanup: setupRegistryPG registers the per-test database teardown via
+	// t.Cleanup, so the factory's cleanup func has nothing left to release.
 	return repo, txMgr, func() {}
 }

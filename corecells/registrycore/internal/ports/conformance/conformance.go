@@ -17,6 +17,10 @@
 // wraps every write in. Reads (Get/List/History) are issued directly: both stores
 // isolate by the explicit typed tenant parameter (PG additionally via a
 // WHERE tenant_id predicate), so no read needs an ambient tx under the test role.
+// (In production the PG read path also runs inside a tenant-scoped tx so FORCE
+// RLS fail-closes an unscoped read; that GUC/RLS behavior is exercised by the PG
+// RLS integration tests, not by this contract suite, which asserts the
+// tenant-parameter isolation common to both stores.)
 // There is no Features struct — unlike UserRepository there is no mem/PG behavior
 // fork to gate; every sub-test exercises one concrete path on both stores.
 //
@@ -72,6 +76,8 @@ func mustParseTenant(s string) tenant.TenantID {
 // persistence.TxRunner (used to provide the ambient tx writes require — a
 // pass-through for stores that need none), and a cleanup func, for one sub-case.
 // The factory is called once per sub-test; cleanup is registered via t.Cleanup.
+// A store that needs no real ambient tx (e.g. the in-memory Registry) can pass
+// outbox.DemoTxRunner{} as the TxRunner.
 type RegistryFactory func(t *testing.T) (repo ports.Registry, txRunner persistence.TxRunner, cleanup func())
 
 // RunRegistryConformance executes the full ports.Registry conformance suite.
@@ -82,6 +88,8 @@ func RunRegistryConformance(t *testing.T, factory RegistryFactory) {
 	t.Run("Create_MissingFieldRejected", func(t *testing.T) { conformCreateMissingFieldRejected(t, factory) })
 	t.Run("Transition_LegalAdvancesAndAppends", func(t *testing.T) { conformTransitionLegal(t, factory) })
 	t.Run("Transition_IllegalRejectedNoMutation", func(t *testing.T) { conformTransitionIllegal(t, factory) })
+	t.Run("Transition_SelfTransitionRejected", func(t *testing.T) { conformTransitionSelf(t, factory) })
+	t.Run("Transition_TerminalRejected", func(t *testing.T) { conformTransitionTerminal(t, factory) })
 	t.Run("Transition_UnknownIDNotFound", func(t *testing.T) { conformTransitionUnknownID(t, factory) })
 	t.Run("Transition_ApprovedRecordsApprover", func(t *testing.T) { conformTransitionApprover(t, factory) })
 	t.Run("Get_UnknownReturnsNotFound", func(t *testing.T) { conformGetUnknown(t, factory) })
@@ -215,11 +223,24 @@ func conformCreateMissingFieldRejected(t *testing.T, factory RegistryFactory) {
 	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
-		_, e := repo.Create(ctx, testTenantID, registry.SubmitInput{ID: "", Kind: "http", Submitter: "alice"})
-		return e
-	})
-	assertCode(t, err, errcode.ErrValidationFailed, "Create missing field")
+	// Every required field (id / kind / submitter) blank must be rejected with
+	// ErrValidationFailed — the contract is per-field, not just the id. Validation
+	// fires before any store write, so the shared "x" id never collides.
+	cases := []struct {
+		name string
+		in   registry.SubmitInput
+	}{
+		{"missing-id", registry.SubmitInput{ID: "", Kind: "http", Submitter: "alice"}},
+		{"missing-kind", registry.SubmitInput{ID: "x", Kind: "", Submitter: "alice"}},
+		{"missing-submitter", registry.SubmitInput{ID: "x", Kind: "http", Submitter: ""}},
+	}
+	for _, tc := range cases {
+		err := txRunner.RunInTx(context.Background(), func(ctx context.Context) error {
+			_, e := repo.Create(ctx, testTenantID, tc.in)
+			return e
+		})
+		assertCode(t, err, errcode.ErrValidationFailed, "Create "+tc.name)
+	}
 }
 
 func conformTransitionLegal(t *testing.T, factory RegistryFactory) {
@@ -254,11 +275,49 @@ func conformTransitionIllegal(t *testing.T, factory RegistryFactory) {
 	})
 	assertCode(t, err, errcode.ErrRegistrationInvalidTransition, "Transition illegal")
 
-	// No half-write: still submitted, history unchanged (length 1).
-	got, _, _ := repo.Get(context.Background(), testTenantID, "http.foo.v1")
+	// No half-write: still submitted, history unchanged (length 1). The reads must
+	// not swallow errors — a failed Get/History would otherwise masquerade as a
+	// state-drift assertion with no diagnostic context.
+	got, ok, gerr := repo.Get(context.Background(), testTenantID, "http.foo.v1")
+	fatalIfErr(t, gerr, "Get after illegal transition")
+	fatalUnless(t, ok, "Get after illegal transition: want ok=true")
 	errUnless(t, got.State == registry.StateSubmitted(), "Transition illegal: state must stay submitted, got %s", got.State)
-	evs, _ := repo.History(context.Background(), testTenantID, "http.foo.v1")
+	evs, herr := repo.History(context.Background(), testTenantID, "http.foo.v1")
+	fatalIfErr(t, herr, "History after illegal transition")
 	errUnless(t, len(evs) == 1, "Transition illegal: history must stay length 1, got %d", len(evs))
+}
+
+// conformTransitionSelf asserts a self-transition (submitted → submitted) is
+// rejected — the frozen legalTransitions table has no self-edges.
+func conformTransitionSelf(t *testing.T, factory RegistryFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	create(t, txRunner, repo, testTenantID, submitInput("self"))
+	_, err := transition(t, txRunner, repo, testTenantID, registry.AdvanceInput{
+		ID: "self", To: registry.StateSubmitted(), Actor: "system",
+	})
+	assertCode(t, err, errcode.ErrRegistrationInvalidTransition, "Transition self")
+}
+
+// conformTransitionTerminal drives a registration to the terminal rejected state
+// (submitted → probing → rejected) and asserts any further transition out of it
+// is rejected — terminal states have no outgoing edges.
+func conformTransitionTerminal(t *testing.T, factory RegistryFactory) {
+	t.Helper()
+	repo, txRunner, cleanup := factory(t)
+	t.Cleanup(cleanup)
+
+	create(t, txRunner, repo, testTenantID, submitInput("term"))
+	for _, to := range []registry.RegistrationState{registry.StateProbing(), registry.StateRejected()} {
+		_, err := transition(t, txRunner, repo, testTenantID, registry.AdvanceInput{ID: "term", To: to, Actor: "system"})
+		fatalIfErr(t, err, "Transition to "+to.String())
+	}
+	_, err := transition(t, txRunner, repo, testTenantID, registry.AdvanceInput{
+		ID: "term", To: registry.StateProbing(), Actor: "system",
+	})
+	assertCode(t, err, errcode.ErrRegistrationInvalidTransition, "Transition out of terminal")
 }
 
 func conformTransitionUnknownID(t *testing.T, factory RegistryFactory) {
@@ -364,6 +423,14 @@ func conformListStateFilter(t *testing.T, factory RegistryFactory) {
 	nonePage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{State: registry.StateApproved()})
 	fatalIfErr(t, err, "List approved")
 	errUnless(t, len(nonePage) == 0, "List approved: want 0 rows, got %d", len(nonePage))
+
+	// Zero-value ListFilter{} means "all states" (the port contract): a mixed-state
+	// store must return every row, not silently treat the zero State as a predicate.
+	allPage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
+	fatalIfErr(t, err, "List all-states")
+	fatalUnless(t, len(allPage) == 2, "List all-states: len = %d, want 2 (submitted a + probing b)", len(allPage))
+	errUnless(t, allPage[0].ID == "a" && allPage[1].ID == "b",
+		"List all-states: ids = [%s %s], want [a b]", allPage[0].ID, allPage[1].ID)
 }
 
 func conformHistoryOrdered(t *testing.T, factory RegistryFactory) {
@@ -420,6 +487,14 @@ func conformCrossTenantIsolation(t *testing.T, factory RegistryFactory) {
 	evs, err := repo.History(ctx, testTenantIDOther, "shared.id")
 	fatalIfErr(t, err, "History cross-tenant")
 	errUnless(t, len(evs) == 0, "History cross-tenant: tenant B must see 0 events, got %d", len(evs))
+
+	// Write-path isolation: tenant B cannot advance tenant A's registration. Probed
+	// before tenant B creates its own shared.id below, so not-found is genuinely the
+	// cross-tenant predicate, not a missing row.
+	_, tErr := transition(t, txRunner, repo, testTenantIDOther, registry.AdvanceInput{
+		ID: "shared.id", To: registry.StateProbing(), Actor: "attacker",
+	})
+	assertCode(t, tErr, errcode.ErrRegistrationNotFound, "Transition cross-tenant")
 
 	// Per-tenant dedup: the same id is independently creatable under tenant B.
 	create(t, txRunner, repo, testTenantIDOther, registry.SubmitInput{ID: "shared.id", Kind: "http", Submitter: "bob"})

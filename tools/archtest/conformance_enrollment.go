@@ -372,6 +372,8 @@ func userRepoConformanceSpec() repoConformanceSpec {
 
 // registryRepoConformanceSpec is the registrycore member (#2388): ports.Registry
 // has mem + PG implementations that must both enroll in conformance.RunRegistryConformance.
+// Blind-spot catalog (including the intentional B1 reverse-guard omission) is in the
+// TestRegistryRepoConformanceEnrollment godoc.
 func registryRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
 		ruleID:          ruleRegistryRepoConformanceEnrollment01,
