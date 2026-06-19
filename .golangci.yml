@@ -409,12 +409,17 @@ linters:
           # generated/contracts is allowed because PR-V1-CODEGEN-FULL-MIGRATION
           # made cells/* call <contractpkg>.NewHandler / NewSubscription instead
           # of constructing wrapper.ContractSpec literals.
+          #
+          # Scope (#2426 F4): this rule covers the `**/cells/**` subtree — examples
+          # (excluded, they have per-example rules below) and externalcells satellites
+          # (e.g. gocell-mdm, linted from their own module dir where files appear as
+          # `cells/...`). Platform corecells are governed by corecells-isolation below,
+          # which deliberately OMITS the gocell-mdm satellite allow so the platform has
+          # no nominal import channel to an external module.
           list-mode: strict
           files:
             - "**/cells/**"
             - "!**/cells/**/*_test.go"
-            - "**/corecells/**"
-            - "!**/corecells/**/*_test.go"
             - "!**/examples/**"
           allow:
             - $gostd
@@ -424,9 +429,10 @@ linters:
             - github.com/ghbvf/gocell/cells
             - github.com/ghbvf/gocell/corecells
             - github.com/ghbvf/gocell/generated/contracts
-            # externalcells satellite modules (e.g. gocell-mdm) follow the same
-            # cells-isolation discipline — each satellite's cells/ subtree may
-            # import within the same satellite (intra-module), not across satellites.
+            # externalcells satellite modules (e.g. gocell-mdm): a satellite's cells/
+            # subtree may import within the SAME satellite (intra-module), not across
+            # satellites. Scoped here (the cells/ subtree), NOT in corecells-isolation,
+            # so platform corecells never get this allow (#2426 F4).
             - github.com/ghbvf/gocell-mdm
             - github.com/google/uuid
             - github.com/jackc/pgx
@@ -456,6 +462,41 @@ linters:
                 composition roots wire auth (#1148). Layered on top of
                 cells-isolation (which allows runtime/* broadly); this subtracts the
                 one interceptor package. Mirrors grpc-adapter-no-interceptor-import.
+        corecells-isolation:
+          # LAYER-02 (platform corecells): identical cell discipline to cells-isolation,
+          # but the allow-list deliberately OMITS github.com/ghbvf/gocell-mdm. Platform
+          # corecells must not even nominally be permitted to import an external satellite
+          # module (#2426 F4 — the gocell-mdm allow belongs only to the cells/ satellite
+          # subtree). Split from cells-isolation because depguard rules are per-file
+          # strict allow-lists: corecells and the satellite cells/ subtree need different
+          # allow surfaces, and `**/corecells/**` is path-disjoint from `**/cells/**`.
+          list-mode: strict
+          files:
+            - "**/corecells/**"
+            - "!**/corecells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/framework/kernel
+            - github.com/ghbvf/gocell/framework/pkg
+            - github.com/ghbvf/gocell/framework/runtime
+            - github.com/ghbvf/gocell/cells
+            - github.com/ghbvf/gocell/corecells
+            - github.com/ghbvf/gocell/generated/contracts
+            - github.com/google/uuid
+            - github.com/jackc/pgx
+            - golang.org/x/crypto
+            - google.golang.org/grpc
+          deny:
+            - pkg: github.com/ghbvf/gocell/cellmodules
+              desc: |
+                cellmodules/ is a Composition Root layer; corecells/ must not import it
+                (reverse import = layer violation — cellmodules/ imports corecells/, not
+                the other way around). Belt-and-suspenders alongside strict allow-list.
+            - pkg: github.com/ghbvf/gocell/framework/runtime/grpc/interceptor
+              desc: |
+                corecells/ must not import runtime/grpc/interceptor — gRPC interceptor
+                wiring is a composition-root concern (AUTH-PLAN-04 / LAYER-09, #1148),
+                mirroring the cells-isolation deny.
         # Per-example cells-isolation rules. Examples are public-facing demos
         # of the framework's architecture; they must follow the SAME cell
         # discipline as platform cells/ (no cross-layer shortcuts) — otherwise
