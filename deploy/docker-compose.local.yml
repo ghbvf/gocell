@@ -47,11 +47,12 @@ services:
       RABBITMQ_DEFAULT_USER: gocell
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD required}
     healthcheck:
-      # check_port_connectivity (not ping): ping reports healthy once the Erlang
-      # node is up, BEFORE the AMQP 5672 listener binds — corebundle's eager dial
-      # would then race it and fail-close (#1940). This gates on the listener
-      # ports actually accepting.
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      # TCP probe (not rabbitmq-diagnostics ping): ping reports healthy once the
+      # Erlang node is up, BEFORE the AMQP 5672 listener binds — corebundle's
+      # eager dial would then race it and fail-close (#1940). A plain port check
+      # preserves that listener gate without spawning diagnostics Erlang VMs
+      # every few seconds during long local Docker Desktop sessions (#2437).
+      test: ["CMD", "nc", "-z", "127.0.0.1", "5672"]
       interval: 3s
       timeout: 5s
       retries: 40

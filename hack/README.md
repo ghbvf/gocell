@@ -33,12 +33,14 @@ inert and there is no local protection.
 `hack/githooks/pre-push` runs the fast, deterministic, offline subset of CI
 that fresh-instance AI co-authors most often skip — gofumpt (scoped to the
 pushed `.go` files), `go build`/`vet` (incl. integration/e2e tags), and
-codegen staleness (`gocell verify generated`). Each tier only fires when
-the push actually touches the files it protects, so a docs-only push pays
-~0s. Honest scope: it checks the working tree (not the pushed commit) and
-`git push --no-verify` bypasses it — a fast feedback loop, not an
-unbypassable gate. See the header comment in `githooks/pre-push` for the
-full rationale and the deliberate CI-mirror deviations.
+codegen staleness (`gocell verify generated`). CPU-heavy golangci-lint is
+left to PR/push CI or explicit developer commands so `git push` is not held
+open by long static-analysis runs. Each tier only fires when the push
+actually touches the files it protects, so a docs-only push pays ~0s.
+Honest scope: it checks the working tree (not the pushed commit) and `git
+push --no-verify` bypasses it — a fast feedback loop, not an unbypassable
+gate. See the header comment in `githooks/pre-push` for the full rationale
+and the deliberate CI-mirror deviations.
 
 ## Adding a new gate
 

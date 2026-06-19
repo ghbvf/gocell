@@ -49,7 +49,7 @@
 // ## Symbol inventory (lives here, not in ai-robust.md per the charter)
 //
 //   - Frozen type: github.com/ghbvf/gocell/framework/runtime/composition.SharedDeps
-//   - Frozen golden: sharedDepsFrozenExportedFields (25 exported fields)
+//   - Frozen golden: sharedDepsFrozenExportedFields
 //
 // Relationship: advances #1412 (SharedDeps Hard-ization) by covering the
 // field-set dimension. The unexported sealed-construction marker (valid) is
@@ -176,7 +176,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 
 	// (c) Same field NAMES but one field RETYPED: proves that type-string drift is
 	// caught at constant field count, not just count drift. Clock is retyped from
-	// clock.Clock → string; all other 24 field names (the full golden set) are
+	// clock.Clock → string; the other golden field names are
 	// preserved so the ONLY divergence is Clock's type. This red case demonstrates
 	// that exportedFieldTypeStrings detects type-string divergence, not just
 	// field-set membership divergence.
@@ -209,7 +209,7 @@ func TestSharedDepsFieldSetFrozen01_DetectorRejectsPerturbation(t *testing.T) {
 	}
 	retyped := exportedFieldTypeStrings(reflect.TypeOf(sharedDepsRetypedClock{}))
 	assert.NotEqual(t, sharedDepsFrozenExportedFields, retyped,
-		"%s anti-vacuity (type drift): a struct with the same 25 field names but Clock "+
+		"%s anti-vacuity (type drift): a struct with the same golden field names but Clock "+
 			"retyped to string must NOT match the golden — proves type-string drift detection, "+
 			"not just field-set membership detection", ruleSharedDepsFieldSetFrozen01)
 

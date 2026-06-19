@@ -196,6 +196,11 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
 `commandType` is required in the enqueue request (along with `payload`); omitting it
 returns `400`. It is the command verb the device dispatches on, echoed back in the dequeue response.
 
+Per-device Pending command cap: once a device accumulates its limit of Pending (not-yet-dequeued)
+commands, further enqueues return `429 ERR_RATE_LIMITED`. The default cap is 1000. Override it with
+`GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE` (positive integer; non-positive or non-integer values
+cause startup fail-fast; unset uses the default).
+
 Response (201):
 
 ```json
