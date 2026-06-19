@@ -35,10 +35,6 @@ type MetricProviderConfig struct {
 // *prom.Registry. Every CounterVec/HistogramVec returned is registered on
 // the configured registry; duplicate registration surfaces as an
 // ErrAdapterPromRegister error, not a panic.
-//
-// Unregister is safe for concurrent use: it uses a RWMutex to protect the
-// internal registry-to-collector map so rollback from NewProviderRelayCollector
-// can be called from any goroutine.
 type MetricProvider struct {
 	cfg  MetricProviderConfig
 	mu   sync.RWMutex
@@ -199,28 +195,6 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	p.vecs[vec] = hv
 	p.mu.Unlock()
 	return vec, nil
-}
-
-// Unregister removes a previously registered collector from the Prometheus
-// registry. It is idempotent — passing an unknown Collector (or one already
-// unregistered) returns nil. Concurrent calls are safe.
-//
-// ref: prometheus/client_golang prometheus/registry.go — Registry.Unregister
-// returns bool; we convert "not found" to nil so callers treat it as a no-op.
-func (p *MetricProvider) Unregister(c metrics.Collector) error {
-	p.mu.Lock()
-	promColl, ok := p.vecs[c]
-	if ok {
-		delete(p.vecs, c)
-	}
-	p.mu.Unlock()
-
-	if !ok {
-		// Idempotent: collector was never registered or already removed.
-		return nil
-	}
-	p.cfg.Registry.Unregister(promColl)
-	return nil
 }
 
 type promCounterVec struct {

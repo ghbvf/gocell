@@ -75,7 +75,7 @@ var _ executor.Observer = (*SagaCollector)(nil)
 //   - p == nil → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - cellID == "" → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - any CounterVec registration error is wrapped with the metric name and
-//     rolls back the counters registered earlier in the sequence (atomic).
+//     returned as a startup-fatal wiring error; caller owns provider lifecycle.
 //
 // Caller contract: never pass a nil *SagaCollector — use NopObserver via
 // WithObserver(nil) for explicit disable.
@@ -88,8 +88,6 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: SagaCollector cellID is required")
 	}
-
-	var registered []kernelmetrics.Collector
 	c := &SagaCollector{cellID: cellID}
 	var err error
 	if c.outcome, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -98,14 +96,14 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 			"step_name is intentionally excluded to bound the step×outcome cardinality; " +
 			"per-step drill-down uses saga_step_retry_total.",
 		LabelNames: []string{"cell", "definition_id", "outcome"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.retry, err = registerCounterVec(p, kernelmetrics.CounterOpts{
 		Name:       "saga_step_retry_total",
 		Help:       "Total retry attempts emitted by the saga executor (attempt N>1 fired) per definition+step.",
 		LabelNames: []string{"cell", "definition_id", "step_name"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.hbFail, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -114,7 +112,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 			"(infra_error = transient err; stale_lease = ok=false / another coordinator took over). " +
 			"Excludes definition_id and step_name — heartbeat is an infra signal, not per-step.",
 		LabelNames: []string{"cell", "reason"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.tick, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -123,7 +121,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 			"(claimed = ≥1 instance; empty = idle tick; error = ClaimPending failed). " +
 			"Loop liveness; definition_id is not available pre-claim.",
 		LabelNames: []string{"cell", "result"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.drive, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -132,7 +130,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 			"(ok = advanced cleanly; error = stale lease / instance gone / step failure). " +
 			"Per-instance forward-progress throughput.",
 		LabelNames: []string{"cell", "definition_id", "result"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.leaderSkip, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -142,7 +140,7 @@ func NewSagaCollector(p kernelmetrics.Provider, cellID string) (*SagaCollector, 
 			"backend_error = distlock I/O fault / lock-acquire failure rate). " +
 			"Sustained contended with drive{result=ok}≈0 means an instance is stuck skipping.",
 		LabelNames: []string{"cell", "definition_id", "reason"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return c, nil

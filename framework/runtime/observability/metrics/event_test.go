@@ -129,29 +129,23 @@ func TestEventRouterCollector_NilReceiverDoesNotPanic(t *testing.T) {
 	c.ObserveReadyWait(ctx, "cell", time.Second)
 }
 
-func TestNewEventRouterCollector_RollbackOnPartialFailure(t *testing.T) {
-	// failAfterFirstEventProvider succeeds GaugeVec registration, fails on
-	// CounterVec, so the first Gauge registration must be rolled back.
+func TestNewEventRouterCollector_ReturnsErrorOnPartialFailure(t *testing.T) {
+	// failAfterFirstEventProvider succeeds GaugeVec registration, then fails on
+	// CounterVec. Registration failure rejects the current wiring.
 	p := &eventPartialFailProvider{failOnCounter: true}
 	_, err := obmetrics.NewEventRouterCollector(p)
 	if err == nil {
 		t.Fatal("expected error from partial failure, got nil")
 	}
-	if !p.unregisterCalled {
-		t.Error("expected Unregister to be called on rollback, but it was not")
-	}
 }
 
-func TestNewEventRouterCollector_RollbackOnHistogramFailure(t *testing.T) {
+func TestNewEventRouterCollector_ReturnsErrorOnHistogramFailure(t *testing.T) {
 	// failAfterTwoEventProvider succeeds GaugeVec + CounterVec but fails on
-	// HistogramVec — both prior registrations must be rolled back.
+	// HistogramVec.
 	p := &eventPartialFailProvider{failOnHistogram: true}
 	_, err := obmetrics.NewEventRouterCollector(p)
 	if err == nil {
 		t.Fatal("expected error from histogram failure, got nil")
-	}
-	if p.unregisterCount < 2 {
-		t.Errorf("expected at least 2 Unregister calls on rollback, got %d", p.unregisterCount)
 	}
 }
 
@@ -190,8 +184,6 @@ func (p *eventSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kerne
 func (p *eventSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	return &eventSpyGaugeVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
-
-func (p *eventSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 type eventSpyCounterVec struct {
 	parent     *eventSpyProvider
@@ -264,15 +256,13 @@ func (g *eventSpyGauge) Dec(ctx context.Context)            { g.Add(ctx, -1) }
 func (g *eventSpyGauge) Add(ctx context.Context, d float64) { g.Set(ctx, d) }
 
 // ---------------------------------------------------------------------------
-// eventPartialFailProvider: configurable partial failure for rollback tests.
+// eventPartialFailProvider: configurable partial failure tests.
 // ---------------------------------------------------------------------------
 
 type eventPartialFailProvider struct {
 	kernelmetrics.NopProvider
-	failOnCounter    bool
-	failOnHistogram  bool
-	unregisterCalled bool
-	unregisterCount  int
+	failOnCounter   bool
+	failOnHistogram bool
 }
 
 func (p *eventPartialFailProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
@@ -292,10 +282,4 @@ func (p *eventPartialFailProvider) HistogramVec(opts kernelmetrics.HistogramOpts
 		return nil, errors.New("histogram registration failed")
 	}
 	return p.NopProvider.HistogramVec(opts)
-}
-
-func (p *eventPartialFailProvider) Unregister(_ kernelmetrics.Collector) error {
-	p.unregisterCalled = true
-	p.unregisterCount++
-	return nil
 }

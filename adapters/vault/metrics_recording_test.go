@@ -3,7 +3,7 @@ package vault
 // metrics_recording_test.go — adapter-local in-memory metrics.Provider for vault
 // unit tests. Records counter/gauge values so tests assert recorded values without
 // importing adapters/prometheus (#1909). Embeds NopProvider for the
-// HistogramVec/Unregister methods vault never records through. Vecs are stateless
+// HistogramVec method vault never records through. Vecs are stateless
 // handles over a shared sample store keyed by fully-qualified name + sorted-label
 // blob, so a 2nd NewTransitMetrics on the SAME provider reuses the same sample
 // keys (register-once parity) — counters keep accumulating and gauges retain their
@@ -21,7 +21,7 @@ import (
 // recordingProvider is an in-memory, concurrency-safe metrics.Provider for vault
 // unit tests. It records counter/gauge values so tests assert recorded values
 // without importing adapters/prometheus (#1909). It embeds NopProvider for the
-// HistogramVec/Unregister methods vault never records through. Vecs are stateless
+// HistogramVec method vault never records through. Vecs are stateless
 // handles over a shared sample store keyed by fully-qualified name + sorted-label
 // blob, so a 2nd NewTransitMetrics on the SAME provider reuses the same sample
 // keys (register-once parity) — counters keep accumulating and gauges retain

@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
@@ -113,20 +112,11 @@ type ShutdownCollector struct {
 // metric family (typically a duplicate name in the same registry). Callers
 // treat this as fatal (consistent with relay_collector.go registration pattern).
 //
-// ref: kernel/outbox.NewProviderRelayCollector — rollback-on-partial-failure
-// pattern for metric registration.
+// Metric registration is startup-fatal: if one family cannot be registered, the
+// caller rejects the current wiring and owns provider lifecycle cleanup.
 func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) {
 	if p == nil {
 		return &ShutdownCollector{disabled: true}, nil
-	}
-
-	// Track registered collectors for rollback on partial failure.
-	var registered []kernelmetrics.Collector
-	rollback := func(origErr error) (*ShutdownCollector, error) {
-		for _, v := range slices.Backward(registered) {
-			_ = p.Unregister(v) // best-effort; ignore unregister errors
-		}
-		return nil, origErr
 	}
 
 	phaseEntries, err := p.CounterVec(kernelmetrics.CounterOpts{
@@ -135,9 +125,8 @@ func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) 
 		LabelNames: []string{"phase"},
 	})
 	if err != nil {
-		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseCounterName, err))
+		return nil, fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseCounterName, err)
 	}
-	registered = append(registered, phaseEntries)
 
 	phaseDuration, err := p.HistogramVec(kernelmetrics.HistogramOpts{
 		Name:       ShutdownPhaseDurationName,
@@ -146,9 +135,8 @@ func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) 
 		Buckets:    defaultShutdownBuckets,
 	})
 	if err != nil {
-		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseDurationName, err))
+		return nil, fmt.Errorf(shutdownRegisterErrFmt, ShutdownPhaseDurationName, err)
 	}
-	registered = append(registered, phaseDuration)
 
 	shutdownTotal, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name:       ShutdownTotalCounterName,
@@ -156,7 +144,7 @@ func NewShutdownCollector(p kernelmetrics.Provider) (*ShutdownCollector, error) 
 		LabelNames: []string{"outcome"},
 	})
 	if err != nil {
-		return rollback(fmt.Errorf(shutdownRegisterErrFmt, ShutdownTotalCounterName, err))
+		return nil, fmt.Errorf(shutdownRegisterErrFmt, ShutdownTotalCounterName, err)
 	}
 
 	return &ShutdownCollector{

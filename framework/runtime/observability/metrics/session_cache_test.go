@@ -48,20 +48,17 @@ func TestNewSessionCacheCollector_RegistersFourCounters(t *testing.T) {
 		"expected exactly %d counters, got %v", len(want), p.counterNames)
 }
 
-// TestNewSessionCacheCollector_AtomicRollback asserts that a mid-sequence
-// registration failure rolls back the counters registered earlier (no orphans),
-// mirroring SagaCollector.
-func TestNewSessionCacheCollector_AtomicRollback(t *testing.T) {
+// TestNewSessionCacheCollector_PartialRegistrationFailure_ReturnsError asserts
+// that a mid-sequence registration failure rejects the current wiring and
+// returns the metric-specific error.
+func TestNewSessionCacheCollector_PartialRegistrationFailure_ReturnsError(t *testing.T) {
 	p := newSagaSpyProvider()
 	p.failOnName = "session_cache_misses_total" // fail on the 2nd of 3
 	_, err := obmetrics.NewSessionCacheCollector(p, "accesscore")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session_cache_misses_total")
-	// hits (registered first) must have been unregistered LIFO.
-	assert.Equal(t, 1, p.unregisterCount, "the first counter must be rolled back")
-	// The rolled-back counter must no longer appear in the registered map.
-	assert.NotContains(t, p.counterNames, "session_cache_hits_total",
-		"rolled-back counter must not remain registered")
+	assert.Contains(t, p.counterNames, "session_cache_hits_total",
+		"counter registered before the failure records the attempted startup wiring")
 }
 
 // TestSessionCacheCollector_RecordsEmitWithCellLabel asserts each Record* method

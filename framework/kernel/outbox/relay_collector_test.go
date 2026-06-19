@@ -73,8 +73,6 @@ func (s *spyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error)
 	return &spyGaugeVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
-func (s *spyProvider) Unregister(_ metrics.Collector) error { return nil }
-
 type spyCounterVec struct {
 	parent *spyProvider
 	name   string
@@ -202,53 +200,33 @@ func TestProviderRelayCollector_ZeroBatchSizeStillObserved(t *testing.T) {
 	}
 }
 
-// TestNewProviderRelayCollector_PartialFailure_RollbackAll verifies that when
-// metric registration fails mid-way (e.g., 3rd metric conflicts), all
-// previously registered metrics are unregistered, preserving Provider clean
-// state for retry or redeployment.
-//
-// Regression test for K2 (OBS-RELAY-REGISTER-ATOMIC-01): sequential
-// registration left orphan metrics on partial failure. The rollback loop in
-// NewProviderRelayCollector must unregister previously registered collectors
-// in LIFO order on any partial failure.
-func TestNewProviderRelayCollector_PartialFailure_RollbackAll(t *testing.T) {
+// TestNewProviderRelayCollector_PartialFailure_ReturnsError verifies that when
+// metric registration fails mid-way (e.g., 3rd metric conflicts), the
+// constructor returns that provider error. Provider lifecycle cleanup is owned
+// by the caller, not by per-instrument unregister.
+func TestNewProviderRelayCollector_PartialFailure_ReturnsError(t *testing.T) {
 	tests := []struct {
-		name        string
-		failOnCall  int // 1-based: which registration call (counter+histogram combined) fails
-		wantRollCnt int // how many Unregister calls expected
+		name           string
+		failOnCall     int // 1-based: which registration call (counter+histogram combined) fails
+		wantRegistered int // completed registrations before the failure
 	}{
-		{name: "fail_on_1st", failOnCall: 1, wantRollCnt: 0},
-		{name: "fail_on_2nd", failOnCall: 2, wantRollCnt: 1},
-		{name: "fail_on_3rd", failOnCall: 3, wantRollCnt: 2},
-		{name: "fail_on_4th", failOnCall: 4, wantRollCnt: 3},
-		// fail_on_5th verifies that 'cleaned' (the 5th metric) is also appended
-		// to the registered slice (F5 fix: LIFO completeness). Before the fix,
-		// cleaned was not appended, so only 3 rollbacks occurred instead of 4.
-		{name: "fail_on_5th", failOnCall: 5, wantRollCnt: 4},
+		{name: "fail_on_1st", failOnCall: 1, wantRegistered: 0},
+		{name: "fail_on_2nd", failOnCall: 2, wantRegistered: 1},
+		{name: "fail_on_3rd", failOnCall: 3, wantRegistered: 2},
+		{name: "fail_on_4th", failOnCall: 4, wantRegistered: 3},
+		{name: "fail_on_5th", failOnCall: 5, wantRegistered: 4},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newFailingProvider(tc.failOnCall)
-			_, err := outbox.NewProviderRelayCollector(p, "rollback-cell")
+			_, err := outbox.NewProviderRelayCollector(p, "partial-failure-cell")
 			if err == nil {
 				t.Fatal("expected error from partial registration, got nil")
 			}
 
-			// All prior registrations must have been rolled back via Unregister.
-			if got := p.unregisteredCount(); got != tc.wantRollCnt {
-				t.Fatalf("want %d Unregister calls, got %d", tc.wantRollCnt, got)
-			}
-
-			// Provider must be in a clean state: re-registering with a
-			// non-failing provider for the same cell must succeed.
-			p2 := newSpyProvider()
-			c2, err := outbox.NewProviderRelayCollector(p2, "rollback-cell")
-			if err != nil {
-				t.Fatalf("re-register after rollback failed: %v", err)
-			}
-			if c2 == nil {
-				t.Fatal("collector must not be nil after clean registration")
+			if got := len(p.registered); got != tc.wantRegistered {
+				t.Fatalf("completed registrations = %d, want %d", got, tc.wantRegistered)
 			}
 		})
 	}
@@ -256,8 +234,8 @@ func TestNewProviderRelayCollector_PartialFailure_RollbackAll(t *testing.T) {
 
 // TestNewProviderRelayCollector_SuccessPath_AllFiveMetricsRegistered asserts
 // that all five outbox metrics (including 'cleaned') are appended to the
-// internal registered slice on the success path. Regression test for F5:
-// 'cleaned' was previously not appended, violating LIFO rollback invariants.
+// test provider's registered slice on the success path. Regression test for F5:
+// 'cleaned' was previously not appended, hiding incomplete startup wiring.
 // Verification strategy: use a counting provider that records how many
 // times CounterVec/HistogramVec were called; on success all 5 must complete.
 func TestNewProviderRelayCollector_SuccessPath_AllFiveMetricsRegistered(t *testing.T) {
@@ -284,10 +262,10 @@ func TestNewProviderRelayCollector_SuccessPath_AllFiveMetricsRegistered(t *testi
 	c.RecordCleanup(context.Background(), 1, 1)
 }
 
-// TestNewProviderRelayCollector_UnregisterLIFOOrder verifies that when
-// registration fails, previously registered collectors are unregistered in
-// reverse (LIFO) order to mirror standard stack-unwinding semantics.
-func TestNewProviderRelayCollector_UnregisterLIFOOrder(t *testing.T) {
+// TestNewProviderRelayCollector_PartialFailureRegistrationOrder verifies that
+// when registration fails, the constructor attempted metrics in the expected
+// order up to the failure point.
+func TestNewProviderRelayCollector_PartialFailureRegistrationOrder(t *testing.T) {
 	// Fail on 4th call; first 3 succeeded (relayed, pollDuration, batchSize).
 	p := newFailingProvider(4)
 	_, err := outbox.NewProviderRelayCollector(p, "lifo-cell")
@@ -295,33 +273,29 @@ func TestNewProviderRelayCollector_UnregisterLIFOOrder(t *testing.T) {
 		t.Fatal("expected error")
 	}
 
-	names := p.unregisteredNames()
-	// Registered order: outbox_relayed_total(1), outbox_poll_duration_seconds(2),
-	// outbox_batch_size(3). Unregister must be reverse: 3, 2, 1.
+	names := p.registeredNames()
 	want := []string{
-		"outbox_batch_size",
-		"outbox_poll_duration_seconds",
 		"outbox_relayed_total",
+		"outbox_poll_duration_seconds",
+		"outbox_batch_size",
 	}
 	if len(names) != len(want) {
-		t.Fatalf("want %d unregistered, got %d: %v", len(want), len(names), names)
+		t.Fatalf("want %d registered, got %d: %v", len(want), len(names), names)
 	}
 	for i, w := range want {
 		if names[i] != w {
-			t.Fatalf("unregister[%d]: want %q got %q", i, w, names[i])
+			t.Fatalf("registered[%d]: want %q got %q", i, w, names[i])
 		}
 	}
 }
 
 // failingProvider is a test Provider that succeeds for the first N-1
-// registration calls, then returns an error on the Nth call, and never
-// errors again. It records which collectors were Unregistered and in what
-// order.
+// registration calls, then returns an error on the Nth call, and never errors
+// again. It records completed registrations.
 type failingProvider struct {
-	failOnCall   int
-	callCount    int
-	registered   []failingCollector
-	unregistered []failingCollector
+	failOnCall int
+	callCount  int
+	registered []failingCollector
 }
 
 type failingCollector struct {
@@ -363,34 +337,12 @@ func (p *failingProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, er
 	return gv, nil
 }
 
-func (p *failingProvider) Unregister(c metrics.Collector) error {
-	p.unregistered = append(p.unregistered, failingCollector{vec: c, name: collectorName(c)})
-	return nil
-}
-
-func (p *failingProvider) unregisteredCount() int {
-	return len(p.unregistered)
-}
-
-func (p *failingProvider) unregisteredNames() []string {
-	names := make([]string, len(p.unregistered))
-	for i, fc := range p.unregistered {
+func (p *failingProvider) registeredNames() []string {
+	names := make([]string, len(p.registered))
+	for i, fc := range p.registered {
 		names[i] = fc.name
 	}
 	return names
-}
-
-// collectorName extracts the metric name from a registered Collector for
-// assertion purposes. It relies on the NamedCollector interface that the
-// failing spy vecs implement.
-func collectorName(c metrics.Collector) string {
-	type named interface {
-		MetricName() string
-	}
-	if n, ok := c.(named); ok {
-		return n.MetricName()
-	}
-	return "<unknown>"
 }
 
 type spyGaugeVec struct {
@@ -411,8 +363,3 @@ func (spyGauge) Set(_ context.Context, _ float64) {}
 func (spyGauge) Inc(_ context.Context)            {}
 func (spyGauge) Dec(_ context.Context)            {}
 func (spyGauge) Add(_ context.Context, _ float64) {}
-
-// MetricName exposes the name so collectorName can extract it in tests.
-func (v *spyCounterVec) MetricName() string   { return v.name }
-func (v *spyHistogramVec) MetricName() string { return v.name }
-func (v *spyGaugeVec) MetricName() string     { return v.name }

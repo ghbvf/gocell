@@ -3,8 +3,6 @@ package outbox
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"slices"
 
 	"github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -128,36 +126,17 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 }
 
 // registerRelayMetrics registers all outbox relay metrics on p and returns the
-// fully-built collector. On any partial failure the already-registered metrics
-// are unregistered in LIFO order so the Provider is left clean.
+// fully-built collector. Metrics registration is startup-fatal: on any partial
+// failure the caller rejects the current wiring and owns provider lifecycle
+// cleanup.
 func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCollectorConfig) (*providerRelayCollector, error) {
-	// registered tracks successfully registered collectors in order. On any
-	// partial failure the rollback function unregisters them in LIFO order so
-	// the Provider is left in a clean state, allowing the caller to retry
-	// construction without "duplicate collector" errors.
-	var registered []metrics.Collector
-	rollback := func(origErr error) error {
-		for _, v := range slices.Backward(registered) {
-			if rbErr := p.Unregister(v); rbErr != nil {
-				slog.Error("outbox: unregister during rollback failed",
-					slog.Any("error", rbErr),
-					slog.String("cell", cellID),
-				)
-			}
-		}
-		return origErr
-	}
-
 	// register is the single mechanism through which collectors enter the
-	// `registered` slice. Each metric registration funnels through it so the
-	// "register + check err + append" pattern cannot drift out of sync —
-	// missing the append step is structurally impossible (previously a latent
-	// rollback gap when a future metric was added after `cleaned`).
-	register := func(c metrics.Collector, err error, name string) error {
+	// collector struct. Each metric registration funnels through it so the
+	// "register + check err" pattern cannot drift out of sync.
+	register := func(err error, name string) error {
 		if err != nil {
-			return rollback(fmt.Errorf("outbox: register %s: %w", name, err))
+			return fmt.Errorf("outbox: register %s: %w", name, err)
 		}
-		registered = append(registered, c)
 		return nil
 	}
 
@@ -166,7 +145,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 		Help:       RelayedHelp,
 		LabelNames: []string{"cell", "kind", "outcome"},
 	})
-	if err := register(relayed, err, "outbox_relayed_total"); err != nil {
+	if err := register(err, "outbox_relayed_total"); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +155,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 		LabelNames: []string{"cell", "phase"},
 		Buckets:    cfg.PollBuckets,
 	})
-	if err := register(pollDuration, err, "outbox_poll_duration_seconds"); err != nil {
+	if err := register(err, "outbox_poll_duration_seconds"); err != nil {
 		return nil, err
 	}
 
@@ -186,7 +165,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 		LabelNames: []string{"cell"},
 		Buckets:    cfg.BatchBuckets,
 	})
-	if err := register(batchSize, err, "outbox_batch_size"); err != nil {
+	if err := register(err, "outbox_batch_size"); err != nil {
 		return nil, err
 	}
 
@@ -195,7 +174,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 		Help:       "Total number of stale entries reclaimed by the relay.",
 		LabelNames: []string{"cell"},
 	})
-	if err := register(reclaimed, err, "outbox_reclaimed_total"); err != nil {
+	if err := register(err, "outbox_reclaimed_total"); err != nil {
 		return nil, err
 	}
 
@@ -204,7 +183,7 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 		Help:       "Total number of entries cleaned up (deleted) by the relay.",
 		LabelNames: []string{"cell", "status"},
 	})
-	if err := register(cleaned, err, "outbox_cleaned_total"); err != nil {
+	if err := register(err, "outbox_cleaned_total"); err != nil {
 		return nil, err
 	}
 

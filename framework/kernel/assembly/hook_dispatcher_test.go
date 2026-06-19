@@ -82,8 +82,7 @@ func (s *spyCounterVec) count(reason string) int {
 	return s.v[reason]
 }
 
-// Registered satisfies metrics.Collector so spyCounterVec can be
-// passed to Provider.Unregister in rollback scenarios.
+// Registered satisfies metrics.Collector for the shared vec interface.
 func (s *spyCounterVec) Registered() bool { return true }
 
 // spyProvider satisfies metrics.Provider and returns a captured CounterVec
@@ -105,10 +104,6 @@ func (p *spyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	// Unused by the dispatcher but required for the Provider contract.
 	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
-
-// Unregister is a no-op for the spy; tests that care about rollback use
-// the failingProvider in relay_collector_test.go instead.
-func (p *spyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // blockingObserver blocks on OnHookEvent until the test calls release().
 // Used to exercise slow-sink scenarios deterministically. release() is

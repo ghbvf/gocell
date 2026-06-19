@@ -207,7 +207,6 @@ func (p *recordingProvider) HistogramVec(metrics.HistogramOpts) (metrics.Histogr
 func (p *recordingProvider) GaugeVec(metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return recNopGaugeVec{}, nil
 }
-func (p *recordingProvider) Unregister(metrics.Collector) error { return nil }
 
 func (p *recordingProvider) counterValue(name string, l metrics.Labels) int64 {
 	p.mu.Lock()

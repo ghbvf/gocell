@@ -82,8 +82,6 @@ func (p *lockoutSpyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec,
 	return metrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *lockoutSpyProvider) Unregister(_ metrics.Collector) error { return nil }
-
 func TestNewAuthMetrics_NopProvider(t *testing.T) {
 	am, err := NewAuthMetrics(metrics.NopProvider{})
 	require.NoError(t, err)

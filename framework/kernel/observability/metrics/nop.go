@@ -30,10 +30,6 @@ func (NopProvider) GaugeVec(opts GaugeOpts) (GaugeVec, error) {
 	return nopGaugeVec{labels: append([]string(nil), opts.LabelNames...)}, nil
 }
 
-// Unregister is a no-op; the NopProvider does not maintain a registry.
-// Returns nil (idempotent, as per the Unregister contract).
-func (NopProvider) Unregister(_ Collector) error { return nil }
-
 // IsReal reports whether p actually records metrics — i.e. non-nil and not the
 // NopProvider sentinel. It is the single source for the "wire instrumentation
 // only when a real metrics backend is configured" decision, shared by the HTTP

@@ -742,8 +742,6 @@ func (p recordingLabelProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelm
 	return p.nop.CounterVec(o)
 }
 
-func (p recordingLabelProvider) Unregister(kernelmetrics.Collector) error { return nil }
-
 type recordingGaugeVec struct {
 	kernelmetrics.GaugeVec
 	withCalls *[]kernelmetrics.Labels
@@ -897,8 +895,6 @@ func (p *projMetricRegProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelm
 	return p.nop.CounterVec(o)
 }
 
-func (p *projMetricRegProvider) Unregister(kernelmetrics.Collector) error { return nil }
-
 // failGaugeProvider returns an error on GaugeVec — projection.RegisterMetrics
 // registers replay_lag (a gauge) first, so this drives the registration-conflict
 // fail-fast path.
@@ -915,8 +911,6 @@ func (p failGaugeProvider) HistogramVec(o kernelmetrics.HistogramOpts) (kernelme
 func (p failGaugeProvider) CounterVec(o kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
 	return p.nop.CounterVec(o)
 }
-
-func (p failGaugeProvider) Unregister(kernelmetrics.Collector) error { return nil }
 
 // TestBuildProjectionCoordinators_MultiProjection_SharesSingleMetrics is the
 // direct regression guard for #1399: before the fix, buildOneProjection called

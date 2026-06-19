@@ -54,6 +54,16 @@ func TestNewProviderConnectionCollector_RegistrationFailure(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 }
 
+func TestNewProviderConnectionCollector_SubscribeFailureRegistrationFailure(t *testing.T) {
+	t.Parallel()
+	provider := &connErrProvider{err: errors.New("duplicate counter"), failAtCounter: 2}
+	_, err := NewProviderConnectionCollector(provider, "testcell")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, 2, provider.counterCalls)
+}
+
 // TestProviderConnectionCollector_RecordReconnect_CounterLabel pins that
 // RecordReconnect emits exactly one Inc with label cell=testcell.
 func TestProviderConnectionCollector_RecordReconnect_CounterLabel(t *testing.T) {
@@ -124,11 +134,19 @@ func TestProviderConnectionCollector_RecordSubscribeFailure(t *testing.T) {
 // Test doubles
 // ---------------------------------------------------------------------------
 
-// connErrProvider returns a fixed error from CounterVec.
-type connErrProvider struct{ err error }
+// connErrProvider returns a fixed error from CounterVec at a configured call.
+type connErrProvider struct {
+	err           error
+	failAtCounter int
+	counterCalls  int
+}
 
-func (p *connErrProvider) CounterVec(_ metrics.CounterOpts) (metrics.CounterVec, error) {
-	return nil, p.err
+func (p *connErrProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counterCalls++
+	if p.failAtCounter == 0 || p.counterCalls == p.failAtCounter {
+		return nil, p.err
+	}
+	return metrics.NopProvider{}.CounterVec(opts)
 }
 
 func (p *connErrProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
@@ -138,7 +156,6 @@ func (p *connErrProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.Histogr
 func (p *connErrProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return nil, p.err
 }
-func (p *connErrProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // connSpyProvider records counter registrations and Inc/Add operations.
 type connSpyProvider struct {
@@ -167,8 +184,6 @@ func (p *connSpyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.Histogr
 func (p *connSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
-
-func (p *connSpyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func (p *connSpyProvider) ops() []connSpyRecord {
 	out := make([]connSpyRecord, len(p.records))
@@ -330,6 +345,34 @@ func TestNoopPublisherCollector_Methods(t *testing.T) {
 	})
 }
 
+func TestNewProviderPublisherCollector_RegistrationFailure_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		failAtCounter int
+		failHistogram bool
+	}{
+		{name: "publish_total", failAtCounter: 1},
+		{name: "publish_failed", failAtCounter: 2},
+		{name: "ack_duration", failHistogram: true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider := &pubRegistrationFailureProvider{
+				failAtCounter: tc.failAtCounter,
+				failHistogram: tc.failHistogram,
+			}
+			_, err := NewProviderPublisherCollector(provider, "testcell")
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, errcode.KindInternal, ec.Kind)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Publisher test doubles
 // ---------------------------------------------------------------------------
@@ -363,12 +406,35 @@ func (p *pubSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error)
 	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
 
-func (p *pubSpyProvider) Unregister(_ metrics.Collector) error { return nil }
-
 func (p *pubSpyProvider) ops() []pubSpyRecord {
 	out := make([]pubSpyRecord, len(p.records))
 	copy(out, p.records)
 	return out
+}
+
+type pubRegistrationFailureProvider struct {
+	failAtCounter int
+	failHistogram bool
+	counterCalls  int
+}
+
+func (p *pubRegistrationFailureProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counterCalls++
+	if p.failAtCounter > 0 && p.counterCalls == p.failAtCounter {
+		return nil, errors.New("duplicate counter")
+	}
+	return metrics.NopProvider{}.CounterVec(opts)
+}
+
+func (p *pubRegistrationFailureProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	if p.failHistogram {
+		return nil, errors.New("duplicate histogram")
+	}
+	return metrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *pubRegistrationFailureProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+	return metrics.NopProvider{}.GaugeVec(opts)
 }
 
 type pubSpyCounterVec struct {
@@ -465,67 +531,61 @@ func TestNewProviderSubscriberCollector_Registration(t *testing.T) {
 	require.NotNil(t, col)
 }
 
-// TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack verifies that
-// a Provider returning an error from a later registration rolls back the metrics
-// already registered (all-or-nothing semantics) and wraps the error.
-func TestNewProviderSubscriberCollector_RegistrationFailure_RollsBack(t *testing.T) {
+// TestNewProviderSubscriberCollector_RegistrationFailure_ReturnsError verifies
+// that a Provider returning an error from a later registration rejects the
+// current wiring and wraps the error.
+func TestNewProviderSubscriberCollector_RegistrationFailure_ReturnsError(t *testing.T) {
 	t.Parallel()
-	// Fail on the histogram (5th registration) so all four counters
-	// (consume_total, consume_failed, dlx_total, dlx_failed) were registered and
-	// must be unregistered. The gauge (6th) is never reached.
-	spy := &subRollbackProvider{failHistogram: true}
+	spy := &subRegistrationFailureProvider{failHistogram: true}
 	_, err := NewProviderSubscriberCollector(spy, "testcell")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, 4, spy.unregisterCount, "all four counters must be rolled back on histogram failure")
+	assert.Equal(t, 4, spy.counterCount, "all four counters should be attempted before histogram failure")
 }
 
-// TestNewProviderSubscriberCollector_GaugeRegistrationFailure_RollsBack verifies
-// that a failure on the gauge (the last, 6th registration) rolls back the 4
-// counters + histogram already registered (5 total).
-func TestNewProviderSubscriberCollector_GaugeRegistrationFailure_RollsBack(t *testing.T) {
+// TestNewProviderSubscriberCollector_GaugeRegistrationFailure_ReturnsError
+// verifies that a failure on the gauge rejects the current wiring and wraps the
+// error.
+func TestNewProviderSubscriberCollector_GaugeRegistrationFailure_ReturnsError(t *testing.T) {
 	t.Parallel()
-	spy := &subRollbackProvider{failGauge: true}
+	spy := &subRegistrationFailureProvider{failGauge: true}
 	_, err := NewProviderSubscriberCollector(spy, "testcell")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.KindInternal, ec.Kind)
-	assert.Equal(t, 5, spy.unregisterCount,
-		"4 counters + histogram must be rolled back on gauge failure")
+	assert.Equal(t, 4, spy.counterCount, "all four counters should be attempted before gauge failure")
 }
 
-// TestNewProviderSubscriberCollector_CounterRegistrationFailure_RollsBack covers
+// TestNewProviderSubscriberCollector_CounterRegistrationFailure_ReturnsError covers
 // each of the four counter registration error branches: when the Nth CounterVec
-// call fails, the N-1 already-registered counters must be unregistered (rollback)
-// and the error wrapped as an errcode.Error. Pins the per-counter failure paths
-// (consume_total / consume_failed / dlx_total / dlx_failed) that the inlined
-// errcode.Wrap branches introduced.
-func TestNewProviderSubscriberCollector_CounterRegistrationFailure_RollsBack(t *testing.T) {
+// call fails, the error is wrapped as an errcode.Error. Pins the per-counter
+// failure paths (consume_total / consume_failed / dlx_total / dlx_failed) that
+// the inlined errcode.Wrap branches introduced.
+func TestNewProviderSubscriberCollector_CounterRegistrationFailure_ReturnsError(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name             string
-		failAtCounter    int // 1-based: fail the Nth CounterVec call
-		wantUnregistered int // counters registered before the failing one
+		name          string
+		failAtCounter int // 1-based: fail the Nth CounterVec call
 	}{
-		{"consume_total", 1, 0},
-		{"consume_failed", 2, 1},
-		{"dlx_total", 3, 2},
-		{"dlx_failed", 4, 3},
+		{"consume_total", 1},
+		{"consume_failed", 2},
+		{"dlx_total", 3},
+		{"dlx_failed", 4},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			spy := &subRollbackProvider{failAtCounter: tc.failAtCounter}
+			spy := &subRegistrationFailureProvider{failAtCounter: tc.failAtCounter}
 			_, err := NewProviderSubscriberCollector(spy, "testcell")
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.True(t, errors.As(err, &ec))
 			assert.Equal(t, errcode.KindInternal, ec.Kind)
-			assert.Equal(t, tc.wantUnregistered, spy.unregisterCount,
-				"counters registered before the failing one must be rolled back")
+			assert.Equal(t, tc.failAtCounter, spy.counterCount,
+				"counter registration should stop at the failing call")
 		})
 	}
 }
@@ -720,21 +780,20 @@ func TestNoopSubscriberCollector_Methods(t *testing.T) {
 // Subscriber test doubles
 // ---------------------------------------------------------------------------
 
-// subRollbackProvider registers metrics successfully until a configured failure
-// point, recording how many Unregister calls the rollback issues. Registration
-// order is 4 counters → histogram → gauge. failAtCounter (1-based, 0=disabled)
+// subRegistrationFailureProvider registers metrics successfully until a configured failure
+// point. Registration order is 4 counters → histogram → gauge. failAtCounter
+// (1-based, 0=disabled)
 // fails the Nth CounterVec call; failHistogram fails the histogram (after all 4
 // counters); failGauge fails the gauge (after the 4 counters + histogram) so the
 // last-registration error branch is exercised.
-type subRollbackProvider struct {
-	failHistogram   bool
-	failGauge       bool
-	failAtCounter   int
-	counterCount    int
-	unregisterCount int
+type subRegistrationFailureProvider struct {
+	failHistogram bool
+	failGauge     bool
+	failAtCounter int
+	counterCount  int
 }
 
-func (p *subRollbackProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+func (p *subRegistrationFailureProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	p.counterCount++
 	if p.failAtCounter > 0 && p.counterCount == p.failAtCounter {
 		return nil, errors.New("duplicate counter")
@@ -742,23 +801,18 @@ func (p *subRollbackProvider) CounterVec(opts metrics.CounterOpts) (metrics.Coun
 	return &subSpyCounterVec{name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
-func (p *subRollbackProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+func (p *subRegistrationFailureProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	if p.failHistogram {
 		return nil, errors.New("duplicate histogram")
 	}
 	return metrics.NopProvider{}.HistogramVec(opts)
 }
 
-func (p *subRollbackProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
+func (p *subRegistrationFailureProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	if p.failGauge {
 		return nil, errors.New("duplicate gauge")
 	}
 	return metrics.NopProvider{}.GaugeVec(opts)
-}
-
-func (p *subRollbackProvider) Unregister(_ metrics.Collector) error {
-	p.unregisterCount++
-	return nil
 }
 
 type subSpyRecord struct {
@@ -791,8 +845,6 @@ func (p *subSpyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 	p.gaugeRegs = append(p.gaugeRegs, opts)
 	return &subSpyGaugeVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
-
-func (p *subSpyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func (p *subSpyProvider) ops() []subSpyRecord {
 	out := make([]subSpyRecord, len(p.records))

@@ -249,8 +249,6 @@ func (p *outboxSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetric
 	return &outboxSpyGaugeVec{parent: p, name: opts.Name, labelNames: opts.LabelNames}, nil
 }
 
-func (p *outboxSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 type outboxSpyCounterVec struct {
 	parent     *outboxSpyProvider
 	name       string

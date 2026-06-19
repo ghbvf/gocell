@@ -164,7 +164,6 @@ func (cp *countingProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kern
 func (cp *countingProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
-func (cp *countingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 type countingVec struct {
 	base kernelmetrics.CounterVec

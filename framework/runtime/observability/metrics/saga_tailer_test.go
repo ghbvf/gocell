@@ -152,15 +152,14 @@ func TestSagaTailerCollector_LabelSets(t *testing.T) {
 	}
 }
 
-func TestSagaTailerCollector_RegistrationRollback(t *testing.T) {
+func TestSagaTailerCollector_PartialRegistrationFailure_ReturnsError(t *testing.T) {
 	p := newTLSpy()
 	p.failOnName = "saga_journal_tailer_drain_total" // second registration fails
 	if _, err := obmetrics.NewSagaTailerCollector(p, tlCell); err == nil {
 		t.Fatal("want error when a registration fails")
 	}
-	// The first counter must have been rolled back (Unregister called).
-	if p.unregisterCount == 0 {
-		t.Error("want LIFO rollback Unregister on partial registration")
+	if _, ok := p.counterNames["saga_journal_tailer_lock_acquire_failed_total"]; !ok {
+		t.Error("expected first counter registration attempt before partial failure")
 	}
 }
 
@@ -192,14 +191,13 @@ type tlSpyRecord struct {
 }
 
 type tlSpyProvider struct {
-	counterNames    map[string]struct{}
-	counterLabels   map[string][]string
-	counterOps      map[string][]tlSpyRecord
-	gaugeNames      map[string]struct{}
-	gaugeLabels     map[string][]string
-	gaugeOps        map[string][]tlSpyRecord
-	failOnName      string
-	unregisterCount int
+	counterNames  map[string]struct{}
+	counterLabels map[string][]string
+	counterOps    map[string][]tlSpyRecord
+	gaugeNames    map[string]struct{}
+	gaugeLabels   map[string][]string
+	gaugeOps      map[string][]tlSpyRecord
+	failOnName    string
 }
 
 func newTLSpy() *tlSpyProvider {
@@ -233,11 +231,6 @@ func (p *tlSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.Ga
 
 func (p *tlSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
 	return kernelmetrics.NopProvider{}.HistogramVec(opts)
-}
-
-func (p *tlSpyProvider) Unregister(kernelmetrics.Collector) error {
-	p.unregisterCount++
-	return nil
 }
 
 type tlSpyCounterVec struct {

@@ -111,8 +111,6 @@ func (p *recordingProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetric
 	return v, nil
 }
 
-func (p *recordingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 func (p *recordingProvider) counterLabels(name string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()

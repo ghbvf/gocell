@@ -51,8 +51,6 @@ func (p *pdpSpyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 	return metrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *pdpSpyProvider) Unregister(_ metrics.Collector) error { return nil }
-
 type pdpSpyCounterVec struct {
 	mu      sync.Mutex
 	labels  []string

@@ -50,18 +50,6 @@ func (p *gcMetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, e
 	return v, nil
 }
 
-func (p *gcMetricProvider) Unregister(c metrics.Collector) error {
-	switch v := c.(type) {
-	case gcCounterVec:
-		delete(p.registered, v.name)
-	case gcHistogramVec:
-		delete(p.registered, v.name)
-	case gcGaugeVec:
-		delete(p.registered, v.name)
-	}
-	return nil
-}
-
 type gcCounterVec struct {
 	name string
 }
@@ -99,13 +87,14 @@ func (gcGauge) Inc(_ context.Context)            {}
 func (gcGauge) Dec(_ context.Context)            {}
 func (gcGauge) Add(_ context.Context, _ float64) {}
 
-func TestNewProviderGCCollector_CleansUpPartialRegistration(t *testing.T) {
+func TestNewProviderGCCollector_ReturnsErrorOnPartialRegistration(t *testing.T) {
 	p := newGCMetricProvider("auth_refresh_gc_removed_total")
 
 	collector, err := NewProviderGCCollector(p)
 	require.Error(t, err)
 	assert.Nil(t, collector)
-	assert.Empty(t, p.registered, "partial metric registration must be unregistered on failure")
+	assert.Contains(t, p.registered, "auth_refresh_gc_runs_total",
+		"metric registered before the failure records the attempted startup wiring")
 }
 
 func TestNewProviderGCCollector_RegistersAndObserves(t *testing.T) {
@@ -124,7 +113,7 @@ func TestNewProviderGCCollector_RegistersAndObserves(t *testing.T) {
 	})
 }
 
-func TestNewProviderGCCollector_RejectsNilProviderAndCleansHistogramFailure(t *testing.T) {
+func TestNewProviderGCCollector_RejectsNilProviderAndReturnsHistogramFailure(t *testing.T) {
 	collector, err := NewProviderGCCollector(nil)
 	require.Error(t, err)
 	assert.Nil(t, collector)
@@ -133,7 +122,8 @@ func TestNewProviderGCCollector_RejectsNilProviderAndCleansHistogramFailure(t *t
 	collector, err = NewProviderGCCollector(p)
 	require.Error(t, err)
 	assert.Nil(t, collector)
-	assert.Empty(t, p.registered, "histogram registration failure must clean up counters")
+	assert.Contains(t, p.registered, "auth_refresh_gc_runs_total")
+	assert.Contains(t, p.registered, "auth_refresh_gc_removed_total")
 }
 
 func TestGCCollectors_NoopsAreSafe(t *testing.T) {

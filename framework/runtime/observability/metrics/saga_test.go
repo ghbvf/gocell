@@ -395,20 +395,20 @@ func TestNewSagaCollector_NoHistograms(t *testing.T) {
 	}
 }
 
-// TestNewSagaCollector_PartialRegistrationFailure_RollsBack verifies the LIFO
-// atomic-registration rollback (#1181 F11): when the 4th counter (saga_tick_total)
-// fails to register, the 3 already-registered counters are torn down via
-// Unregister so the provider retains no orphans.
-func TestNewSagaCollector_PartialRegistrationFailure_RollsBack(t *testing.T) {
+// TestNewSagaCollector_PartialRegistrationFailure_ReturnsError verifies that
+// when the 4th counter (saga_tick_total) fails to register, the constructor
+// rejects the current wiring and returns the registration error.
+func TestNewSagaCollector_PartialRegistrationFailure_ReturnsError(t *testing.T) {
 	p := newSagaSpyProvider()
 	p.failOnName = "saga_tick_total" // the 4th counter in NewSagaCollector order
 	_, err := obmetrics.NewSagaCollector(p, "auditcore")
 	if err == nil {
 		t.Fatal("expected a registration error when saga_tick_total fails")
 	}
-	// outcome, retry, hbFail were registered before the tick failure → 3 rolled back.
-	if p.unregisterCount != 3 {
-		t.Errorf("unregisterCount = %d, want 3 (LIFO rollback of the 3 prior counters)", p.unregisterCount)
+	for _, name := range []string{"saga_step_outcome_total", "saga_step_retry_total", "saga_heartbeat_failed_total"} {
+		if _, ok := p.counterNames[name]; !ok {
+			t.Errorf("expected prior counter registration attempt for %s", name)
+		}
 	}
 }
 
@@ -430,9 +430,8 @@ type sagaSpyProvider struct {
 	counterOps     map[string][]sagaSpyRecord
 
 	// failOnName, when non-empty, makes CounterVec return an error for that
-	// metric name — exercises the LIFO rollback in NewSagaCollector.
-	failOnName      string
-	unregisterCount int
+	// metric name.
+	failOnName string
 }
 
 func newSagaSpyProvider() *sagaSpyProvider {
@@ -463,17 +462,6 @@ func (p *sagaSpyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernel
 func (p *sagaSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	p.gaugeNames[opts.Name] = struct{}{}
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
-}
-
-func (p *sagaSpyProvider) Unregister(c kernelmetrics.Collector) error {
-	p.unregisterCount++
-	// Remove from counterNames so that NotContains assertions work correctly
-	// after a partial-registration rollback (mirrors real provider Unregister
-	// semantics where the counter is removed from the registry).
-	if cv, ok := c.(*sagaSpyCounterVec); ok {
-		delete(p.counterNames, cv.name)
-	}
-	return nil
 }
 
 type sagaSpyCounterVec struct {
