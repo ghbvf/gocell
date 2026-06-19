@@ -198,6 +198,67 @@ func TestDiffSignatures_DetectsMissingContract(t *testing.T) {
 	}
 }
 
+// TestAddParamRefTarget_EscapeAndBounds covers the closure's param-$ref resolver:
+// empty ref skipped, within-dir + out-of-dir refs resolved to monorepo-relative
+// paths, and an above-root escape or a root-resolving ref rejected (matching the
+// parser's fs.ValidPath rule so the closure cannot diverge from re-parse).
+func TestAddParamRefTarget_EscapeAndBounds(t *testing.T) {
+	tests := []struct {
+		name, dir, ref, want string // want=="" means nothing added
+	}{
+		{"empty ref", "contracts/http/x/v1", "", ""},
+		{"sibling in dir", "contracts/http/x/v1", "param.schema.json", "contracts/http/x/v1/param.schema.json"},
+		{"out-of-dir shared mixin", "contracts/http/x/v1", "../../../shared/cas/v1/c.json", "contracts/shared/cas/v1/c.json"},
+		{"escape above root", "contracts/x", "../../../../etc/passwd", ""},
+		{"resolves to root", "x", "..", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			set := map[string]struct{}{}
+			addParamRefTarget(tt.dir, tt.ref, set)
+			if tt.want == "" {
+				if len(set) != 0 {
+					t.Errorf("expected nothing added, got %v", set)
+				}
+				return
+			}
+			if _, ok := set[tt.want]; !ok || len(set) != 1 {
+				t.Errorf("expected only %q in set, got %v", tt.want, set)
+			}
+		})
+	}
+}
+
+// TestPruneStale_DryRunDoesNotDelete asserts dryRun reports a stale file without
+// removing it, while a real run deletes it — so a dropped closure file leaves no
+// orphan but --dry-run is side-effect-free.
+func TestPruneStale_DryRunDoesNotDelete(t *testing.T) {
+	tmp := t.TempDir()
+	bundleAbs := filepath.Join(tmp, filepath.FromSlash(bundleDirFromRoot))
+	if err := os.MkdirAll(bundleAbs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(bundleAbs, "stale.yaml")
+	mustWrite(t, stale, "orphan\n")
+	desired := map[string][]byte{"keep.yaml": []byte("x")} // stale.yaml not desired
+
+	pruned, err := pruneStale(tmp, desired, true) // dryRun
+	if err != nil {
+		t.Fatalf("pruneStale dryRun: %v", err)
+	}
+	assertContains(t, pruned, "prune: stale.yaml")
+	if _, err := os.Stat(stale); err != nil {
+		t.Errorf("dryRun must NOT delete stale.yaml: %v", err)
+	}
+
+	if _, err := pruneStale(tmp, desired, false); err != nil { // real prune
+		t.Fatalf("pruneStale real: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("real prune must delete stale.yaml; stat err=%v", err)
+	}
+}
+
 func mustWrite(t *testing.T, abs, content string) {
 	t.Helper()
 	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {

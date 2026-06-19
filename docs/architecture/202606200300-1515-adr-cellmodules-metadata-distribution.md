@@ -89,6 +89,32 @@ anti-vacuity coverage in `cellmodulemeta_test.go`. A dedicated archtest funnel
 (sanctioned-writer / coverage as separate named invariants) is defense-in-depth
 over the byte golden and is an optional fast-follow.
 
+## Governance amendment: SHARED-SCHEMA-MIRROR-FUNNEL-01 A2
+
+This PR broadens the A2 caller-allowlist of `SHARED-SCHEMA-MIRROR-FUNNEL-01` (the
+`codegen.WriteOptions.Headerless` funnel) from one package to two:
+`tools/codegen/sharedschema` (JSON mirrors) and `tools/codegen/cellmodulemeta`
+(this bundle). Threat-matrix re-eval (per ai-robust.md "ADR amendment 必须同步
+重评威胁矩阵"):
+
+- **Why sanctioned**: `Headerless` opts out of the "an existing file at the dest
+  must carry the gocell header before we overwrite it" safety guard. Both packages
+  write **byte-identical verbatim copies of non-Go artifacts** (JSON / YAML /
+  proto) that by definition carry no gocell header; injecting one would corrupt
+  JSON and break the byte-identity their own verify gate asserts. cellmodulemeta
+  is the same shape of legitimate user as sharedschema, not a new escape.
+- **Blind-spot ④ now applies to cellmodulemeta too**: A2 scans `CompositeLit`
+  only, so a field-assignment laundering (`var o codegen.WriteOptions;
+  o.Headerless = true`) inside cellmodulemeta is NOT caught — the same accepted
+  Medium-tier gap already documented for sharedschema. Accepted on the same basis
+  (cellmodulemeta is a tiny, single-purpose package whose only Write callsite is
+  the composite literal in `Generate`); the Hard-ening path (seal `Headerless` via
+  unexport + private ctor) remains tracked by gh issue #954 and would cover both
+  packages at once.
+- **No widening of the A1 reverse-enum**: A1 (undeclared error-response copies) is
+  untouched. The bundle's precise param-`$ref` closure (D2) deliberately excludes
+  the error-response mirror canonical, so no A1 carve-out was needed.
+
 ## Deferred (backlog, not silent)
 
 - **#1515-PR2 — resolver**: `gocell generate assembly` resolves an assembly cell

@@ -59,6 +59,7 @@ package cellmodulemeta
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -265,6 +266,18 @@ func platformClosureFiles(root string, pm *metadata.ProjectMeta) ([]string, erro
 			set[c.File] = struct{}{}
 		}
 	}
+	// Fail-fast on a zero-cell closure: the only way the platform module yields no
+	// cells is a misresolved root — typically running `gocell generate
+	// cellmodule-metadata` from a nested module (e.g. cmd/gocell/) whose go.mod
+	// makes findRoot() stop short of the repo root, so the parse sees no corecells
+	// subtree. Without this guard Generate would silently write an empty bundle and
+	// exit 0 (the foot-gun parseProjectGuarded guards for validate/check).
+	if len(platformCells) == 0 {
+		return nil, fmt.Errorf(
+			"cellmodulemeta: no corecells cells discovered under %q — run gocell from the repo "+
+				"root (the directory holding .gocell/manifest.yaml), not a nested module", root,
+		)
+	}
 	contractIDs := make(map[string]struct{})
 	for _, s := range pm.Slices {
 		if _, ok := platformCells[s.BelongsToCell]; !ok {
@@ -305,14 +318,18 @@ func addContractParamRefTargets(pm *metadata.ProjectMeta, contractIDs, set map[s
 }
 
 // addParamRefTarget records the contract-Dir-relative $ref resolved to a
-// monorepo-relative slash path. Empty ref or an escape above root is skipped
-// (re-parse would reject the escape too; the closure stays in-tree).
+// monorepo-relative slash path. Resolution + validity use the SAME rule as the
+// parser's resolveRefPath (path.Clean(path.Join(dir, ref)) gated by
+// fs.ValidPath), so the closure cannot diverge from what re-parse will accept:
+// fs.ValidPath rejects empty, absolute, and any ".."-escaping path. "." (the
+// root itself) is additionally skipped — it is never a real schema file and
+// would otherwise make desiredBundle try to read the root directory.
 func addParamRefTarget(contractDir, ref string, set map[string]struct{}) {
 	if ref == "" {
 		return
 	}
 	target := path.Clean(path.Join(contractDir, ref))
-	if target == "." || target == ".." || len(target) >= 3 && target[:3] == "../" {
+	if target == "." || !fs.ValidPath(target) {
 		return
 	}
 	set[target] = struct{}{}
