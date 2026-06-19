@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/healthz"
 	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/projection"
 	"github.com/ghbvf/gocell/framework/kernel/worker"
@@ -86,12 +87,13 @@ const (
 // leader-handoff threat row stays ⚠️ until then).
 type Tailer struct {
 	// required deps (nil-guarded in NewTailer)
-	replay   projection.ReplaySource         // Head + Replay (PR-03 SagaJournalSource)
-	cursor   projection.Cursor               // Position(evt) → GlobalSeq
-	store    projection.OwnerCheckpointStore // fenced checkpoint (LoadOffset + AdvanceIfOwner)
-	txRunner persistence.TxRunner            // apply + advance committed in one tx (D5a)
-	apply    projection.Apply                // func(ctx, ProjectionEvent) error
-	locker   distlock.Locker                 // shared instance, per-projection key
+	replay      projection.ReplaySource         // Head + Replay (PR-03 SagaJournalSource)
+	cursor      projection.Cursor               // Position(evt) → GlobalSeq
+	store       projection.OwnerCheckpointStore // fenced checkpoint (LoadOffset + AdvanceIfOwner)
+	deadLetters projection.DeadLetterStore      // poison-event sink (recorded + skipped past, #2110)
+	txRunner    persistence.TxRunner            // apply + advance committed in one tx (D5a)
+	apply       projection.Apply                // func(ctx, ProjectionEvent) error
+	locker      distlock.Locker                 // shared instance, per-projection key
 
 	// identity
 	cellID         string
@@ -148,6 +150,7 @@ func NewTailer(
 	replay projection.ReplaySource,
 	cursor projection.Cursor,
 	store projection.OwnerCheckpointStore,
+	deadLetters projection.DeadLetterStore,
 	txRunner persistence.TxRunner,
 	apply projection.Apply,
 	locker distlock.Locker,
@@ -164,6 +167,9 @@ func NewTailer(
 	}
 	if validation.IsNilInterface(store) {
 		return nil, nilDepErr("store")
+	}
+	if validation.IsNilInterface(deadLetters) {
+		return nil, nilDepErr("deadLetters")
 	}
 	if validation.IsNilInterface(txRunner) {
 		return nil, nilDepErr("txRunner")
@@ -182,6 +188,7 @@ func NewTailer(
 		replay:               replay,
 		cursor:               cursor,
 		store:                store,
+		deadLetters:          deadLetters,
 		txRunner:             txRunner,
 		apply:                apply,
 		locker:               locker,
@@ -449,7 +456,7 @@ func (t *Tailer) tickLoop(ctx context.Context) {
 				t.logger.WarnContext(ctx, "saga journal tailer: tick failed",
 					slog.String("cell", t.cellID),
 					slog.String("projection", t.projectionID),
-					slog.Any("error", err))
+					slog.Any("error", redaction.RedactError(err)))
 			}
 		}
 	}
@@ -584,16 +591,27 @@ func (t *Tailer) observeDrain(ctx context.Context, result DrainResult) {
 	})
 }
 
-// commitEvent is the SOLE sanctioned caller of OwnerCheckpointStore.AdvanceIfOwner
-// (SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01). It applies one event at the
-// already-resolved cursor position pos and advances the fenced checkpoint in the
-// SAME transaction so apply+advance commit atomically (exactly-once within an
-// owner, D5(a); PROJECTION-CHECKPOINT-TX-BOUND-01).
+// commitEvent applies one event at the already-resolved cursor position pos and
+// advances the fenced checkpoint in the SAME transaction so apply+advance commit
+// atomically (exactly-once within an owner, D5(a); PROJECTION-CHECKPOINT-TX-BOUND-01).
+//
+// Apply-error disposition mirrors the Apply contract (outbox.IsPermanent, the
+// single predicate shared with the Coordinator):
+//   - transient (plain error): leave the checkpoint put, retry next tick.
+//   - permanent (outbox.NewPermanentError): the apply tx rolled back with no
+//     partial read-model state, so the poison event is skipped — recorded to the
+//     dead-letter sink and advanced past — rather than freezing the projection
+//     (#2110). See skipPoisonEvent.
+//
+// It is one of the two sanctioned callers of OwnerCheckpointStore.AdvanceIfOwner
+// (SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01), the other being skipPoisonEvent.
 func (t *Tailer) commitEvent(ctx context.Context, ownerToken string, evt projection.ProjectionEvent, pos int64, drained *int) error {
 	reachedAdvance := false
+	var applyErr error
 	txErr := t.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		applyCtx := evt.RestoreContext(txCtx)
 		if e := t.apply(applyCtx, evt); e != nil {
+			applyErr = e
 			// Carry the event identity + position so a wedged apply is locatable
 			// from the tick-error log without re-deriving it (F7).
 			return fmt.Errorf("tailer commit: apply event_id=%s stream=%s position=%d: %w",
@@ -602,17 +620,85 @@ func (t *Tailer) commitEvent(ctx context.Context, ownerToken string, evt project
 		reachedAdvance = true // the next call is the AdvanceIfOwner — failures past here are advance faults
 		return t.store.AdvanceIfOwner(txCtx, t.cellID, t.projectionID, ownerToken, pos)
 	})
-	if txErr != nil {
-		if reachedAdvance {
-			t.observeAdvanceFailure(ctx, txErr)
+	switch {
+	case txErr == nil:
+		*drained++
+		t.safeObserve(ctx, "ObserveCheckpointAdvance", func() {
+			t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvanceOK)
+		})
+		return nil
+	case reachedAdvance:
+		// Apply succeeded; the advance itself failed (stale owner / tx fault).
+		t.observeAdvanceFailure(ctx, txErr)
+		return txErr
+	case outbox.IsPermanent(applyErr):
+		return t.skipPoisonEvent(ctx, ownerToken, evt, pos, applyErr, drained)
+	default:
+		// Transient apply error: leave the checkpoint put and retry next tick.
+		return txErr
+	}
+}
+
+// skipPoisonEvent records a poison event (permanent apply error) to the
+// dead-letter sink AND advances the checkpoint past it in ONE transaction, so
+// "skipped" and "recorded" commit atomically — a crash can never leave the
+// checkpoint advanced past an unrecorded poison event (#2110). commitEvent's
+// first tx already rolled back the failed apply, so the read-model carries no
+// partial state from the poison event. On record/advance failure it fails closed:
+// the checkpoint stays put and the event is re-driven next tick (still skippable
+// once the sink recovers).
+//
+// It is the second sanctioned caller of OwnerCheckpointStore.AdvanceIfOwner
+// alongside commitEvent (SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01) and the SOLE
+// caller of DeadLetterStore.Record (SAGA-TAILER-DEAD-LETTER-WRITER-01).
+func (t *Tailer) skipPoisonEvent(
+	ctx context.Context, ownerToken string, evt projection.ProjectionEvent, pos int64, applyErr error, drained *int,
+) error {
+	redacted := redaction.RedactError(applyErr)
+	dl := projection.DeadLetter{
+		CellID:       t.cellID,
+		ProjectionID: t.projectionID,
+		GlobalSeq:    pos,
+		EventID:      evt.EventID(),
+		Stream:       evt.Stream(),
+		ErrorType:    errcodeOf(applyErr), // stable code (not PII) from the pre-redaction error
+		ErrorMessage: redacted.Error(),
+		OccurredAt:   evt.OccurredAt(),
+	}
+	txErr := t.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := t.deadLetters.Record(txCtx, dl); err != nil {
+			return fmt.Errorf("tailer poison: record dead-letter event_id=%s position=%d: %w",
+				evt.EventID(), pos, err)
 		}
+		return t.store.AdvanceIfOwner(txCtx, t.cellID, t.projectionID, ownerToken, pos)
+	})
+	if txErr != nil {
+		t.observeAdvanceFailure(ctx, txErr)
 		return txErr
 	}
 	*drained++
+	t.logger.WarnContext(ctx, "saga tailer: poison event skipped past (permanent apply error, dead-lettered)",
+		slog.String("cell", t.cellID),
+		slog.String("projection", t.projectionID),
+		slog.String("event_id", evt.EventID()),
+		slog.String("stream", evt.Stream()),
+		slog.Int64("position", pos),
+		slog.Any("error", redacted))
 	t.safeObserve(ctx, "ObserveCheckpointAdvance", func() {
-		t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvanceOK)
+		t.observer.ObserveCheckpointAdvance(ctx, t.projectionID, AdvancePoisonSkip)
 	})
 	return nil
+}
+
+// errcodeOf returns the stable errcode Code of err (e.g. ERR_VALIDATION_FAILED),
+// or "" when err is not an *errcode.Error. The code is a bounded classifier, not
+// PII, so it is safe in the dead-letter record's ErrorType column.
+func errcodeOf(err error) string {
+	var ec *errcode.Error
+	if errors.As(err, &ec) {
+		return string(ec.Code)
+	}
+	return ""
 }
 
 // observeAdvanceFailure classifies a checkpoint-advance failure into the metric

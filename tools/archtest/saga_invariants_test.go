@@ -15,6 +15,7 @@
 //   - INVARIANT: SAGA-SLOG-INSTANCE-FIELDS-CALLER-01
 //   - INVARIANT: SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01
 //   - INVARIANT: SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01
+//   - INVARIANT: SAGA-TAILER-DEAD-LETTER-WRITER-01
 //   - INVARIANT: SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01
 //   - INVARIANT: SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01
 //
@@ -1187,8 +1188,10 @@ func TestSagaGlobalReaderConformanceEnrollment_ReverseBlindSpot_NoReflectImpl(t 
 // ref: SAGA-INVARIANTS-FILE-CONSOLIDATED-01 (this rule must stay in this file)
 
 // TestSagaTailerCheckpointAdvancerCaller enforces
-// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: only (*Tailer).commitEvent may call
-// projection.OwnerCheckpointStore.AdvanceIfOwner in runtime/saga/tailer.
+// SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01: sanctioned callers of
+// projection.OwnerCheckpointStore.AdvanceIfOwner in runtime/saga/tailer are
+// (*Tailer).commitEvent (clean apply) and (*Tailer).skipPoisonEvent
+// (poison-event dead-letter skip, #2110).
 func TestSagaTailerCheckpointAdvancerCaller(t *testing.T) {
 	t.Parallel()
 	diags := CheckSagaTailerCheckpointAdvancerCaller(t, ConfigForExternalCell{})
@@ -1276,7 +1279,107 @@ func TestSagaTailerCheckpointAdvancerCaller_GREENFixture(t *testing.T) {
 	t.Parallel()
 	diags := CheckSagaTailerCheckpointAdvancerCaller(t, ConfigForExternalCell{})
 	for _, d := range diags {
-		t.Errorf("GREENFixture: (*Tailer).commitEvent must NOT be flagged, but got: %s", d.Message)
+		t.Errorf("GREENFixture: (*Tailer).commitEvent / skipPoisonEvent must NOT be flagged, but got: %s", d.Message)
+	}
+}
+
+// ============================================================================
+// SAGA-TAILER-DEAD-LETTER-WRITER-01   (#2110)
+// ============================================================================
+// INVARIANT: SAGA-TAILER-DEAD-LETTER-WRITER-01
+//
+// Only (*Tailer).skipPoisonEvent (runtime/saga/tailer) may call
+// projection.DeadLetterStore.Record, so the poison-event dead-letter record stays
+// bound to the same RunInTx as the checkpoint advance ("skipped ⟺ recorded",
+// #2110). Sibling of SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01; same scanner shape,
+// same rating (downstream Hard go/types caller-allowlist, upstream Medium Go
+// visibility ceiling — Record is a public method on a public interface). Hard
+// upgrade path shares the sealed-handle track at gh #1612.
+
+// TestSagaTailerDeadLetterWriter enforces SAGA-TAILER-DEAD-LETTER-WRITER-01: only
+// (*Tailer).skipPoisonEvent may call projection.DeadLetterStore.Record.
+func TestSagaTailerDeadLetterWriter(t *testing.T) {
+	t.Parallel()
+	diags := CheckSagaTailerDeadLetterWriter(t, ConfigForExternalCell{})
+	Report(t, sagaTailerDeadLetterWriterRuleID, diags)
+}
+
+// TestSagaTailerDeadLetterWriter_NonVacuity asserts the production scanner finds at
+// least one DeadLetterStore.Record call whose enclosing FuncDecl is
+// (*Tailer).skipPoisonEvent in runtime/saga/tailer — confirming the rule is
+// non-vacuous and that the sanctioned caller is still the one actually calling Record.
+// A rename of skipPoisonEvent would cause the GREEN fixture to fail while this check
+// also turns red, keeping the two in sync.
+func TestSagaTailerDeadLetterWriter_NonVacuity(t *testing.T) {
+	t.Parallel()
+	var sanctionedCallerFound bool
+	Run(t, Typed(TypedOpts{Tests: false}, []string{"./framework/runtime/saga/tailer/..."}), func(p *Pass) []Diagnostic {
+		if p.Pkg == nil || p.Pkg.Path() != sagaTailerPkg {
+			return nil
+		}
+		info := p.TypesInfo
+		for _, file := range p.Files {
+			if strings.HasSuffix(p.Rel(file), "_test.go") {
+				continue
+			}
+			EachInChildren[ast.FuncDecl](file, func(fd *ast.FuncDecl) {
+				if fd.Body == nil {
+					return
+				}
+				fdName := fd.Name.Name
+				EachInSubtree[ast.CallExpr](fd.Body, func(call *ast.CallExpr) {
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != sagaDeadLetterRecordMethodName {
+						return
+					}
+					obj := info.ObjectOf(sel.Sel)
+					if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != sagaKernelProjectionPkg {
+						return
+					}
+					if fdName == sagaTailerSkipPoisonEventMethodName {
+						sanctionedCallerFound = true
+					}
+				})
+			})
+		}
+		return nil
+	})
+	if !sanctionedCallerFound {
+		t.Fatalf("%s: non-vacuity check failed — no DeadLetterStore.Record call found inside "+
+			"(*Tailer).%s in runtime/saga/tailer; either the call was removed, the method was "+
+			"renamed, or the package path changed (update sagaTailerPkg constant)",
+			sagaTailerDeadLetterWriterRuleID, sagaTailerSkipPoisonEventMethodName)
+	}
+}
+
+// TestSagaTailerDeadLetterWriter_REDFixture loads the synthetic
+// sagatailerdeadletterfixture package and asserts the REAL detector
+// (scanSagaTailerDeadLetterWriterCallers) fires on the unsanctioned Record call in
+// (*badWriter).illegalRecord.
+func TestSagaTailerDeadLetterWriter_REDFixture(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+	const fixturePkg = "./tools/archtest/internal/sagatailerdeadletterfixture/..."
+	var diags []Diagnostic
+	Run(t, Fixture(FixtureOpts{Tests: false}, []string{fixturePkg, "./framework/kernel/projection/..."}),
+		func(p *Pass) []Diagnostic {
+			diags = append(diags, scanSagaTailerDeadLetterWriterCallers(p)...)
+			return nil
+		})
+	assert.GreaterOrEqual(t, len(diags), 1,
+		"REDFixture: the real scanSagaTailerDeadLetterWriterCallers must flag the "+
+			"unsanctioned Record call in (*badWriter).illegalRecord")
+}
+
+// TestSagaTailerDeadLetterWriter_GREENFixture asserts the real skipPoisonEvent
+// callsite in runtime/saga/tailer is NOT flagged (it IS sanctioned).
+func TestSagaTailerDeadLetterWriter_GREENFixture(t *testing.T) {
+	t.Parallel()
+	diags := CheckSagaTailerDeadLetterWriter(t, ConfigForExternalCell{})
+	for _, d := range diags {
+		t.Errorf("GREENFixture: (*Tailer).skipPoisonEvent must NOT be flagged, but got: %s", d.Message)
 	}
 }
 
@@ -3717,6 +3820,7 @@ var knownSagaInvariantIDs = []string{
 	"SAGA-SLOG-INSTANCE-FIELDS-CALLER-01",
 	"SAGA-GLOBALREADER-CONFORMANCE-ENROLL-01",
 	"SAGA-TAILER-CHECKPOINT-ADVANCER-CALLER-01",   // EPIC #1609 PR-04
+	"SAGA-TAILER-DEAD-LETTER-WRITER-01",           // #2110 poison-event disposition
 	"SAGA-OWNER-CHECKPOINT-CONFORMANCE-ENROLL-01", // EPIC #1609 PR-04
 	"SAGA-PROJECTION-DEPS-INMEM-FUNNEL-01",        // #2175 (merged from standalone file)
 }

@@ -933,34 +933,9 @@ func TestClassify(t *testing.T) {
 // TestIsPermanent
 // ---------------------------------------------------------------------------
 
-func TestIsPermanent(t *testing.T) {
-	t.Parallel()
-
-	errInner := errors.New("inner")
-	errPerm := outbox.NewPermanentError(errInner)
-	errWrapped := errors.Join(errors.New("outer"), errPerm)
-
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"plain error", errors.New("x"), false},
-		{"*PermanentError direct", errPerm, true},
-		{"*PermanentError wrapped via errors.Join", errWrapped, true},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := isPermanent(tc.err); got != tc.want {
-				t.Errorf("isPermanent(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
+// Permanent-error classification moved to outbox.IsPermanent (the single source
+// shared by both projection drivers); its tests live in kernel/outbox
+// (TestIsPermanent there). The Coordinator's classify() composes it.
 
 // ---------------------------------------------------------------------------
 // TestCheckpointKey — internal helper (accessible from package projection)

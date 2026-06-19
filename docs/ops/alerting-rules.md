@@ -952,7 +952,7 @@ Projection 投影 metric 同维度约定。readiness probe `<cell>_saga_tailer_<
 |---|---|---|
 | `saga_journal_tailer_lock_acquire_failed_total{reason}` | Counter | per-projection distlock 抢锁失败（leader gate 跳过该 tick），`reason ∈ {contended, ctx_canceled, backend_error}` |
 | `saga_journal_tailer_drain_total{result}` | Counter | 有进展或失败的 drain，`result ∈ {ok, head_error, store_error, apply_error}`（head_error = head 取上界失败；空闲 caught-up tick 不计） |
-| `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error}` |
+| `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error, poison_skip}`（poison_skip = 跳过一个 dead-lettered poison event，#2110） |
 | `saga_journal_tailer_pending_events` | Gauge | 残余积压 = HeadSeq − checkpoint（上次干净 tick 后） |
 | `saga_journal_tailer_last_success_timestamp_seconds` | Gauge | 上次完整 tick 的 unix 时间（驱动停摆告警） |
 
@@ -1076,6 +1076,25 @@ checkpoint 推进故障——`stale_owner` 是良性交接、必须排除，只�
       {{ $labels.cell }}/{{ $labels.projection }}. result=stale_owner is a benign leader
       handoff (CAS fence) and is excluded. Sustained error means apply+advance cannot
       commit → checkpoint frozen. Inspect the projection.apply tx path and DB health.
+```
+
+poison event 被跳过——permanent apply error 被 dead-letter 并跳过（#2110）。这**不是停滞**
+（投影继续前进），但表示上游在产坏事件，需排查；处置见 saga-runbook §5b。
+
+```yaml
+- alert: GoCellSagaTailerPoisonEvents
+  expr: sum(rate(gocell_saga_journal_tailer_checkpoint_advance_total{result="poison_skip"}[15m])) by (cell, projection) > 0
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer skipping poison events ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      The tailer is dead-lettering and skipping poison events (permanent apply errors:
+      bad payload / unknown kind / malformed id) for {{ $labels.cell }}/{{ $labels.projection }}.
+      The projection is NOT frozen (the bad events are recorded to saga_projection_dead_letters
+      and skipped past), but a sustained rate means an upstream producer or the projection's
+      Apply is mis-handling events. Triage the dead-letter table and follow saga-runbook §5b.
 ```
 
 ---
