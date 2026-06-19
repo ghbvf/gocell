@@ -49,8 +49,9 @@ type HTTPConfigGetter struct {
 // header. Both are forwarded to the generated client, whose constructor fails
 // fast on a nil/typed-nil transport or nil ring and runs clock.MustHaveClock.
 func NewHTTPConfigGetter(t transport.CellTransport, ring kauth.ServiceKeyring, clk clock.Clock) *HTTPConfigGetter {
-	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0].
-	return &HTTPConfigGetter{client: getclient.NewClient(t, ring, "accesscore", clk)}
+	// NewClientForAccesscore bakes callerCell="accesscore" from contract.yaml
+	// endpoints.clients — the caller-cell identity is not a forgeable parameter.
+	return &HTTPConfigGetter{client: getclient.NewClientForAccesscore(t, ring, clk)}
 }
 
 // GetEntry fetches the current config entry for key from the configcore

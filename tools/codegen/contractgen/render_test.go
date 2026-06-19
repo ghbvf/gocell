@@ -2604,12 +2604,13 @@ func TestHTTPMethodConst(t *testing.T) {
 
 // TestRender_Golden_Client byte-locks the generated contract client (client.tmpl,
 // #2093) for the clientsonly synth fixture (GET /internal/v1/sample/clientsonly,
-// clients:[testcell], flat non-projection {ok} response). It pins: the sealed
-// constructor NewClient(transport.CellTransport, ServiceKeyring, callerCell, Clock),
-// the signing+DoContract dispatch, and decode-into-Response (the non-projection
-// path). The projection decode path (data envelope) and POST-body path are
-// byte-locked by the committed generated/contracts/http/** client files via
-// `gocell verify generated`.
+// clients:[testcell], flat non-projection {ok} response). It pins: the caller-baked
+// constructor NewClientForTestcell(transport.CellTransport, ServiceKeyring, Clock)
+// (callerCell baked, F2), the signing+DoContract dispatch, and decode-into-Response
+// (the non-projection path). The query-encoding path is byte-locked by
+// TestRender_Golden_ClientQuery; the projection decode path (data envelope) and
+// POST-body path are byte-locked by the committed generated/contracts/http/** client
+// files via `gocell verify generated`.
 func TestRender_Golden_Client(t *testing.T) {
 	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
 	absTestDir, err := filepath.Abs(testDir)
@@ -2631,6 +2632,41 @@ func TestRender_Golden_Client(t *testing.T) {
 	}
 	content := renderFile(t, spec, "client_gen.go")
 	goldenFile := goldenFilePath("synth_http_auth_modes_clientsonly", "client_gen.go")
+	if *updateGolden {
+		writeGolden(t, goldenFile, content)
+		return
+	}
+	assertGolden(t, goldenFile, content)
+}
+
+// TestRender_Golden_ClientQuery byte-freezes the generated cross-cell client for a
+// clients+queryParams internal contract (#2093, F3): the client must encode the
+// declared query params onto httpReq.URL.RawQuery BEFORE auth.SignInternalRequest
+// (which folds RawQuery into the service-token MAC). The clientsquery fixture
+// exercises every query GoType the handler supports (string optional+required,
+// int64, float64, bool) so a template regression that drops a param — the exact
+// bug this finding fixes — is caught here, not only by cross-module verify.
+func TestRender_Golden_ClientQuery(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_auth_modes")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	const contractID = "http.sample.clientsquery.v1"
+	if p.Contracts[contractID] == nil {
+		t.Fatalf("%s not found in synth fixture", contractID)
+	}
+	spec, err := buildContractSpec(absTestDir, p, contractID)
+	if err != nil {
+		t.Fatalf("buildContractSpec: %v", err)
+	}
+	content := renderFile(t, spec, "client_gen.go")
+	goldenFile := goldenFilePath("synth_http_auth_modes_clientsquery", "client_gen.go")
 	if *updateGolden {
 		writeGolden(t, goldenFile, content)
 		return

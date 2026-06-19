@@ -106,19 +106,30 @@
 //
 // # client_gen.go (kind=http, gated by shouldEmitClient — #2093)
 //
-// Renders the sealed cross-cell contract Client: the sole sibling-cell call type
-// (ADR D2 downstream Hard). It holds an injected transport.CellTransport (the only
-// expressible dispatch path — a bare *http.Client is not type-expressible),
-// signs every request with a service token (auth.SignInternalRequest), dispatches
-// via DoContract, and on the declared success status decodes the body — into the
-// directly-unmarshalable Response, or for responseProjection contracts (whose
-// Response.Data is the sealed projection.ResourceProjection) into the resource-item
-// DTO via the {data: ...} envelope (Endpoint.ClientDecodeDTO/List). Domain error
-// mapping is the caller's job: the method returns (decoded, httpStatus, err) and
-// returns (nil, status, nil) for a non-success status. Emitted ONLY when
-// shouldEmitClient is true (internal path + endpoints.clients declared); the
-// caller-side enforcement that cells reach siblings ONLY through this client is
-// CELL-TRANSPORT-DOCONTRACT-CALLER-01 + CELL-SYNC-TRANSPORT-FUNNEL-01.
+// Renders the cross-cell contract Client (unexported fields → not externally
+// struct-literal constructable). It is the sole *generated* sibling-cell caller
+// type; its Hard property is codegen + byte golden (the generated artifact is
+// frozen), NOT a sealed interface — transport.CellTransport is a plain exported
+// interface, so holding one is not a type-level seal, and "the constructor only
+// takes a CellTransport" merely means a bare *http.Client is not accepted by that
+// signature (a cell could still hold net/http; that bypass is caught by the Medium
+// backstops below, not the compiler). One NewClientFor<Cell> is emitted per
+// endpoints.clients cell, baking the caller-cell identity as a literal so a
+// wrong/forged callerCell is unexpressible (F2). The method encodes path + query
+// (url.Values → RawQuery set BEFORE signing, since SignInternalRequest folds
+// RawQuery into the MAC — F3) + body, signs with a service token
+// (auth.SignInternalRequest), dispatches via DoContract, and on the declared
+// success status decodes the body — into the directly-unmarshalable Response, or
+// for responseProjection contracts (whose Response.Data is the sealed
+// projection.ResourceProjection) into the resource-item DTO via the {data: ...}
+// envelope (Endpoint.ClientDecodeDTO/List). Domain error mapping is the caller's
+// job: the method returns (decoded, httpStatus, err) and returns (nil, status, nil)
+// for a non-success status. Emitted ONLY when shouldEmitClient is true (internal
+// path + endpoints.clients declared) and only for shapes the client can faithfully
+// encode (validateGeneratedClientEncodable rejects NoContent / custom non-tenant
+// headers at codegen — F3/F4). The Medium caller-side backstops that a cell reaches
+// siblings ONLY through this client are CELL-TRANSPORT-DOCONTRACT-CALLER-01 +
+// CELL-SYNC-TRANSPORT-FUNNEL-01.
 //
 // # spec_gen.go (kind=event only)
 //

@@ -116,17 +116,13 @@ type ContractGenSpec struct {
 	// Example: "http-order-create-v1-standard-schema-compile-failed".
 	PanicReasonStandardSchemaCompileFailed string
 	// PanicReasonClientTransportNil is the kebab-case reason literal for the
-	// generated client's nil-transport fail-fast (client.tmpl NewClient, #2093).
+	// generated client's nil-transport fail-fast (client.tmpl newClient, #2093).
 	// Pre-computed from ContractID + "-client-transport-nil".
 	PanicReasonClientTransportNil string
 	// PanicReasonClientRingNil is the kebab-case reason literal for the generated
-	// client's nil-keyring fail-fast (client.tmpl NewClient, #2093).
+	// client's nil-keyring fail-fast (client.tmpl newClient, #2093).
 	// Pre-computed from ContractID + "-client-ring-nil".
 	PanicReasonClientRingNil string
-	// PanicReasonClientCallerCellEmpty is the kebab-case reason literal for the
-	// generated client's empty-callerCell fail-fast (client.tmpl NewClient, #2093).
-	// Pre-computed from ContractID + "-client-caller-cell-empty".
-	PanicReasonClientCallerCellEmpty string
 }
 
 // DTOSpec is one Go struct definition.

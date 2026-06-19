@@ -47,19 +47,27 @@
 //     (unexported fields + single sanctioned constructors) — no package outside
 //     can forge a transport. Field sets frozen by INPROCESS-TRANSPORT-SEALED-01 /
 //     REMOTE-TRANSPORT-SEALED-01.
-//   - Downstream Hard (#2093): the codegen-generated contract client is the SOLE
-//     sealed sibling-call type — its constructor takes ONLY a sealed CellTransport,
-//     so a bare *http.Client is not type-expressible as the sibling-call path
-//     (codegen + byte golden, per ADR D2). Emitted for every internal contract
-//     that declares endpoints.clients (contractgen shouldEmitClient).
-//   - Downstream Medium backstops (two, both permanent ceilings — a cell reaching
-//     a sibling sync path any other way is caught, not compile-prevented, since
-//     net/http is a stdlib API and DoContract is an exported method):
+//   - Downstream Hard (#2093) — the GENERATED ARTIFACT, not the interface: the
+//     codegen contract client is byte-frozen by codegen + golden, so you cannot
+//     hand-add or alter a sibling-call client type, and one is emitted for exactly
+//     the internal contracts declaring endpoints.clients (contractgen
+//     shouldEmitClient). The Hard guarantee is the golden-pinned generated code, NOT
+//     a sealed interface: [CellTransport] is a plain exported interface (contrast
+//     [TransportMode], which IS sealed — unexported field + accessors), so "the
+//     generated constructor only takes a CellTransport" is not a type-level seal —
+//     it only means a bare *http.Client is not accepted by that constructor's
+//     signature. The constructor also bakes the caller-cell identity: one
+//     NewClientFor<Cell> per endpoints.clients cell (no free callerCell string), so
+//     a wrong/forged caller is unexpressible at the call site (F2).
+//   - Downstream "sole expressible path" — Medium (two permanent ceilings): the
+//     guarantee that a cell reaches a sibling sync path ONLY via a generated client
+//     is enforced by AST scan, not the type system, because net/http is a stdlib API
+//     and DoContract is an exported method (neither can be made a compile error), and
+//     the CellTransport interface is not sealed (an external package could implement
+//     it — though to actually dial it would still hold net/http, caught below).
 //     CELL-SYNC-TRANSPORT-FUNNEL-01 bans a cell from holding/constructing a raw
 //     net/http client; CELL-TRANSPORT-DOCONTRACT-CALLER-01 bans a cell from calling
-//     CellTransport.DoContract directly (only generated clients may). Together with
-//     the Hard generated client, the only expressible cell→sibling sync path is a
-//     generated client.
+//     CellTransport.DoContract directly (only generated clients may).
 //
 // ref: ServiceWeaver/weaver internal/weaver/remoteweavelet.go (local/remote
 // dispatch); go-micro selector/default.go (minimal Resolver+transport shape).

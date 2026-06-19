@@ -22,18 +22,23 @@ import (
 )
 
 // ClientContractID is the logical contract id this client dispatches through the
-// sealed transport.CellTransport seam (in-process short-circuit or remote — the
+// transport.CellTransport seam (in-process short-circuit or remote — the
 // composition root chooses by deployment topology, US5 #1966).
 const ClientContractID = "http.sample.clientsonly.v1"
 
-// Client is the sole sealed sibling-cell call type for http.sample.clientsonly.v1 (ADR D2
-// downstream Hard, #2093). It accepts ONLY a sealed transport.CellTransport as the
-// dispatch path — a bare *http.Client is not type-expressible here — and signs
-// every outbound request itself (auth.SignInternalRequest), so it is fully
-// self-contained. Domain error mapping is the caller's responsibility: the method
-// returns the decoded success DTO, the HTTP status, and a transport/build/decode
-// error; on a non-success status it returns (nil, status, nil) for the caller to
-// classify.
+// Client is the sole *generated* sibling-cell caller type for http.sample.clientsonly.v1
+// (ADR D2, #2093). Its strength is codegen+golden (this file is generated and
+// byte-frozen), NOT a sealed interface: transport.CellTransport is a plain
+// exported interface, so receiving it is not itself a type-level seal. A bare
+// *http.Client cannot be passed to this constructor, and hand-written bypass
+// callers (a cell holding net/http, or calling DoContract directly) are caught by
+// the Medium AST funnels CELL-SYNC-TRANSPORT-FUNNEL-01 /
+// CELL-TRANSPORT-DOCONTRACT-CALLER-01 — the "sole expressible path" guarantee is
+// Medium, not Hard. The client signs every outbound request itself
+// (auth.SignInternalRequest), so it is fully self-contained. Domain error mapping
+// is the caller's responsibility: the method returns the decoded success DTO, the
+// HTTP status, and a transport/build/decode error; on a non-success status it
+// returns (nil, status, nil) for the caller to classify.
 type Client struct {
 	transport  transport.CellTransport
 	ring       kauth.ServiceKeyring
@@ -41,13 +46,13 @@ type Client struct {
 	clock      clock.Clock
 }
 
-// NewClient constructs the generated client. t is the topology-injected sealed
-// transport (in-process or remote); ring signs the outbound service token;
-// callerCell is the calling cell's identity (one of contract.yaml
-// endpoints.clients). All three strong deps are wiring inputs that fail fast at
-// construction (not at the first request): a nil/typed-nil transport, a nil ring,
-// or an empty callerCell each panics here.
-func NewClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell string, clk clock.Clock) *Client {
+// newClient is the shared constructor body. callerCell is never a wiring input —
+// each exported NewClientFor<Cell> below bakes the caller-cell identity as a
+// literal from contract.yaml endpoints.clients, so a wrong/forged callerCell is
+// unexpressible at the call site (#2093, F2; mirrors command.tmpl's baked
+// DispatchID). The two strong deps fail fast at construction (not at the first
+// request): a nil/typed-nil transport or a nil ring each panics here.
+func newClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell string, clk clock.Clock) *Client {
 	clock.MustHaveClock(clk, "generated client http.sample.clientsonly.v1")
 	if validation.IsNilInterface(t) {
 		panic(panicregister.Approved("http-sample-clientsonly-v1-client-transport-nil", errcode.Assertion("generated client http.sample.clientsonly.v1: CellTransport must not be nil (the composition root must inject the in-process or remote transport)")))
@@ -55,13 +60,19 @@ func NewClient(t transport.CellTransport, ring kauth.ServiceKeyring, callerCell 
 	if validation.IsNilInterface(ring) {
 		panic(panicregister.Approved("http-sample-clientsonly-v1-client-ring-nil", errcode.Assertion("generated client http.sample.clientsonly.v1: ServiceKeyring must not be nil (the composition root must supply the internal service keyring)")))
 	}
-	if callerCell == "" {
-		panic(panicregister.Approved("http-sample-clientsonly-v1-client-caller-cell-empty", errcode.Assertion("generated client http.sample.clientsonly.v1: callerCell must not be empty (the wiring must supply the calling cell's id, one of contract.yaml endpoints.clients)")))
-	}
 	return &Client{transport: t, ring: ring, callerCell: callerCell, clock: clk}
 }
 
-// Clientsonly dispatches GET /internal/v1/sample/clientsonly through the sealed transport.
+// NewClientForTestcell constructs the http.sample.clientsonly.v1 client for caller
+// cell "testcell" (declared in contract.yaml endpoints.clients). The
+// caller-cell identity is baked, not a parameter, so a wrong/forged callerCell is
+// unexpressible. t is the topology-injected transport (in-process or remote); ring
+// signs the outbound service token. Both fail fast at construction.
+func NewClientForTestcell(t transport.CellTransport, ring kauth.ServiceKeyring, clk clock.Clock) *Client {
+	return newClient(t, ring, "testcell", clk)
+}
+
+// Clientsonly dispatches GET /internal/v1/sample/clientsonly through the transport.CellTransport seam.
 // It builds and signs the request, dispatches via DoContract, and on the declared
 // success status decodes the response body. tn is folded into the service-token
 // MAC and the X-Tenant-ID header by auth.SignInternalRequest.

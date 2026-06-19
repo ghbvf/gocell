@@ -627,9 +627,14 @@ defer 为 #2093（触发条件 = US5 #1966 落地 或 第二个跨 cell 同步�
 #### 落地形态
 
 - **生成式 client（client.tmpl）**：contractgen 新增 `client.tmpl`，为声明了 `endpoints.clients`
-  的 internal-path http 契约生成 sealed `Client`。构造器 `NewClient(transport.CellTransport, …)`
-  **只收 sealed `CellTransport`**——裸 `*http.Client` 在类型层不可表达为兄弟-cell 调用路径；client
-  自签名（`auth.SignInternalRequest`）+ `DoContract` 分发 + 解码。
+  的 internal-path http 契约生成 `Client`（unexported 字段，仅经下述构造器构造）。每个 `endpoints.clients`
+  声明的 cell 生成一个 `NewClientFor<Cell>(transport.CellTransport, ring, clk)` 构造器，**bake caller-cell
+  身份为字面量**（无可传入的 `callerCell` 串），故误/伪 caller 在调用点不可表达（F2，仿 `command.tmpl`
+  的 baked `DispatchID`）。构造器收 `transport.CellTransport`——注意 `CellTransport` 是**普通导出接口、非
+  sealed type**（对比同文件的 sealed `TransportMode`）：裸 `*http.Client` 只是不被该构造器签名接收，并非
+  「sibling 调用路径在类型层不可表达」（见下「威胁矩阵重评」）。client 自签名（`auth.SignInternalRequest`）
+  + 编码 path/query/body（query 在签名**前**写入 `RawQuery`，因签名把 `RawQuery` 折进 MAC，F3）+ `DoContract`
+  分发 + 解码。
 - **gate = internal-path + 非空 `endpoints.clients`**（`shouldEmitClient`；`buildHTTPEndpointSpec`
   只为 `metadata.IsInternalHTTPPath` 填 `Endpoint.Clients`，故非空 ⇒ 作者已声明的兄弟-callable 契约）。
   实际命中 **4 个**契约：`http.config.internal.get.v1`（projection GET，accesscore→configcore，
@@ -645,8 +650,13 @@ defer 为 #2093（触发条件 = US5 #1966 落地 或 第二个跨 cell 同步�
 
 - **上游 = Hard**：`InProcessTransport` / `RemoteHTTPTransport` sealed（unexported 字段 + 单一
   sanctioned constructor，`INPROCESS-TRANSPORT-SEALED-01` / `REMOTE-TRANSPORT-SEALED-01`）。
-- **下游 Hard 层 = 生成式 client**：codegen + 字节 golden 锁存在性/形态；构造器只收 sealed
-  `CellTransport`（裸 `*http.Client` 类型不可表达）。
+- **下游 Hard 层 = 生成 artifact（codegen + 字节 golden），非接口 seal**：Hard 性由「生成 client 的存在性/
+  形态被字节 golden 锁存」承载——不可手改/手加 sibling 调用 client 类型。**修正 planning 措辞**：`CellTransport`
+  是普通导出接口，**非** sealed type，故「构造器只收 sealed `CellTransport`」「裸 `*http.Client` 在类型层
+  不可表达为 sibling 路径」是过度声明——真相是裸 `*http.Client` 仅不被生成构造器签名接收；cell 仍可自持
+  `net/http` 直拨（由下面 Medium backstop A 捕获，非编译错）。caller-cell 身份由 `NewClientFor<Cell>` baked
+  字面量锁定（F2，Hard：误 caller 在调用点不可表达）；codegen completeness 预检在构建期拒绝 `clients` 契约
+  无法被 client 忠实编码的形态（NoContent-204 / 非 tenant 自定义 header，F3/F4，`validateGeneratedClientEncodable`）。
 - **下游两个 Medium backstop（皆永久天花板，非待升级 TODO，不开 fake Hard-upgrade issue）**：
   - **A — `CELL-SYNC-TRANSPORT-FUNNEL-01`**：禁 cell 持/造裸 `net/http` client。stdlib 导出 API
     不可封、不可使 import 成编译错误 → typed AST 符号扫描是该载体类的可达天花板。
@@ -655,14 +665,18 @@ defer 为 #2093（触发条件 = US5 #1966 落地 或 第二个跨 cell 同步�
     `DoContract` 是导出接口方法 → 调用方 typed scan 是可达天花板（同 `COMMAND-ASYNC-EMIT-CALLER-01`
     族）。**没有 B，cell 持注入的 `CellTransport` 直调 `DoContract` 即绕过生成 client 且不触 A**——
     故 B 是「唯一可表达路径」闭环的关键。
-- **闭环论证**：A + B ⇒ cell 触达兄弟 sync 的唯一可表达出口 = Hard-sealed 生成 client。
+- **闭环论证**：A + B（皆 Medium）⇒ cell 触达兄弟 sync 的「唯一可表达出口 = 生成 client」是 Medium 级保证；
+  生成 client 自身是 Hard（codegen + 字节 golden）。**故整体下游 = Hard 生成 artifact + Medium sole-path 闭环**，
+  而非「下游 Hard」单一档位。
 - **funnel 本身不升 Hard**：D2 原文「目标 Hard（上下游双侧）」中的「下游 callsite scan」永久停留
   Medium（honest ceiling），Hard 性由生成 client 这一新载体承载，而非把 scan 本身变编译错误。
 
 **权威语义**：`tools/codegen/contractgen/doc.go` §client_gen.go + `framework/runtime/transport/doc.go`
 §Governance + archtest `CELL-SYNC-TRANSPORT-FUNNEL-01`（backstop A，godoc 已重评）+
-`CELL-TRANSPORT-DOCONTRACT-CALLER-01`（backstop B）+ 生成 golden（4 个 `client_gen.go` +
-`synth_http_auth_modes_clientsonly_client_gen_go.golden`）。
+`CELL-TRANSPORT-DOCONTRACT-CALLER-01`（backstop B）+ codegen `validateGeneratedClientEncodable`
+（F3/F4 编码完整性，`TestValidateGeneratedClientEncodable`）+ 生成 golden（4 个 `client_gen.go` +
+`synth_http_auth_modes_clientsonly_client_gen_go.golden` + 含 query 编码的
+`synth_http_auth_modes_clientsquery_client_gen_go.golden`）。
 
 ## Rejected alternatives
 

@@ -96,6 +96,11 @@ var templates = func() *template.Template {
 		// constant (e.g. "GET" → "http.MethodGet"), so the generated client uses the
 		// stdlib const rather than a bare string literal.
 		"httpMethodConst": httpMethodConst,
+		// goPascalCase converts an identifier to PascalCase. client.tmpl uses it to
+		// derive one NewClientFor<Cell> constructor per endpoints.clients cell
+		// (e.g. "accesscore" → "NewClientForAccesscore"), baking the caller-cell
+		// identity so a wrong/forged callerCell is unexpressible (#2093, F2).
+		"goPascalCase": goPascalCase,
 	}
 
 	t := template.Must(codegen.SharedTemplates.Clone())
