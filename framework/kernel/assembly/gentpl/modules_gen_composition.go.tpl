@@ -6,11 +6,6 @@ import (
 {{- range .ModuleImports}}
 	{{.}}
 {{- end}}
-{{- if .Capabilities}}
-	"github.com/ghbvf/gocell/framework/runtime/capability"
-{{- end}}
-	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
-	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
 func generatedCellModules() []composition.CellModule {
