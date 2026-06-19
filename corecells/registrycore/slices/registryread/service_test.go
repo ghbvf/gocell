@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
@@ -37,7 +38,7 @@ func mustCodec(t *testing.T) *query.CursorCodec {
 // cell wiring).
 func newSvc(t *testing.T, store ports.Registry) *Service {
 	t.Helper()
-	svc, err := NewService(store, mustCodec(t), query.RunModeDemo, nil)
+	svc, err := NewService(store, outbox.DemoCellTxManager(), mustCodec(t), query.RunModeDemo, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -107,14 +108,23 @@ func itemField(t *testing.T, item projection.ResourceProjection, key string) str
 
 // TestNewService_NilStore pins the required-dep fail-fast for store.
 func TestNewService_NilStore(t *testing.T) {
-	if _, err := NewService(nil, mustCodec(t), query.RunModeDemo, nil); err == nil {
+	if _, err := NewService(nil, outbox.DemoCellTxManager(), mustCodec(t), query.RunModeDemo, nil); err == nil {
 		t.Fatal("NewService(nil store) must error (gocell:\"required\")")
+	}
+}
+
+// TestNewService_NilTxRunner pins the required-dep fail-fast for txRunner: a nil
+// TxManager must error so a misassembled cell can never run reads without the
+// tenant-scoped tx that injects the RLS GUC (#2392 scopedread funnel).
+func TestNewService_NilTxRunner(t *testing.T) {
+	if _, err := NewService(newMemStore(t), nil, mustCodec(t), query.RunModeDemo, nil); err == nil {
+		t.Fatal("NewService(nil txRunner) must error (gocell:\"required\")")
 	}
 }
 
 // TestNewService_NilCodec pins the required-dep fail-fast for codec.
 func TestNewService_NilCodec(t *testing.T) {
-	if _, err := NewService(newMemStore(t), nil, query.RunModeDemo, nil); err == nil {
+	if _, err := NewService(newMemStore(t), outbox.DemoCellTxManager(), nil, query.RunModeDemo, nil); err == nil {
 		t.Fatal("NewService(nil codec) must error (gocell:\"required\")")
 	}
 }
