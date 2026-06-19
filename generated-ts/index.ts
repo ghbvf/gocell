@@ -25,6 +25,7 @@ export * as eventUserLockedV1 from './contracts/event/user/locked/v1/types';
 export * as eventUserUnlockedV1 from './contracts/event/user/unlocked/v1/types';
 export * as eventUserUpdatedV1 from './contracts/event/user/updated/v1/types';
 export * as httpAdminHealthCellsV1 from './contracts/http/admin/health/cells/v1/types';
+export * as httpAdminSystemV1 from './contracts/http/admin/system/v1/types';
 export * as httpAuthDecideV1 from './contracts/http/auth/decide/v1/types';
 export * as httpAuthLoginV1 from './contracts/http/auth/login/v1/types';
 export * as httpAuthRefreshV1 from './contracts/http/auth/refresh/v1/types';

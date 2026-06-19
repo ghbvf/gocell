@@ -25,6 +25,7 @@ import (
 	idemhttp "github.com/ghbvf/gocell/framework/runtime/http/idempotency"
 	"github.com/ghbvf/gocell/framework/runtime/http/middleware"
 	"github.com/ghbvf/gocell/framework/runtime/http/router"
+	"github.com/ghbvf/gocell/framework/runtime/sysinfo"
 )
 
 // WithHealthAggregator injects a custom healthz.Aggregator into the bootstrap.
@@ -227,6 +228,15 @@ func WithReadyzDeadline(d time.Duration) Option {
 func WithAdapterInfo(info map[string]string) Option {
 	return func(b *Bootstrap) {
 		b.adapterInfo = info
+	}
+}
+
+// WithSystemInfo sets startup-stable build/environment/deployment metadata for
+// the admin system endpoint. Bootstrap fills assembly name and cell order from
+// its CoreAssembly so callers cannot drift from the mounted cell set.
+func WithSystemInfo(cfg sysinfo.Config) Option {
+	return func(b *Bootstrap) {
+		b.systemInfoConfig = cfg
 	}
 }
 

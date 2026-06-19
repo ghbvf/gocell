@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
 var _ cell.Cell = (*SysCore)(nil)
@@ -31,6 +32,15 @@ var cellMeta = &metadata.CellMeta{
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
 
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.admin.system.v1": "system:read",
+})
+
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *SysCore) Init(ctx context.Context, reg cell.Registrar) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
@@ -53,6 +63,9 @@ func (c *SysCore) Init(ctx context.Context, reg cell.Registrar) error {
 			}
 			mux.Route("/health", func(s cell.RouteMux) {
 				captureErr(c.healthHandler.RegisterRoutes(s))
+			})
+			mux.Route("/system", func(s cell.RouteMux) {
+				captureErr(c.systemHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

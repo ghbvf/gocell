@@ -66,6 +66,7 @@ func runtimeBaseOptions(
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(locals.metricProvider),
+		systemInfoOption(shared, asm),
 	}
 	// Register the assembly's shared infrastructure as the FIRST ManagedResources
 	// so bootstrap's LIFO teardown closes them LAST — after every consumer

@@ -30,6 +30,9 @@ func TestInitInternal_WiresHandler(t *testing.T) {
 	if c.healthHandler == nil {
 		t.Fatal("healthHandler is nil after initInternal — generated route group would nil-deref")
 	}
+	if c.systemHandler == nil {
+		t.Fatal("systemHandler is nil after initInternal — generated route group would nil-deref")
+	}
 }
 
 // TestInit_RegistersAdminRouteGroup runs the full generated Init through a
