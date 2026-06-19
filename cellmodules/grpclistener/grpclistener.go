@@ -1,16 +1,15 @@
-// Package grpclistener is the composition-root helper for the platform-bundle gRPC
-// listener: it resolves the listen address + transport security from the
-// environment (GOCELL_GRPC_* convention) and builds the adapters/grpc server from a
-// caller-supplied interceptor.Deps. It is shared by every platform composition root
-// that bundles a cell serving a gRPC contract — cmd/corebundle, examples/ssobff,
-// examples/corebundlestarter — because accesscore registers grpc.auth.session.verify.v1
-// unconditionally (cell_gen.go, PR-11 #1154), so any assembly that boots accesscore
-// MUST wire a gRPC listener or bootstrap fail-fasts (checkOrphanGRPCServices).
+// Package grpclistener is the composition-root helper for gRPC listeners: it
+// resolves the listen address + transport security from a caller-selected env
+// prefix and builds the adapters/grpc server from a caller-supplied
+// interceptor.Deps. It is shared by every composition root that bundles a cell
+// serving a gRPC contract because those roots MUST wire a gRPC listener or
+// bootstrap fail-fasts (checkOrphanGRPCServices).
 //
 // Living in cellmodules/ (the composition-root layer that may depend on adapters/ +
 // runtime/) keeps the env→TLS→server logic single-sourced rather than copied per
-// root. examples/iotdevice keeps its own copy (a standalone example with its own
-// GOCELL_IOTDEVICE_GRPC_* env prefix); folding it in is tracked separately.
+// root. Platform roots use PlatformEnv (GOCELL_GRPC_*); standalone examples can
+// pass their own EnvConfig prefix while retaining the same TLS and fail-closed
+// behavior.
 package grpclistener
 
 import (
@@ -39,17 +38,26 @@ const (
 	DefaultAddr = ":9095"
 )
 
+// EnvConfig selects the gRPC listener env namespace and fallback bind address.
+type EnvConfig struct {
+	Prefix      string
+	DefaultAddr string
+}
+
+// PlatformEnv is the default platform-bundle gRPC listener env namespace.
+var PlatformEnv = EnvConfig{Prefix: "GOCELL_GRPC", DefaultAddr: DefaultAddr}
+
 // AddrFromEnv resolves the gRPC listen address from the environment, falling back
-// to DefaultAddr. It is the SINGLE source for the address so the caller binds the
-// same addr in both adaptersgrpc.Config.Addr and bootstrap's WithGRPCListener
+// to env.DefaultAddr. It is the SINGLE source for the address so the caller binds
+// the same addr in both adaptersgrpc.Config.Addr and bootstrap's WithGRPCListener
 // (#1737 F2): bootstrap pre-binds the WithGRPCListener addr and serves that
 // pre-bound listener, so the adapter's Config.Addr never reaches net.Listen on the
 // bootstrap path.
-func AddrFromEnv() string {
-	if addr := strings.TrimSpace(os.Getenv(EnvAddr)); addr != "" {
+func AddrFromEnv(env EnvConfig) string {
+	if addr := strings.TrimSpace(os.Getenv(env.envName("ADDR"))); addr != "" {
 		return addr
 	}
-	return DefaultAddr
+	return env.withDefaults().DefaultAddr
 }
 
 // ServerFromEnv builds the gRPC server, resolving transport security from the
@@ -60,11 +68,12 @@ func AddrFromEnv() string {
 // adaptersgrpc.New binds them — so the composition root supplies neither registrar
 // nor drain and "forgot the stream chain" is unrepresentable.
 func ServerFromEnv(
+	env EnvConfig,
 	durabilityMode outbox.DurabilityMode,
 	addr string,
 	deps interceptor.Deps,
 ) (*adaptersgrpc.Server, error) {
-	tlsCfg, err := tlsConfigFromEnv(durabilityMode)
+	tlsCfg, err := tlsConfigFromEnv(env, durabilityMode)
 	if err != nil {
 		return nil, err
 	}
@@ -82,21 +91,27 @@ func ServerFromEnv(
 //     non-loopback plaintext bind).
 //   - no TLS material, durable mode → require an explicit insecure opt-in, else
 //     fail fast so a real deployment cannot ship plaintext by omission.
-func tlsConfigFromEnv(durabilityMode outbox.DurabilityMode) (adaptersgrpc.TLSConfig, error) {
-	certPath := strings.TrimSpace(os.Getenv(EnvTLSCertFile))
-	keyPath := strings.TrimSpace(os.Getenv(EnvTLSKeyFile))
-	caPath := strings.TrimSpace(os.Getenv(EnvTLSClientCAFile))
+func tlsConfigFromEnv(env EnvConfig, durabilityMode outbox.DurabilityMode) (adaptersgrpc.TLSConfig, error) {
+	env = env.withDefaults()
+	certEnv := env.envName("TLS_CERT_FILE")
+	keyEnv := env.envName("TLS_KEY_FILE")
+	caEnv := env.envName("TLS_CLIENT_CA_FILE")
+	allowInsecureEnv := env.envName("ALLOW_INSECURE")
+
+	certPath := strings.TrimSpace(os.Getenv(certEnv))
+	keyPath := strings.TrimSpace(os.Getenv(keyEnv))
+	caPath := strings.TrimSpace(os.Getenv(caEnv))
 
 	if certPath != "" || keyPath != "" || caPath != "" {
-		return tlsConfigFromPaths(certPath, keyPath, caPath)
+		return tlsConfigFromPaths(certEnv, keyEnv, caEnv, certPath, keyPath, caPath)
 	}
 
 	// No TLS material: demo runs plaintext; durable mode must opt in explicitly.
-	if durabilityMode == outbox.DurabilityDurable && !envTrue(EnvAllowInsecure) {
+	if durabilityMode == outbox.DurabilityDurable && !envTrue(allowInsecureEnv) {
 		return adaptersgrpc.TLSConfig{}, fmt.Errorf(
 			"durable mode requires gRPC TLS (set %s + %s, optionally %s for mTLS) "+
 				"or an explicit %s=true to run plaintext behind a TLS-terminating sidecar",
-			EnvTLSCertFile, EnvTLSKeyFile, EnvTLSClientCAFile, EnvAllowInsecure,
+			certEnv, keyEnv, caEnv, allowInsecureEnv,
 		)
 	}
 	return adaptersgrpc.TLSConfig{AllowInsecure: true}, nil
@@ -104,17 +119,20 @@ func tlsConfigFromEnv(durabilityMode outbox.DurabilityMode) (adaptersgrpc.TLSCon
 
 // tlsConfigFromPaths reads the server cert/key (required) and optional client CA
 // (mTLS) PEM files into a TLSConfig.
-func tlsConfigFromPaths(certPath, keyPath, caPath string) (adaptersgrpc.TLSConfig, error) {
+func tlsConfigFromPaths(
+	certEnv, keyEnv, caEnv string,
+	certPath, keyPath, caPath string,
+) (adaptersgrpc.TLSConfig, error) {
 	if certPath == "" || keyPath == "" {
 		return adaptersgrpc.TLSConfig{}, fmt.Errorf(
-			"%s and %s must both be set to enable gRPC TLS", EnvTLSCertFile, EnvTLSKeyFile,
+			"%s and %s must both be set to enable gRPC TLS", certEnv, keyEnv,
 		)
 	}
-	certPEM, err := readPEMFile(EnvTLSCertFile, certPath)
+	certPEM, err := readPEMFile(certEnv, certPath)
 	if err != nil {
 		return adaptersgrpc.TLSConfig{}, err
 	}
-	keyPEM, err := readPEMFile(EnvTLSKeyFile, keyPath)
+	keyPEM, err := readPEMFile(keyEnv, keyPath)
 	if err != nil {
 		return adaptersgrpc.TLSConfig{}, err
 	}
@@ -122,7 +140,7 @@ func tlsConfigFromPaths(certPath, keyPath, caPath string) (adaptersgrpc.TLSConfi
 	if caPath == "" {
 		return tlsCfg, nil
 	}
-	caPEM, err := readPEMFile(EnvTLSClientCAFile, caPath)
+	caPEM, err := readPEMFile(caEnv, caPath)
 	if err != nil {
 		return adaptersgrpc.TLSConfig{}, err
 	}
@@ -144,4 +162,19 @@ func readPEMFile(envName, path string) ([]byte, error) {
 // envTrue reports whether the named env var is set to "true" (case-insensitive).
 func envTrue(key string) bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
+}
+
+func (env EnvConfig) withDefaults() EnvConfig {
+	if strings.TrimSpace(env.Prefix) == "" {
+		env.Prefix = PlatformEnv.Prefix
+	}
+	if strings.TrimSpace(env.DefaultAddr) == "" {
+		env.DefaultAddr = PlatformEnv.DefaultAddr
+	}
+	return env
+}
+
+func (env EnvConfig) envName(suffix string) string {
+	env = env.withDefaults()
+	return strings.TrimRight(env.Prefix, "_") + "_" + suffix
 }

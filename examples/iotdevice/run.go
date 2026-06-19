@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/auth"
 
@@ -45,6 +46,10 @@ import (
 )
 
 const envDurableSinglePod = "GOCELL_IOTDEVICE_DURABLE_SINGLE_POD"
+
+func envTrue(key string) bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
+}
 
 // readyzVerboseHealthOpts gates /readyz?verbose (PR-A35 + PR269 round-3): the
 // health handler enforces a strict X-Readyz-Token check. When the operator sets

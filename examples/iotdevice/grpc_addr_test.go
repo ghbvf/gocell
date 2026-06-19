@@ -19,3 +19,12 @@ func TestGRPCAddrFromEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestGRPCEnvConfig(t *testing.T) {
+	if got := iotDeviceGRPCEnv.Prefix; got != "GOCELL_IOTDEVICE_GRPC" {
+		t.Fatalf("iotDeviceGRPCEnv.Prefix = %q, want GOCELL_IOTDEVICE_GRPC", got)
+	}
+	if got := iotDeviceGRPCEnv.DefaultAddr; got != defaultGRPCAddr {
+		t.Fatalf("iotDeviceGRPCEnv.DefaultAddr = %q, want %q", got, defaultGRPCAddr)
+	}
+}

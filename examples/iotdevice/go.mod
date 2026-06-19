@@ -3,6 +3,7 @@ module github.com/ghbvf/gocell/examples/iotdevice
 go 1.25.11
 
 require (
+	github.com/ghbvf/gocell/cellmodules v0.0.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -97,6 +98,8 @@ replace github.com/ghbvf/gocell/adapters/grpc => ../../adapters/grpc
 replace github.com/ghbvf/gocell/adapters/mqtt => ../../adapters/mqtt
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../../adapters/postgres
+
+replace github.com/ghbvf/gocell/cellmodules => ../../cellmodules
 
 replace github.com/ghbvf/gocell/generated => ../../generated
 
