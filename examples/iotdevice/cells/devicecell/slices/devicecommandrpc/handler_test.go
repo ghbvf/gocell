@@ -74,7 +74,8 @@ func newTestServerWith(t *testing.T, notifier *devicecmd.Notifier, extra ...devi
 		devicecmd.WithOnEnqueue(notifier.Notify),
 	}, extra...)
 	svc, err := devicecmd.NewService(
-		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd, opts...)
+		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd, opts...,
+	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}

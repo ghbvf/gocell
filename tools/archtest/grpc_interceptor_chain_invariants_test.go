@@ -1057,7 +1057,8 @@ func (g grpcWiringGuard) runProduction(t *testing.T) {
 					"%s: allowlist entry %q is STALE — no live reference observed. Either the funnel moved "+
 						"or the scanner regressed; drop or update the dead allowlist entry so it cannot become a "+
 						"silent bypass slot.",
-					g.ruleID, f),
+					g.ruleID, f,
+				),
 			})
 		}
 	}
@@ -1112,7 +1113,8 @@ var grpcWiringMintGuard = grpcWiringGuard{
 				"wire a chain that reads one while the adapter binds the other (#1752: every RPC silently "+
 				"attributed to the runtime sentinel). Obtain the wiring bundle from NewServerInterceptors(deps) "+
 				"instead. If this IS a new sanctioned funnel, add it to grpcWiringMintGuard.allowlist with rationale.",
-			name, rel)
+			name, rel,
+		)
 	},
 }
 
@@ -1131,7 +1133,8 @@ var grpcWiringBundleGuard = grpcWiringGuard{
 				"(e.g. lifted off another bundle via b.Registrar()) with options built from a DIFFERENT registrar "+
 				"— a mismatch the mint funnel cannot see (#1752). Obtain the bundle from NewServerInterceptors(deps) "+
 				"instead. If this IS a new sanctioned assembler, add it to grpcWiringBundleGuard.allowlist with rationale.",
-			rel)
+			rel,
+		)
 	},
 }
 

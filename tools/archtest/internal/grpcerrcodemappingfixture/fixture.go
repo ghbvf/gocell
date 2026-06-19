@@ -13,8 +13,9 @@
 package grpcerrcodemappingfixture
 
 import (
-	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"google.golang.org/grpc/codes"
+
+	"github.com/ghbvf/gocell/framework/pkg/errcode"
 )
 
 // nonExhaustiveToGRPCCode is the RED case: a toGRPCCode-style switch that
