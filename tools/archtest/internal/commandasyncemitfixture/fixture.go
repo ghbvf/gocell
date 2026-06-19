@@ -20,7 +20,7 @@ import (
 )
 
 // commandTopic is a const string in the reserved command namespace.
-const commandTopic = "command.remotecommand.v1"
+const commandTopic = "command.x.v1"
 
 // BadEmit constructs a command-namespace entry via the generic kout.Emit helper
 // without going through EmitAsync — the producer-side bypass.

@@ -23,7 +23,7 @@ import (
 
 // dispatchID is a bare command DispatchID a cell should never name directly —
 // the generated wrapper bakes it in.
-const dispatchID command.CommandID = "command.remotecommand.v1"
+const dispatchID command.CommandID = "command.x.v1"
 
 type payload struct {
 	Foo string `json:"foo"`

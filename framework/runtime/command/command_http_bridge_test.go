@@ -24,7 +24,7 @@ func TestEmitAsyncFromIdempotencyKey_SourcesCommandIDFromIdentity(t *testing.T) 
 	}
 	ctx := idemkey.WithRequestIdentity(context.Background(), id)
 	if err := EmitAsyncFromIdempotencyKey(ctx, clock.Real(), em,
-		CommandID("command.remotecommand.v1"), "device-7", struct{}{}); err != nil {
+		CommandID("command.x.v1"), "device-7", struct{}{}); err != nil {
 		t.Fatalf("EmitAsyncFromIdempotencyKey: %v", err)
 	}
 	if em.calls != 1 {

@@ -1,7 +1,7 @@
 package main
 
 // commandbus_roundtrip_test.go — end-to-end exercise of the generated command-bus
-// funnel for command.device-command.cmdremote.v1 (#1044 PR-1). This is the only test
+// funnel for command.remotecommand.v1 (#1044 PR-1). This is the only test
 // that drives the REAL generated package (cmdremote.Register / cmdremote.Dispatch /
 // cmdremote.Handler) through a runtime command.Registry, covering the three runtime
 // branches the contractgen golden test cannot execute: success invoke, no-handler

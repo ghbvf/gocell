@@ -4,7 +4,7 @@ package main
 //
 // Drives the full reactive loop: a device-registered event is "redelivered"
 // twice to the real devicebootstrap.HandleDeviceRegistered producer, which emits
-// a command.devicecommand.cmdremote.v1 entry per delivery through a writer-emitter
+// a command.remotecommand.v1 entry per delivery through a writer-emitter
 // into a FakeStore the relay polls. Because command_id == source event entry.ID()
 // is deterministic across redelivery, the two emitted command entries carry the
 // SAME command_id (different store ids); the relay's Claimer-wrapped dispatch
