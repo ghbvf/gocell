@@ -343,8 +343,6 @@ transport 均调用 `span.RecordError(err)`，携带完整的 Go TLS 错误字�
 | `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** for local development; startup still requires `GOCELL_SERVICE_SECRET` so the internal listener is service-token guarded in every mode. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly. |
 | `GOCELL_HTTP_HEALTH_ADDR` | Health listener bind address (`/healthz`, `/readyz`, `/metrics`) | `127.0.0.1:9091` | Same format as primary. Default is local/dev only. Use `:9091` or another Pod-reachable address for kubelet HTTP probes and Prometheus PodIP/Service scrapes. |
 | `GOCELL_HTTP_HEALTH_LOCAL_ONLY` | Explicit waiver for loopback health listener in `GOCELL_ADAPTER_MODE=real` | unset | Set to `1` only when health/metrics are reached from the same network namespace, such as local dev, same-Pod sidecar, or exec-probe style checks. |
-| `GOCELL_HTTP_DEVICE_MTLS_ADDR` | Device-mTLS (renew) listener bind address. Devices that have already enrolled connect here over mutual TLS to renew their certificate (RFC 7030 simplereenroll, `POST /api/v1/deviceidentity/renew`). | `127.0.0.1:9092` | No | Default is loopback-only (dev). In production, set to a routable address or place a TLS-terminating proxy in front; missing this variable causes the listener to bind on `127.0.0.1:9092` (loopback). Port must not collide with primary (`:8080`), internal (`:9090`), health (`:9091`), or gRPC (`:9095`) listeners. |
-
 All three addresses must be non-empty and distinct; startup fails fast otherwise.
 
 ## gRPC Listener (PR-11 #1154)

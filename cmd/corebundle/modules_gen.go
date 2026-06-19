@@ -93,9 +93,6 @@ func generatedBrokerCells() []string {
 // Derived by `gocell generate assembly`; `--verify` red-flags stale output (#2037).
 func generatedFrameworkServedContracts() []string {
 	return []string{
-		"http.deviceidentity.cacerts.v1",
-		"http.deviceidentity.enroll.v1",
-		"http.deviceidentity.renew.v1",
 		"http.devicestate.v1",
 	}
 }

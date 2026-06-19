@@ -2,7 +2,7 @@ id: http.deviceidentity.enroll.v1
 kind: http
 ownerCell: _framework
 consistencyLevel: L1
-lifecycle: active
+lifecycle: draft
 description: |
   Device identity enrollment — issues a signed certificate for a device CSR.
   ref: RFC 7030 §4.2 simpleenroll

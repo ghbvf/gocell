@@ -77,6 +77,18 @@ corebundle 经 `bootstrap.AuthorizerFromCells(cells)` 取 lazy `auth.Authorizer`
 解析一次 PDP，同时服务 HTTP（Authorize）/ gRPC（Authorize）/ cert 路径（AuthorizeAs）。run.go 把
 `authorizer.(auth.SubjectAuthorizer)` 注入 pdpauthz（断言失败 fail-fast）。
 
+### corebundle EST 接线 deferral（PR-9 #1905）
+
+**本 PR（PR-8b）仅交付框架能力**（`cellmodules/deviceidentity` Service/handlers/mtls.go、
+`SubjectDescriptor`、`pdpauthz`、archtests、softca softCA adapter）；enroll/renew/cacerts
+契约保持 draft、不接线进 corebundle assembly。原因：`certdeps.Resolve` 在 postgres 拓扑
+fail-closed（无 durable CA），而 `bootstrap.validateFrameworkServing` 要求 active 框架契约
+在**所有拓扑**都 serve（不支持「demo serve / postgres skip」），故 active + 接线必须等 PR-9
+#1905（durable CA + certdeps postgres 路径）同步落地才能满足该不变量。
+
+当前可运行状态：memory 拓扑（softca）框架能力齐备；postgres 拓扑 corebundle 启动正常
+（certdeps 不在依赖链上）。
+
 ### D6 — EST 前端鉴权三态
 
 - **enroll = enrollment-credential（应用层）**：route `auth.public:true`（跳 listener JWT）+ 包裹 middleware
@@ -94,15 +106,18 @@ softca 无 server-cert 签发路径。renew listener 需无条件 server cert（
 **启动期生成 ephemeral ECDSA P-256 自签 server cert**（loopback SAN，每次启动重生成、永不持久化），
 clientCAs = enroll signer 的 CA trust bundle（同一 CA 实例——设备 `/enroll` 拿到的证书正是 renew listener
 mTLS 接受的）。与 dev softca「重启换锚」临时态一致；设备验证 server 端为 out-of-band（dev skip-verify）。
-生产由 TLS-terminating 代理 / 真实 server cert 前置（`GOCELL_HTTP_DEVICE_MTLS_ADDR` 暴露 routable addr）。
+生产由 TLS-terminating 代理 / 真实 server cert 前置（device-mTLS listener 绑定地址通过环境变量配置，
+随 PR-9 #1905 corebundle 接线落地时注册到 env-vars.md）。
 
 ### D8 — cacerts response projection carve-out
 
-`http.deviceidentity.cacerts.v1`（GET，`{data:{trustBundle}}`）加入 `resourceReadProjectionCarveOut`
+`http.deviceidentity.cacerts.v1`（GET，`{data:{trustBundle}}`）保留在 `resourceReadProjectionCarveOut`
 （`RESOURCE-PROJECTION-COVERAGE-01`）。理由（同 `http.admin.health.cells.v1` #1860 范式）：trustBundle 是
 **public CA 材料**，unauthenticated、非 tenant-scoped、无 PII、无可掩码列轴——column-masking funnel
 （responseProjection，FieldMask 来自 PDP 决策）对一个无 PDP 决策的公开端点是 dishonest 的恒等掩码。
 sibling devicestate/status（device:read 鉴权、tenant-scoped）则正确标 `responseProjection: true`。
+注：`RESOURCE-PROJECTION-COVERAGE-01` scan 不按 lifecycle 过滤，draft 合约仍被扫描；cacerts 现为 draft，
+carve-out 保留以防 scan 误报，待 PR-9 #1905 active 化时移除（彼时该契约应无需 responseProjection 或补标）。
 
 ## 威胁矩阵
 
@@ -131,9 +146,11 @@ PR-10a（`202606121400-1348`）建立「subject 从 ctx principal 派生 + Requi
 - **正向**：cert 授权获得「接口 + 内置默认（PDP-backed adapter）+ 可换接缝」可消费性模型（与 Signer 对称）；
   任意 cell（含外部）+ certlifecycle 复用同一 PDP，policy 不漂移；EST 前端开箱可用。
 - **代价**：新增 1 sealed 类型 + 1 segregated 接口 + 1 adapter 包 + 2 archtest（funnel + 残差边界）+
-  device-mTLS listener + 1 projection carve-out。
-- **后续**：证书行持久化 / cert-issued&revoked emit（PR-9 #1905）；certlifecycle sweep 接线（PR-7/9/10）；
-  status/revoke 端点实现（契约仍 draft）；device-mTLS 真实 server cert / mesh 终结（生产化）。
+  1 projection carve-out。device-mTLS listener + corebundle EST 接线延到 PR-9。
+- **后续**：corebundle EST 接线 + 契约 active 化 + device-mTLS listener（PR-9 #1905，需 certdeps
+  postgres 路径 + durable CA）；证书行持久化 / cert-issued&revoked emit（同 PR-9）；
+  certlifecycle sweep 接线（PR-7/9/10）；status/revoke 端点实现（契约仍 draft）；
+  device-mTLS 真实 server cert / mesh 终结（生产化）。
 
 ## 参考
 

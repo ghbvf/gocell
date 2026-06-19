@@ -13,25 +13,13 @@ cells:
   - _framework
 # Acceptance curation for JOURNEY-CONTRACT-EXISTENCE-01: http.devicestate.v1 is
 # the first active framework-owned contract (PR-8a / #2037), served via the
-# bootstrap framework RouteGroup. The EST synchronous issuance front-end
-# (enroll / renew / cacerts) active-izes here (PR-8b / #1904); revoke + the
-# certificate status query active-ize in their own PRs (PR-9/#1905) and extend
-# this journey further.
+# bootstrap framework RouteGroup. EST写路径 active 化随 PR-9 #1905 落地。
 contracts:
   - http.devicestate.v1
-  - http.deviceidentity.enroll.v1
-  - http.deviceidentity.renew.v1
-  - http.deviceidentity.cacerts.v1
 passCriteria:
   - text: 设备状态查询经 device:read 鉴权放行后返回 200；无 presence 后端时诚实报告 state=unknown + observedAt（判定时刻），绝不臆造 online/offline
     mode: manual
   - text: 未携带凭据返回 401，凭据缺 device:read 权限返回 403（fail-closed）
     mode: manual
   - text: 声明 active 的框架契约若未被 bootstrap 框架 RouteGroup 挂载，启动期 fail-fast（DEAD-CONTRACT 框架版）
-    mode: manual
-  - text: 设备持 enrollment-credential 调 POST /enroll 返回 201 + 证书（base64 DER）+ chain（PKCS#7 certs-only）；无凭据 401、setup-bootstrap 冒充 403、越权 SAN 4xx
-    mode: manual
-  - text: 设备以现证书经 device-mTLS listener 调 POST /renew 返回 200 + 新证书；身份从客户端证书 SPIFFE URI SAN 恢复（tenant+device，无 registry）；缺 peer 证书 TLS 握手拒
-    mode: manual
-  - text: GET /cacerts 无需鉴权（RFC 7030 信任根分发，鉴权前置悖论）返回 200 + trustBundle（base64 PKCS#7 certs-only）；CA 后端不可达返回 503
     mode: manual

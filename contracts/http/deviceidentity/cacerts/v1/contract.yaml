@@ -2,7 +2,7 @@ id: http.deviceidentity.cacerts.v1
 kind: http
 ownerCell: _framework
 consistencyLevel: L0
-lifecycle: active
+lifecycle: draft
 description: |
   Device identity CA trust distribution — returns the issuing CA trust bundle so a
   device can establish trust BEFORE it enrolls. The bundle is a PKCS#7 certs-only

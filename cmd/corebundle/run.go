@@ -122,11 +122,10 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		opts = append(opts, bootstrap.WithPrimaryAuthorizer(authorizer))
 
 		// Serving options: the mandatory gRPC listener + framework-owned HTTP serving
-		// (deviceserving + device-identity EST enroll/renew/cacerts) + the device-mTLS
-		// renew listener. Grouped in buildServingOptions to keep this closure within
-		// the cognitive-complexity budget; the same lazy PDP feeds HTTP, gRPC, and the
-		// cert path.
-		servingOpts, servErr := buildServingOptions(ctx, compShared, asm.CellIDs(), authorizer)
+		// (deviceserving / devicestate.v1 only). Grouped in buildServingOptions to
+		// keep this closure within the cognitive-complexity budget.
+		// EST enroll/renew/cacerts wiring deferred to PR-9 #1905.
+		servingOpts, servErr := buildServingOptions(compShared, asm.CellIDs(), authorizer)
 		if servErr != nil {
 			return nil, servErr
 		}
@@ -152,11 +151,9 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 }
 
 // buildServingOptions builds the mandatory gRPC listener + framework-owned HTTP
-// serving (deviceserving + device-identity EST enroll/renew/cacerts) + the
-// device-mTLS renew listener options for the corebundle assembly. It is factored
-// out of runCorebundle's runtime-options closure to keep that closure within the
-// cognitive-complexity budget; the SAME lazy PDP (authorizer) feeds HTTP, gRPC,
-// and the cert path.
+// serving (deviceserving / devicestate.v1 only) options for the corebundle
+// assembly. It is factored out of runCorebundle's runtime-options closure to keep
+// that closure within the cognitive-complexity budget.
 //
 // gRPC (PR-11 #1154): accesscore serves grpc.auth.session.verify.v1 on
 // cell.PrimaryListener unconditionally, so a gRPC listener with that ref MUST be
@@ -167,21 +164,13 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 // Framework HTTP serving (ownerCell: _framework, ADR 202606130635-1939): the
 // must-serve expectation rides on the assembly (generatedFrameworkServedContracts);
 // bootstrap phase0 validateFrameworkServing fail-fasts on an unwired declared
-// framework contract or an omitted option (#2348 review F1 / #2037 / PR-8b #1904).
+// framework contract or an omitted option (#2348 review F1 / #2037).
+// EST enroll/renew/cacerts wiring deferred to PR-9 #1905 (certdeps postgres path).
 func buildServingOptions(
-	ctx context.Context,
 	compShared *composition.SharedDeps,
 	cellIDClosedSet []string,
 	authorizer auth.Authorizer,
 ) ([]bootstrap.Option, error) {
-	deviceRoutes, deviceMTLSOpt, err := deviceIdentityServingOptions(
-		ctx, compShared.Clock, compShared.Topology, compShared.JWTVerifier, authorizer,
-		deviceMTLSAddrFromEnv(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("device-identity serving wiring: %w", err)
-	}
-
 	grpcCollector, err := obmetrics.NewGRPCProviderCollector(compShared.MetricsProvider, obmetrics.ProviderCollectorConfig{})
 	if err != nil {
 		return nil, fmt.Errorf("build grpc metrics collector: %w", err)
@@ -204,14 +193,11 @@ func buildServingOptions(
 		return nil, fmt.Errorf("build grpc server: %w", err)
 	}
 
-	frameworkRoutes := append(
-		[]bootstrap.FrameworkServedRoute{deviceserving.NewService(compShared.Clock).Route()},
-		deviceRoutes...,
-	)
 	return []bootstrap.Option{
 		bootstrap.WithGRPCListener(cell.PrimaryListener, grpcServer, grpcAddr),
-		bootstrap.WithFrameworkHTTPServing(frameworkRoutes),
-		deviceMTLSOpt,
+		bootstrap.WithFrameworkHTTPServing([]bootstrap.FrameworkServedRoute{
+			deviceserving.NewService(compShared.Clock).Route(),
+		}),
 	}, nil
 }
 

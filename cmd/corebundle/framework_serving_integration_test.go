@@ -6,7 +6,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -94,107 +93,6 @@ func TestFrameworkServing_Smoke_DevicestateReturns401WhenNoToken(t *testing.T) {
 			"(WithFrameworkHTTPServing missing or phase5 mount failed). "+
 			"401 proves the route is mounted and the device:read PDP gate fired. "+
 			"Covers #2348 review F2: full bootstrap must successfully wire framework serving.")
-}
-
-// TestFrameworkServing_Smoke_DeviceIdentityRoutesMounted boots the full
-// corebundle assembly (including device-identity EST serving wired by PR-8b
-// #1904) and asserts two smoke sub-cases on the PrimaryListener:
-//
-// (a) GET /api/v1/deviceidentity/cacerts → 200 + body contains "trustBundle"
-//
-//	The cacerts route is public (RFC 7030 §4.1 unauthenticated CA trust
-//	distribution). A 200 with the expected JSON field proves the route is
-//	mounted AND the softca signer produced a trust bundle. A 404 would
-//	indicate WithFrameworkHTTPServing was not wired or the route was never
-//	registered.
-//
-// (b) POST /api/v1/deviceidentity/enroll (no Authorization header) → 401
-//
-//	The enroll route is public at the listener level (auth.public:true skips
-//	the JWT gate) but requires an application-layer enrollment-credential bearer
-//	token. A missing header triggers a typed 401 response from the handler's
-//	EnrollmentCredentialVerifier middleware. A 404 would indicate the route was
-//	never mounted; a 200 would indicate the application-layer auth gate is
-//	broken.
-//
-// Both sub-cases use the same bootstrapped app instance from
-// buildBootstrapFromShared, which already wires enroll/cacerts (PrimaryListener)
-// and renew (DeviceMTLSListener) as part of deviceIdentityServingOptions.
-func TestFrameworkServing_Smoke_DeviceIdentityRoutesMounted(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-
-	primaryLn, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	healthLn := newCorebundleLocalListener(t)
-	internalLn := newCorebundleLocalListener(t)
-
-	app, err := buildBootstrapFromShared(
-		t, shared, primaryLn,
-		withCorebundleTestInternalListener(t, internalLn),
-		bootstrap.WithListener(
-			cell.HealthListener,
-			healthLn.Addr().String(),
-			[]kauth.ListenerAuth{kauth.AuthNone{}},
-			bootstrap.WithListenerNet(healthLn),
-		),
-	)
-	require.NoError(t, err, "buildBootstrapFromShared must succeed: device-identity serving is correctly wired")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() { errCh <- app.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-errCh:
-		case <-time.After(testtime.SelectShutdown):
-			t.Error("bootstrap did not shut down in time")
-		}
-	})
-
-	waitForHealthy(t, healthLn.Addr().String())
-
-	base := "http://" + primaryLn.Addr().String()
-
-	// (a) GET /api/v1/deviceidentity/cacerts — public, no token required.
-	// Expected: 200 OK with a JSON body containing a "trustBundle" field.
-	// A 404 would indicate the cacerts route was never mounted via
-	// WithFrameworkHTTPServing.
-	cacertsResp, err := http.Get(base + "/api/v1/deviceidentity/cacerts")
-	require.NoError(t, err)
-	defer cacertsResp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, cacertsResp.StatusCode,
-		"GET /api/v1/deviceidentity/cacerts without a token must return 200 OK "+
-			"(public RFC 7030 §4.1 CA trust distribution). "+
-			"404 would indicate the cacerts framework route was never mounted.")
-
-	assert.Contains(t, cacertsResp.Header.Get("Content-Type"), "application/json",
-		"cacerts response must be JSON")
-
-	// Read up to 4 KiB — sufficient to find the trustBundle field.
-	buf := make([]byte, 4096)
-	n, _ := cacertsResp.Body.Read(buf)
-	body := string(buf[:n])
-	assert.Contains(t, body, "trustBundle",
-		"cacerts response body must contain 'trustBundle' field (RFC 7030 §4.1 CA material). "+
-			"Absence means the signer did not produce a trust bundle or the response schema changed.")
-
-	// (b) POST /api/v1/deviceidentity/enroll — no Authorization header.
-	// Expected: 401 Unauthorized (application-layer enrollment-credential gate fires).
-	// A 404 would indicate the enroll route was never mounted.
-	// A 200 would indicate the application-layer auth gate is broken.
-	enrollResp, err := http.Post(base+"/api/v1/deviceidentity/enroll", "application/json",
-		strings.NewReader(`{"csr":"dGVzdA==","deviceId":"11111111-1111-1111-1111-111111111111"}`))
-	require.NoError(t, err)
-	defer enrollResp.Body.Close()
-
-	assert.Equal(t, http.StatusUnauthorized, enrollResp.StatusCode,
-		"POST /api/v1/deviceidentity/enroll without Authorization header must return 401. "+
-			"401 proves: (1) the enroll route is mounted on PrimaryListener, "+
-			"(2) the EnrollmentCredentialVerifier middleware fired and rejected the missing bearer token. "+
-			"404 would mean the route was never registered; 200 would mean auth gate is broken.")
 }
 
 // TestFrameworkServing_Regression_OmitOptionCausesStartupFailFast verifies

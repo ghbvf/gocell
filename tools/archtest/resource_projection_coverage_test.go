@@ -110,6 +110,8 @@ var resourceReadProjectionCarveOut = map[string]struct{}{
 	// endpoint has no PDP decision, so routing it through the funnel would be a
 	// dishonest identity mask. Legitimately exempt per the rule's "genuinely
 	// non-maskable primitive" branch (same shape as #1860 above).
+	// Contract is currently draft (corebundle wiring deferred to PR-9 #1905);
+	// carve-out remains because this scan does not filter by lifecycle.
 	// Carve-out rationale + threat model:
 	// docs/architecture/202606192340-1904-adr-explicit-subject-pdp-est-front.md §D8.
 	"http.deviceidentity.cacerts.v1": {},

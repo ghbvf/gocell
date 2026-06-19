@@ -2,7 +2,7 @@ id: http.deviceidentity.renew.v1
 kind: http
 ownerCell: _framework
 consistencyLevel: L1
-lifecycle: active
+lifecycle: draft
 description: |
   Device identity certificate renewal — reissues a certificate for an existing device.
   ref: RFC 7030 §4.2 simplereenroll
