@@ -3,13 +3,15 @@ package authorizationdecide
 // INVARIANT: BASELINE-OWNER-RULE-TENANT-FREEZE-01
 //
 // BASELINE-OWNER-RULE-TENANT-FREEZE-01 freezes the baseline grant surface of the
-// owner-scoped actions (user:read, user:write, role:read) so that tenant can never become
+// owner-scoped actions (user:read, user:write, role:read, access:decide, device:read —
+// authoritative set: ownerScopedBaselineSelfRules) so that tenant can never become
 // an owner-grant factor. It enforces two complementary properties:
 //
 //  1. Each owner-scoped SELF rule (baseline-user-read-self, baseline-user-write-self,
-//     baseline-role-read-self) is an EffectAllow rule granting EXACTLY its one action and
-//     carrying EXACTLY the ownership condition subject.sub == resource.id (Source=SourceSubject,
-//     Key="sub", Operator=OpEqualsAttr, RHSSource=SourceResource, RHSKey="id", no static Values).
+//     baseline-role-read-self, baseline-access-decide-self, baseline-device-read-self) is an
+//     EffectAllow rule granting EXACTLY its one action and carrying EXACTLY the ownership
+//     condition subject.sub == resource.id (Source=SourceSubject, Key="sub",
+//     Operator=OpEqualsAttr, RHSSource=SourceResource, RHSKey="id", no static Values).
 //  2. The CLOSED SET of EffectAllow rules granting each owner-scoped action is EXACTLY two —
 //     the one frozen owner rule (self access) and the one admin rule (subject.roles ∈
 //     {admin, super-admin}) — and nothing else.
@@ -120,6 +122,7 @@ var ownerScopedBaselineSelfRules = map[string]string{
 	"baseline-user-write-self":    authz.PermUserWrite().String(),
 	"baseline-role-read-self":     authz.PermRoleRead().String(),
 	"baseline-access-decide-self": authz.PermAccessDecide().String(),
+	"baseline-device-read-self":   authz.PermDeviceRead().String(),
 }
 
 // conditionMatches reports field-by-field equality of two abac.Conditions, including the

@@ -75,15 +75,20 @@ func (s *Service) Devicestate(_ context.Context, req *devicestate.Request) (devi
 // is forwarded to the PDP as the ABAC `resource`, so the engine decides per-device
 // ownership (baseline owner rule `subject.sub == resource.id`) rather than an
 // all-or-nothing coarse gate. This is the documented PermDeviceRead() shape and
-// matches the sibling devicecommand gate (#2348 F3 / #2351). The composition root
-// passes generatedFrameworkServedContracts() as the must-serve expectation set
-// alongside this route; bootstrap reconciles the two at startup.
+// matches the sibling devicecommand gate (#2348 F3). The composition root passes
+// generatedFrameworkServedContracts() as the must-serve expectation set alongside
+// this route; bootstrap reconciles the two at startup.
 //
-// The platform (corecells/accesscore) PDP baseline grants no device:read rule yet,
-// so on corebundle the endpoint fail-closes to deny until a tenant policy (or the
-// presence-backend PR) supplies a device:read grant — the safe default for an
-// MDM/zero-trust boundary. The device-ownership data-layer (RowScope/tenant
-// isolation against real presence data) is tracked in #2351.
+// The platform (corecells/accesscore) PDP baseline grants device:read via two rules
+// (#2351): device-SELF ownership (the device whose id == the path id reads its OWN
+// state, subject.sub == resource.id) and admin/super-admin (fleet read). A non-owner
+// non-admin is PDP-denied. Enabling the grant before a real presence backend is safe:
+// this handler always returns state "unknown", so there is no existence/state oracle
+// to enumerate — the ownership model is established and frozen now, leaving only the
+// data-layer RowScope/typed-tenant isolation (against real presence data) for the
+// presence backend (#1904/#1905); TenantID stays nil until a device→tenant binding
+// source exists. Delegated user-owns-device ownership (subject.sub == resource.owner
+// via a device→owner PIP lookup) likewise lands with that device registry.
 func (s *Service) Route() bootstrap.FrameworkServedRoute {
 	h := devicestate.NewHandler(s, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{

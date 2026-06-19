@@ -62,11 +62,14 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   canonical 化的 path-param 转发给 PDP 作 `resource`，由 baseline ownership 规则
   `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
   短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
-  delegated ownership（owner ≠ id，如设备）用 `subject.sub == resource.owner`（owner 由 PIP lookup 供）。
+  delegated ownership（owner ≠ id，如 user 拥有 device）用 `subject.sub == resource.owner`（owner 由 PIP lookup
+  供）；device 读**自身**状态仍是 device-self `subject.sub == resource.id`（framework-owned devicestate，#2351；
+  delegated user-owns-device 待 device registry/PIP）。
   owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
   owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
-  精确集（identitymanage / rbaccheck）与盲区见该 archtest godoc。baseline owner-scoped action
-  （user:read/write、role:read）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
+  精确集（identitymanage / rbaccheck / framework-owned deviceserving—devicestate #2351，scan 含 `./cellmodules/...`）
+  与盲区见该 archtest godoc。baseline owner-scoped action（user:read/write、role:read、device:read #2351；
+  authoritative set 见 freeze test）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
   冻结：① 每条 owner self 规则须 = EffectAllow + 精确单 action + frozen owner condition
   （`subject.sub == resource.id`）；② 每个 owner action 的 allow 规则闭集恰为 `{1 owner, 1 admin}`。真正的
   owner→tenant widen 向量（PDP 跨规则 OR）——**新增一条 tenant 匹配 allow 规则**、替换 owner 条件、或扩

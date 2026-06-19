@@ -35,6 +35,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cellmodules/deviceserving"
 	accesscore "github.com/ghbvf/gocell/corecells/accesscore"
 	auditcore "github.com/ghbvf/gocell/corecells/auditcore"
 	configcore "github.com/ghbvf/gocell/corecells/configcore"
@@ -136,6 +137,12 @@ func startCorebundlePDPApp(t *testing.T) string {
 	asm := assembly.New(clock.Real(), assembly.Config{
 		ID:             "pdp-test",
 		DurabilityMode: outbox.DurabilityDemo,
+		// Declare the framework-owned must-serve set so this shared PDP harness is
+		// production-faithful (run.go wires framework serving): the devicestate route
+		// is wired below via WithFrameworkHTTPServing, and phase0 validateFrameworkServing
+		// reconciles the two. This lets TestABACPDPGatesDevicestate exercise the
+		// device:read baseline ownership rule (#2351) on the same app the other PDP tests use.
+		FrameworkContracts: generatedFrameworkServedContracts(),
 	})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
@@ -174,6 +181,12 @@ func startCorebundlePDPApp(t *testing.T) string {
 		// gRPC listener: mandatory because accesscore registers
 		// grpc.auth.session.verify.v1 unconditionally (PR-11 #1154).
 		corebundleTestGRPCListenerOption(t, cells, asm.CellIDs()),
+		// Framework-owned HTTP serving (devicestate) — mirrors production run.go and
+		// satisfies the FrameworkContracts must-serve set declared above. Lets the
+		// device:read PDP gate be exercised end-to-end (#2351, TestABACPDPGatesDevicestate).
+		bootstrap.WithFrameworkHTTPServing(
+			[]bootstrap.FrameworkServedRoute{deviceserving.NewService(clock.Real()).Route()},
+		),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

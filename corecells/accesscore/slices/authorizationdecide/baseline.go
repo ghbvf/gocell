@@ -186,6 +186,34 @@ var builtinBaseline = []abac.Rule{
 		Action:     []string{authz.PermAccessDecide().String()},
 		Conditions: []abac.Condition{adminOrSuperAdmin()},
 	},
+	// device-ownership baseline (#2351, presence-backend prerequisite): device:read
+	// gates the framework-owned http.devicestate.v1 serving handler
+	// (auth.RequirePermissionForResource("id", PermDeviceRead()), cellmodules/deviceserving).
+	// The model is device-SELF ownership (subject.sub == resource.id) — the device whose
+	// id equals the path id reads its OWN state — NOT the delegated user-owns-device model
+	// (subject.sub == resource.owner) which would need a device→owner PIP lookup the platform
+	// does not have yet (that lands with the presence backend / device registry). device-self
+	// matches the existing device family (devicecommand consume gate, iotdevice example) and
+	// the frozen owner condition, so the self rule below is shape-identical to user:read-self.
+	// Enabling the grant now (before real presence data) is safe: the handler always returns
+	// state "unknown", so there is no existence/state oracle to enumerate — it lets the
+	// ownership model be tested + frozen before data lands, leaving the presence PR to wire
+	// only the data-layer RowScope/tenant isolation. Closed {owner, admin} surface, frozen by
+	// BASELINE-OWNER-RULE-TENANT-FREEZE-01 (baseline-device-read-self is registered there).
+	{
+		ID:         "baseline-device-read-admin",
+		Name:       "Baseline: allow admin/super-admin to read any device's presence state",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceRead().String()},
+		Conditions: []abac.Condition{adminOrSuperAdmin()},
+	},
+	{
+		ID:         "baseline-device-read-self",
+		Name:       "Baseline: allow a device to read its own presence state (subject.sub == resource.id)",
+		Effect:     authz.EffectAllow,
+		Action:     []string{authz.PermDeviceRead().String()},
+		Conditions: []abac.Condition{subjectIsResource()},
+	},
 }
 
 // subjectIsResource returns the cross-attribute ABAC condition that checks
@@ -242,8 +270,10 @@ func adminOrSuperAdmin() abac.Condition {
 // admin/super-admin; + 3 identity-ownership rules (#1977 Batch B:
 // user:read/write, role:read for subject.sub == resource.id); + 2 access:decide
 // rules (#1863: self subject.sub == resource.id + admin) for the PDP
-// self-introspection endpoint. Each rule is action-scoped so a baseline allow for
-// one permission never leaks to another.
+// self-introspection endpoint; + 2 device:read rules (#2351: device-self
+// subject.sub == resource.id + admin) for the framework-owned devicestate serving
+// handler (presence-backend prerequisite). Each rule is action-scoped so a baseline
+// allow for one permission never leaks to another.
 //
 // Returns the package-level builtinBaseline slice directly (no allocation).
 func builtinBaselineRules() []abac.Rule {

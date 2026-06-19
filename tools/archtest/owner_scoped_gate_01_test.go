@@ -3,8 +3,10 @@
 // INVARIANT: OWNER-SCOPED-GATE-EXACT-SET-01
 //
 // OWNER-SCOPED-GATE-EXACT-SET-01 freezes the set of owner-scoped route gates in
-// accesscore AND the iotdevice/todoorder examples (the latter added by PR-10d
-// #1894, which migrated their auth.SelfOr gates to RequirePermissionForResource).
+// accesscore, the iotdevice/todoorder examples (the latter added by PR-10d
+// #1894, which migrated their auth.SelfOr gates to RequirePermissionForResource),
+// AND the composition-root cellmodules/deviceserving framework-owned devicestate
+// gate (#2351 — the first owner-scoped gate frozen outside corecells/examples).
 // An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
 // one of the two sanctioned owner-scoped gate shapes:
@@ -67,9 +69,10 @@
 //     contract serve tests + e2e cover wiring.
 //   - Only the named handler files are scanned (accesscore identitymanage/rbaccheck/
 //     authorizationdecide + examples ordercell/cell.go, devicecell/cell.go,
-//     devicecommand/handler.go); a NEW owner-scoped endpoint in a new file must be added
-//     to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple
-//     check forces this consciously for the already-guarded files). A RequirePermissionForSelf
+//     devicecommand/handler.go + the composition-root cellmodules/deviceserving/service.go,
+//     #2351); a NEW owner-scoped endpoint in a new file must be added to
+//     ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple check
+//     forces this consciously for the already-guarded files). A RequirePermissionForSelf
 //     callsite in an unlisted file is likewise not frozen.
 package archtest
 
@@ -113,6 +116,14 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	// r.URL.Path instead of the subject, breaking the access:decide self rule → this
 	// triple goes MISSING → CI red.
 	"authorizationdecide|self|PermAccessDecide": {},
+	// #2351: the framework-owned http.devicestate.v1 serving gate lives in the
+	// composition-root layer (cellmodules/deviceserving/service.go), not a cell handler —
+	// the first owner-scoped gate frozen outside corecells/examples (scan scope widened to
+	// ./cellmodules/... below). Device-SELF ownership (subject.sub == resource.id), backed
+	// by the accesscore baseline-device-read-self rule. A regression to plain
+	// auth.RequirePermission would forward r.URL.Path, breaking per-device ownership and
+	// re-opening the cross-device enumeration vector → this triple goes MISSING → CI red.
+	"deviceserving|id|PermDeviceRead": {},
 }
 
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
@@ -137,6 +148,12 @@ func ownerScopedGateHandlerKey(rel string) string {
 		return "iotdevice-device"
 	case strings.HasSuffix(rel, "slices/devicecommand/handler.go"):
 		return "devicecommand"
+	// #2351: the framework-owned devicestate serving gate in the composition-root layer
+	// (cellmodules/deviceserving/service.go Route()), gated by
+	// RequirePermissionForResource("id", PermDeviceRead()). Scanned because the scan scope
+	// includes ./cellmodules/... (see TestOwnerScopedGate_ExactSet_01).
+	case strings.HasSuffix(rel, "deviceserving/service.go"):
+		return "deviceserving"
 	default:
 		return ""
 	}
@@ -221,7 +238,7 @@ func TestOwnerScopedGate_ExactSet_01(t *testing.T) {
 	}
 
 	collected := map[string]struct{}{}
-	_ = Run(t, Typed(TypedOpts{}, []string{"./corecells/...", "./examples/..."}),
+	_ = Run(t, Typed(TypedOpts{}, []string{"./corecells/...", "./examples/...", "./cellmodules/..."}),
 		func(p *Pass) []Diagnostic {
 			if p.TypesInfo == nil || p.Fset == nil {
 				return nil
