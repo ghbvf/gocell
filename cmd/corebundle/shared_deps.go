@@ -70,13 +70,16 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// demo branch — cmd/corebundle must not import runtime/eventbus directly
 	// (depguard corebundle-no-direct-eventbus, COREBUNDLE-EVENTBUS-FUNNEL-01).
 	//
-	// #2152 PR-2: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL, falling
-	// back to GOCELL_AMQP_URL) for the broker-requiring cells (= the postgres cell
-	// set), then deduped by eventtransport. Colocated assemblies share one
-	// GOCELL_AMQP_URL → one connection (behavior-preserving); distinct per-cell URLs
-	// are fail-closed (egress-only — a single subscriber cannot consume N brokers).
-	brokerCells := make(map[string]string, len(generatedPostgresCells()))
-	for _, cellID := range generatedPostgresCells() {
+	// #2152 PR-2 / #2365: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL,
+	// falling back to GOCELL_AMQP_URL) for the broker cells — the codegen-derived set
+	// of cells that produce or consume an amqp-transported contract
+	// (generatedBrokerCells, #2365; previously reused generatedPostgresCells, which
+	// conflated "needs DB" with "touches the broker"). Then deduped by eventtransport.
+	// Colocated assemblies share one GOCELL_AMQP_URL → one connection (behavior-
+	// preserving); distinct per-cell URLs are fail-closed (egress-only — a single
+	// subscriber cannot consume N brokers).
+	brokerCells := make(map[string]string, len(generatedBrokerCells()))
+	for _, cellID := range generatedBrokerCells() {
 		brokerCells[cellID] = LoadBrokerURL(strings.ToUpper(cellID))
 	}
 	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: brokerCells})

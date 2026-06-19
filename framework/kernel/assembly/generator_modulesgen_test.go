@@ -455,6 +455,98 @@ func TestGenerateModulesGen_CompositionForm_PartialPostgresCells(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// generatedBrokerCells — codegen function tests (#2365 broker-cell derivation)
+// ---------------------------------------------------------------------------
+
+// addBrokerTestContract registers a contract with an explicit resolved Transports
+// set. The parser guarantees every contract has a non-empty Transports after
+// parsing (event/command default to amqp — defaultTransportsForKind); the hand-
+// built test project honors that invariant explicitly.
+func addBrokerTestContract(p *metadata.ProjectMeta, id, kind, transport string) {
+	p.Contracts[id] = &metadata.ContractMeta{ID: id, Kind: kind, Transports: []string{transport}}
+}
+
+// addBrokerTestSlice registers a single-usage slice belonging to cellID that uses
+// contractID in the given role.
+func addBrokerTestSlice(p *metadata.ProjectMeta, sliceID, cellID, contractID, role string) {
+	p.Slices[sliceID] = &metadata.SliceMeta{
+		ID:             sliceID,
+		BelongsToCell:  cellID,
+		ContractUsages: []metadata.ContractUsage{{Contract: contractID, Role: role}},
+	}
+}
+
+// brokerCellsFnBody returns the source span of the generatedBrokerCells() function
+// body so assertions can scope to it (cell IDs also appear in module imports).
+func brokerCellsFnBody(t *testing.T, content string) string {
+	t.Helper()
+	idx := indexOfStr(content, "func generatedBrokerCells()")
+	if idx < 0 {
+		t.Fatal("generatedBrokerCells() not found")
+	}
+	body := content[idx:]
+	end := strings.Index(body, "}")
+	if end < 0 {
+		t.Fatal("generatedBrokerCells() body not closed")
+	}
+	return body[:end+1]
+}
+
+// TestGenerateModulesGen_CompositionForm_BrokerCellsEmitted verifies the composition
+// form emits generatedBrokerCells() listing the cells that produce OR consume an
+// amqp-transported (broker) contract, sorted, and excluding http-only cells. A cell
+// is a broker cell by its contractUsages' contract transport — NOT by a role subset
+// (publish AND subscribe both count) nor by cell.yaml requires.
+func TestGenerateModulesGen_CompositionForm_BrokerCellsEmitted(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// One amqp-transported event contract + one non-broker http contract.
+	addBrokerTestContract(project, "event.session.created.v1", "event", "amqp")
+	addBrokerTestContract(project, "http.auth.login.v1", "http", "http")
+	// accesscore PUBLISHES the event → broker cell.
+	addBrokerTestSlice(project, "sessionlogin", "accesscore", "event.session.created.v1", "publish")
+	// auditcore SUBSCRIBES the event → broker cell (proves subscribe counts too).
+	addBrokerTestSlice(project, "auditappend", "auditcore", "event.session.created.v1", "subscribe")
+	// configcore only SERVES http → NOT a broker cell (soundness / anti-vacuity).
+	addBrokerTestSlice(project, "configserve", "configcore", "http.auth.login.v1", "serve")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	assert.Contains(t, content, "func generatedBrokerCells() []string")
+	body := brokerCellsFnBody(t, content)
+	assert.Contains(t, body, `"accesscore"`, "publisher of an amqp event is a broker cell")
+	assert.Contains(t, body, `"auditcore"`, "subscriber of an amqp event is a broker cell")
+	assert.NotContains(t, body, `"configcore"`, "http-only cell is NOT a broker cell")
+	assert.Less(t, strings.Index(body, `"accesscore"`), strings.Index(body, `"auditcore"`),
+		"broker cells must be sorted (accesscore before auditcore)")
+}
+
+// TestGenerateModulesGen_CompositionForm_NoBrokerCells verifies generatedBrokerCells()
+// is ALWAYS emitted (like generatedPostgresCells) and returns nil when no cell uses
+// an amqp-transported contract.
+func TestGenerateModulesGen_CompositionForm_NoBrokerCells(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// Only a non-broker http contract; no amqp usage anywhere.
+	addBrokerTestContract(project, "http.auth.login.v1", "http", "http")
+	addBrokerTestSlice(project, "configserve", "configcore", "http.auth.login.v1", "serve")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	out, err := gen.GenerateModulesGen("corebundle")
+	require.NoError(t, err)
+	content := string(out)
+
+	assert.Contains(t, content, "func generatedBrokerCells() []string")
+	assert.Contains(t, brokerCellsFnBody(t, content), "return nil",
+		"no amqp-transported usage → broker cells nil")
+}
+
+// ---------------------------------------------------------------------------
 // generatedFrameworkServedContracts — codegen function tests (#2037)
 // ---------------------------------------------------------------------------
 
