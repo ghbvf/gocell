@@ -424,6 +424,10 @@ linters:
             - github.com/ghbvf/gocell/cells
             - github.com/ghbvf/gocell/corecells
             - github.com/ghbvf/gocell/generated/contracts
+            # externalcells satellite modules (e.g. gocell-mdm) follow the same
+            # cells-isolation discipline — each satellite's cells/ subtree may
+            # import within the same satellite (intra-module), not across satellites.
+            - github.com/ghbvf/gocell-mdm
             - github.com/google/uuid
             - github.com/jackc/pgx
             - golang.org/x/crypto

@@ -1,16 +1,15 @@
 // Command mdmd is the hand-written composition root for the external MDM cell
 // module (Operator-SDK mode, ADR 202605281200). It dogfoods the public
 // runtime/composition API — composition.New(...).With(...).Build(...) — assembling
-// the (PR-0 empty) enrollcell in the demo / in-memory topology with zero external
-// infrastructure, serving green /healthz + /readyz.
+// the enrollcell in the demo / in-memory topology with zero external infrastructure,
+// serving green /healthz + /readyz + the http.deviceidentity.status.v1 endpoint.
 //
-// This module is NOT in the gocell root go.work; it consumes gocell via go.mod
-// `replace` directives plus a one-line `use .` go.work that roots it as its own
-// workspace. Because that local go.work shadows the gocell root go.work, `go
-// build`/`go test` run from this directory need NO GOWORK=off. (A bare repo-root
-// `go test ./...` still excludes this module — it is absent from the root go.work.)
-// #1722 splits this into its own repo and drops both the go.work and the replaces
-// in favor of `go get github.com/ghbvf/gocell/framework@vX.Y.Z`.
+// PR-1 wiring:
+//   - certdeps.Resolve proves the cert-signing bottom layer is live (softca demo CA).
+//   - status/mem.New provides the in-memory CertRecord repository.
+//   - enrollcell.NewModule(Deps) wires the status repo into the cell.
+//   - bootstrap.WithFrameworkHTTPServing mounts http.deviceidentity.status.v1.
+//   - bootstrap.PrimaryAuthorizerOption discovers enrollcell.Authorizer() (enrollAuthorizer).
 //
 // AUTH-PLAN-04: auth-plan construction (NewAuthJWT / NewAuthServiceToken) lives HERE
 // in the composition root, never inside runtime/composition or a cell.
@@ -25,6 +24,9 @@ import (
 	"time"
 
 	enrollcell "github.com/ghbvf/gocell-mdm/cells/enrollcell"
+	"github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status"
+	statusmem "github.com/ghbvf/gocell-mdm/cells/enrollcell/slices/status/mem"
+	"github.com/ghbvf/gocell/cellmodules/certdeps"
 	"github.com/ghbvf/gocell/framework/kernel/assembly"
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
@@ -111,12 +113,7 @@ func main() {
 }
 
 // run gates the demo daemon behind an explicit opt-in and, when allowed, builds and
-// serves the app on addrs. The MDM enrollment daemon is a demo/in-memory skeleton —
-// NOT production-safe — so it refuses to start unless MDMD_DEMO=1 (fail-closed; the
-// buildMemSharedDeps warn banner records the degraded posture but is not the gate).
-// addrs + lns are parameters (lns mirrors buildApp's injection seam: production passes
-// the zero value and bootstrap binds addrs itself; the startup smoke test injects
-// pre-bound loopback listeners) so the gate and the boot path are unit-testable.
+// serves the app on addrs.
 func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error {
 	if os.Getenv(demoOptInEnv) != "1" {
 		return fmt.Errorf("mdmd: refusing to start: demo/in-memory skeleton (NOT production-safe); set %s=1 to run the demo", demoOptInEnv)
@@ -129,39 +126,93 @@ func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error 
 		slog.String("primary", addrs.primary),
 		slog.String("internal", addrs.internal),
 		slog.String("health", addrs.health),
+		slog.String("status_endpoint", "GET "+addrs.primary+"/api/v1/deviceidentity/status?deviceId=<id>"),
+		slog.String("auth", "JWT Bearer; roles: mdm-admin or mdm-operator for device:read"),
 	)
 	return app.Run(ctx)
 }
 
-// buildApp assembles the demo-topology app: memory SharedDeps + the empty enrollcell
-// via the public composition API. Extracted from run so the startup smoke test can
-// drive it with injected loopback addrs + pre-bound listeners.
+// buildApp assembles the demo-topology app: memory SharedDeps + enrollcell with
+// status slice + framework-serving harness.
+//
+// PR-1 cert-wiring:
+//   - certdeps.Resolve proves the cert-signing bottom layer is live.
+//   - proveCertBaseLive smoke-validates the resolved Signer (non-nil TrustBundle).
+//   - The Signer/RevStore are NOT injected into enrollcell (PR-1 only reads status;
+//     enroll/revoke injection lands in PR-2 when those paths are consumed).
 func buildApp(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) (*composition.App, error) {
 	shared, err := buildMemSharedDeps(addrs)
 	if err != nil {
 		return nil, fmt.Errorf("build shared deps: %w", err)
 	}
-	m := enrollcell.Module()
-	app, err := composition.New(m.ID()).With(m).Build(ctx, shared, runtimeOptions(shared, lns))
+	return buildAppFromShared(ctx, shared, lns)
+}
+
+// buildAppFromShared assembles the app from a pre-built SharedDeps. Extracted so
+// the startup smoke test can inject the same SharedDeps (and hence the same JWT
+// key pair) that the running server uses — enabling integration tests to issue
+// valid tokens without a separate key-exchange mechanism.
+func buildAppFromShared(ctx context.Context, shared *composition.SharedDeps, lns prebuiltListeners) (*composition.App, error) {
+	// Prove the cert-signing bottom layer is live (CERTDEPS smoke, epic §0).
+	// demo topology → softca dev CA (ephemeral trust anchor, in-memory ledger).
+	// postgres topology → fail-closed (durable CA not yet wired, by design).
+	cd, err := certdeps.Resolve(shared.Clock, shared.Topology)
+	if err != nil {
+		return nil, fmt.Errorf("certdeps: %w", err)
+	}
+	if err := proveCertBaseLive(ctx, cd); err != nil {
+		return nil, fmt.Errorf("certdeps smoke: %w", err)
+	}
+
+	// Build the status in-memory repository and service.
+	repo := statusmem.New(shared.Clock)
+	statusSvc := status.NewService(repo, shared.Clock)
+
+	// Build the cell module with status repo injected.
+	m := enrollcell.NewModule(enrollcell.Deps{StatusRepo: repo})
+
+	app, err := composition.New(m.ID()).With(m).Build(ctx, shared,
+		runtimeOptions(shared, lns, statusSvc.FrameworkRoute()))
 	if err != nil {
 		return nil, fmt.Errorf("composition build: %w", err)
 	}
 	return app, nil
 }
 
-// buildMemSharedDeps constructs a fully-populated SharedDeps in dev/memory mode: no
-// postgres, no redis, ephemeral in-process JWT keys. Every field SharedDeps.validate
-// requires in demo mode is populated even though the empty cell uses little of it.
+// proveCertBaseLive smoke-validates the resolved CertDeps by calling
+// TrustBundle: a non-empty bundle confirms the dev CA is initialized and the
+// cert-signing bottom layer is truly live (not a stub). This prevents the
+// certdeps.Resolve call in buildApp from being dead code.
+func proveCertBaseLive(ctx context.Context, cd certdeps.CertDeps) error {
+	bundle, err := cd.Signer.TrustBundle(ctx)
+	if err != nil {
+		return fmt.Errorf("TrustBundle: %w", err)
+	}
+	if len(bundle) == 0 {
+		return fmt.Errorf("cert base live: TrustBundle returned empty bundle (dev CA not initialized)")
+	}
+	slog.Debug("mdmd: cert base live", slog.Int("trust_bundle_certs", len(bundle)))
+	return nil
+}
+
+// mustServeFrameworkContracts returns the must-serve set of framework-owned contracts
+// for this composition root. It is the hand-authored single source of the
+// FrameworkContracts set passed to assembly.Config; the drift test in
+// cmd/mdmd/framework_serving_test.go cross-checks this against the wired
+// FrameworkServedRoute ContractIDs (Medium guard, ADR-1939 §AI-robust).
+//
+// Hard-ization path: replace this with a codegen-derived function (M2, epic #2299).
+func mustServeFrameworkContracts() []string {
+	return []string{"http.deviceidentity.status.v1"}
+}
+
+// buildMemSharedDeps constructs a fully-populated SharedDeps in dev/memory mode.
 //
 // TOPOLOGY INVARIANT (MDM-PR15 hardening): every dependency below is the demo /
 // in-memory / single-pod variant. When this module moves to the postgres topology,
 // the Publisher/Subscriber, ConsumerClaimer, and NonceStore MUST be re-resolved via
 // the topology-gated resolvers (cellmodules/eventtransport.Resolve +
-// replaydeps.Resolve) and devServiceSecret via env — NOT left as the literals here,
-// or multi-pod replay defense / cross-process eventing silently break. archtest's
-// in-mem/eventbus funnels (REPLAYDEPS-INMEM-FUNNEL-01 / COREBUNDLE-EVENTBUS-FUNNEL-01)
-// do not yet scan externalcells/* (tracked in backlog), so this is currently a
-// documented guard, not a machine-enforced one.
+// replaydeps.Resolve) and devServiceSecret via env.
 func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 	clk := clock.Real()
 
@@ -170,15 +221,13 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		return nil, fmt.Errorf("topology: %w", err)
 	}
 
-	// One structured banner for every demo-only / not-production-safe choice, so the
-	// degraded posture is greppable in startup logs (mirrors the prod rule that noop
-	// providers must be visible). MDM-PR15 replaces these with real adapters.
 	slog.Warn("mdmd: demo/in-memory topology — NOT production-safe",
 		slog.String("jwt", "ephemeral RSA keys; tokens invalid on restart"),
 		slog.String("jwt_issuer", devJWTIssuer),
 		slog.String("jwt_audience", devJWTAudience),
 		slog.String("service_secret", "hardcoded demo secret; production must source per-cell secret from env"),
 		slog.String("metrics", "NopProvider (metrics disabled)"),
+		slog.String("status", "GET /api/v1/deviceidentity/status?deviceId=<id> requires JWT with mdm-admin or mdm-operator role"),
 	)
 
 	eb := eventbus.New(clk)
@@ -217,7 +266,6 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		// (RequireProductionControlPlane) VerboseDisabled is REJECTED — MDM-PR15 must
 		// then set VerboseToken instead of deleting this field.
 		VerboseDisabled: true,
-		// PG / Redis nil → in-memory paths (see TOPOLOGY INVARIANT above).
 	})
 	if err != nil {
 		return nil, fmt.Errorf("composition.NewSharedDeps: %w", err)
@@ -259,14 +307,18 @@ func netListenerOpt(ln net.Listener) []bootstrap.ListenerOption {
 	return []bootstrap.ListenerOption{bootstrap.WithListenerNet(ln)}
 }
 
-// runtimeOptions builds the bootstrap options: assembly + three listeners. An empty
-// cell needs no gRPC listener (no gRPC service), no PrimaryAuthorizer (no endpoints /
-// PDP), and no ConsumerBase (no subscribers) — only what makes health/readyz serve.
-func runtimeOptions(shared *composition.SharedDeps, lns prebuiltListeners) composition.RuntimeOptionsFunc {
+// runtimeOptions builds the bootstrap options: assembly + three listeners +
+// framework-serving + primary authorizer.
+func runtimeOptions(
+	shared *composition.SharedDeps,
+	lns prebuiltListeners,
+	fwRoute bootstrap.FrameworkServedRoute,
+) composition.RuntimeOptionsFunc {
 	return func(cells []cell.Cell) ([]bootstrap.Option, error) {
 		asm := assembly.New(shared.Clock, assembly.Config{
-			ID:             "mdm",
-			DurabilityMode: outbox.DurabilityDemo,
+			ID:                 "mdm",
+			DurabilityMode:     outbox.DurabilityDemo,
+			FrameworkContracts: mustServeFrameworkContracts(),
 		})
 		for _, c := range cells {
 			if err := asm.Register(c); err != nil {
@@ -288,6 +340,15 @@ func runtimeOptions(shared *composition.SharedDeps, lns prebuiltListeners) compo
 			return nil, fmt.Errorf("internal listener auth: %w", err)
 		}
 
+		// PrimaryAuthorizerOption discovers enrollcell.Authorizer() via duck-type
+		// (authorizerProvider interface) and wraps it in WithPrimaryAuthorizer.
+		// This wires the enrollAuthorizer PDP into every request context on the
+		// primary listener so auth.RequirePermission can call Authorize.
+		pdpOpt, err := bootstrap.PrimaryAuthorizerOption(cells)
+		if err != nil {
+			return nil, fmt.Errorf("primary authorizer: %w", err)
+		}
+
 		return []bootstrap.Option{
 			bootstrap.WithAssembly(asm),
 			bootstrap.WithPublisher(shared.Publisher),
@@ -299,6 +360,8 @@ func runtimeOptions(shared *composition.SharedDeps, lns prebuiltListeners) compo
 			bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
 				[]kauth.ListenerAuth{kauth.AuthNone{}}, netListenerOpt(lns.health)...),
 			bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled()),
+			bootstrap.WithFrameworkHTTPServing([]bootstrap.FrameworkServedRoute{fwRoute}),
+			pdpOpt,
 		}, nil
 	}
 }
