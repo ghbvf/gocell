@@ -18,6 +18,7 @@ endpoints:
   http:
     method: GET
     path: /api/v1/samples/{id}/sub/{id2}
+    permission: sample:read
     pathParams:
       id:
         type: string

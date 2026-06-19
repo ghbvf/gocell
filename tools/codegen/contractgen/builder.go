@@ -221,6 +221,17 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 			contract.ID, viols[0].Message)
 	}
 
+	// #2020 mandatory-AuthZ-mode Hard gate at the UNBYPASSABLE object-render core: every
+	// contract rendered by any path — gocell generate, gocell verify codegen-*, verify
+	// generated (generatedverify), cellgen stage_render, or a direct RenderContractArtifacts
+	// caller — flows through buildHTTPSpec, so a modeless / mis-reasoned route cannot be
+	// generated regardless of entry point (mirrors the sibling ValidateHTTPHeaders gate above
+	// and k8s apiextensions object-level validation). Shares metadata.ClassifyHTTPAuthMode with
+	// cellgen's serve-scan + governance FMT-42 (one oracle).
+	if v := metadata.ClassifyHTTPAuthMode(contract); v != metadata.HTTPAuthModeOK {
+		return fmt.Errorf("contractgen build: contract %q %s", contract.ID, v.Message())
+	}
+
 	// Pre-compute path, query, and header params once; both buildHTTPDTOs and
 	// buildHTTPEndpointSpec need them (F-09: avoid calling builders twice).
 	pathParams := buildPathParams(http)

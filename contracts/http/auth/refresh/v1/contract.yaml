@@ -35,6 +35,7 @@ endpoints:
     successStatus: 200
     auth:
       public: true
+      reason: "Token-refresh entrypoint: exchanges a refresh token for a new access token with no prior JWT (authentication chain)."
     idempotency:
       exempt: true
     noContent: false

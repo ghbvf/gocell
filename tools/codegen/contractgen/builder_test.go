@@ -927,6 +927,44 @@ func TestValidateGRPCProtoPath(t *testing.T) {
 
 // --- BuildHTTPEndpointSpec HasBody tests ---
 
+// TestBuildHTTPSpec_ModelessRejected is the RED test for the #2020 mandatory-AuthZ-mode
+// Hard gate inside buildHTTPSpec. An active+codegen HTTP contract that declares no
+// endpoints.http.permission and no explicit opt-out flag is "modeless" — the gate
+// must reject it so no artifact is ever emitted regardless of entry point.
+// This proves ClassifyHTTPAuthMode→HTTPAuthModeModeless → error containing
+// "declares no AuthZ mode" before any template is rendered.
+func TestBuildHTTPSpec_ModelessRejected(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.synth.modeless.v1": {
+				ID:         "http.synth.modeless.v1",
+				Kind:       "http",
+				Lifecycle:  "active",
+				Codegen:    true,
+				Transports: []string{"http"},
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/api/v1/synth/modeless",
+						SuccessStatus: 200,
+						// Permission is intentionally empty; Auth has no opt-out flag.
+						// This is the modeless state the gate must reject.
+					},
+				},
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := buildContractSpec(root, p, "http.synth.modeless.v1")
+	if err == nil {
+		t.Fatal("expected buildContractSpec to reject a modeless HTTP contract, got nil error")
+	}
+	if !strings.Contains(err.Error(), "declares no AuthZ mode") {
+		t.Errorf("error should contain %q, got: %v", "declares no AuthZ mode", err)
+	}
+}
+
 // TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that
 // HasBody=false when the contract is POST but declares no schemaRefs.request.
 // This is the "body-less POST" case (path-param-only endpoints).
@@ -1045,6 +1083,7 @@ func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
 				NoContent:     false,
 				Auth: metadata.HTTPAuthMeta{
 					Bootstrap: true,
+					Reason:    "bootstrap admin endpoint uses HTTP Basic credentials, not JWT",
 				},
 				Responses: map[int]metadata.HTTPResponseMeta{
 					400: {Description: "Bad Request"},

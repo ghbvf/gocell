@@ -14,6 +14,7 @@ endpoints:
     successStatus: 200
     auth:
       clientsOnly: true
+      reason: "test fixture — exercises the clientsOnly (ServiceOnly) client codegen shape"
     queryParams:
       cursor:
         type: string

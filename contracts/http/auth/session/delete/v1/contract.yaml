@@ -38,6 +38,7 @@ endpoints:
     auth:
       serviceOwned: true
       passwordResetExempt: true
+      reason: "{id} is a session id, not a user id, so a route-level owner gate cannot be expressed; the service validates ownership by comparing the principal subject against the session user_id."
       responses:
         - 503
     ownership:

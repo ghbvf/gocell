@@ -1142,30 +1142,41 @@ func (v *Validator) validateFMT41PasswordResetExempt(c *metadata.ContractMeta, f
 
 // fieldEndpointsHTTPPermission anchors FMT-42 findings on the user-editable HTTP
 // permission overlay field (endpoints.http.permission, #2205).
-const fieldEndpointsHTTPPermission = "endpoints.http.permission"
+const (
+	fieldEndpointsHTTPPermission = "endpoints.http.permission"
+	fieldEndpointsHTTPAuth       = "endpoints.http.auth"
+	fieldEndpointsHTTPAuthReason = "endpoints.http.auth.reason"
+)
 
 // validateFMT42 validates the HTTP route permission overlay (endpoints.http.permission,
-// #2205) — the HTTP sibling of FMT-41's gRPC permission guards. The overlay is SPARSE
-// and OPTIONAL during the #2205 migration: a standard route WITHOUT it keeps the legacy
-// hand-wired gate, so an absent permission is legal and NOT flagged here ("standard
-// route MUST declare permission" is the PR-13 Hard-ification, not this rule). When the
-// overlay IS present, FMT-42 owns the two metadata-pure guards governance can decide
+// #2205) AND the mandatory-AuthZ-mode rule (#2020) — the HTTP sibling of FMT-41's gRPC
+// permission guards. It owns the metadata-pure authz guards governance can decide
 // without reading code:
 //
-//   - no-gate mutex: permission requires a RequirePermission gate, but the no-gate auth
-//     modes (public / bootstrap / clientsOnly / serviceOwned) replace or delegate that
-//     gate — carrying an action on them is contradictory (mirrors FMT-41's public⊕permission).
-//   - permission closed-set: a non-empty permission must be a member of the closed authz
-//     registry (authz.IsKnownPermissionString) — a typo fails at validate time rather
-//     than at the runtime resolver. The schema if/then also enforces the mutex; FMT-42 is
-//     the governance-layer sibling that additionally checks registry membership (which
-//     JSON Schema cannot express) and produces an actionable finding.
+//   - no-gate mutex (overlay present): permission requires a RequirePermission gate, but
+//     the no-gate auth modes (public / bootstrap / clientsOnly / serviceOwned) replace or
+//     delegate that gate — carrying an action on them is contradictory (mirrors FMT-41's
+//     public⊕permission).
+//   - permission closed-set (overlay present): a non-empty permission must be a member of
+//     the closed authz registry (authz.IsKnownPermissionString) — a typo fails at validate
+//     time rather than at the runtime resolver. JSON Schema cannot express registry
+//     membership; FMT-42 does.
+//   - mandatory mode (#2020): every active codegen HTTP route MUST declare exactly one
+//     AuthZ mode — the ABAC default (permission) or an explicit opt-out (public / bootstrap
+//     / clientsOnly / serviceOwned) — else it is a modeless standard route (rejected unless
+//     on the frozen migration ledger, metadata.IsHTTPAuthModeLedgered). This supersedes the
+//     former "absent permission is legal" sparse-overlay leniency: ABAC is now the default
+//     and non-ABAC must opt out explicitly.
+//   - opt-out reason (#2020): an opt-out mode MUST carry a non-empty auth.reason; a reason
+//     without an opt-out mode is forbidden (ABAC/standard routes are self-justifying).
 //
-// AI-robust: Medium (governance YAML-metadata validate layer, same tier as FMT-41). The
-// Hard binding is the codegen funnel: cellgen renders the cell resolver from this overlay
-// and runtime/auth.NewStaticMethodPolicyResolver fail-fasts on an unknown action at
-// construction (defense-in-depth). The reach into pkg/authz is legal because authz is a
-// leaf pkg package (kernel→pkg is allowed), same as FMT-41.
+// AI-robust: Medium (governance YAML-metadata validate layer, defense-in-depth). The Hard
+// carrier for #2020 is the cellgen generate-time completeness gate
+// (validateHTTPAuthModeCompleteness, mirroring gRPC #2008): a modeless route makes the
+// build fail. FMT-42 surfaces the same violation at `gocell validate`, before codegen runs.
+// The classification helpers (metadata.HTTPAuthModeDeclared / IsOptOut) and the ledger are
+// the single oracle shared with cellgen. The reach into pkg/authz is legal because authz is
+// a leaf pkg package (kernel→pkg is allowed), same as FMT-41.
 func (v *Validator) validateFMT42() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -1173,13 +1184,44 @@ func (v *Validator) validateFMT42() []ValidationResult {
 			continue
 		}
 		h := c.Endpoints.HTTP
-		if h == nil || h.Permission == "" {
-			// Sparse overlay: an absent permission is legal during the #2205 migration.
-			continue
+		// Two complementary, non-overlapping checks: validateFMT42ForContract guards an
+		// EXISTING permission's legality (closed-set + mutex with opt-out modes), while
+		// validateFMT42AuthMode guards mode completeness + reason. They cannot double-report:
+		// when permission is present the route is mode-declared, so validateFMT42AuthMode
+		// never takes its modeless branch.
+		if h != nil && h.Permission != "" {
+			results = append(results, v.validateFMT42ForContract(c, h)...)
 		}
-		results = append(results, v.validateFMT42ForContract(c, h)...)
+		results = append(results, v.validateFMT42AuthMode(c)...)
 	}
 	return results
+}
+
+// validateFMT42AuthMode is the governance (Medium, validate-time) arm of the #2020
+// mandatory-AuthZ-mode rule, sharing the metadata.ClassifyHTTPAuthMode oracle with the
+// contractgen comprehensive Hard gate and cellgen's serve-scan — one judgment, three
+// callers. It maps the classifier's violation kind to a field-anchored finding + fix.
+func (v *Validator) validateFMT42AuthMode(c *metadata.ContractMeta) []ValidationResult {
+	kind := metadata.ClassifyHTTPAuthMode(c)
+	if kind == metadata.HTTPAuthModeOK {
+		return nil
+	}
+	file := contractFile(c)
+	msg := fmt.Sprintf("http contract %q %s", c.ID, kind.Message())
+	switch kind {
+	case metadata.HTTPAuthModeModeless:
+		return []ValidationResult{v.newError(codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuth, msg,
+			"add endpoints.http.permission with a registered authz action (e.g. config:read), "+
+				"or set an opt-out auth flag together with endpoints.http.auth.reason")}
+	case metadata.HTTPAuthModeOptOutMissingReason:
+		return []ValidationResult{v.newError(codeFMT42, IssueRequired, file, fieldEndpointsHTTPAuthReason, msg,
+			"add endpoints.http.auth.reason explaining why this route opts out of the ABAC default")}
+	case metadata.HTTPAuthModeReasonWithoutOptOut:
+		return []ValidationResult{v.newError(codeFMT42, IssueForbidden, file, fieldEndpointsHTTPAuthReason, msg,
+			"remove endpoints.http.auth.reason, or set the opt-out auth flag it is meant to justify")}
+	default:
+		return nil
+	}
 }
 
 // validateFMT42ForContract runs the FMT-42 guards for a single http contract that
