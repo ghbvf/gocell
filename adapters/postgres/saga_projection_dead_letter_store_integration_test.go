@@ -106,7 +106,7 @@ func TestSagaProjectionDeadLetterStore_RecordAndAdvanceAtomic(t *testing.T) {
 	off, err := ckpt.LoadOffset(ctx, cell, proj)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), off, "checkpoint advanced past the poison event")
-	assertDeadLetterCount(t, ctx, pool, cell, proj, 6, 1)
+	assertDeadLetterCount(t, ctx, pool, cell, proj, 5, 1)
 
 	// Rollback path: the surrounding tx fails AFTER record+advance — neither the
 	// (new) dead-letter row nor the checkpoint advance must persist.

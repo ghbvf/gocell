@@ -27,7 +27,7 @@ type DeadLetter struct {
 	// is guaranteed by the projection declaration source (the stream name comes
 	// from the saga definition, not from tenant-scoped data), so it is safe to
 	// persist in the dead-letter table and include in structured log fields.
-	Stream    string
+	Stream string
 	// ErrorType is a coarse machine-filterable class (e.g. the errcode Code), or
 	// empty when the permanent error is not an errcode. ErrorMessage is the
 	// redacted human reason. ErrorType is extracted by errcodeOf via errors.As,
