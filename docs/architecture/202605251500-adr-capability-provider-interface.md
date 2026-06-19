@@ -108,7 +108,7 @@ pg := capability.NewPGProvider(adapterpg.NewTxManager(pool), adapterpg.NewOutbox
 
 ### 4. 不变的归属
 
-- **outbox relay 仍归 configcore**：relay 是唯一实例、metric label `configcore`、经 `WithRelay`（`RELAY-SOLE-HOLDER-01` 守）。它从 `shared.PG.DB()` 取 pool handle 构造，不再自开 pool。保留 configcore 归属避免 observability label churn；relay 不要求 module 顺序（只需 pool 存活，LIFO 已保证 pool 后 close）。
+- **outbox relay 归 `cmd/corebundle/cap_wiring.go`**（#2341 起 superseded 原「relay 仍归 configcore」）：relay 是 **per-POOL** 基建——**一 pool 一 relay**，在开 pool 处（cap_wiring.go）构造，经 keyed `bootstrap.WithRelay(InfraInstanceKey, relay)` 注册（`RELAY-CONSTRUCTION-CELLMODULE-BAN-01` 守「cell module 不得构造/注册 relay」）。metric `cell` label = **DSN group representative**（colocated=组内字母序首 cell，如 `accesscore`；非固定 `configcore`）。relay 不要求 module 顺序（只需 pool 存活，LIFO 已保证 relay 在 broker/pool 前 close）。完整机制见本文 §Amendment 2026-06-18 #2341。
 - **protocol 构造**（`cas/session/ledger.NewProtocol`）仍 composition-root-only：module 文件在 `cmd/corebundle/ package main` 内，在既有 archtest allowlist 内。
 
 ## Enforcement（已落地）

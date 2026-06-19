@@ -73,8 +73,10 @@ func (c *OutboxRejectCollector) ObserveReject(ctx context.Context, cellID, topic
 
 // ---------------------------------------------------------------------------
 
-// OutboxPendingDepthCollector registers outbox_pending_depth{cell} scoped to
-// the owner cell supplied at construction. One collector per relay.
+// OutboxPendingDepthCollector registers outbox_pending_depth{cell} scoped to the
+// relay's pool. The cell label is the DSN-group representative supplied at
+// construction (#2341) — in a partial-split pool it covers every cell sharing the
+// pool, not a single owner cell. One collector per relay.
 //
 // Metric registered:
 //   - outbox_pending_depth{cell}: current ELIGIBLE pending outbox entry depth
@@ -122,7 +124,8 @@ func NewOutboxPendingDepthCollector(p kernelmetrics.Provider, cellID string) (*O
 
 	pending, err := p.GaugeVec(kernelmetrics.GaugeOpts{
 		Name: "outbox_pending_depth",
-		Help: "Current eligible pending outbox entries for the owner cell " +
+		Help: "Current eligible pending outbox entries for the relay's pool, labeled by DSN-group " +
+			"representative cell (in a partial-split pool this covers all cells sharing the pool) " +
 			"(status=pending AND next_retry_at IS NULL OR <= now(); excludes rows in retry backoff). " +
 			"Set on each Relay reclaim tick.",
 		LabelNames: []string{"cell"},
@@ -135,7 +138,7 @@ func NewOutboxPendingDepthCollector(p kernelmetrics.Provider, cellID string) (*O
 }
 
 // ObservePendingDepth implements runtimeoutbox.PendingDepthObserver.
-// Records the current pending outbox depth for the owner cell.
+// Records the current pending outbox depth for the relay's pool (cell label = DSN-group representative).
 func (c *OutboxPendingDepthCollector) ObservePendingDepth(ctx context.Context, n int64) {
 	if c == nil {
 		return

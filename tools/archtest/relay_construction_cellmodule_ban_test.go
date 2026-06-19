@@ -9,7 +9,8 @@
 //	framework/runtime/outbox.NewRelay
 //	framework/runtime/bootstrap.WithRelay
 //
-// MUST NOT be called from any cellmodules/ production file. The outbox relay is
+// MUST NOT be called from any cellmodules/ production file, nor from any
+// cmd/corebundle/ production file other than cap_wiring.go. The outbox relay is
 // per-POOL assembly infrastructure (one relay drains one pool's outbox table),
 // NOT per-cell business wiring. It is constructed exclusively in the composition
 // root's single provisioning site (cmd/corebundle/cap_wiring.go), where the pool
@@ -35,9 +36,16 @@
 // pool handle, and cell modules legitimately hold the pool (to build session /
 // ledger / config stores via the not-banned NewSessionStore/NewOutboxStore
 // family), so "no relay construction" cannot be made type-inexpressible — it is a
-// documented Go ceiling, same family as CAPABILITY-PROVIDER-FUNNEL-01. The
-// composition root (cmd/corebundle/cap_wiring.go) is naturally out of scope: this
-// rule scans ./cellmodules/... only, so the sanctioned site needs no allowlist.
+// documented Go ceiling, same family as CAPABILITY-PROVIDER-FUNNEL-01. The rule
+// scans BOTH ./cellmodules/... (TestRelayConstructionCellmoduleBan_CellmodulesClean)
+// and ./cmd/corebundle/... (TestRelayConstructionCellmoduleBan_CorebundleConfined),
+// exempting the sole sanctioned site cmd/corebundle/cap_wiring.go via
+// isCapWiringSanctionedSite (platform-identity-bound, shared with
+// CAPABILITY-PROVIDER-FUNNEL-01). So a NEW cmd/corebundle production file that
+// constructs/registers a relay — a second provisioning path — is caught too, making
+// "relay constructed exclusively in cap_wiring.go" an executable invariant, not a
+// godoc-only claim. The exemption is a no-op under ./cellmodules/... (cap_wiring.go
+// is not under cellmodules), so a single scanner serves both scopes.
 //
 // # Blind spots (BS)
 //
@@ -89,14 +97,28 @@ var relayCtorBannedInCellmodules = map[string]map[string]struct{}{
 // scanRelayConstructionViolations walks every CallExpr in pass.Files, resolves the
 // callee to its (pkgPath, name) tuple via archtest.ResolvePackageRef, and flags hits
 // whose owning package + name are in relayCtorBannedInCellmodules — unless the file
-// is a _test.go file. There is no sanctioned-site allowlist: the rule is run only
-// over ./cellmodules/..., and the sole sanctioned site (cmd/corebundle/cap_wiring.go)
-// is outside that scan scope.
+// is a _test.go file or the sole sanctioned per-pool provisioning site
+// (cmd/corebundle/cap_wiring.go, via isCapWiringSanctionedSite). The cap_wiring
+// exemption is a no-op when scanning ./cellmodules/... (cap_wiring.go is not under
+// cellmodules) and active when scanning ./cmd/corebundle/..., so the same scanner
+// confines relay construction to cap_wiring.go in both scopes — single source.
 func scanRelayConstructionViolations(p *Pass) []Diagnostic {
 	var out []Diagnostic
+	// pkgPath is constant across p.Files (a Pass is one loaded package); resolve it
+	// once for the platform-identity bind in isCapWiringSanctionedSite.
+	pkgPath := ""
+	if p.Pkg != nil {
+		pkgPath = p.Pkg.Path()
+	}
 	for _, file := range p.Files {
 		rel := p.Rel(file)
 		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		// Exempt the sole sanctioned per-pool provisioning site, bound to platform
+		// package identity so a forged consumer-module cap_wiring.go is not exempt
+		// (shared with CAPABILITY-PROVIDER-FUNNEL-01).
+		if isCapWiringSanctionedSite(pkgPath, rel) {
 			continue
 		}
 		EachInSubtree[ast.CallExpr](file, func(call *ast.CallExpr) {
@@ -117,7 +139,7 @@ func scanRelayConstructionViolations(p *Pass) []Diagnostic {
 				Line: line,
 				Message: shortPkg(pkgPath) + "." + name + " is per-pool assembly infrastructure and may " +
 					"only be constructed/registered in cmd/corebundle/cap_wiring.go (keyed by the pool's " +
-					"InfraInstanceKey); cell modules must not own outbox relays (#2341)",
+					"InfraInstanceKey); no other cell module or cmd/corebundle file may own outbox relays (#2341)",
 			})
 		})
 	}
@@ -133,6 +155,22 @@ func TestRelayConstructionCellmoduleBan_CellmodulesClean(t *testing.T) {
 	diags := Run(t, Typed(
 		TypedOpts{Tests: false},
 		[]string{"./cellmodules/..."},
+	), scanRelayConstructionViolations)
+	Report(t, relayCtorBanRuleID, diags)
+}
+
+// TestRelayConstructionCellmoduleBan_CorebundleConfined extends the invariant to the
+// composition root itself: NewRelay/WithRelay may be called ONLY from
+// cmd/corebundle/cap_wiring.go (the single per-pool provisioning site), not from any
+// other cmd/corebundle production file. Scanning ./cmd/corebundle/... with cap_wiring.go
+// exempted via isCapWiringSanctionedSite turns the godoc claim "relay constructed
+// exclusively in cap_wiring.go" into an executable invariant — a new cmd/corebundle file
+// that builds/registers a relay (resurrecting a second provisioning path) turns CI red.
+// After #2341 cap_wiring.go is the sole relay site, so this must be GREEN.
+func TestRelayConstructionCellmoduleBan_CorebundleConfined(t *testing.T) {
+	diags := Run(t, Typed(
+		TypedOpts{Tests: false},
+		[]string{"./cmd/corebundle/..."},
 	), scanRelayConstructionViolations)
 	Report(t, relayCtorBanRuleID, diags)
 }

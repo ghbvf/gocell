@@ -367,9 +367,9 @@ The old global PostgreSQL env names for the **serving pool** (`cmd/corebundle`) 
 | Old name (pre-T6, removed from serving pool) | New name |
 |---|---|
 | `GOCELL_PG_DSN` (**serving pool only — removed**; migration tool still uses it) | `GOCELL_CONFIGCORE_DATABASE_URL` + `GOCELL_AUDITCORE_DATABASE_URL` + `GOCELL_ACCESSCORE_DATABASE_URL` (same value, per-cell seam #1964) |
-| `GOCELL_PG_MAX_CONNS` | `GOCELL_ACCESSCORE_DATABASE_MAX_CONNS` (pool knobs read from alphabetically-first cell; see §Per-cell database DSNs) |
-| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_ACCESSCORE_DATABASE_IDLE_TIMEOUT` |
-| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_ACCESSCORE_DATABASE_MAX_LIFETIME` |
+| `GOCELL_PG_MAX_CONNS` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_MAX_CONNS` — **colocated/shared-DSN: set all three to the same value, or leave all three unset.** Cells sharing a DSN group MUST declare identical pool knobs or `percellpg.Resolve` fails closed at startup; setting only `accesscore` makes `audit`/`config` keep the default and trips the mismatch gate. Partial-split: identical within each DSN group. See §Per-cell database DSNs |
+| `GOCELL_PG_IDLE_TIMEOUT` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_IDLE_TIMEOUT` — same value across the DSN group, or all unset (same fail-closed rule as `MAX_CONNS`) |
+| `GOCELL_PG_MAX_LIFETIME` | `GOCELL_{ACCESSCORE,AUDITCORE,CONFIGCORE}_DATABASE_MAX_LIFETIME` — same value across the DSN group, or all unset (same fail-closed rule as `MAX_CONNS`) |
 | `GOCELL_MASTER_KEY` | `GOCELL_CONFIGCORE_MASTER_KEY` |
 | `GOCELL_MASTER_KEY_PREVIOUS` | `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` |
 | `GOCELL_KEY_PROVIDER` | `GOCELL_CONFIGCORE_KEY_PROVIDER` |

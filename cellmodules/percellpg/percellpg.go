@@ -1,7 +1,6 @@
 package percellpg
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -165,7 +164,7 @@ func groupCellsByDSN(cellIDs []string, cells map[string]adapterpg.Config) (
 	// a DSN means sharing a pool — mismatched knobs are a misconfiguration; the
 	// previous "first cell wins" behavior was a silent data loss.
 	for _, dsn := range dsnOrder {
-		if kerr := checkGroupKnobs(dsn, dsnGroups[dsn], cells); kerr != nil {
+		if kerr := checkGroupKnobs(dsnGroups[dsn], cells); kerr != nil {
 			return nil, nil, nil, kerr
 		}
 	}
@@ -191,7 +190,7 @@ type poolKnobs struct {
 // Returns a fail-closed errcode error naming the conflicting cell IDs and the
 // first differing knob when any mismatch is detected. The error carries
 // WithInternal attrs (cell_ids, knob) so the detail stays server-side only.
-func checkGroupKnobs(dsn string, group []string, cells map[string]adapterpg.Config) error {
+func checkGroupKnobs(group []string, cells map[string]adapterpg.Config) error {
 	if len(group) <= 1 {
 		return nil
 	}
@@ -219,7 +218,6 @@ func checkGroupKnobs(dsn string, group []string, cells map[string]adapterpg.Conf
 					"refusing to start with ambiguous pool configuration",
 				errcode.WithInternal(errcode.InternalAttr("cell_ids", cellIDs)),
 				errcode.WithInternal(errcode.InternalAttr("knob", knob)),
-				errcode.WithInternal(errcode.InternalAttr("dsn_prefix", dsnPrefix(dsn))),
 			)
 		}
 	}
@@ -243,27 +241,4 @@ func firstDifferingKnob(a, b poolKnobs) string {
 		return "ConnectTimeout"
 	}
 	return ""
-}
-
-// dsnPrefix returns a non-sensitive prefix of the DSN for diagnostic context,
-// truncated after the host to avoid leaking credentials or database names.
-func dsnPrefix(dsn string) string {
-	const maxLen = 40
-	// Strip userinfo (credentials) from the prefix: find "://" and skip to host.
-	if i := strings.Index(dsn, "://"); i >= 0 {
-		rest := dsn[i+3:]
-		// Skip userinfo@: everything up to the last '@' before the first '/'.
-		if at := strings.LastIndex(strings.SplitN(rest, "/", 2)[0], "@"); at >= 0 {
-			rest = rest[at+1:]
-		}
-		candidate := fmt.Sprintf("%s://%s", dsn[:i], rest)
-		if len(candidate) > maxLen {
-			return candidate[:maxLen] + "…"
-		}
-		return candidate
-	}
-	if len(dsn) > maxLen {
-		return dsn[:maxLen] + "…"
-	}
-	return dsn
 }

@@ -295,6 +295,38 @@ func TestResolve_SameDSN_DifferentPoolKnobs_FailClosed(t *testing.T) {
 	}
 }
 
+// TestResolve_SameDSN_KnobMismatch_KeywordValueDSN_NoCredentialLeak: a keyword/value
+// (non-URL) DSN carrying a password must never leak that password into the knob-mismatch
+// error — including its InternalDetails, which errcode.Error() appends as "k=v" pairs.
+// Regression for the removed dsn_prefix internal attr: the old dsnPrefix only stripped
+// URL userinfo, so a keyword/value DSN like "host=db user=app password=secret" surfaced
+// the password verbatim in the server-side error string. The DSN group is fully
+// identified by its member cell IDs (cell_ids) + the differing knob, so no DSN-derived
+// value belongs in the diagnostic.
+func TestResolve_SameDSN_KnobMismatch_KeywordValueDSN_NoCredentialLeak(t *testing.T) {
+	t.Parallel()
+	topo := mkTopo(t, "real", "postgres", true)
+	const dsn = "host=db port=5432 user=app password=hunter2secret dbname=gocell"
+	cfg := Config{
+		Cells: map[string]adapterpg.Config{
+			"accesscore": {DSN: dsn, MaxConns: 10},
+			"auditcore":  {DSN: dsn, MaxConns: 20}, // knob mismatch → fail-closed
+		},
+	}
+	_, ok, err := Resolve(topo, cfg)
+	if err == nil || ok {
+		t.Fatalf("Resolve(keyword/value DSN, knob mismatch) = (ok=%v, err=%v), want fail-closed", ok, err)
+	}
+	// The credential must NOT appear anywhere in the error (incl. InternalDetails).
+	if strings.Contains(err.Error(), "hunter2secret") || strings.Contains(err.Error(), "password=") {
+		t.Errorf("error leaks DSN credential: %q", err)
+	}
+	// The diagnostic must still identify the conflicting cells.
+	if !strings.Contains(err.Error(), "accesscore") || !strings.Contains(err.Error(), "auditcore") {
+		t.Errorf("error = %q, want it to mention both conflicting cells", err)
+	}
+}
+
 // TestResolve_SameDSN_SamePoolKnobs_OK: two cells sharing the same DSN with identical
 // pool knobs must succeed — this is the normal colocated case with explicit knob parity.
 func TestResolve_SameDSN_SamePoolKnobs_OK(t *testing.T) {

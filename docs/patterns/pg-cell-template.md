@@ -41,7 +41,7 @@ operator env
      └─── CellModule.Provide(ctx, shared)       ← per-cell 各自读自己的 env
                GOCELL_<CELLID>_CURSOR_KEY
                GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
-               （PG URL / TxManager / OutboxWriter 经 shared.PG 取得）
+               （PG URL / TxManager / OutboxWriter 经 shared.PG.ForCell(<cellid>) 解析本 cell provider 取得）
                └─→ (composition.ModuleResult, error)   // {Cell, Opts, Resources}
 
      ↓
@@ -59,7 +59,7 @@ app.Run(ctx)   // *composition.App.Run → bootstrap.New(opts...).Run(ctx)
    统一构建，不在 CellModule 里重读或自行开 pool。
 2. **per-cell adapter 配置由 CellModule.Provide 自己读**: cursor key 等带
    `GOCELL_<CELLID>_` 前缀的 env 由对应 Module 自行解析；PG TxManager、
-   OutboxWriter 由 `shared.PG` 供给，互不干扰。
+   OutboxWriter 由 `shared.PG.ForCell(<cellid>)`（per-cell PGSet 路由，#2341）供给，互不干扰。
 
 ---
 
@@ -255,10 +255,14 @@ import (
 	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
+// fooCellID is this cell's stable ID. It resolves foocore's pool provider from the
+// shared per-cell PGSet (#2341) and labels its capability.PGInstance.
+const fooCellID = "foocore"
+
 // fooCoreModuleConfig bundles inputs for buildFooCoreOpts.
 type fooCoreModuleConfig struct {
 	topology  bootstrap.Topology
-	pg        capability.PGProvider
+	pg        capability.PGSet
 	publisher outbox.Publisher
 }
 
@@ -279,7 +283,14 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 				"foocore postgres mode requires the postgres capability provider "+
 					"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 		}
-		db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
+		// Resolve THIS cell's pool provider from the shared PGSet (#2341): colocated →
+		// the shared pool; split → foocore's own pool. Fails closed if foocore has no
+		// provisioned pool.
+		pg, err := cfg.pg.ForCell(fooCellID)
+		if err != nil {
+			return fooCoreModuleResult{}, fmt.Errorf("foocore: %w", err)
+		}
+		db, err := cellsecrets.PgxPoolFromProvider(pg)
 		if err != nil {
 			return fooCoreModuleResult{}, fmt.Errorf("foocore: %w", err)
 		}
@@ -290,8 +301,8 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		// composition.WithMigrations(ns, fs) and apply/verify it
 		// (adapters/postgres.MigrationSet.ApplyAll / VerifyAll) BEFORE Build —
 		// see docs/guides/cell-external-repo-quickstart.md "Migrations".
-		txMgr := cfg.pg.TxManager()
-		outboxWriter := cfg.pg.OutboxWriter()
+		txMgr := pg.TxManager()
+		outboxWriter := pg.OutboxWriter()
 
 		pgStore := adapterpg.NewOutboxStore(db, clk)
 		relayWorker := outboxruntime.NewRelay(clk, pgStore, cfg.publisher, outboxruntime.DefaultRelayConfig())
@@ -456,11 +467,18 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 	// provisions the postgres capability before composition.Build. Without this,
 	// buildFooCoreOpts sees a nil cfg.pg and fails the postgres branch.
 	shared := buildMinimalTestSharedDeps(t) // cross-cutting deps; PG injected below
-	shared.PG = capability.NewPGProvider(
-		adapterpg.NewTxManager(pool),
-		adapterpg.NewOutboxWriter(shared.Clock),
-		pool.DB(),
-	)
+	// Wrap the migrated pool into a single-instance PGSet (#2341): colocated shape with
+	// one pool serving foocore. shared.PG.ForCell(fooCellID) then resolves this provider.
+	pgSet, err := capability.NewPGSet([]capability.PGInstance{{
+		Provider: capability.NewPGProvider(
+			adapterpg.NewTxManager(pool),
+			adapterpg.NewOutboxWriter(shared.Clock),
+			pool.DB(),
+		),
+		Cells: []string{fooCellID},
+	}})
+	require.NoError(t, err)
+	shared.PG = pgSet
 
 	res, err := foocore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
