@@ -4,12 +4,12 @@
 # memory: ai-robust.md §1). It is NOT a full `make verify` — only the
 # subset that is (a) deterministic offline, (b) sub-10s on a WARM cache,
 # (c) high "forgot to run" rate. Infra-bound gates (go test against
-# testcontainers) stay in CI. CI-faithful golangci-lint (deviation 4) is
+# testcontainers) stay in CI. CI-faithful golangci-lint (deviation 5) is
 # the only inclusion that breaches the sub-10s budget on cold cache; it
 # is accepted because warm steady-state is ~7s alongside build/vet, and
 # the cold cost is unavoidable CI work that the push pays regardless.
 #
-# Not a 1:1 CI mirror — four deliberate deviations:
+# Not a 1:1 CI mirror — five deliberate deviations:
 #   - The gofumpt gate runs `go -C tools run mvdan.cc/gofumpt` (version
 #     resolved from tools/go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
 #     gofumpt drifts from the version the CI formatter gate enforces
@@ -83,7 +83,7 @@
 # Wall cost is ~max(slowest gate), not the sum of serial tiers. Each gate
 # is still change-gated: a docs-only push launches nothing (~0s); a .go
 # push on a WARM cache pays ~max(build/vet/lint) ≈ 7-15s. Cold-cache is
-# dominated by golangci-lint (~5min measured, see deviation 4 —
+# dominated by golangci-lint (~5min measured, see deviation 5 —
 # unavoidable CI work, paid once, then warm); a schema/contract push
 # additionally runs the codegen staleness probe in the same fan-out (no
 # extra wall time unless it is the slowest job).
@@ -316,7 +316,7 @@ lint_gate() {
 #                               deliberate CI-structure deviations.
 #   Tier 4  golangci-lint     — CI-faithful PR-mode lint
 #                               (--new-from-merge-base=origin/develop);
-#                               warm ~7s, cold ~5min (deviation 4).
+#                               warm ~7s, cold ~5min (deviation 5).
 #   Tier 3  codegen staleness — only when a codegen *source* changed; can
 #                               fire with go_changed=0 (schema/tmpl-only
 #                               push), so it has its own gate, not nested
