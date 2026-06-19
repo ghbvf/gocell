@@ -70,15 +70,25 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*composition.SharedDeps, *cmdLo
 	// demo branch — cmd/corebundle must not import runtime/eventbus directly
 	// (depguard corebundle-no-direct-eventbus, COREBUNDLE-EVENTBUS-FUNNEL-01).
 	//
-	// #2152 PR-2: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL, falling
-	// back to GOCELL_AMQP_URL) for the broker-requiring cells (= the postgres cell
-	// set), then deduped by eventtransport. Colocated assemblies share one
-	// GOCELL_AMQP_URL → one connection (behavior-preserving); distinct per-cell URLs
-	// are fail-closed (egress-only — a single subscriber cannot consume N brokers).
-	brokerCells := make(map[string]string, len(generatedPostgresCells()))
-	for _, cellID := range generatedPostgresCells() {
+	// #2152 PR-2 / #2365: the broker URL is read per cell (GOCELL_<CELLID>_AMQP_URL,
+	// falling back to GOCELL_AMQP_URL) for the broker cells — the codegen-derived set
+	// of cells that produce or consume an amqp-transported contract
+	// (generatedBrokerCells, #2365; previously reused generatedPostgresCells, which
+	// conflated "needs DB" with "touches the broker"). Then deduped by eventtransport.
+	// Colocated assemblies share one GOCELL_AMQP_URL → one connection (behavior-
+	// preserving); distinct per-cell URLs are fail-closed (egress-only — a single
+	// subscriber cannot consume N brokers).
+	brokerCellIDs := generatedBrokerCells()
+	brokerCells := make(map[string]string, len(brokerCellIDs))
+	for _, cellID := range brokerCellIDs {
 		brokerCells[cellID] = LoadBrokerURL(strings.ToUpper(cellID))
 	}
+	// Surface the codegen-derived broker cell set at startup so multi-cell broker
+	// deployments are diagnosable (which cells were classified broker cells). cell IDs
+	// are a non-sensitive closed set; the AMQP URLs (which carry credentials) are NOT
+	// logged — eventtransport redacts them (AMQP-URL-REDACTION-FUNNEL-01).
+	slog.InfoContext(ctx, "corebundle: broker cells (codegen-derived from amqp contractUsages)",
+		slog.Any("broker_cells", brokerCellIDs))
 	transport, err := eventtransport.Resolve(clk, topo, eventtransport.Config{Cells: brokerCells})
 	if err != nil {
 		return nil, nil, err
