@@ -591,6 +591,31 @@ func TestGenerateModulesGen_CompositionForm_BrokerCellsSkipsUnknownContract(t *t
 	assert.Contains(t, body, "return nil", "no resolvable amqp usage → broker cells nil")
 }
 
+// TestGenerateModulesGen_CompositionForm_BrokerCellsEmptyTransportsFailClosed verifies a
+// REGISTERED contract with an empty transports set fails generation closed. The parser
+// only defaults Transports when the `transports` key is absent, so an explicit
+// `transports: []` stays empty for FMT-39 to reject — codegen does not run FMT-39, so it
+// must refuse rather than silently exclude the cell from the broker set (fail-closed,
+// like collectOutboxProjectionTopics).
+func TestGenerateModulesGen_CompositionForm_BrokerCellsEmptyTransportsFailClosed(t *testing.T) {
+	project := buildModulesTestProject()
+	asm := project.Assemblies["corebundle"]
+	asm.Build.CompositionAPI = true
+	// A registered contract with an explicit-empty transports set (malformed metadata).
+	project.Contracts["event.broken.v1"] = &metadata.ContractMeta{ID: "event.broken.v1", Kind: "event", Transports: []string{}}
+	addBrokerTestSlice(project, "sessionlogin", "accesscore", "event.broken.v1", "publish")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	_, err := gen.GenerateModulesGen("corebundle")
+	require.Error(t, err, "a referenced contract with empty transports must fail generation closed")
+
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec), "error must be an errcode.Error, got: %T", err)
+	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	assert.Contains(t, strings.ToLower(ec.Message), "transports",
+		"error must name the empty transports cause")
+}
+
 // ---------------------------------------------------------------------------
 // generatedFrameworkServedContracts — codegen function tests (#2037)
 // ---------------------------------------------------------------------------

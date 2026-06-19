@@ -576,7 +576,10 @@ func (g *Generator) generateModulesGenComposition(
 	}
 	topoData := buildTopologyGroupsData(asm.Topology)
 	postgresCells := g.collectPostgresCells(asm.Cells)
-	brokerCells := g.collectBrokerCells(asm.Cells)
+	brokerCells, err := g.collectBrokerCells(asm.Cells)
+	if err != nil {
+		return nil, err
+	}
 	frameworkServed := append([]string(nil), asm.FrameworkContracts...)
 	sort.Strings(frameworkServed)
 	ctx := modulesCompositionContext{
@@ -635,9 +638,14 @@ func (g *Generator) collectPostgresCells(cellRefs []metadata.AssemblyCellRef) []
 // with the framework's subscription derivation (metadata.deriveEventSubscribers, which
 // likewise skips usages of unregistered contracts): contract-reference validity is a
 // `gocell validate` concern, and a dangling usage wires no runtime pub/sub, so skipping
-// it here cannot orphan broker traffic. The parser guarantees a non-empty Transports
-// for every parsed contract.
-func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) []string {
+// it here cannot orphan broker traffic. A REGISTERED contract with an empty Transports
+// set, by contrast, fails generation closed (mirroring collectOutboxProjectionTopics's
+// fail-closed posture): the parser only defaults Transports when the `transports` key is
+// ABSENT (parser.go), so an explicit `transports: []` stays empty for FMT-39 to reject —
+// but codegen does not run FMT-39, so such a malformed contract would otherwise be
+// SILENTLY excluded from the broker set. Refusing here keeps the derived set honest
+// rather than fail-open.
+func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) ([]string, error) {
 	inAssembly := make(map[string]bool, len(cellRefs))
 	for _, ref := range cellRefs {
 		inAssembly[ref.ID] = true
@@ -647,12 +655,12 @@ func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) []st
 		if s == nil || !inAssembly[s.BelongsToCell] {
 			continue
 		}
-		for _, cu := range s.ContractUsages {
-			c := g.contracts.Get(cu.Contract)
-			if c != nil && contractIsBrokerTransported(c) {
-				cellSet[s.BelongsToCell] = struct{}{}
-				break
-			}
+		uses, err := g.sliceUsesBrokerContract(s)
+		if err != nil {
+			return nil, err
+		}
+		if uses {
+			cellSet[s.BelongsToCell] = struct{}{}
 		}
 	}
 	var cells []string
@@ -660,7 +668,30 @@ func (g *Generator) collectBrokerCells(cellRefs []metadata.AssemblyCellRef) []st
 		cells = append(cells, id)
 	}
 	sort.Strings(cells)
-	return cells
+	return cells, nil
+}
+
+// sliceUsesBrokerContract reports whether s has a contractUsage referencing an
+// amqp-transported (broker) contract. A registered contract with an empty Transports
+// set fails closed (the fail-open hazard explained on collectBrokerCells); an
+// unregistered reference is skipped.
+func (g *Generator) sliceUsesBrokerContract(s *metadata.SliceMeta) (bool, error) {
+	for _, cu := range s.ContractUsages {
+		c := g.contracts.Get(cu.Contract)
+		if c == nil {
+			continue // unregistered contract: skip (validation raises it; wires no runtime pub/sub)
+		}
+		if len(c.Transports) == 0 {
+			return false, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"contractUsage references a contract with an empty transports set",
+				errcode.WithInternal(errcode.InternalAttr("_",
+					fmt.Sprintf("slice=%q contract=%q", s.ID, cu.Contract))))
+		}
+		if contractIsBrokerTransported(c) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // contractIsBrokerTransported reports whether c is carried over the broker (amqp).
