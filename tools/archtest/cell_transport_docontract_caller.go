@@ -36,10 +36,11 @@ const doContractMethodName = "DoContract"
 // production scan and the synthetic table (mirrors forbiddenHTTPClientRef).
 //
 // Rationale (epic #1423 US4 follow-up #2093 — generated-client downstream Hard):
-// once the codegen-generated contract client lands as the SOLE sealed sibling-cell
-// call type, a cell must reach a sibling's http contract ONLY through that
-// generated client (which holds the sealed transport.CellTransport and calls
-// DoContract internally). A cell calling transport.CellTransport.DoContract
+// once the codegen-generated contract client lands as the SOLE generated
+// sibling-cell call type (Hard via codegen + byte golden, NOT interface sealing —
+// transport.CellTransport is a plain exported interface), a cell must reach a
+// sibling's http contract ONLY through that generated client (which holds an
+// injected transport.CellTransport and calls DoContract internally). A cell calling transport.CellTransport.DoContract
 // directly with a hand-built request bypasses the generated client — and would
 // NOT trip CELL-SYNC-TRANSPORT-FUNNEL-01 (that scan bans raw net/http clients, not
 // DoContract). This is the second Medium backstop that closes the funnel: together

@@ -25,23 +25,25 @@
 //
 // ## AI-robust rating: Medium — backstop A of the closed sync-transport funnel
 //
-// The sync-transport funnel is now a closed funnel with one upstream Hard layer,
-// one downstream Hard layer, and TWO downstream Medium backstops:
+// The sync-transport funnel is a closed funnel with one upstream Hard layer, a
+// downstream Hard generated artifact, and TWO downstream Medium backstops:
 //   - Upstream Hard: InProcessTransport / RemoteHTTPTransport are sealed types
 //     (unexported fields + sole constructors, INPROCESS-TRANSPORT-SEALED-01 /
 //     REMOTE-TRANSPORT-SEALED-01) — a transport cannot be forged.
-//   - Downstream Hard (#2093): the codegen-generated contract client is the SOLE
-//     sealed sibling-call type — its constructor takes ONLY a sealed
-//     transport.CellTransport, so a bare *http.Client is not type-expressible as
-//     the sibling-call path (codegen + byte golden = Hard, per ADR D2).
+//   - Downstream Hard (#2093) — the generated ARTIFACT, not the interface: the
+//     codegen-generated contract client is the SOLE generated sibling-call type,
+//     Hard via codegen + byte golden (the artifact is frozen). It is NOT a sealed
+//     interface: transport.CellTransport is a plain exported interface, so the
+//     constructor taking it is not a type-level seal — a bare *http.Client is merely
+//     not accepted by that constructor's signature (per ADR D2).
 //   - Downstream Medium backstop A (THIS rule): a cell may not hold/construct a
 //     raw net/http client.
 //   - Downstream Medium backstop B (CELL-TRANSPORT-DOCONTRACT-CALLER-01): a cell
 //     may not call transport.CellTransport.DoContract directly, so the generated
 //     client is the only expressible dispatch path.
 //
-// A + B together ⇒ the only expressible cell→sibling sync path is the Hard-sealed
-// generated client.
+// A + B (both Medium) together ⇒ the only expressible cell→sibling sync path is the
+// generated client (itself Hard via codegen + byte golden, not interface sealing).
 //
 // Why this scan stays Medium (per ai-robust.md): the forbidden symbols are a
 // third-party (stdlib) package's exported API; we cannot seal their construction
@@ -59,7 +61,7 @@
 //
 //   - Vacuity: after the #2093 configclient migration zero production cell holds a
 //     raw http client today — the only former caller now dispatches via the
-//     generated get.Client (which holds the sealed transport.CellTransport). The
+//     generated get.Client (which holds an injected transport.CellTransport). The
 //     production scan (TestCellSyncTransportFunnel01) is therefore vacuously green
 //     — exactly like GRPC-CELL-NO-CLIENT-DIAL-01. Anti-vacuity is provided by the
 //     synthetic fixture (TestCellSyncTransportFunnel01_FixtureScanRED) which MUST

@@ -14,9 +14,11 @@
 // cell-scoped scan excludes them by construction.
 //
 // Rationale (epic #1423 US4 follow-up #2093 — generated-client downstream Hard):
-// the codegen-generated contract client is the SOLE sealed sibling-cell call type
-// (ADR D2 downstream Hard). It holds the sealed transport.CellTransport and calls
-// DoContract internally; a cell reaches a sibling's http contract ONLY through it.
+// the codegen-generated contract client is the SOLE generated sibling-cell call
+// type (ADR D2 downstream — Hard via codegen + byte golden, NOT interface sealing;
+// transport.CellTransport is a plain exported interface). It holds an injected
+// transport.CellTransport and calls DoContract internally; a cell reaches a
+// sibling's http contract ONLY through it.
 // A cell calling DoContract directly (with a hand-built request) bypasses the
 // generated client — and would NOT trip CELL-SYNC-TRANSPORT-FUNNEL-01, whose scan
 // bans raw net/http clients, not DoContract calls (a cell legitimately holds an
@@ -29,16 +31,19 @@
 //   - Upstream Hard: InProcessTransport / RemoteHTTPTransport are sealed types
 //     (unexported fields + sole constructors, INPROCESS-TRANSPORT-SEALED-01 /
 //     REMOTE-TRANSPORT-SEALED-01) — a transport cannot be forged.
-//   - Downstream Hard: the codegen-generated contract client (codegen + byte
-//     golden, constructor takes ONLY a sealed transport.CellTransport — a bare
-//     *http.Client is not type-expressible as the sibling-call path).
+//   - Downstream Hard: the codegen-generated contract client — Hard via codegen +
+//     byte golden (the artifact is frozen), NOT interface sealing.
+//     transport.CellTransport is a plain exported interface, so the constructor
+//     taking it is not a type-level seal; a bare *http.Client is merely not accepted
+//     by that constructor's signature.
 //   - Downstream Medium backstop A (CELL-SYNC-TRANSPORT-FUNNEL-01): a cell may not
 //     hold/construct a raw net/http client.
 //   - Downstream Medium backstop B (THIS rule): a cell may not call DoContract
 //     directly, so the generated client is the only expressible dispatch path.
 //
-// A + B together ⇒ the only expressible cell→sibling sync path is a Hard-sealed
-// generated client. Medium is the ceiling here (per ai-robust.md): DoContract is
+// A + B together ⇒ the only expressible cell→sibling sync path is a generated client
+// (Hard via codegen + byte golden, not interface sealing). Medium is the ceiling
+// here (per ai-robust.md): DoContract is
 // an exported method on an exported interface; we cannot make "calling it" a
 // compile error without unexporting the seam (which the generated client, living
 // in another module, must call). A typed method-call scan via ResolveMethodCall is

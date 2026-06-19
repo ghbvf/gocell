@@ -215,6 +215,10 @@ Medium 为天花板」，本 ADR **设下游档位目标**（实现属对应 iss
   - **下游（Hard + Medium backstop）**：generated contract client **只接收 sealed `CellTransport`**
     作为唯一可表达的兄弟-cell 调用路径（裸 `http.Client` 直拨 / 直接 import 兄弟 cell 在类型层不可
     表达）；Medium archtest typed scan 作 backstop，捕获绕过 generated client 的裸调用。
+    > **措辞修正（#2093 落地后，见 §#2093 Amendment）**：上文「只接收 sealed `CellTransport`」「裸
+    > `http.Client` 类型层不可表达」是当初目标措辞且**过度声明**——`CellTransport` 实为普通导出接口（非
+    > sealed type）。下游 Hard 归**生成物**（codegen + 字节 golden），「唯一可表达路径」归两个 **Medium**
+    > AST backstop（net/http ban + DoContract caller ban），非接口 seal。
   - → US4 #1963 / US8 #1961。
 - **broker-mandatory 双闸 fail-fast → Medium（启动期 guard，永久档位）。** 「拓扑 × bus 类型」组合
   type system **不可表达**（拓扑是启动期数据、bus 是注入实例），故 Hard 不可达、Medium 是合理永久
