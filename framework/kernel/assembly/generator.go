@@ -196,6 +196,10 @@ type topologyGroupTemplateData struct {
 	Role     string
 	Cells    []string
 	Endpoint string
+	// RequiresBrokerForCrossProcessEvents is the codegen-derived per-role broker
+	// signal (#2196), stamped by buildTopologyGroupsData from the role set returned
+	// by collectCrossProcessBrokerEventRoles. Rendered onto bootstrap.TopologyGroup.
+	RequiresBrokerForCrossProcessEvents bool
 }
 
 // capabilityConstNames maps cell.yaml `requires` enum values to their
@@ -574,7 +578,11 @@ func (g *Generator) generateModulesGenComposition(
 			"assembly topology validation failed before codegen", err,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
-	topoData := buildTopologyGroupsData(asm.Topology)
+	brokerRoles, err := g.collectCrossProcessBrokerEventRoles(asm)
+	if err != nil {
+		return nil, err
+	}
+	topoData := buildTopologyGroupsData(asm.Topology, brokerRoles)
 	postgresCells := g.collectPostgresCells(asm.Cells)
 	brokerCells, err := g.collectBrokerCells(asm.Cells)
 	if err != nil {
@@ -707,23 +715,85 @@ func contractIsBrokerTransported(c *metadata.ContractMeta) bool {
 }
 
 // buildTopologyGroupsData translates the metadata.TopologyMeta into the flattened
-// template-serialisable form. Empty topology (no groups) returns a zero-value
-// topologyGroupsTemplateData so the template emits a nil-returning
-// generatedTopologyGroups() — the all-colocated default (no role split).
-func buildTopologyGroupsData(topo metadata.TopologyMeta) topologyGroupsTemplateData {
+// template-serialisable form, stamping each group's codegen-derived
+// RequiresBrokerForCrossProcessEvents bool from brokerRoles (the set of roles
+// returned by collectCrossProcessBrokerEventRoles, #2196). Empty topology (no
+// groups) returns a zero-value topologyGroupsTemplateData so the template emits a
+// nil-returning generatedTopologyGroups() — the all-colocated default (no role split).
+func buildTopologyGroupsData(topo metadata.TopologyMeta, brokerRoles map[string]struct{}) topologyGroupsTemplateData {
 	var d topologyGroupsTemplateData
 	if len(topo.Groups) == 0 {
 		return d
 	}
 	d.Groups = make([]topologyGroupTemplateData, 0, len(topo.Groups))
 	for _, g := range topo.Groups {
+		_, needsBroker := brokerRoles[g.Role]
 		d.Groups = append(d.Groups, topologyGroupTemplateData{
-			Role:     g.Role,
-			Cells:    append([]string(nil), g.Cells...),
-			Endpoint: g.Endpoint,
+			Role:                                g.Role,
+			Cells:                               append([]string(nil), g.Cells...),
+			Endpoint:                            g.Endpoint,
+			RequiresBrokerForCrossProcessEvents: needsBroker,
 		})
 	}
 	return d
+}
+
+// collectCrossProcessBrokerEventRoles returns the set of deployment-group roles
+// (in asm.Topology) that participate in cross-process event pub/sub and therefore
+// need a real broker. A role is in the set iff it is an endpoint (publisher OR
+// subscriber side) of at least one active, amqp-transported event contract whose
+// publisher cell and some subscriber cell fall in DIFFERENT groups. This is the
+// precise codegen-derived signal that drives the bootstrap broker-mandatory gate
+// (validateSplitTopologyBroker) since #2196 — replacing the coarse HasRemoteCells
+// proxy and the removed static TOPO-13 rule with a single derived fact. The bool
+// is projected per-role by bootstrap.SpecForRole and sealed into DeploymentTopology.
+//
+// Scope mirrors the (now-deleted) TOPO-13 structure, reusing metadata.CellGroup
+// for placement:
+//   - < 2 groups → no process boundary → empty set (all-colocated / single role).
+//   - only event contracts matter (the in-memory EventBus is the bus a broker
+//     replaces; sync HTTP/CellTransport contracts cross processes without one).
+//   - only active contracts (draft/deprecated carry no live broker requirement).
+//   - only amqp-transported events; a registered event with an EMPTY transports
+//     set fails generation closed (the fail-open hazard documented on
+//     collectBrokerCells — explicit `transports: []` is malformed metadata).
+//   - the publisher/subscriber must resolve to a cell in a declared group; an
+//     external actor, the _framework sentinel publisher, or a cell outside this
+//     assembly's groups resolves to no group via CellGroup and is skipped (those
+//     have no deployment placement the topology can govern).
+func (g *Generator) collectCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta) (map[string]struct{}, error) {
+	roles := make(map[string]struct{})
+	if len(asm.Topology.Groups) < 2 {
+		return roles, nil // no process boundary
+	}
+	events := g.contracts.ByKind(string(cellvocab.ContractEvent))
+	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
+	for _, c := range events {
+		if cellvocab.ContractLifecycle(c.Lifecycle) != cellvocab.ContractLifecycleActive {
+			continue
+		}
+		if len(c.Transports) == 0 {
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"event contract has an empty transports set",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", c.ID))))
+		}
+		if !contractIsBrokerTransported(c) {
+			continue
+		}
+		pubGroup, ok := metadata.CellGroup(asm, c.Endpoints.Publisher)
+		if c.Endpoints.Publisher == "" || !ok {
+			continue
+		}
+		for _, sub := range c.Endpoints.Subscribers {
+			subGroup, ok := metadata.CellGroup(asm, sub)
+			if !ok || pubGroup.Role == subGroup.Role {
+				continue
+			}
+			roles[pubGroup.Role] = struct{}{}
+			roles[subGroup.Role] = struct{}{}
+		}
+	}
+	return roles, nil
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new

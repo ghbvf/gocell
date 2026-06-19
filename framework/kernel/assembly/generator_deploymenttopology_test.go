@@ -85,10 +85,12 @@ func TestGenerateModulesGen_TopologyGroups_SingleGroup_ValidGo(t *testing.T) {
 	content := string(formatted)
 	assert.Contains(t, content, "func generatedTopologyGroups() []bootstrap.TopologyGroup")
 	assert.Contains(t, content, "[]bootstrap.TopologyGroup{")
-	assert.Contains(t, content, `Role:     "monolith"`)
+	assert.Contains(t, content, `"monolith"`)
 	assert.Contains(t, content, `"accesscore"`)
 	assert.Contains(t, content, `"auditcore"`)
-	assert.Contains(t, content, `Endpoint: "mono.svc:9000"`)
+	assert.Contains(t, content, `"mono.svc:9000"`)
+	// A single group has no process boundary → broker signal false.
+	assert.Contains(t, content, "RequiresBrokerForCrossProcessEvents: false")
 }
 
 // TestGenerateModulesGen_TopologyGroups_MultiGroup_Golden is the Hard codegen
