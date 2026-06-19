@@ -59,7 +59,9 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", parseErr
 	}
 	if *rule != "" && *changed {
-		return req, false, "", fmt.Errorf("--rule and --changed are mutually exclusive: use one or the other")
+		return req, false, "", fmt.Errorf(
+			"--rule and --changed are mutually exclusive: --changed already narrows by scan domain;" +
+				" to run one rule unfiltered, drop --changed and use --rule=<ID>")
 	}
 
 	shard, shardErr := parseShard(*shardStr)
@@ -133,6 +135,15 @@ func runArchtestReport(ctx context.Context, req archtestrunner.Request, format s
 	}
 	if ie := ctxInterrupted(ctx, "archtest"); ie != nil {
 		return ie
+	}
+
+	// Under --changed, make the selection explicit on stderr so a clean exit
+	// with 0 rules selected is not misread as "the full suite passed" — the
+	// full sharded run remains authoritative (see the --changed help text).
+	if req.Changed {
+		fmt.Fprintf(os.Stderr,
+			"archtest --changed: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+				" this is a pre-filter, not the authoritative full run\n", len(report.Selected))
 	}
 
 	results := mapReportToResults(report)

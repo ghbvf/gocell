@@ -121,6 +121,38 @@ func TestBuildFileDomainIndex_Extraction(t *testing.T) {
 			fn:   "TestMulti",
 			want: fileDomain{scoped: true, prefixes: []string{"adapters/redis", "adapters/postgres"}},
 		},
+		{
+			// StandaloneModule patterns are relative to a separate fixture
+			// module, not the workspace, so they cannot map to a repo-relative
+			// prefix → unknown (always run), never a never-matching prefix.
+			name: "standalone module is unknown",
+			body: `func TestSM(t *testing.T) {
+	Run(t, StandaloneModule(fixtureDir, TypedOpts{}, []string{"./promoted_ok", "./base"}), nil)
+}`,
+			fn:   "TestSM",
+			want: fileDomain{}, // unknown
+		},
+		{
+			// A computed scope (ModuleScope) contaminates the whole file to
+			// unknown even when a resolvable Typed scope is also present.
+			name: "modulescope contaminates production into unknown",
+			body: `func TestMix(t *testing.T) {
+	Run(t, Production(TypedOpts{}), nil)
+	Run(t, AST(ModuleScope(root)), nil)
+}`,
+			fn:   "TestMix",
+			want: fileDomain{}, // sawComputed overrides productionGo
+		},
+		{
+			// An unresolved const reference in the patterns slice is computed →
+			// unknown (the const is not a package-level string const here).
+			name: "unresolved const ref is unknown",
+			body: `func TestUnres(t *testing.T) {
+	Run(t, AST(DirsScope(root, []string{undefinedConst})), nil)
+}`,
+			fn:   "TestUnres",
+			want: fileDomain{}, // unknown
+		},
 	}
 
 	for _, tc := range cases {

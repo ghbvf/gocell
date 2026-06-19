@@ -9,14 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const fakeArchtestDir = "tools/archtest"
-
 // makeFakeArchtestDir creates a temporary workspace structure with
 // tools/archtest/*_test.go files for rule-index testing.
 func makeFakeArchtestDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	dir := filepath.Join(root, fakeArchtestDir)
+	dir := filepath.Join(root, archtestPkgDir)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	for name, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))

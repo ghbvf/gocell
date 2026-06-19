@@ -96,6 +96,29 @@ func TestApplyFilters_SourceMode_EmptyChange(t *testing.T) {
 	assert.Empty(t, got, "no changed files => no rules selected")
 }
 
+// TestApplyFilters_SourceMode_ContractsYAMLChange verifies that a contracts
+// YAML change selects a contracts-scoped (content) rule via its path prefix and
+// excludes a Go-scoped rule (a .yaml change is not a production Go change).
+func TestApplyFilters_SourceMode_ContractsYAMLChange(t *testing.T) {
+	root := makeFakeArchtestDir(t, map[string]string{
+		"contracts_test.go": wrapRule(`func TestContracts(t *testing.T) {
+	Run(t, AST(DirsScope(root, []string{"contracts"})), nil)
+}`),
+		"redis_test.go": wrapRule(`func TestRedis(t *testing.T) {
+	Run(t, Typed(TypedOpts{}, []string{"./adapters/redis/..."}), nil)
+}`),
+	})
+	discovered := []string{"TestContracts", "TestRedis"}
+	e := sourceModeEngine(func(_ context.Context, _ string) ([]string, error) {
+		return []string{"contracts/audit/v1/contract.yaml"}, nil
+	})
+
+	got, err := e.applyFilters(context.Background(), Request{WorkspaceRoot: root, Changed: true}, discovered)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"TestContracts"}, got,
+		"a contracts YAML change selects the contracts-scoped rule, not the Go-scoped rule")
+}
+
 // TestApplyFilters_SourceMode_ShardComposes verifies --shard applies before
 // --changed source filtering (shard narrows the candidate set first).
 func TestApplyFilters_SourceMode_ShardComposes(t *testing.T) {

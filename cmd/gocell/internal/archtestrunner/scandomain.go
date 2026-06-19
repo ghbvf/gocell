@@ -241,6 +241,8 @@ func (ix *archtestPkgIndex) funcScope(name string, stack map[string]bool) scopeA
 	}
 	stack[name] = true
 	var acc scopeAccum
+	// ast.Inspect runs synchronously, so the shared `stack` map is mutated and
+	// read in DFS order across the closure and its recursive funcScope calls.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -266,23 +268,38 @@ func (ix *archtestPkgIndex) funcScope(name string, stack map[string]bool) scopeA
 }
 
 // scopeCtorArgIndex maps a scope-constructor name to the index of its
-// patterns/dirs argument. Production has none (it scans all production Go).
+// repo-relative patterns/dirs argument. Production has none (it scans all
+// production Go); ModuleScope/StandaloneModule are handled as unknown in
+// recordScope (their domains do not map to a repo-relative prefix).
 var scopeCtorArgIndex = map[string]int{
-	"Typed":            1, // Typed(opts, patterns)
-	"Fixture":          1, // Fixture(opts, patterns)
-	"DirsScope":        1, // DirsScope(root, dirs, ...predicates)
-	"StandaloneModule": 2, // StandaloneModule(dir, opts, patterns)
+	"Typed":     1, // Typed(opts, patterns)
+	"Fixture":   1, // Fixture(opts, patterns)
+	"DirsScope": 1, // DirsScope(root, dirs, ...predicates)
 }
 
-// isScopeCtor reports whether a call names a scan-scope constructor. Production,
-// Typed and Fixture require a composite-literal first arg (their *Opts struct),
-// which discriminates them from the unrelated 0-arg p.Typed() predicate method.
+// isScopeCtor reports whether a call names a scan-scope constructor.
+//
+// Production, Typed and Fixture require a composite-literal first arg (their
+// *Opts struct), which discriminates them from the unrelated 0-arg p.Typed()
+// predicate method. DirsScope/ModuleScope/StandaloneModule have no such
+// method-name collision in tools/archtest, but are still gated on a minimum
+// arg count (the index recordScope reads must exist) for consistency and
+// defense against a future same-named method.
+//
+// Blind spot (safe): only a scope constructor invoked *directly* is recognized.
+// A scope held in a variable and passed indirectly (s := Production(...);
+// Run(t, s, nil)) produces no constructor call node here, so the rule falls
+// back to the unknown (always-run) domain — over-running, never skipping.
 func isScopeCtor(name string, call *ast.CallExpr) bool {
 	switch name {
 	case "Production", "Typed", "Fixture":
 		return len(call.Args) >= 1 && isCompositeLit(call.Args[0])
-	case "DirsScope", "ModuleScope", "StandaloneModule":
-		return true
+	case "ModuleScope":
+		return len(call.Args) >= 1 // needs the root arg
+	case "DirsScope":
+		return len(call.Args) >= 2 // needs root + dirs args
+	case "StandaloneModule":
+		return len(call.Args) >= 3 // needs dir + opts + patterns args
 	default:
 		return false
 	}
@@ -295,18 +312,21 @@ func (ix *archtestPkgIndex) recordScope(name string, call *ast.CallExpr, acc *sc
 	case "Production":
 		acc.hasProduction = true
 		return
-	case "ModuleScope":
-		acc.sawComputed = true // whole-module scope: cannot narrow
+	case "ModuleScope", "StandaloneModule":
+		// ModuleScope scans a whole module; StandaloneModule scans a separate
+		// fixture module whose patterns are module-relative (not repo-relative).
+		// Neither maps to a repo-relative prefix, so cannot narrow → always run.
+		acc.sawComputed = true
 		return
 	}
 	argIdx, ok := scopeCtorArgIndex[name]
 	if !ok || argIdx >= len(call.Args) {
-		acc.sawComputed = true
+		acc.sawComputed = true // unknown ctor shape / missing patterns arg: cannot narrow
 		return
 	}
 	raws, ok := ix.evalStringSlice(call.Args[argIdx], map[string]bool{})
 	if !ok {
-		acc.sawComputed = true
+		acc.sawComputed = true // non-literal patterns (var / unresolved helper): cannot narrow
 		return
 	}
 	for _, raw := range raws {
@@ -413,14 +433,17 @@ func (ix *archtestPkgIndex) evalStringExpr(expr ast.Expr) (string, bool) {
 }
 
 // normalizePattern reduces a scope pattern to a repo-relative prefix: it strips
-// a leading "./", a trailing "/..." and "/", and rejects (ok=false) glob or
-// whole-tree patterns that cannot be narrowed to a path prefix.
+// a leading "./", a trailing "/..." and "/", and rejects (ok=false) any pattern
+// that cannot be narrowed to a clean path prefix — whole-tree ("..."), glob
+// (*?[), or a malformed empty/dot/double-slash segment. Rejecting (rather than
+// keeping a malformed prefix) routes the rule to the unknown/always-run domain,
+// avoiding a never-matching prefix that would be a silent false negative.
 func normalizePattern(raw string) (string, bool) {
 	p := strings.TrimSpace(raw)
 	p = strings.TrimPrefix(p, "./")
 	p = strings.TrimSuffix(p, "/...")
 	p = strings.TrimSuffix(p, "/")
-	if p == "" || p == "." || strings.Contains(p, "...") {
+	if p == "" || p == "." || strings.Contains(p, "...") || strings.Contains(p, "//") {
 		return "", false
 	}
 	if strings.ContainsAny(p, "*?[") {
