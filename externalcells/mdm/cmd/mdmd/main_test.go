@@ -106,6 +106,49 @@ func TestRun_RefusesWithoutDemoOptIn(t *testing.T) {
 	}
 }
 
+// TestNetListenerOpt covers both arms of the listener-injection seam: nil → no
+// options (production lets bootstrap bind the addr itself); non-nil → exactly one
+// WithListenerNet option (the smoke test's pre-bound path).
+func TestNetListenerOpt(t *testing.T) {
+	if got := netListenerOpt(nil); got != nil {
+		t.Errorf("netListenerOpt(nil) = %v, want nil (bootstrap binds the addr itself)", got)
+	}
+
+	ln := mustLoopbackListener(t)
+	defer func() { _ = ln.Close() }()
+	if got := netListenerOpt(ln); len(got) != 1 {
+		t.Errorf("netListenerOpt(non-nil) returned %d options, want 1 (WithListenerNet)", len(got))
+	}
+}
+
+// TestBuildApp_InvalidAddrsRejected asserts the composition root is fail-fast on a
+// bad bind config: empty addrs make composition.NewSharedDeps' health-reachability
+// validation fail, and buildApp propagates that as an error rather than booting a
+// misconfigured daemon. Covers buildMemSharedDeps' NewSharedDeps error arm + buildApp's
+// error propagation.
+func TestBuildApp_InvalidAddrsRejected(t *testing.T) {
+	_, err := buildApp(context.Background(), listenerAddrs{}, prebuiltListeners{})
+	if err == nil {
+		t.Fatal("buildApp with empty addrs returned nil error, want a config validation failure")
+	}
+}
+
+// TestRun_PropagatesBuildError asserts run surfaces a build failure (rather than
+// panicking or booting half-built): with the opt-in satisfied but an invalid bind
+// config, run returns buildApp's error wrapped with its "build app" context. Covers
+// run's build-error arm (the gate-pass path that TestRun_RefusesWithoutDemoOptIn does not).
+func TestRun_PropagatesBuildError(t *testing.T) {
+	t.Setenv(demoOptInEnv, "1")
+
+	err := run(context.Background(), listenerAddrs{}, prebuiltListeners{})
+	if err == nil {
+		t.Fatal("run() with opt-in but invalid addrs returned nil, want a wrapped build error")
+	}
+	if !strings.Contains(err.Error(), "build app") {
+		t.Errorf("error %q missing run's build-app context", err)
+	}
+}
+
 // mustLoopbackListener binds an OS-assigned free loopback port and keeps the
 // listener open for bootstrap to adopt (WithListenerNet) — zero rebind race.
 func mustLoopbackListener(t *testing.T) net.Listener {
