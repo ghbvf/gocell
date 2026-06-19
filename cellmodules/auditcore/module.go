@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/audit"
 	"github.com/ghbvf/gocell/framework/runtime/audit/ledger"
+	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
@@ -146,7 +147,7 @@ func (m module) Provide(
 	// optional admin pool; memory: mem cross-tenant store) plus any ManagedResources
 	// the module opens itself (the optional admin cross-tenant pool, #1810). The
 	// serving pool is owned by shared.PG, not the module.
-	storageOpts, resources, err := auditStorageOpts(ctx, shared, relayMem, bootstrapMem)
+	storageOpts, bootstrapOpts, resources, err := auditStorageOpts(ctx, shared, relayMem, bootstrapMem, auditProtocol, bootstrapProtocol)
 	if err != nil {
 		return composition.ModuleResult{}, err
 	}
@@ -154,7 +155,12 @@ func (m module) Provide(
 
 	c := auditcell.NewAuditCore(shared.Clock, auditOpts...)
 
-	return composition.ModuleResult{Cell: c, Resources: resources}, nil
+	// bootstrapOpts carries WithAuditChainVerifier (#1755) when a verifier was built
+	// (always in demo; in postgres only when the admin pool is provisioned). The
+	// endpoint is ENABLED separately by the composition root's operator-creds block
+	// (WithAuditChainVerifyEndpoint), so injecting the verifier here never couples
+	// admin-pool presence to the admin plane — no #1810 regression.
+	return composition.ModuleResult{Cell: c, Opts: bootstrapOpts, Resources: resources}, nil
 }
 
 // auditStorageOpts builds the storage-mode-specific auditcore options + opened
@@ -166,60 +172,83 @@ func (m module) Provide(
 // admin pool. Extracted from Provide to keep its cognitive complexity within bounds.
 func auditStorageOpts(
 	ctx context.Context, shared *composition.SharedDeps, relayMem, bootstrapMem *ledger.MemStore,
-) ([]auditcell.Option, []kernellifecycle.ManagedResource, error) {
+	auditProtocol, bootstrapProtocol *ledger.Protocol,
+) ([]auditcell.Option, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	if shared.Topology.StorageBackend() != "postgres" {
-		// Demo/memory topology: both mem stores are guaranteed non-nil here
-		// (buildAuditStoresWithMem populates relayMem and bootstrapMem).
-		ctStore, ctErr := ledger.NewMemCrossTenantStore(relayMem, bootstrapMem)
-		if ctErr != nil {
-			return nil, nil, fmt.Errorf("auditcore: mem cross-tenant store: %w", ctErr)
-		}
-		return []auditcell.Option{auditcell.WithCrossTenantQueryStore(ctStore)}, nil, nil
+		return memAuditStorageOpts(shared, relayMem, bootstrapMem)
 	}
 
 	pg, pgErr := shared.PG.ForCell(auditCellID)
 	if pgErr != nil {
-		return nil, nil, fmt.Errorf("auditcore: %w", pgErr)
+		return nil, nil, nil, fmt.Errorf("auditcore: %w", pgErr)
 	}
 	opts := []auditcell.Option{
 		auditcell.WithOutboxDeps(nil, outbox.WrapWriterForCell(pg.OutboxWriter())),
 		auditcell.WithTxManager(persistence.WrapForCell(pg.TxManager())),
 	}
-	crossTenantStore, ctRes, ctErr := buildCrossTenantStore(ctx, shared)
+	crossTenantStore, verifier, ctRes, ctErr := buildCrossTenantStore(ctx, shared, auditProtocol, bootstrapProtocol)
 	if ctErr != nil {
-		return nil, nil, ctErr
+		return nil, nil, nil, ctErr
 	}
 	if crossTenantStore == nil {
-		return opts, nil, nil
+		// Admin pool not provisioned: super-admin cross-tenant reads stay 501 and the
+		// #1755 verify endpoint stays unserved (no verifier). Unchanged for #1810.
+		return opts, nil, nil, nil
 	}
 	opts = append(opts, auditcell.WithCrossTenantQueryStore(crossTenantStore))
-	return opts, []kernellifecycle.ManagedResource{ctRes}, nil
+	return opts, []bootstrap.Option{bootstrap.WithAuditChainVerifier(verifier)},
+		[]kernellifecycle.ManagedResource{ctRes}, nil
 }
 
-// buildCrossTenantStore constructs the admin-pool-backed CrossTenantQueryStore
-// for super-admin cross-tenant reads (#1810). Returns (nil, nil, nil) when
-// GOCELL_AUDIT_ADMIN_DSN is not set — the caller treats nil as "not provisioned"
-// and leaves super-admin reads fail-closed at HTTP 501. Returns (nil, nil, err)
-// when the env var is set but the pool construction or ping fails — FAIL-FAST.
-// On success it returns the store AND a poolCloseResource so the admin pool is
-// Closed in LIFO order on graceful shutdown (registered via ModuleResult.Resources).
+// memAuditStorageOpts builds the demo/memory cross-tenant read store + a mem-backed
+// #1755 chain verifier (so the verify endpoint works in demo when an operator
+// stands up the AdminListener). Both mem stores are guaranteed non-nil here
+// (buildAuditStoresWithMem populated them). Extracted to keep auditStorageOpts's
+// cognitive complexity within bounds.
+func memAuditStorageOpts(
+	shared *composition.SharedDeps, relayMem, bootstrapMem *ledger.MemStore,
+) ([]auditcell.Option, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	ctStore, ctErr := ledger.NewMemCrossTenantStore(relayMem, bootstrapMem)
+	if ctErr != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore: mem cross-tenant store: %w", ctErr)
+	}
+	verifyStore, vsErr := ledger.NewMemChainVerifyStore(relayMem, bootstrapMem)
+	if vsErr != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore: mem chain verify store: %w", vsErr)
+	}
+	verifier, vErr := audit.NewChainVerifier(verifyStore, shared.MetricsProvider, shared.Clock, nil)
+	if vErr != nil {
+		return nil, nil, nil, fmt.Errorf("auditcore: mem chain verifier: %w", vErr)
+	}
+	return []auditcell.Option{auditcell.WithCrossTenantQueryStore(ctStore)},
+		[]bootstrap.Option{bootstrap.WithAuditChainVerifier(verifier)}, nil, nil
+}
+
+// buildCrossTenantStore constructs the admin-pool-backed dependencies that need
+// the gocell_audit_admin role: the super-admin CrossTenantQueryStore (#1810) AND
+// the #1755 full-chain ChainVerifier (one shared admin pool, one ManagedResource).
+// Returns (nil, nil, nil, nil) when GOCELL_AUDIT_ADMIN_DSN is not set — the caller
+// treats nil as "not provisioned" and leaves super-admin reads fail-closed at HTTP
+// 501 and the verify endpoint unserved. Returns (nil, nil, nil, err) when the env
+// var is set but construction / preflight fails — FAIL-FAST. On success it returns
+// the cross-tenant store, the verifier, AND a poolCloseResource so the admin pool
+// is Closed in LIFO order on graceful shutdown (registered via ModuleResult.Resources).
 //
 // The admin pool connects with the gocell_audit_admin role which has a
 // role-scoped permissive RLS SELECT policy (migration 065 — USING(true)), so it
 // can read every tenant's rows without BYPASSRLS, preserving ADR #1676.
 // No localhost fallback; no default credentials.
 func buildCrossTenantStore(
-	ctx context.Context, shared *composition.SharedDeps,
-) (ledger.CrossTenantQueryStore, kernellifecycle.ManagedResource, error) {
+	ctx context.Context, shared *composition.SharedDeps, auditProtocol, bootstrapProtocol *ledger.Protocol,
+) (ledger.CrossTenantQueryStore, *audit.ChainVerifier, kernellifecycle.ManagedResource, error) {
 	adminDSN := os.Getenv("GOCELL_AUDIT_ADMIN_DSN")
 	if adminDSN == "" {
-		// Not provisioned — super-admin reads stay gracefully unavailable (501);
-		// nil store + nil resource is the sanctioned "absent" sentinel (caller
-		// checks crossTenantStore != nil before wiring).
-		return nil, nil, nil //nolint:nilnil // nil-triple = "not provisioned" sentinel; see godoc
+		// Not provisioned — super-admin reads stay gracefully unavailable (501) and
+		// the verify endpoint stays unserved; the nil sentinel signals "absent".
+		return nil, nil, nil, nil //nolint:nilnil // nil sentinel = "not provisioned"; see godoc
 	}
 	if shared.PG == nil {
-		return nil, nil, fmt.Errorf("auditcore: GOCELL_AUDIT_ADMIN_DSN is set but postgres capability is nil " +
+		return nil, nil, nil, fmt.Errorf("auditcore: GOCELL_AUDIT_ADMIN_DSN is set but postgres capability is nil " +
 			"(composition root must provision the postgres capability on SharedDeps)")
 	}
 	// Build a dedicated admin pool. RequireRestrictedRole is false: the
@@ -232,7 +261,7 @@ func buildCrossTenantStore(
 	adminPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: adminDSN})
 	if err != nil {
 		// DSN set but pool construction/ping failed → FAIL-FAST (no silent fallback).
-		return nil, nil, fmt.Errorf("auditcore: admin cross-tenant pool: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore: admin cross-tenant pool: %w", err)
 	}
 	// Composition-time preflight (#1810 F3): assert the admin pool's role is
 	// correctly provisioned — non-superuser, NOBYPASSRLS, and has SELECT on
@@ -241,7 +270,7 @@ func buildCrossTenantStore(
 	// avoid a leaked connection.
 	if prefErr := adminPool.AuditAdminReadyCheck(ctx); prefErr != nil {
 		_ = adminPool.Close(ctx)
-		return nil, nil, fmt.Errorf("auditcore: admin pool role preflight failed "+
+		return nil, nil, nil, fmt.Errorf("auditcore: admin pool role preflight failed "+
 			"(GOCELL_AUDIT_ADMIN_DSN is set but the role is misconfigured — "+
 			"ensure gocell_audit_admin is NOSUPERUSER NOBYPASSRLS with SELECT on audit_entries): %w",
 			prefErr)
@@ -249,9 +278,38 @@ func buildCrossTenantStore(
 	store, err := adapterpg.NewAuditCrossTenantStore(adminPool.DB())
 	if err != nil {
 		_ = adminPool.Close(ctx)
-		return nil, nil, fmt.Errorf("auditcore: NewAuditCrossTenantStore: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore: NewAuditCrossTenantStore: %w", err)
 	}
-	return store, auditAdminPoolResource{pool: adminPool}, nil
+	verifier, err := buildChainVerifier(ctx, shared, adminPool, auditProtocol, bootstrapProtocol)
+	if err != nil {
+		_ = adminPool.Close(ctx)
+		return nil, nil, nil, err
+	}
+	return store, verifier, auditAdminPoolResource{pool: adminPool}, nil
+}
+
+// buildChainVerifier wires the #1755 admin-pool-backed ChainVerifier from the same
+// admin pool as the cross-tenant store. The protocol map is keyed by each
+// protocol's OWN Namespace() (drift-proof — the key cannot diverge from the
+// protocol it indexes); NewAuditChainVerifyStore re-runs the admin-role preflight
+// (fail-closed self-guard, #1755). Extracted to keep buildCrossTenantStore's
+// cognitive complexity within bounds.
+func buildChainVerifier(
+	ctx context.Context, shared *composition.SharedDeps, adminPool *adapterpg.Pool,
+	auditProtocol, bootstrapProtocol *ledger.Protocol,
+) (*audit.ChainVerifier, error) {
+	verifyStore, err := adapterpg.NewAuditChainVerifyStore(ctx, adminPool, map[string]*ledger.Protocol{
+		string(auditProtocol.Namespace()):     auditProtocol,
+		string(bootstrapProtocol.Namespace()): bootstrapProtocol,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auditcore: NewAuditChainVerifyStore: %w", err)
+	}
+	verifier, err := audit.NewChainVerifier(verifyStore, shared.MetricsProvider, shared.Clock, nil)
+	if err != nil {
+		return nil, fmt.Errorf("auditcore: NewChainVerifier: %w", err)
+	}
+	return verifier, nil
 }
 
 // buildAuditProtocols builds the cursor codec and both ledger protocols

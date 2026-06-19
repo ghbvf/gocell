@@ -29,6 +29,14 @@ audit read 的 **serving 池**（NOBYPASSRLS）对 `RowScopeAll` 始终 fail-clo
 未 provision 时优雅 fail-closed（501，不 fail-open）。机制/威胁矩阵见 ADR
 `202606131900-1810` + `202606071300-1618`/`202606071200-1676` 的 2026-06-13 amendment。
 
+同一 `gocell_audit_admin` admin 池还背书 **admin 全链 verify 工具**（#1755）：枚举每个
+`(namespace, tenant)` 链并逐链 HMAC verify，经 operator 端点 `POST /admin/v1/audit/chains/verify`
+（AdminListener，凭据 gated）触发。它是**系统完整性操作**（同 `VerifyBootstrapTailOnStartup`），
+只返回完整性裁决（valid / first-invalid-seq）、**不返回审计行内容**，故**不带** `CrossTenantVisibility`
+obligation（不经 #1760 sealed 数据读 funnel——Hard by `ChainVerifyResult` 字段集）。verify store 构造期
+强制 `AuditAdminReadyCheck`（serving 池被 fail-closed 拒，#1755 AI-HARD），机制见 ADR
+`202606191724-1755`。
+
 ## Principal claim source
 
 JWT tenant claim 在 auth 边界解析并写入 context。service principal 无 tenant。

@@ -278,6 +278,20 @@ type Bootstrap struct {
 	// endpoint not mounted (rebuild remains programmatic-only).
 	projectionRebuildEnabled bool
 
+	// auditChainVerifier is the admin-pool-backed full-chain verify orchestrator
+	// (#1755), injected by WithAuditChainVerifier. Held behind the narrow
+	// chainVerifier interface (audit_chain_verify.go) so the handler is testable
+	// with a fake. nil unless the composition root provisioned the admin pool.
+	auditChainVerifier chainVerifier
+
+	// auditChainVerifyEnabled opts in the framework audit chain verify
+	// control-plane endpoint, set by WithAuditChainVerifyEndpoint. true = phase5
+	// mounts POST /admin/v1/audit/chains/verify on the AdminListener (operator
+	// auth). false = endpoint not mounted. phase0
+	// (validateAuditChainVerifyEndpoint) fails fast if enabled without an
+	// AdminListener or without an injected verifier.
+	auditChainVerifyEnabled bool
+
 	// frameworkServingRoutes are the wired framework-owned HTTP RouteGroups, set by
 	// WithFrameworkHTTPServing. The must-serve EXPECTATION is NOT stored here — it
 	// rides on the assembly (assembly.Config.FrameworkContracts, read via

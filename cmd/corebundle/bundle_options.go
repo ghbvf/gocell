@@ -213,6 +213,23 @@ func defaultRuntimeOptions(
 		bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []auth.ListenerAuth{auth.AuthNone{}}),
 		devtoolsOption(shared),
 	)
+	// Operator control-plane (AdminListener) — declared ONLY when operator
+	// credentials are present, so the default deployment stays AdminListener-free
+	// and the #1755 audit chain verify endpoint stays dormant (like projection
+	// rebuild). The verify endpoint is enabled in the SAME block, so admin-pool
+	// presence (which enables #1810 super-admin reads) never forces the admin plane
+	// on — the verifier is injected by the auditcore module regardless, but stays
+	// unserved here without operator credentials (no #1810 regression).
+	operatorAuth, operatorEnabled, opErr := operatorAuthFromEnv(shared.Clock)
+	if opErr != nil {
+		return nil, fmt.Errorf("operator admin auth: %w", opErr)
+	}
+	if operatorEnabled {
+		opts = append(opts,
+			bootstrap.WithListener(cell.AdminListener, adminHTTPAddr(), []auth.ListenerAuth{operatorAuth}),
+			bootstrap.WithAuditChainVerifyEndpoint(),
+		)
+	}
 	return opts, nil
 }
 

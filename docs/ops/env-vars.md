@@ -104,14 +104,34 @@ Both variables are **required, persistent operator Basic Auth credentials** prot
 | `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | HTTP Basic Auth username protecting the setup/admin endpoint. Persistent operator authenticator — env is the authenticator (who may trigger setup), not the business admin identity (which comes from the POST body). Must be non-empty; empty value fails fast. | — | **Required, persistent (lifetime of deployment)** |
 | `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | HTTP Basic Auth password protecting the setup/admin endpoint. Minimum 8 bytes after TrimSpace (handles K8s secret trailing newlines). Control characters fail fast. Persistent operator authenticator — not the business admin password. | — | **Required, persistent (lifetime of deployment)** |
 
-> **Operator control-plane (admin listener)**: `cmd/corebundle` does **not** wire
-> `cell.AdminListener` / `AuthOperator`, so it reads no `GOCELL_OPERATOR_ADMIN_*`
-> variables — setting them on corebundle has no effect. The operator
-> control-plane (`/admin/v1/*`, e.g. projection rebuild) is demonstrated in
-> `examples/todoorder` (see `examples/todoorder/auth.go::newOperatorAuthFromEnv`,
-> which reads `GOCELL_OPERATOR_ADMIN_USERNAME` / `_PASSWORD`). Design:
-> `docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md` and
-> `docs/ops/listener-topology.md` §"Admin Listener".
+### Operator control-plane (admin listener)
+
+`cmd/corebundle` wires `cell.AdminListener` / `AuthOperator` **conditionally** —
+only when operator credentials are present in the environment (#1755). Absent
+credentials = no admin port (the default deployment posture; the audit chain verify
+and projection rebuild endpoints stay dormant). Present credentials = a loopback
+admin listener gated by operator HTTP Basic Auth + per-IP rate limiting, mounting
+`POST /admin/v1/audit/chains/verify` (full per-`(namespace, tenant)` audit chain
+integrity verify, #1755). The endpoint enable is gated on these credentials —
+NOT on `GOCELL_AUDIT_ADMIN_DSN` — so provisioning the audit admin pool (#1810
+super-admin reads) without operator credentials never stands up the admin plane.
+
+| Variable | Purpose | Default | Notes |
+|---|---|---|---|
+| `GOCELL_OPERATOR_ADMIN_USERNAME` | HTTP Basic Auth username for the operator control-plane (AdminListener). When unset (with `_PASSWORD`), the AdminListener is not declared. | — | Optional; both username+password gate the admin plane |
+| `GOCELL_OPERATOR_ADMIN_PASSWORD` | HTTP Basic Auth password for the operator control-plane. Minimum length enforced by `auth.NewAuthOperator`; not trimmed (may contain whitespace). | — | Optional; required (with username) to enable the AdminListener |
+| `GOCELL_ADMIN_HTTP_ADDR` | AdminListener bind address. Loopback by default (network isolation + operator credentials = defense in depth). Only consulted when operator credentials enable the admin plane. | `127.0.0.1:9092` | Any `host:port` |
+
+The audit chain verify endpoint emits aggregate Prometheus metrics on the health
+listener's `/metrics`: `audit_chain_verify_runs_total{outcome}` (outcome ∈
+`success`|`invalid_found`|`error`), `audit_chain_verify_invalid_chains` /
+`audit_chain_verify_errored_chains` (last-run gauges), and
+`audit_chain_verify_duration_seconds`. Per-chain detail (namespace, tenant, first
+invalid seq) is on the response body + structured logs only — never a metric label.
+Design: `docs/architecture/202606191724-1755-adr-admin-audit-chain-verify-tool.md`,
+`docs/architecture/202606041200-1505-adr-operator-control-plane-auth.md`,
+`docs/ops/listener-topology.md` §"Admin Listener". `examples/todoorder` demonstrates
+the same operator-credential pattern for the projection rebuild endpoint.
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 

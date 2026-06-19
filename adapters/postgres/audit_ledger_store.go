@@ -717,96 +717,12 @@ func (s *LedgerStore) scanEntries(rows pgx.Rows, ns string) ([]*ledger.Entry, er
 // post-commit integrity verification must call Verify after the transaction
 // commits.
 func (s *LedgerStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
-	ns := s.namespace()
-	chainTenant := auditChainTenant(ctx)
-
-	if fromSeq < 1 || toSeq < fromSeq {
-		return false, fromSeq, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
-	}
-
-	prevHash, baseErr := s.verifyBaseline(ctx, ns, chainTenant, fromSeq)
-	if baseErr != nil {
-		return false, fromSeq, baseErr
-	}
-
-	return s.verifyRange(ctx, ns, chainTenant, fromSeq, toSeq, prevHash)
-}
-
-// verifyBaseline returns the hash of entries[fromSeq-1] in the (namespace,
-// tenant) chain when fromSeq > 1 (the sub-range baseline), or "" when
-// fromSeq == 1 (chain genesis). A missing baseline row returns
-// ErrAuditLedgerNotFound.
-func (s *LedgerStore) verifyBaseline(ctx context.Context, ns, tenantID string, fromSeq int64) (string, error) {
-	if fromSeq == 1 {
-		return "", nil
-	}
-	var baselineHash string
-	err := s.db.QueryRow(
-		ctx,
-		`SELECT hash FROM audit_entries WHERE namespace=$1 AND tenant_id=$2 AND seq_no=$3`,
-		ns, tenantID, fromSeq-1,
-	).Scan(&baselineHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", errcode.New(errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: Verify baseline entry not found",
-			errcode.WithDetails(errcode.PublicInt("baselineSeqNo", fromSeq-1)))
-	}
-	if err != nil {
-		return "", ctxcancel.WrapOrInfra(err, "verify_baseline", ns,
-			ErrAdapterPGQuery, "audit ledger: verify baseline lookup failed")
-	}
-	return baselineHash, nil
-}
-
-// verifyRange scans entries in [fromSeq, toSeq] of the (namespace, tenant) chain
-// and validates gap-freeness, PrevHash linkage, and hash recomputation. prevHash
-// is the expected PrevHash of the first scanned entry (empty string for the
-// chain genesis).
-func (s *LedgerStore) verifyRange(ctx context.Context, ns, tenantID string, fromSeq, toSeq int64, prevHash string) (bool, int64, error) {
-	rows, queryErr := s.db.Query(ctx, selectRangeSQL, ns, tenantID, fromSeq, toSeq)
-	if queryErr != nil {
-		return false, 0, ctxcancel.WrapOrInfra(queryErr, "verify_query", ns,
-			ErrAdapterPGQuery, "audit ledger: verify range query failed")
-	}
-	defer rows.Close()
-
-	expectedSeq := fromSeq
-	for rows.Next() {
-		var e ledger.Entry
-		if scanErr := rows.Scan(
-			&e.SeqNo,
-			&e.EventID, &e.EventType, &e.ActorID,
-			&e.SubjectID, &e.TenantID, &e.SessionID, &e.CorrelationID, &e.TraceID, &e.OccurredAt,
-			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
-		); scanErr != nil {
-			return false, 0, ctxcancel.WrapOrInfra(scanErr, "verify_scan", ns,
-				ErrAdapterPGQuery, "audit ledger: verify scan failed")
-		}
-		if e.SeqNo != expectedSeq {
-			return false, expectedSeq, nil
-		}
-		expectedSeq++
-		if e.PrevHash != prevHash {
-			return false, e.SeqNo, nil
-		}
-		if e.Hash != s.protocol.ComputeHash(e.PrevHash, &e) {
-			return false, e.SeqNo, nil
-		}
-		prevHash = e.Hash
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return false, 0, ctxcancel.WrapOrInfra(rowsErr, "verify_rows_err", ns,
-			ErrAdapterPGQuery, "audit ledger: verify rows error")
-	}
-	if expectedSeq <= toSeq {
-		return false, expectedSeq, errcode.New(
-			errcode.KindNotFound, errcode.ErrAuditLedgerNotFound,
-			"audit ledger: entry not found during Verify",
-			errcode.WithDetails(errcode.PublicInt("missingSeqNo", expectedSeq)),
-		)
-	}
-	return true, -1, nil
+	// Delegates to the shared package verify loop (audit_verify_core.go) so the
+	// serving path and the #1755 admin AuditChainVerifyStore path use ONE
+	// HMAC/linkage implementation. The chain is scoped by the explicit
+	// (namespace, tenant) predicates the loop builds — here namespace is this
+	// store's bound namespace and tenant is the ctx scope (#1618).
+	return verifyChainExec(ctx, s.db, s.protocol, s.namespace(), auditChainTenant(ctx), fromSeq, toSeq)
 }
 
 // validateAuditPayloadJSON checks that payload is a valid JSON object or null.
