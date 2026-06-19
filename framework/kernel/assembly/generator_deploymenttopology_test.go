@@ -101,6 +101,12 @@ func TestGenerateModulesGen_TopologyGroups_MultiGroup_Golden(t *testing.T) {
 		{Role: "edge", Cells: []string{metadatatest.CellIDAuditCore}, Endpoint: "https://edge.svc:9443"},
 	}}
 	project := buildCompositionProjectForTopology(topo)
+	// #2429: require a capability so the golden carries the runtime/capability import
+	// alongside bootstrap/composition. This byte-locks the gofumpt-canonical import
+	// ordering (bootstrap < capability < composition) — the exact block whose
+	// hardcoded mis-ordering tripped the pre-push gofumpt gate. Without a capability
+	// the import block omits capability and the regression is invisible to the golden.
+	project.Cells[metadatatest.CellIDAccessCore].Requires = []string{"postgres"}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateModulesGen("topobundle")
@@ -126,11 +132,24 @@ func TestGenerateModulesGen_TopologyGroups_MultiGroup_Golden(t *testing.T) {
 	for _, want := range []string{
 		"[]bootstrap.TopologyGroup{", `Role:     "core"`, `Role:     "edge"`,
 		`"accesscore"`, `"auditcore"`, `"https://core.svc:9443"`, `"https://edge.svc:9443"`,
+		// #2429: the capability import must be present (so the golden actually
+		// exercises the bootstrap < capability < composition ordering it locks).
+		`"github.com/ghbvf/gocell/framework/runtime/capability"`,
 	} {
 		if !bytes.Contains(out, []byte(want)) {
 			t.Errorf("generated output missing %q:\n%s", want, out)
 		}
 	}
+	// #2429: the framework import block must be gofumpt-canonical regardless of the
+	// golden bytes — bootstrap < capability < composition (alphabetical path order).
+	posBootstrap := bytes.Index(out, []byte(`"github.com/ghbvf/gocell/framework/runtime/bootstrap"`))
+	posCapability := bytes.Index(out, []byte(`"github.com/ghbvf/gocell/framework/runtime/capability"`))
+	posComposition := bytes.Index(out, []byte(`"github.com/ghbvf/gocell/framework/runtime/composition"`))
+	require.Positive(t, posBootstrap)
+	require.Positive(t, posCapability)
+	require.Positive(t, posComposition)
+	assert.Less(t, posBootstrap, posCapability, "bootstrap import must precede capability (#2429)")
+	assert.Less(t, posCapability, posComposition, "capability import must precede composition (#2429)")
 }
 
 // TestGenerateModulesGen_TopologyGroups_IllegalCellInTwoGroups is the

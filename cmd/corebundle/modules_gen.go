@@ -7,8 +7,8 @@ import (
 	cellmodulesauditcore "github.com/ghbvf/gocell/cellmodules/auditcore"
 	cellmodulesconfigcore "github.com/ghbvf/gocell/cellmodules/configcore"
 	cellmodulessyscore "github.com/ghbvf/gocell/cellmodules/syscore"
-	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 )
 
