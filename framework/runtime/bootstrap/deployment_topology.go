@@ -37,6 +37,17 @@ type TopologyGroup struct {
 	Role     string
 	Cells    []string
 	Endpoint string
+	// RequiresBrokerForCrossProcessEvents is the codegen-derived per-role signal:
+	// true iff this group is an endpoint (publisher OR subscriber side) of at
+	// least one active, amqp-transported event contract whose publisher cell and
+	// some subscriber cell fall in DIFFERENT groups (i.e. cross a process
+	// boundary). Derived by `gocell generate assembly` from the assembly's
+	// contractUsages + topology, NOT hand-authored — metadata.TopologyGroup
+	// (authoring YAML) deliberately does not carry this field. It is the precise
+	// input to the phase0 broker-mandatory gate, replacing the coarse
+	// HasRemoteCells proxy: a sync-only split (remote cells but no cross-process
+	// events) reports false here and is correctly allowed an in-memory bus (#2196).
+	RequiresBrokerForCrossProcessEvents bool
 }
 
 // Deployment-role selection error message constants — MESSAGE-CONST-LITERAL-01.
@@ -102,6 +113,9 @@ func deriveRoleSpec(groups []TopologyGroup, role string) (DeploymentTopologySpec
 		if g.Role == role {
 			found = true
 			spec.Colocated = append([]string(nil), g.Cells...)
+			// Project the SELECTED role's broker signal (not an OR across groups):
+			// the gate fires per-process, and only this process's role matters.
+			spec.RequiresBrokerForCrossProcessEvents = g.RequiresBrokerForCrossProcessEvents
 			continue
 		}
 		for _, c := range g.Cells {
@@ -130,6 +144,12 @@ func deriveRoleSpec(groups []TopologyGroup, role string) (DeploymentTopologySpec
 type DeploymentTopologySpec struct {
 	Colocated []string
 	Remote    []RemoteCellEndpoint
+	// RequiresBrokerForCrossProcessEvents is the codegen-derived per-process
+	// signal projected from the selected role's TopologyGroup (see that field's
+	// doc). True => this process participates in cross-process event pub/sub and
+	// the phase0 broker-mandatory gate demands a real broker; false => sync-only
+	// (or colocated) and the in-memory bus is permitted.
+	RequiresBrokerForCrossProcessEvents bool
 }
 
 // DeploymentTopology is the SEALED, validated, runtime-read-only view of the
@@ -147,6 +167,11 @@ type DeploymentTopology struct {
 	explicit  bool                // false = no topology declared => all colocated
 	colocated map[string]struct{} // populated iff explicit
 	remote    map[string]string   // cellID -> endpoint, iff explicit
+	// requiresBrokerForCrossProcessEvents is the sealed copy of the spec's
+	// codegen-derived per-process broker signal (see DeploymentTopologySpec). It
+	// is the sole input to the phase0 broker-mandatory gate; queried via
+	// RequiresBrokerForCrossProcessEvents(). Zero value (all-colocated) = false.
+	requiresBrokerForCrossProcessEvents bool
 }
 
 // Deployment topology error message constants — MESSAGE-CONST-LITERAL-01.
@@ -186,9 +211,10 @@ func newDeploymentTopology(spec DeploymentTopologySpec) (DeploymentTopology, err
 	}
 
 	return DeploymentTopology{
-		explicit:  true,
-		colocated: colocated,
-		remote:    remote,
+		explicit:                            true,
+		colocated:                           colocated,
+		remote:                              remote,
+		requiresBrokerForCrossProcessEvents: spec.RequiresBrokerForCrossProcessEvents,
 	}, nil
 }
 
@@ -277,16 +303,27 @@ func validateDeployEndpoint(ep, cellID string) error {
 
 // HasRemoteCells reports whether the deployment topology declares at least one
 // remote cell (i.e. a split topology with a process boundary). Zero value
-// (no explicit topology, all-colocated) returns false. Used by the bootstrap
-// phase0 broker-mandatory gate: a split topology + in-memory EventBus is
-// rejected because the in-memory bus cannot deliver events across processes.
+// (no explicit topology, all-colocated) returns false.
 //
-// Coarse proxy (Medium, blind-spot): true for ANY remote cell, even one with
-// only sync (CellTransport) contracts and no cross-process events; the precise
-// "has cross-process event pub/sub" signal would require codegen derivation
-// (tracked as #1967).
+// This is the generic "is this a split deployment?" predicate, consumed by the
+// split-mTLS gates (HasNonLoopbackRemoteCells / SharedNonLoopbackRemoteEndpoint
+// build on the same remote set) and celltransport wiring. It is NOT the
+// broker-mandatory trigger: since #2196 that gate keys off the precise
+// codegen-derived RequiresBrokerForCrossProcessEvents signal, so a sync-only
+// split (remote cells, no cross-process events) is no longer over-rejected.
 func (t DeploymentTopology) HasRemoteCells() bool {
 	return len(t.remote) > 0
+}
+
+// RequiresBrokerForCrossProcessEvents reports whether this process participates
+// in cross-process event pub/sub and therefore needs a real broker (the
+// in-memory EventBus cannot deliver events across processes). It is the precise
+// codegen-derived signal (single-sourced from assembly.yaml topology +
+// contractUsages, projected per-role by SpecForRole, sealed here), and the sole
+// trigger of the phase0 broker-mandatory gate (validateSplitTopologyBroker).
+// Zero value (all-colocated, or a sync-only split) returns false.
+func (t DeploymentTopology) RequiresBrokerForCrossProcessEvents() bool {
+	return t.requiresBrokerForCrossProcessEvents
 }
 
 // HasNonLoopbackRemoteCells reports whether the topology declares at least one

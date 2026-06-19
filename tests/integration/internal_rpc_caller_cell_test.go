@@ -239,7 +239,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	require.NoError(t, err)
 	callerCellCollector, err := obmetrics.NewGRPCProviderCollector(kernelmetrics.NopProvider{}, obmetrics.ProviderCollectorConfig{})
 	require.NoError(t, err)
-	callerCellGRPCServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+	callerCellGRPCServer, err := grpclistener.ServerFromEnv(grpclistener.PlatformEnv, outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
 		Verifier:        callerCellNoopGRPCVerifier{},
 		Clock:           clock.Real(),
 		Collector:       callerCellCollector,

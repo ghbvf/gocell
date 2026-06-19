@@ -96,6 +96,18 @@ No cell flips to ⚠️/❌.
 - A third deployment role + an additional managed pool (closed LIFO on shutdown).
 - `schema_guard` now has role-conditional RLS expectations on `audit_entries`.
 
+## Amendment 2026-06-19 — startup full-chain verify shipped (#1755)
+
+The *Scope boundaries* "OUT — #1755: startup full per-tenant chain verify" item is
+now **shipped** (ADR `202606191724-1755`). #1810's promise held: the
+`gocell_audit_admin` admin pool is exactly the enumeration prerequisite the verify
+tool needed (`SELECT DISTINCT namespace, tenant_id`), and #1755 reuses this admin
+pool read-only. The verify tool carries NO `CrossTenantVisibility` obligation
+(unlike `QueryCrossTenant`) because it returns only integrity verdicts, never audit
+row content — so the sealed cross-tenant data-read funnel is untouched. No threat
+cell flips: the admin pool, the role-scoped policy, and the serving-role boundary
+are all unchanged; #1755 adds only a read-only SELECT consumer.
+
 ## References
 
 - Migration: `adapters/postgres/migrations/065_audit_admin_read_role.sql`

@@ -3,6 +3,7 @@ package grpclistener
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	adaptersgrpc "github.com/ghbvf/gocell/adapters/grpc"
@@ -44,12 +45,29 @@ func TestAddrFromEnv(t *testing.T) {
 			if tc.wantSet {
 				t.Setenv(EnvAddr, tc.envVal)
 			}
-			got := AddrFromEnv()
+			got := AddrFromEnv(PlatformEnv)
 			if got != tc.want {
 				t.Errorf("AddrFromEnv() = %q; want %q", got, tc.want)
 			}
 		})
 	}
+}
+
+func TestAddrFromEnv_CustomEnvConfig(t *testing.T) {
+	env := EnvConfig{Prefix: "GOCELL_IOTDEVICE_GRPC", DefaultAddr: ":8084"}
+
+	t.Run("custom default when unset", func(t *testing.T) {
+		if got := AddrFromEnv(env); got != ":8084" {
+			t.Errorf("AddrFromEnv(custom) = %q; want :8084", got)
+		}
+	})
+
+	t.Run("custom prefix override", func(t *testing.T) {
+		t.Setenv("GOCELL_IOTDEVICE_GRPC_ADDR", "  127.0.0.1:18084  ")
+		if got := AddrFromEnv(env); got != "127.0.0.1:18084" {
+			t.Errorf("AddrFromEnv(custom) = %q; want 127.0.0.1:18084", got)
+		}
+	})
 }
 
 // TestTLSConfigFromEnv verifies the six TLS posture cases for tlsConfigFromEnv.
@@ -149,7 +167,7 @@ func TestTLSConfigFromEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setEnv(t)
 
-			got, err := tlsConfigFromEnv(tc.mode)
+			got, err := tlsConfigFromEnv(PlatformEnv, tc.mode)
 
 			if tc.wantErr {
 				if err == nil {
@@ -164,6 +182,33 @@ func TestTLSConfigFromEnv(t *testing.T) {
 			assertTLSConfig(t, got, tc.wantAllowInsecure, tc.wantCertNonNil, tc.wantKeyNonNil, tc.wantCANonNil)
 		})
 	}
+}
+
+func TestTLSConfigFromEnv_CustomEnvConfig(t *testing.T) {
+	env := EnvConfig{Prefix: "GOCELL_IOTDEVICE_GRPC", DefaultAddr: ":8084"}
+
+	t.Run("durable mode honors custom allow insecure env", func(t *testing.T) {
+		t.Setenv("GOCELL_IOTDEVICE_GRPC_ALLOW_INSECURE", "true")
+
+		got, err := tlsConfigFromEnv(env, outbox.DurabilityDurable)
+		if err != nil {
+			t.Fatalf("tlsConfigFromEnv(custom) unexpected error: %v", err)
+		}
+		assertTLSConfig(t, got, true, false, false, false)
+	})
+
+	t.Run("custom tls env names are used in errors", func(t *testing.T) {
+		t.Setenv("GOCELL_IOTDEVICE_GRPC_TLS_CERT_FILE", filepath.Join(t.TempDir(), "cert.pem"))
+
+		_, err := tlsConfigFromEnv(env, outbox.DurabilityDurable)
+		if err == nil {
+			t.Fatal("expected error for missing key")
+		}
+		if got := err.Error(); !strings.Contains(got, "GOCELL_IOTDEVICE_GRPC_TLS_CERT_FILE") ||
+			!strings.Contains(got, "GOCELL_IOTDEVICE_GRPC_TLS_KEY_FILE") {
+			t.Fatalf("error = %q; want custom TLS env names", got)
+		}
+	})
 }
 
 func assertTLSConfig(

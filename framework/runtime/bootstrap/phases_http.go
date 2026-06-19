@@ -173,6 +173,12 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState) []cell.RouteGroup {
 	if b.projectionRebuildEnabled {
 		groups = append(groups, b.projectionRebuildRouteGroup())
 	}
+	// Framework audit chain verify control-plane endpoint (opt-in via
+	// WithAuditChainVerifyEndpoint, #1755). phase0 (validateAuditChainVerifyEndpoint)
+	// guaranteed the AdminListener + injected verifier exist when enabled.
+	if b.auditChainVerifyEnabled {
+		groups = append(groups, b.auditChainVerifyRouteGroup())
+	}
 	// Framework-owned HTTP serving (ownerCell: _framework; opt-in via
 	// WithFrameworkHTTPServing). These RouteGroups keep CellID=="" (framework-owned,
 	// not cell-owned); phase0 (validateFrameworkServing) reconciled the wired set

@@ -38,13 +38,16 @@ correct choice for most assemblies and requires no configuration change.
   scheme** in a split (≥2 groups) topology (enforced by `gocell validate` rule
   TOPO-14, #2263). Loopback endpoints (`localhost`/`127.x.x.x`/`::1`) may use
   bare `host:port` or `http` for local multi-process dev.
-- **Split requires a broker**: when an event's publisher and subscriber land in
-  different groups, a real event broker is required (TOPO-13).
+- **Cross-process events require a broker**: when an active amqp event's publisher
+  and subscriber land in different groups, a real event broker is required. This is
+  enforced at startup by the bootstrap runtime gate from a codegen-derived signal
+  (the former static `gocell validate` rule TOPO-13 was removed in #2196); a
+  sync-only split (remote cells, no cross-process events) does NOT require a broker.
 
 ## Current status: `topology.groups` authoring + runtime role selection (PR-2)
 
 `topology.groups` is the authoring model (#2278 PR-1, replacing the earlier
-single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/13/14),
+single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/14),
 `gocell generate` (emits `generatedTopologyGroups()`), and the catalog export all
 operate on groups.
 
@@ -65,8 +68,10 @@ ever mounts a cell declared remote for its role (the upstream backstop for
 `NewForRole`). End-to-end dual-topology acceptance (same image, 2 processes +
 broker + PG) is tracked by #1967 (PR-4).
 
-A split topology requires a real event broker (TOPO-13 enforces this). See the
-§Split topology requirements section below for the full infrastructure checklist.
+A split topology with cross-process events requires a real event broker (the
+bootstrap runtime gate enforces this from a codegen-derived signal; the static
+TOPO-13 rule was removed in #2196). See the §Split topology requirements section
+below for the full infrastructure checklist.
 
 ## Endpoint format
 
@@ -82,20 +87,22 @@ material via the four env vars described in §Split mTLS 配置 checklist below.
 
 ## Static enforcement by `gocell validate`
 
-Four governance rules enforce deployment topology:
+Three governance rules enforce deployment topology statically:
 
 | Rule | What it checks |
 |------|---------------|
 | **TOPO-10** | Structural validity: groups exhaustively + mutually-exclusively partition the assembly's cells; unique non-empty roles; valid per-group endpoints |
 | **TOPO-11** | Provider reachability: every contract consumed by a cell in the assembly must have its provider cell as a member of that assembly |
-| **TOPO-13** | Active broker gate (US3 #1965): in a split topology (≥2 groups), an event contract whose publisher and subscriber fall in different groups requires a real broker — the in-memory EventBus cannot deliver events across processes |
 | **TOPO-14** | mTLS scheme gate (#2263): in a split topology, a non-loopback group endpoint must use `https` scheme — bare `host:port` or `http://` is rejected for non-loopback addresses |
 
-Run `gocell validate` to check all four. TOPO-12 (the former topology.remote
-fail-close gate) was removed by US5 #1966. TOPO-13 is the active event-specific
-broker gate for split topologies: it fires when a split topology uses an
-in-memory EventBus for a cross-process (different-group) event contract.
-Correctness is proven by synthetic RED/GREEN unit tests.
+Run `gocell validate` to check all three. TOPO-12 (the former topology.remote
+fail-close gate) was removed by US5 #1966. The **broker-mandatory requirement**
+for cross-process events is NOT a static rule: the former static gate **TOPO-13
+was removed in #2196** because a static rule cannot see the runtime-injected
+broker and therefore over-constrained legal broker-backed splits. It is now a
+single codegen-derived fact (`assembly.collectCrossProcessBrokerEventRoles` →
+`bootstrap.DeploymentTopology.RequiresBrokerForCrossProcessEvents`) enforced
+solely by the bootstrap **phase0 runtime gate** (see §Split topology requirements below).
 
 ### Missing-dependency fail-fast (sync dimension)
 
@@ -126,8 +133,9 @@ The offending `cellID` is on the `KindInternal` error in the **server log**
   its module was not wired: confirm the composition root mounts that cell (e.g. it is
   in the role's group and `composition.NewForRole` selected it).
 
-The event dimension is covered separately by the broker gate (TOPO-13 + bootstrap
-phase0, US3 #1965). There is **no** separate phase0 missing-dependency gate — the
+The event dimension is covered separately by the broker gate (bootstrap phase0
+`validateSplitTopologyBroker`, US3 #1965; the static TOPO-13 rule was removed in
+#2196). There is **no** separate phase0 missing-dependency gate — the
 eager `celltransport.Resolve` seam already provides the runtime fail-fast (see ADR
 `202606131142-1423` §#1967 Amendment).
 
@@ -159,19 +167,29 @@ When cells are split across processes, the following infrastructure is required:
   message broker (e.g. RabbitMQ) to exchange events across process boundaries.
   In postgres topology this is provisioned per cell via `GOCELL_<CELLID>_AMQP_URL`
   (falling back to the assembly-wide `GOCELL_AMQP_URL`; #2152 PR-2 — colocated cells
-  dedup to one connection, distinct broker URLs are currently fail-closed). A split
-  topology combined with an in-memory EventBus is rejected by a **double gate**:
-  the static `gocell validate` rule TOPO-13 and a bootstrap **phase0 runtime
-  gate** (`validateSplitTopologyBroker`) that fail-fasts when the deployment has
-  remote cells while the resolved event transport is not a real broker. Since
-  #2211 that decision is the sealed `EventTransportKind` (minted only by
-  `eventtransport.Resolve`, threaded via `bootstrap.WithEventTransportKind`): the
-  gate checks `IsRealBroker()`, and an **unset** kind — e.g. a composition root
-  that declared remote cells but forgot the option — is fail-closed. This
-  replaced the earlier `StorageBackend() != postgres` proxy ("non-nil ≠ real
-  broker" closed). The runtime gate is a coarse proxy: it fires on any remote
-  cell, even one with only sync (no cross-process events); a precise
-  codegen-derived signal is a follow-up (US7 #1967).
+  dedup to one connection, distinct broker URLs are currently fail-closed). A process
+  that participates in **cross-process events** while the resolved event transport is
+  not a real broker is rejected by a single bootstrap **phase0 runtime gate**
+  (`validateSplitTopologyBroker`). Its trigger (since #2196) is the precise
+  codegen-derived `DeploymentTopology.RequiresBrokerForCrossProcessEvents` signal —
+  single-sourced from the assembly topology + contractUsages, emitted onto
+  `generatedTopologyGroups()` and sealed at phase0 — NOT the coarse `HasRemoteCells`
+  proxy: a **sync-only split** (remote cells, only CellTransport/HTTP contracts) needs
+  no *cross-process* broker — on **demo** topology the in-memory bus is permitted. The
+  former static `gocell validate` rule TOPO-13 was removed in #2196 (it could not see the
+  runtime-injected broker and so over-constrained legal broker-backed splits); the runtime
+  gate is now the sole **topology-derived (cross-process-event)** broker-mandatory
+  enforcement point. The **postgres storage-durability** broker requirement is orthogonal
+  and independent: on postgres, `eventtransport.Resolve` always provisions a real broker
+  for the durable outbox relay (keyed off `generatedBrokerCells()`), regardless of
+  cross-process events — so on a correctly-wired postgres process the gate's
+  `IsRealBroker()` check is structurally satisfied, and the gate does real broker-rejection
+  work only for demo storage. Since #2211 the "is it a real broker?" decision
+  is the sealed `EventTransportKind` (minted only by `eventtransport.Resolve`, threaded
+  via `bootstrap.WithEventTransportKind`): the gate checks `IsRealBroker()`, and an
+  **unset** kind — e.g. a composition root that declared cross-process events but
+  forgot the option — is fail-closed. This replaced the earlier
+  `StorageBackend() != postgres` proxy ("non-nil ≠ real broker" closed).
 - **Remote sync transport** (US4 #1963 + US5 #1966, active): US4 wired
   topology-gated transport selection (`celltransport.Resolve`) and the
   in-process dispatch path. US5 added `RemoteHTTPTransport` + `StaticResolver`

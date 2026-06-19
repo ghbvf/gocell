@@ -24,13 +24,18 @@ func writeTree(t *testing.T, files map[string]string) string {
 
 func TestHasNestedModuleRoot(t *testing.T) {
 	root := writeTree(t, map[string]string{
-		"cmd/gocell/go.mod":     "module x/cmd/gocell\n",
-		"cmd/gocell/main.go":    "package main\n",
-		"cmd/corebundle/go.mod": "module x/cmd/corebundle\n",
-		"framework/kernel/k.go": "package kernel\n", // plain production, no nested go.mod
+		"cmd/gocell/go.mod":               "module x/cmd/gocell\n",
+		"cmd/gocell/main.go":              "package main\n",
+		"cmd/corebundle/go.mod":           "module x/cmd/corebundle\n",
+		"cellmodules/go.mod":              "module x/cellmodules\n",
+		"cellmodules/grpclistener/go.mod": "module x/cellmodules/grpclistener\n",
+		"framework/kernel/k.go":           "package kernel\n", // plain production, no nested go.mod
 	})
 	if !HasNestedModuleRoot(filepath.Join(root, "cmd")) {
 		t.Errorf("HasNestedModuleRoot(cmd) = false, want true (cmd holds member modules)")
+	}
+	if HasNestedModuleRoot(filepath.Join(root, "cellmodules")) {
+		t.Errorf("HasNestedModuleRoot(cellmodules) = true, want false (module roots are not expandable parents)")
 	}
 	if HasNestedModuleRoot(filepath.Join(root, "framework", "kernel")) {
 		t.Errorf("HasNestedModuleRoot(framework/kernel) = true, want false (no nested go.mod)")
@@ -223,21 +228,25 @@ func TestSatelliteParentPatterns(t *testing.T) {
 // TestModuleRootMemberPatterns covers the single-sourced module-root increment
 // (#2164) — the sibling of SatelliteParentPatterns. SatelliteParentPatterns re-emits
 // the MULTI-MEMBER parents (cmd/adapters/examples, !IsModuleRoot && HasNestedModuleRoot);
-// ModuleRootMemberPatterns re-emits the TOP-LEVEL SINGLE-MODULE ROOTS (corecells/
-// cellmodules, IsModuleRoot && !HasNestedModuleRoot) that Patterns prunes via IsModuleRoot.
+// ModuleRootMemberPatterns re-emits the TOP-LEVEL MODULE ROOTS (corecells/cellmodules,
+// IsModuleRoot) that Patterns prunes via IsModuleRoot.
 // Both OBS-01 and the duration gates compose this increment onto their base.
 func TestModuleRootMemberPatterns(t *testing.T) {
-	t.Run("real workspace yields exactly the top-level single-module roots", func(t *testing.T) {
+	t.Run("real workspace yields exactly the top-level module roots", func(t *testing.T) {
 		root := writeTree(t, map[string]string{
 			"framework/kernel/k.go": "package kernel\n", // plain production layer, not a module root
 			// multi-member parent — owned by SatelliteParentPatterns, NOT this increment.
 			"cmd/gocell/go.mod":  "module x/cmd/gocell\n",
 			"cmd/gocell/main.go": "package main\n",
-			// top-level single-module roots — own go.mod, no nested member → THIS increment.
-			"cellmodules/go.mod": "module x/cellmodules\n",
-			"cellmodules/m.go":   "package cellmodules\n",
-			"corecells/go.mod":   "module x/corecells\n",
-			"corecells/c.go":     "package corecells\n",
+			// Top-level module roots — own go.mod → THIS increment. A nested helper
+			// module stays a separate workspace member without making the parent an
+			// expandable satellite parent.
+			"cellmodules/go.mod":              "module x/cellmodules\n",
+			"cellmodules/m.go":                "package cellmodules\n",
+			"cellmodules/grpclistener/go.mod": "module x/cellmodules/grpclistener\n",
+			"cellmodules/grpclistener/g.go":   "package grpclistener\n",
+			"corecells/go.mod":                "module x/corecells\n",
+			"corecells/c.go":                  "package corecells\n",
 		})
 		got := ModuleRootMemberPatterns(root)
 		gotSet := map[string]bool{}
@@ -250,7 +259,7 @@ func TestModuleRootMemberPatterns(t *testing.T) {
 			}
 		}
 		if len(got) != 2 {
-			t.Errorf("ModuleRootMemberPatterns = %v, want exactly the 2 top-level single-module roots "+
+			t.Errorf("ModuleRootMemberPatterns = %v, want exactly the 2 top-level module roots "+
 				"(no framework layers, no multi-member parents)", got)
 		}
 		// The increment is genuinely NEW: its members appear in neither the base scan

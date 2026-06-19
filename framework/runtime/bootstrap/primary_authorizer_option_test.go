@@ -54,9 +54,9 @@ type countingAuthorizerCell struct {
 	providerCalls atomic.Int64
 }
 
-func newCountingAuthorizerCell(id string) *countingAuthorizerCell {
+func newCountingAuthorizerCell() *countingAuthorizerCell {
 	return &countingAuthorizerCell{
-		Cell:       cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		Cell:       cell.MustNewBaseCell(&metadata.CellMeta{ID: "accesscore", Type: "core"}),
 		authorizer: &countingAuthorizer{},
 	}
 }
@@ -164,7 +164,7 @@ func TestLazyAuthorizer_DelegatesAfterProviderReady(t *testing.T) {
 // provider call count == 1 across 3 Authorize calls.
 func TestLazyAuthorizer_CachesAuthorizer(t *testing.T) {
 	t.Parallel()
-	provider := newCountingAuthorizerCell("accesscore")
+	provider := newCountingAuthorizerCell()
 	lazy := &lazyAuthorizer{provider: provider}
 
 	const calls = 3
@@ -185,7 +185,7 @@ func TestLazyAuthorizer_CachesAuthorizer(t *testing.T) {
 // Authorize takes the cached fast path (provider.Authorizer() not called again).
 func TestLazyAuthorizer_ResolveAuthorizer_Success(t *testing.T) {
 	t.Parallel()
-	provider := newCountingAuthorizerCell("accesscore")
+	provider := newCountingAuthorizerCell()
 	lazy := &lazyAuthorizer{provider: provider}
 
 	require.NoError(t, lazy.ResolveAuthorizer(), "ResolveAuthorizer must succeed when the provider yields a live Authorizer")
@@ -465,7 +465,7 @@ func TestLazyAuthorizer_AuthorizeAs_FailsClosedOnNilProvider(t *testing.T) {
 // in an identical resolved state as one call would.
 func TestLazyAuthorizer_ResolveAuthorizer_Idempotent(t *testing.T) {
 	t.Parallel()
-	provider := newCountingAuthorizerCell("accesscore")
+	provider := newCountingAuthorizerCell()
 	lazy := &lazyAuthorizer{provider: provider}
 
 	require.NoError(t, lazy.ResolveAuthorizer(), "first ResolveAuthorizer must succeed")
@@ -487,11 +487,11 @@ func TestLazyAuthorizer_ResolveAuthorizer_Idempotent(t *testing.T) {
 // TestLazyAuthorizer_AuthorizeAs_DoesNotCallProvider verifies that after
 // ResolveAuthorizer has cached the Authorizer, AuthorizeAs uses the cached
 // value without calling provider.Authorizer() again. This pins the cache-hit
-// behaviour for the explicit-subject cert-signing path.
+// behavior for the explicit-subject cert-signing path.
 func TestLazyAuthorizer_AuthorizeAs_DoesNotCallProvider(t *testing.T) {
 	t.Parallel()
 	pdp := &subjectAwareAuthorizer{}
-	provider := newCountingAuthorizerCell("accesscore")
+	provider := newCountingAuthorizerCell()
 	// Override the authorizer inside the provider cell so it satisfies SubjectAuthorizer.
 	provider.authorizer = nil // We replace the cell with a custom one that returns pdp.
 

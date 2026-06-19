@@ -186,8 +186,9 @@ func buildServingOptions(
 	if err != nil {
 		return nil, fmt.Errorf("build grpc metrics collector: %w", err)
 	}
-	grpcAddr := grpclistener.AddrFromEnv()
+	grpcAddr := grpclistener.AddrFromEnv(grpclistener.PlatformEnv)
 	grpcServer, err := grpclistener.ServerFromEnv(
+		grpclistener.PlatformEnv,
 		durabilityModeForTopology(compShared.Topology),
 		grpcAddr,
 		interceptor.Deps{

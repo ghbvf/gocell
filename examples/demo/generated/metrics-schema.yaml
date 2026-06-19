@@ -3,6 +3,37 @@ assemblyId: demo
 scope: assembly-reachable
 entrypoint: examples/demo/main.go
 metrics:
+    - name: audit_chain_verify_duration_seconds
+      type: histogram
+      help: Wall-clock duration of a full admin audit chain verify run.
+      labels: []
+      buckets:
+        - "0.01"
+        - "0.05"
+        - "0.1"
+        - "0.5"
+        - "1"
+        - "2"
+        - "5"
+        - "10"
+        - "30"
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_errored_chains
+      type: gauge
+      help: Number of audit chains whose verify could not complete in the last run.
+      labels: []
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_invalid_chains
+      type: gauge
+      help: Number of per-(namespace,tenant) audit chains found tampered in the last verify run.
+      labels: []
+      file: framework/runtime/audit/chain_verify_runner.go
+    - name: audit_chain_verify_runs_total
+      type: counter
+      help: Total admin audit chain verify runs, by outcome (success|invalid_found|error).
+      labels:
+        - outcome
+      file: framework/runtime/audit/chain_verify_runner.go
     - name: auth_account_lockout_total
       type: counter
       help: Total number of account auto-lockout transitions, by reason (threshold_locked / lazy_unlocked).

@@ -95,7 +95,7 @@ func startSessionVerifyGRPCApp(t *testing.T) (string, *auth.JWTIssuer) {
 	require.NoError(t, err)
 	// Production gRPC wiring path: grpclistener.ServerFromEnv builds the adapter
 	// server from the interceptor.Deps, exactly as run.go does.
-	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
+	grpcServer, err := grpclistener.ServerFromEnv(grpclistener.PlatformEnv, outbox.DurabilityDemo, grpcLn.Addr().String(), interceptor.Deps{
 		Verifier:        jwtVerifier,
 		Clock:           clock.Real(),
 		Collector:       grpcCollector,

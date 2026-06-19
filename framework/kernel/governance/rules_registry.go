@@ -52,8 +52,8 @@ var allRules = []Rule{
 	{Code: codeTOPO09, Phase: PhaseBase, Detect: (*Validator).validateTOPO09},
 	{Code: codeTOPO10, Phase: PhaseBase, Detect: (*Validator).validateTOPO10},
 	{Code: codeTOPO11, Phase: PhaseBase, Detect: (*Validator).validateTOPO11},
-	// TOPO-13: broker-mandatory static gate (Epic #1423 US3, permanent).
-	{Code: codeTOPO13, Phase: PhaseBase, Detect: (*Validator).validateTOPO13},
+	// TOPO-13 removed (#2196): broker-mandatory check is now a codegen-derived fact
+	// enforced solely by the bootstrap runtime gate (validateSplitTopologyBroker).
 	// TOPO-14: split-topology mTLS endpoint gate (#2263, non-loopback remote → https).
 	{Code: codeTOPO14, Phase: PhaseBase, Detect: (*Validator).validateTOPO14},
 

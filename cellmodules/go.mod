@@ -3,7 +3,6 @@ module github.com/ghbvf/gocell/cellmodules
 go 1.25.11
 
 require (
-	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000
 	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000
@@ -73,8 +72,6 @@ require (
 replace github.com/ghbvf/gocell/corecells => ../corecells
 
 replace github.com/ghbvf/gocell/adapters/adapterutil => ../adapters/adapterutil
-
-replace github.com/ghbvf/gocell/adapters/grpc => ../adapters/grpc
 
 replace github.com/ghbvf/gocell/adapters/postgres => ../adapters/postgres
 
