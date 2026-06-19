@@ -13,6 +13,8 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	pgquery "github.com/ghbvf/gocell/framework/pkg/pgquery"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -44,12 +46,15 @@ func NewRegistry(pool *pgxpool.Pool, clk clock.Clock) *Registry {
 
 // resolveRead returns the DBTX for read paths (ambient tx if present, else pool).
 //
-// RLS caller obligation (#2236 review F1): under FORCE ROW LEVEL SECURITY + the
-// restricted serving role, a pool read with no app.tenant_id GUC fail-closes to 0
-// rows. The GUC is set only inside TxManager.RunInTx, so the bound service MUST run
-// tenant-scoped reads within a tenant.WithScope + RunInTx (scopedread funnel, US6) —
-// the pool fallback here is for superuser/test paths and bootstrap reads only. See
-// the ports.Registry godoc "Read scoping under RLS".
+// Pool fallback scope: the pool fallback (no ambient tx) is ONLY safe for
+// superuser / integration-test paths and mem-topology bootstrap reads where no
+// FORCE ROW LEVEL SECURITY policy is active.  In a production PG tenant-scoped
+// read the GUC app.tenant_id MUST be set via TxManager.RunInTx before any query
+// touches contract_registrations; without it the restricted serving role returns
+// 0 rows under FORCE RLS — the read fail-closes silently (no error, no data
+// leak, but also no correct tenant data).  See #2392 (scopedread wiring) for the
+// planned funnel that will make ambient-tx mandatory on the read path and
+// eliminate the pool fallback for tenant-scoped reads.
 func (r *Registry) resolveRead(ctx context.Context) DBTX {
 	if r.session != nil {
 		return r.session.resolve(ctx)
@@ -67,7 +72,8 @@ func (r *Registry) resolveWrite(ctx context.Context) (DBTX, error) {
 }
 
 const (
-	colsProjection = `kind, payload_schema, submitter, approver, state, created_at, updated_at`
+	colsProjection   = `kind, payload_schema, submitter, approver, state, created_at, updated_at`
+	msgInvalidTenant = "registry repo: invalid tenant"
 )
 
 func (r *Registry) Create(ctx context.Context, t tenant.TenantID, in registry.SubmitInput) (registry.ContractRegistration, error) {
@@ -214,19 +220,22 @@ func (r *Registry) Get(ctx context.Context, t tenant.TenantID, id string) (regis
 	return scanRegistration(row, id)
 }
 
-func (r *Registry) List(ctx context.Context, t tenant.TenantID, afterID string, limit int) ([]registry.ContractRegistration, error) {
+func (r *Registry) List(
+	ctx context.Context, t tenant.TenantID, params query.ListParams, filter ports.ListFilter,
+) ([]registry.ContractRegistration, error) {
 	if err := t.Validate(); err != nil {
 		return nil, invalidTenant(err)
 	}
-	var limitArg any = limit
-	if limit <= 0 {
-		limitArg = nil // LIMIT NULL = unbounded (parity with the mem impl)
+	b := pgquery.NewBuilder()
+	b.AppendParam("SELECT id, "+colsProjection+" FROM contract_registrations WHERE tenant_id = ", t.String())
+	// optional state filter: applied before AppendKeyset so the keyset/ORDER/LIMIT
+	// operate on the already-filtered result set
+	b.AppendIf(!filter.State.IsZero(), " AND state = ", filter.State.String())
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, queryErr("list-keyset", err)
 	}
-	rows, err := r.resolveRead(ctx).Query(ctx,
-		`SELECT id, `+colsProjection+`
-		 FROM contract_registrations
-		 WHERE tenant_id = $1 AND id > $2 ORDER BY id ASC LIMIT $3`,
-		t.String(), afterID, limitArg)
+	sqlStr, args := b.Build()
+	rows, err := r.resolveRead(ctx).Query(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, queryErr("list", err)
 	}
@@ -340,7 +349,7 @@ func scanRegistrationRow(rows Rows) (registry.ContractRegistration, error) {
 }
 
 func invalidTenant(err error) error {
-	return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "registry repo: invalid tenant", err)
+	return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, msgInvalidTenant, err)
 }
 
 func dupErr(id string) error {

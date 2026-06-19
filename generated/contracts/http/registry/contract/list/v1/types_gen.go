@@ -19,6 +19,7 @@ import (
 type Request struct {
 	Cursor string `json:"cursor,omitempty"`
 	Limit  int64  `json:"limit,omitempty"`
+	State  string `json:"state,omitempty"`
 }
 
 // Response — http.registry.contract.list.v1.response
@@ -30,12 +31,12 @@ type Response struct {
 
 // ResponseDataItem is a generated DTO for contract http.registry.contract.list.v1.
 type ResponseDataItem struct {
-	ID            string `json:"id"`
-	Kind          string `json:"kind"`
-	State         string `json:"state"`
-	Submitter     string `json:"submitter"`
-	Approver      string `json:"approver"`
-	PayloadSchema string `json:"payloadSchema"`
+	ID            string  `json:"id"`
+	Kind          string  `json:"kind"`
+	State         string  `json:"state"`
+	Submitter     string  `json:"submitter"`
+	Approver      *string `json:"approver"`
+	PayloadSchema *string `json:"payloadSchema"`
 	// format: date-time
 	CreatedAt string `json:"createdAt"`
 	// format: date-time

@@ -15,8 +15,14 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
+
+// testTenantStr is the canonical tenant UUID the cell-loop test scopes submit +
+// list to (submit/list are tenant-scoped via ports.Registry since 303-US6).
+const testTenantStr = "00000000-0000-0000-0000-000000000001"
 
 var testEpoch = func() time.Time {
 	ts, err := time.Parse(time.RFC3339, "2026-06-18T00:00:00Z")
@@ -46,7 +52,8 @@ func TestNew_Identity(t *testing.T) {
 // both slice handlers the generated route group references.
 func TestInitInternal_WiresHandlers(t *testing.T) {
 	c := newCell()
-	if err := c.initInternal(context.Background(), nil); err != nil {
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
 	if c.writeHandler == nil || c.readHandler == nil {
@@ -94,6 +101,7 @@ func allowCtx() context.Context {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "cell-a", Roles: []string{auth.RoleAdmin}, AuthMethod: "test",
 	})
+	ctx = ctxkeys.WithTenantID(ctx, testTenantStr)
 	return auth.WithAuthorizer(ctx, allowAuthorizer{dec})
 }
 
@@ -109,7 +117,8 @@ func (a allowAuthorizer) Authorize(context.Context, string, string, string) (aut
 // proof (spec US4 "最小可用面") that submit and list share one in-mem registrar.
 func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	c := newCell()
-	if err := c.initInternal(context.Background(), nil); err != nil {
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
 		t.Fatalf("initInternal: %v", err)
 	}
 	mux := celltest.NewTestMux()
@@ -123,9 +132,12 @@ func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	})
 	ctx := allowCtx()
 
+	const submitBody = `{"id":"http.example.foo.v1","kind":"http","ownerCell":"registrycore",` +
+		`"lifecycle":"active","endpoints":{"server":"registrycore"},` +
+		`"schemaRefs":{"response":"response.schema.json"}}`
 	postRec := httptest.NewRecorder()
 	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/registry/contracts",
-		bytes.NewReader([]byte(`{"id":"http.example.foo.v1","kind":"http"}`))).WithContext(ctx)
+		bytes.NewReader([]byte(submitBody))).WithContext(ctx)
 	postReq.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(postRec, postReq)
 	if postRec.Code != http.StatusCreated {
@@ -152,5 +164,56 @@ func TestSubmitListLoop_ThroughCellHandlers(t *testing.T) {
 	}
 	if body.Data[0].State != registry.StateSubmitted().String() {
 		t.Fatalf("submitted contract state = %q, want %q (sealed)", body.Data[0].State, registry.StateSubmitted().String())
+	}
+}
+
+// TestInitInternal_DurableMode_NilCursorCodec_Errors pins that durable mode without
+// an injected CursorCodec is a startup error (fail-closed, mirrors auditcore/
+// configcore). A real TxManager is NOT required for this guard — the codec check
+// fires first; the test supplies a demo TxManager to isolate the codec guard.
+func TestInitInternal_DurableMode_NilCursorCodec_Errors(t *testing.T) {
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(outbox.DemoCellTxManager()), // isolate codec guard
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	err := c.initInternal(context.Background(), rec)
+	if err == nil {
+		t.Fatal("initInternal(durable, nil codec) must return error (fail-closed)")
+	}
+}
+
+// TestInitInternal_DurableMode_DemoTxManager_Errors pins that durable mode with a
+// demo (noop) TxManager is rejected by outbox.CheckNotNoop — an assembly that
+// forgets to wire a real TxManager must fail at Init() time. A real codec is NOT
+// required because the TxManager guard runs before the codec guard.
+func TestInitInternal_DurableMode_DemoTxManager_Errors(t *testing.T) {
+	// Build a real cursor codec so only the TxManager guard fires.
+	devKey := []byte("registrycore-cell-test-key-32bytes!")
+	codec, err := query.NewCursorCodec(devKey)
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(outbox.DemoCellTxManager()),
+		WithCursorCodec(codec),
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	err = c.initInternal(context.Background(), rec)
+	if err == nil {
+		t.Fatal("initInternal(durable, demo txManager) must return error (CheckNotNoop)")
+	}
+}
+
+// TestInitInternal_DemoMode_Fallbacks_Succeed pins that demo mode with no injected
+// TxManager or CursorCodec succeeds by falling back to the built-in defaults.
+// This is the normal in-mem / CI topology.
+func TestInitInternal_DemoMode_Fallbacks_Succeed(t *testing.T) {
+	c := New(clockmock.New(testEpoch)) // no options — demo fallbacks apply
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDemo)
+	if err := c.initInternal(context.Background(), rec); err != nil {
+		t.Fatalf("initInternal(demo, no opts) must succeed: %v", err)
+	}
+	if c.writeHandler == nil || c.readHandler == nil {
+		t.Fatal("handlers nil after demo fallback initInternal")
 	}
 }

@@ -4,15 +4,20 @@ package registryread
 
 import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/validation"
 )
 
 // validateRequired verifies every required dependency on the Service struct
 // is present and non-typed-nil. Generated from gocell:"required" struct field
 // tags; do not edit by hand.
 func (s *Service) validateRequired() error {
-	if s.registrar == nil {
+	if validation.IsNilInterface(s.store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"registryread.NewService: registrar required")
+			"registryread.NewService: store required")
+	}
+	if s.codec == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"registryread.NewService: codec required")
 	}
 	return nil
 }

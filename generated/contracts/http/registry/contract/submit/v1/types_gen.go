@@ -16,9 +16,15 @@ import (
 
 // Request — http.registry.contract.submit.v1.request
 type Request struct {
-	ID            string      `json:"id"`
-	Kind          RequestKind `json:"kind"`
-	PayloadSchema string      `json:"payloadSchema,omitempty"`
+	ID               string                  `json:"id"`
+	Kind             RequestKind             `json:"kind"`
+	OwnerCell        string                  `json:"ownerCell"`
+	Lifecycle        RequestLifecycle        `json:"lifecycle"`
+	ConsistencyLevel RequestConsistencyLevel `json:"consistencyLevel,omitempty"`
+	Transports       []string                `json:"transports,omitempty"`
+	Endpoints        *RequestEndpoints       `json:"endpoints,omitempty"`
+	SchemaRefs       *RequestSchemaRefs      `json:"schemaRefs,omitempty"`
+	PayloadSchema    string                  `json:"payloadSchema,omitempty"`
 }
 
 // RequestKind enumerates the closed value-set of the kind field.
@@ -35,6 +41,48 @@ const (
 	RequestKindWebhook    RequestKind = "webhook"
 	RequestKindGrpc       RequestKind = "grpc"
 )
+
+// RequestLifecycle enumerates the closed value-set of the lifecycle field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type RequestLifecycle string
+
+const (
+	RequestLifecycleDraft      RequestLifecycle = "draft"
+	RequestLifecycleActive     RequestLifecycle = "active"
+	RequestLifecycleDeprecated RequestLifecycle = "deprecated"
+)
+
+// RequestConsistencyLevel enumerates the closed value-set of the consistencyLevel field.
+// The schema enum is the single source; a value removed there drops the const,
+// breaking any reference at compile time (#1935).
+type RequestConsistencyLevel string
+
+const (
+	RequestConsistencyLevelL0 RequestConsistencyLevel = "L0"
+	RequestConsistencyLevelL1 RequestConsistencyLevel = "L1"
+	RequestConsistencyLevelL2 RequestConsistencyLevel = "L2"
+	RequestConsistencyLevelL3 RequestConsistencyLevel = "L3"
+	RequestConsistencyLevelL4 RequestConsistencyLevel = "L4"
+)
+
+// RequestEndpoints is a generated DTO for contract http.registry.contract.submit.v1.
+type RequestEndpoints struct {
+	Server           string   `json:"server,omitempty"`
+	Clients          []string `json:"clients,omitempty"`
+	Publisher        string   `json:"publisher,omitempty"`
+	ActorSubscribers []string `json:"actorSubscribers,omitempty"`
+	Handler          string   `json:"handler,omitempty"`
+	Invokers         []string `json:"invokers,omitempty"`
+	Provider         string   `json:"provider,omitempty"`
+	Readers          []string `json:"readers,omitempty"`
+}
+
+// RequestSchemaRefs is a generated DTO for contract http.registry.contract.submit.v1.
+type RequestSchemaRefs struct {
+	Request  string `json:"request,omitempty"`
+	Response string `json:"response,omitempty"`
+}
 
 // Response — http.registry.contract.submit.v1.response
 type Response struct {
