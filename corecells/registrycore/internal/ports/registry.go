@@ -58,9 +58,12 @@ type ListFilter struct {
 // run them within a tenant-scoped tx (tenant.WithScope(ctx, t) + RunInTx). The bound
 // read service satisfies it through the registrycore/internal/scopedread funnel (#2392),
 // the sole production caller of tenant.WithScope in registrycore (pinned by
-// TENANT-TXSCOPE-WRITE-CALLER-01), mirroring configcore/internal/scopedread. The typed
-// tenant param is the primary isolation; RLS is the DB-Hard backstop the caller keeps
-// effective by scoping reads.
+// TENANT-TXSCOPE-WRITE-CALLER-01), mirroring configcore/internal/scopedread. Today List
+// is the only read with a production caller; Get/History carry the same obligation on any
+// future caller. The funnel guards the tenant.WithScope writer, NOT each repo-read
+// callsite — a read that bypasses scopedread is not a compile error, it fail-closes to 0
+// rows under RLS (no leak, but no correct data). The typed tenant param is the primary
+// isolation; RLS is the DB-Hard backstop the caller keeps effective by scoping reads.
 type Registry interface {
 	// Create records a new submission in the submitted state plus its initial
 	// migration event (From = zero sentinel, To = submitted), atomically, scoped to
