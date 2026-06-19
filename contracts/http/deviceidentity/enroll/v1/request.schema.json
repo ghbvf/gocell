@@ -20,7 +20,8 @@
     "requestedDuration": {
       "type": "string",
       "maxLength": 32,
-      "description": "Requested cert lifetime as a Go duration string accepted by time.ParseDuration, e.g. \"720h\", \"1h30m\", \"90m\", \"1.5h\". Clamped to the Signer's max-TTL SignConstraints (PR-5)."
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$",
+      "description": "Requested cert lifetime as a Go duration string accepted by time.ParseDuration, e.g. \"720h\", \"1h30m\", \"90m\", \"1.5h\". Pattern admits compound/fractional Go durations but rejects free-form text; clamped to the Signer's max-TTL SignConstraints (PR-5)."
     },
     "usages": {
       "type": "array",
