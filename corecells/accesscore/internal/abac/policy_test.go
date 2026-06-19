@@ -329,3 +329,102 @@ func TestPolicy_Validate(t *testing.T) {
 		})
 	}
 }
+
+// legacyEmptyActionAllowPolicy is a policy whose sole rule is an empty-Action
+// allow — valid before #1979, persisted, rendered inert by the evaluator. It is
+// the canonical #2409 F1 case: rejected by the authoring profile, tolerated by
+// stored-read.
+func legacyEmptyActionAllowPolicy() *abac.Policy {
+	return &abac.Policy{
+		ID:       "legacy-pol",
+		TenantID: validTenantID1,
+		Name:     "Legacy untargeted allow",
+		Rules:    []abac.Rule{{ID: "r1", Name: "untargeted allow", Effect: authz.EffectAllow}},
+	}
+}
+
+// TestPolicy_ValidateStored covers the stored-read profile (#2409 F1): a persisted
+// policy carrying a legacy empty-Action allow rule must pass (so it reaches the
+// evaluator, which renders it inert), while every policy-level structural-integrity
+// violation must STILL fail-closed (anti-vacuity keeps the tolerance scoped).
+func TestPolicy_ValidateStored(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		policy  *abac.Policy
+		wantErr bool
+	}{
+		{
+			// THE differentiator versus Validate (authoring), asserted directly below too.
+			name:    "legacy empty-Action allow rule tolerated",
+			policy:  legacyEmptyActionAllowPolicy(),
+			wantErr: false,
+		},
+		{
+			name:    "valid action-scoped policy passes",
+			policy:  makeValidPolicy(),
+			wantErr: false,
+		},
+		// ── anti-vacuity: policy-level structural violations still fail-closed ──
+		{
+			name:    "empty ID still rejected",
+			policy:  &abac.Policy{ID: "", TenantID: validTenantID1, Name: "x", Rules: []abac.Rule{makeValidRule("r1")}},
+			wantErr: true,
+		},
+		{
+			name:    "non-canonical TenantID still rejected",
+			policy:  &abac.Policy{ID: "p1", TenantID: tenant.TenantID("not-a-uuid"), Name: "x", Rules: []abac.Rule{makeValidRule("r1")}},
+			wantErr: true,
+		},
+		{
+			name:    "empty Name still rejected",
+			policy:  &abac.Policy{ID: "p1", TenantID: validTenantID1, Name: "", Rules: []abac.Rule{makeValidRule("r1")}},
+			wantErr: true,
+		},
+		{
+			name:    "zero rules still rejected",
+			policy:  &abac.Policy{ID: "p1", TenantID: validTenantID1, Name: "x", Rules: []abac.Rule{}},
+			wantErr: true,
+		},
+		{
+			name:    "duplicate rule IDs still rejected",
+			policy:  &abac.Policy{ID: "p1", TenantID: validTenantID1, Name: "x", Rules: []abac.Rule{makeValidRule("dup"), makeValidRule("dup")}},
+			wantErr: true,
+		},
+		{
+			name: "structurally invalid nested rule still rejected (empty rule ID)",
+			policy: &abac.Policy{
+				ID: "p1", TenantID: validTenantID1, Name: "x",
+				Rules: []abac.Rule{{ID: "", Name: "bad", Effect: authz.EffectAllow}},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.policy.ValidateStored()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Policy.ValidateStored() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestPolicy_AuthoringRejectsStoredTolerates pins the single intended divergence
+// between the two profiles (#2409 F1): the exact same legacy empty-Action allow
+// policy is rejected by the authoring Validate (write → 422) yet accepted by
+// ValidateStored (read → flows to the inert evaluator). If a future refactor
+// collapses the profiles, this trips.
+func TestPolicy_AuthoringRejectsStoredTolerates(t *testing.T) {
+	t.Parallel()
+	p := legacyEmptyActionAllowPolicy()
+	if err := p.Validate(); err == nil {
+		t.Error("authoring Validate must reject a legacy empty-Action allow policy (write-side 422)")
+	}
+	if err := p.ValidateStored(); err != nil {
+		t.Errorf("stored-read ValidateStored must tolerate the same policy, got %v", err)
+	}
+}

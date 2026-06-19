@@ -96,10 +96,17 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   `abac.Rule.Validate` fail-closed（422）；读侧 evaluator `applyRule` 对空-Action allow fail-closed（视为
   不适用、永不放行，纵深防御漏网/旧持久化规则）；baseline 静态面由 archtest
   `BASELINE-ALLOW-ACTION-NONEMPTY-01`（Medium，value-level 同包冻结 + anti-vacuity + RED case）守。
+  **读侧 inert 对 PG 持久化行真实可达（#2409）**：空-Action 拒绝是 **authoring** 不变式、非存储完整性
+  不变式，故域层校验分两 profile——写路径用 authoring `Rule.Validate`/`Policy.Validate`（含空-Action 拒绝）；
+  repo 读路径（PG `scanPolicy`）用 stored-read `ValidateStored`（仅结构完整性，容忍 legacy 空-Action allow，
+  让其流入 evaluator 按上面 inert 处理）。否则 `scanPolicy` 复用 authoring `Validate` 会把一条 legacy 空-Action
+  allow 行判成 `ErrPGSchemaShape` → `ListByTenant` → 整租户 PDP 503（fail-closed 但破坏可用性，且使读侧 inert
+  成 dead code）。
   空 Action 仅对 `EffectDeny` 合法（deny-all，forbid-wins 覆盖全部 action）。wire 经契约
   `http.policy.shared/v1/rule.schema.json` 的 `action` 字段承载（present-only optional：结构真相单源在域层
   Validate，沿用 #1977 约定，非 schema 结构强制）。运行时谓词 `len(Action)>0` 不可在 Go 编译期表达，故
-  真正的 Hard 仅在 baseline 改用 codegen+byte-golden（PR-13 末态）时可达；当前三层为可达最强。
+  真正的 Hard 仅在 baseline 改用 codegen+byte-golden 时可达；当前三层为可达最强（评级/Hard 化路径见对应
+  archtest godoc 与 PR-10a ADR amendment）。
 - 路由门禁是 coarse allow/deny，不**执行** obligation（RowScope/FieldMask 由数据层 PEP 执行），
   但对 Allow 携带的非零 obligation **fail-closed**（拒绝而非静默丢弃）——baseline obligation
   为零，正常路径不受影响。

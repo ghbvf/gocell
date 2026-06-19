@@ -195,3 +195,86 @@ func TestRule_Validate(t *testing.T) {
 		})
 	}
 }
+
+// TestRule_ValidateStored covers the stored-read profile (#2409 F1). It differs
+// from Validate (authoring) in exactly ONE case: an empty-Action Allow is tolerated
+// (a legacy persisted row the evaluator renders inert), NOT rejected. Every genuine
+// structural-integrity violation must STILL be rejected — that is the anti-vacuity
+// half that keeps the tolerance scoped, not a blanket "accept anything".
+func TestRule_ValidateStored(t *testing.T) {
+	t.Parallel()
+
+	goodCond := abac.Condition{Source: abac.SourceSubject, Key: "department", Operator: abac.OpEquals, Values: []string{"eng"}}
+
+	tests := []struct {
+		name    string
+		rule    abac.Rule
+		wantErr bool
+	}{
+		{
+			// THE differentiator: rejected by Validate (authoring), tolerated here.
+			name:    "empty-Action allow tolerated (legacy persisted, inert in evaluator)",
+			rule:    abac.Rule{ID: "legacy-allow", Name: "Untargeted allow", Effect: authz.EffectAllow},
+			wantErr: false,
+		},
+		{
+			name:    "empty-Action allow with conditions also tolerated",
+			rule:    abac.Rule{ID: "legacy-allow-cond", Name: "Untargeted allow", Effect: authz.EffectAllow, Conditions: []abac.Condition{goodCond}},
+			wantErr: false,
+		},
+		{
+			name:    "action-scoped allow passes",
+			rule:    abac.Rule{ID: "scoped", Name: "Scoped allow", Effect: authz.EffectAllow, Action: []string{"audit:read"}},
+			wantErr: false,
+		},
+		{
+			name:    "deny with empty Action passes (deny-all)",
+			rule:    abac.Rule{ID: "deny-all", Name: "Deny everything", Effect: authz.EffectDeny},
+			wantErr: false,
+		},
+		// ── anti-vacuity: structural-integrity violations still fail-closed ──
+		{
+			name:    "empty ID still rejected",
+			rule:    abac.Rule{ID: "", Name: "x", Effect: authz.EffectAllow},
+			wantErr: true,
+		},
+		{
+			name:    "reserved _ prefix ID still rejected (attribution spoof)",
+			rule:    abac.Rule{ID: "_default-deny", Name: "x", Effect: authz.EffectAllow},
+			wantErr: true,
+		},
+		{
+			name:    "empty Name still rejected",
+			rule:    abac.Rule{ID: "r", Name: "", Effect: authz.EffectAllow},
+			wantErr: true,
+		},
+		{
+			name:    "invalid Effect still rejected",
+			rule:    abac.Rule{ID: "r", Name: "x", Effect: authz.Effect(99)},
+			wantErr: true,
+		},
+		{
+			name: "invalid condition still propagates",
+			rule: abac.Rule{
+				ID: "r", Name: "x", Effect: authz.EffectAllow,
+				Conditions: []abac.Condition{{Source: 0, Key: "dept", Operator: abac.OpEquals, Values: []string{"eng"}}},
+			},
+			wantErr: true,
+		},
+		{
+			name:    "invalid Obligations still propagate",
+			rule:    abac.Rule{ID: "r", Name: "x", Effect: authz.EffectAllow, Obligations: authz.Obligations{RowScope: tenant.RowScope(99)}},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.rule.ValidateStored()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Rule.ValidateStored() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
