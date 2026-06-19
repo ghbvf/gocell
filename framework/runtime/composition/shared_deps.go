@@ -131,9 +131,14 @@ type SharedDeps struct {
 	// ConsumerClaimer coordinates outbox consumer idempotency.
 	ConsumerClaimer idempotency.Claimer
 
-	// PG is the assembly's single postgres capability provider. Nil in
+	// PG is the assembly's per-cell postgres provider resolver (#2341). Each cell
+	// module resolves ITS pool's provider via PG.ForCell(cellID): colocated
+	// assemblies map every cell to one shared provider (one pool); split assemblies
+	// map each cell to its own pool's provider (N pools, each driven by its own
+	// relay). Assembly-wide consumers with no "cell" dimension (the CQRS projection
+	// harness) use PG.Sole(), which fails closed in split topology. Nil in
 	// non-postgres modes; cell modules take their in-memory path.
-	PG capability.PGProvider
+	PG capability.PGSet
 
 	// Redis is the assembly's shared redis capability provider. Nil in modes
 	// without redis.

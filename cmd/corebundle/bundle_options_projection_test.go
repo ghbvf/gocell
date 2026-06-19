@@ -20,6 +20,27 @@ func (projNoopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 	return fn(ctx)
 }
 
+// colocatedPGSet wraps prov as the sole pool serving configcore — the colocated
+// shape projectionRuntimeOptions resolves via shared.PG.Sole().
+func colocatedPGSet(t *testing.T, prov capability.PGProvider) capability.PGSet {
+	t.Helper()
+	set, err := capability.NewPGSet([]capability.PGInstance{{Provider: prov, Cells: []string{"configcore"}}})
+	require.NoError(t, err)
+	return set
+}
+
+// splitPGSet wraps two distinct providers (N>1 pools) so Sole() returns ok=false —
+// the split shape projectionRuntimeOptions must fail closed on.
+func splitPGSet(t *testing.T) capability.PGSet {
+	t.Helper()
+	set, err := capability.NewPGSet([]capability.PGInstance{
+		{Provider: capability.NewPGProvider(projNoopTxRunner{}, nil, nil), Cells: []string{"accesscore"}},
+		{Provider: capability.NewPGProvider(projNoopTxRunner{}, nil, nil), Cells: []string{"auditcore"}},
+	})
+	require.NoError(t, err)
+	return set
+}
+
 // TestProjectionRuntimeOptions_MemoryMode verifies that without a postgres
 // capability (memory mode) no projection options are wired — a projection
 // declared in this mode then fails fast in the bootstrap phase6 drain, which is
@@ -45,7 +66,7 @@ func TestProjectionRuntimeOptions_PGMode(t *testing.T) {
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	require.NoError(t, err)
 	defer pool.Close()
-	shared := &composition.SharedDeps{PG: capability.NewPGProvider(projNoopTxRunner{}, nil, pool)}
+	shared := &composition.SharedDeps{PG: colocatedPGSet(t, capability.NewPGProvider(projNoopTxRunner{}, nil, pool))}
 
 	t.Run("gated off by default (fail-closed posture)", func(t *testing.T) {
 		// No GOCELL_PROJECTION_PG_JOURNAL_PREVIEW → not wired; a projection declared
@@ -67,4 +88,19 @@ func TestProjectionRuntimeOptions_PGMode(t *testing.T) {
 		assert.Len(t, opts, 5,
 			"gate opt-in wires WithProjection{CheckpointStore,TxRunner,ReplaySource,Cursor} + WithHealthChecker")
 	})
+}
+
+// TestProjectionRuntimeOptions_SplitTopology_FailsClosed verifies the #2341 split
+// guard: with the gate ON but N>1 pools (Sole() == false), the projection harness
+// MUST fail closed — each pool has its own projection_events with an incomparable
+// global_seq, so wiring a single source would corrupt the read model. The reject
+// happens BEFORE any pool I/O (Sole() short-circuits), so no real pool is needed.
+func TestProjectionRuntimeOptions_SplitTopology_FailsClosed(t *testing.T) {
+	t.Setenv(envProjectionPGJournalPreview, "true")
+	shared := &composition.SharedDeps{PG: splitPGSet(t)}
+	opts, err := projectionRuntimeOptions(shared)
+	require.Error(t, err, "split topology (N pools) must fail closed when the projection gate is on")
+	assert.Nil(t, opts)
+	assert.Contains(t, err.Error(), "split topology",
+		"error should explain the split-topology incompatibility")
 }

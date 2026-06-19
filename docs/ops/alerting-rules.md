@@ -751,6 +751,11 @@ retry-backoff 不同失败域），本 Gauge 不会随之增长。每次 Relay r
 而非 Prometheus scrape 间隔），应使用较长的 `for:` 窗口避免 scrape 窗口内的
 假阳性。
 
+**`cell` label 归因（#2341）**：`outbox_pending_depth` 及 relay 侧 metrics 的 `cell` label 是 relay 所在
+pool 的 **DSN group representative**（colocated = 组内字母序首 cell，如 `accesscore`），**非单一 owner
+cell**。partial-split 部署中一个 `cell=<rep>` series 覆盖同池多个 cell 的 outbox——按 `cell` 聚合时
+（如下 `GoCellOutboxPendingDepthHigh` 的 `by (cell)`）`{{ $labels.cell }}` 应理解为 DSN 组代表而非单 cell。
+
 注：`outbox_relayed_total` 自 #1674 起带 `kind` label（`event` = broker publish /
 `command` = 进程内 async command dispatch），与 `outcome`（`published|retried|dead|
 skipped|lost`）正交。上面不带 `kind` filter 的查询按两类求和，语义不变；按类对账用
@@ -1642,8 +1647,10 @@ NOSUPERUSER + NOBYPASSRLS 要求——这是 `FORCE ROW LEVEL SECURITY` 在运�
 GoCell **不**把单个 readyz probe 的状态导出为 Prometheus 指标——probe 失败的唯一
 运行时信号是 `/readyz` 返回 **503**（→ k8s readiness probe 标记 pod NotReady）。因此本
 probe 没有形如 `gocell_..._total` 的专属告警序列；它复用既有的 readyz 可用性信号，再由
-运维查 `/readyz?verbose` 的 `dependencies.postgres_app_role_restricted_ready` 字段定位
-具体失败原因。
+运维查 `/readyz?verbose` 的 `dependencies.postgres_app_role_restricted_ready`（colocated 单池裸名）
+**或** `dependencies.postgres_app_role_restricted_ready_<rep>`（split：`WithPoolInstance` 给非 default
+池追加 `_<rep>` 实例后缀，`<rep>` = DSN group representative cell，#2341；探针名约定见
+`docs/ops/readyz.md`）字段定位具体失败原因。
 
 ### GoCellPostgresAppRoleNotRestricted（blackbox /readyz）
 

@@ -76,7 +76,11 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	require.NoError(t, provisionCapabilities(ctx, shared, locals),
 		"provisionCapabilities must succeed with a fully migrated DB")
 	require.NotNil(t, shared.PG, "shared.PG must be provisioned in postgres mode")
-	defer func() { _ = locals.poolMR.Close(ctx) }()
+	defer func() {
+		for _, p := range locals.poolMRs {
+			_ = p.Close(ctx)
+		}
+	}()
 
 	// composition.Builder.Build verifies that platform modules can Provide
 	// with the PG capability. Bootstrap options (listeners, auth) are omitted
@@ -124,8 +128,8 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
 
 	provErr := provisionCapabilities(ctx, shared, locals)
-	if locals.poolMR != nil {
-		_ = locals.poolMR.Close(ctx)
+	for _, p := range locals.poolMRs {
+		_ = p.Close(ctx)
 	}
 
 	require.Error(t, provErr, "provisionCapabilities must fail-closed when schema is lagged")

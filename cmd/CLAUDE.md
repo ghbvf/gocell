@@ -120,7 +120,7 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `JWTDeps` | issuer + verifier（JWT 签发/验证） |
 | `InternalServiceKeyring` | /internal/v1/* service-token per-cell keyring（接口，monolith=master 派生 / split=ProvisionedKeyring），#2153 |
 | `NonceStore` | /internal/v1/* 服务令牌防重放 store；control-plane 校验经 `Kind()` 拒 noop / 多 pod in-memory（#1410） |
-| `PG` | sealed `capability.PGProvider`，由 `cellmodules/percellpg.Resolve` 在 postgres 拓扑下注入；memory 拓扑下为 nil，cell module 走 in-memory 路径 |
+| `PG` | sealed `capability.PGSet`（per-cell 路由层，`ForCell(cellID)` 解析本 cell 的 provider，`Sole()` 仅 colocated 返回唯一 provider），由 `cellmodules/percellpg.Resolve` 在 postgres 拓扑下注入；memory 拓扑下为 nil，cell module 走 in-memory 路径 |
 | `ConsumerClaimer` | outbox 消费幂等键声明者；`Kind()` 自报 in_memory/distributed（#1410，CP8 fail-closed） |
 | `Publisher` / `Subscriber` | outbox 事件传输（relay 发布 sink + consumer 订阅源）；接口型，经 `cellmodules/eventtransport.Resolve` 按 Topology 选型——demo=in-memory，postgres=真实 broker（RabbitMQ），缺 broker fail-closed（#1940） |
 | `PrimaryHTTPAddr` / `InternalHTTPAddr` / `HealthHTTPAddr` | 三 listener 绑定地址 |
@@ -134,6 +134,6 @@ Wave-1 #1423 删除了跨 module value handoff（`ModuleExports` + `in` 参数�
 | `GOCELL_ACCESSCORE_IP_HASH_SALT` | bootstrap-failed 事件 client-IP keyed-hash salt（≥32 字节，#1488） | real 模式 fail-fast（缺失/demo key/<32B） |
 | `GOCELL_ADAPTER_MODE` | 适配器模式：`""`（dev，默认）/ `real` | — |
 | `GOCELL_CELL_ADAPTER_MODE` | 存储后端：`memory`（默认）/ `postgres`（`postgres` 经 Topology 耦合规则强制要求 `GOCELL_ADAPTER_MODE=real`） | — |
-| `GOCELL_<CELLID>_DATABASE_URL` | 每个 postgres cell 的 DSN（#1964 per-cell PG seam）。postgres 拓扑下 `generatedPostgresCells()` 中的每个 cell（accesscore / auditcore / configcore）均须设置；缺失任一 → fail-fast 报告 cell 名 + 期望的 env var。共址部署时三个 cell 设同一 DSN，`percellpg.Resolve` dedup 后只开一个 pool；>1 个不同 DSN → fail-closed（仅支持共址，拆分部署见 #1963） | postgres 拓扑 fail-fast |
-| `GOCELL_<CELLID>_AMQP_URL` | 每个 broker cell 的 per-cell RabbitMQ URL（#2152 PR-2 per-cell broker seam）。postgres 拓扑下对 `generatedPostgresCells()` 每个 cell 读取，缺失回退 `GOCELL_AMQP_URL`；`eventtransport.dedupBrokerURL` 去重。共址部署留空、只设 `GOCELL_AMQP_URL`（dedup 后只开一个连接）；>1 个不同 URL → fail-closed（egress-only：单 subscriber 无法消费 N broker，真 N-broker fan-out 见 ingress follow-up + #2341） | 可选（回退 `GOCELL_AMQP_URL`） |
+| `GOCELL_<CELLID>_DATABASE_URL` | 每个 postgres cell 的 DSN（#1964 per-cell PG seam）。postgres 拓扑下 `generatedPostgresCells()` 中的每个 cell（accesscore / auditcore / configcore）均须设置；缺失任一 → fail-fast 报告 cell 名 + 期望的 env var。colocated 部署时三个 cell 设同一 DSN，`percellpg.Resolve` dedup 后只开 1 个 pool + 1 个 relay，keyed by `DefaultInstanceKey()`；split 部署时 >1 个不同 DSN，每个 distinct DSN 开 1 个 pool + 1 个 relay，keyed by `NewInfraInstanceKey(rep)`（rep = 该 DSN 组内字母序首 cell ID）（#2341 落地） | postgres 拓扑 fail-fast |
+| `GOCELL_<CELLID>_AMQP_URL` | 每个 broker cell 的 per-cell RabbitMQ URL（#2152 PR-2 per-cell broker seam）。postgres 拓扑下对 `generatedPostgresCells()` 每个 cell 读取，缺失回退 `GOCELL_AMQP_URL`；`eventtransport.dedupBrokerURL` 去重。共址部署留空、只设 `GOCELL_AMQP_URL`（dedup 后只开一个连接）；>1 个不同 URL → fail-closed（egress-only：单 subscriber 无法消费 N broker，真 N-broker fan-out 需 ingress N-router #2366；注：per-cell DB pool fan-out #2341 已落地，但不解除此 broker 闸） | 可选（回退 `GOCELL_AMQP_URL`） |
 | `GOCELL_AMQP_URL` | postgres 拓扑的 RabbitMQ broker URL（事件传输 publisher/subscriber，#1940）；per-cell `GOCELL_<CELLID>_AMQP_URL` 的 assembly 级回退；demo 拓扑不读 | postgres 拓扑 fail-fast（broker cell 既无 per-cell URL 也无此回退即启动期报错，不静默降级回 in-memory） |

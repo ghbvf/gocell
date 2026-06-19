@@ -27,11 +27,16 @@ import (
 	configcell "github.com/ghbvf/gocell/corecells/configcore"
 	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/runtime/capability"
 	"github.com/ghbvf/gocell/framework/runtime/composition"
 	"github.com/ghbvf/gocell/framework/runtime/crypto"
 	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/framework/runtime/state/cas"
 )
+
+// configCellID is the stable cell identifier used in error messages, logs, and
+// ForCell routing.
+const configCellID = "configcore"
 
 // ModuleOption configures a configcore module.
 type ModuleOption func(*module)
@@ -61,7 +66,7 @@ func Module(opts ...ModuleOption) composition.CellModule {
 }
 
 // ID returns the stable identifier used in error messages and logs.
-func (*module) ID() string { return "configcore" }
+func (*module) ID() string { return configCellID }
 
 // Provide resolves all configcore-specific dependencies and returns the
 // constructed cell, non-resource bootstrap options, and the single-source
@@ -108,12 +113,21 @@ func (m *module) Provide(
 		return composition.ModuleResult{}, fmt.Errorf("configcore eventbus-cache collector: %w", err)
 	}
 
-	// 4. PG storage and cell options.
+	// 4. PG storage and cell options. Resolve THIS cell's pool provider (#2341):
+	// colocated → the shared pool; split → configcore's own pool. nil in memory mode
+	// (buildConfigCorePostgresOpts is never reached); fails closed on a missing pool.
+	var configPG capability.PGProvider
+	if shared.PG != nil {
+		p, pgErr := shared.PG.ForCell(configCellID)
+		if pgErr != nil {
+			return composition.ModuleResult{}, fmt.Errorf("configcore: %w", pgErr)
+		}
+		configPG = p
+	}
 	modResult, err := buildConfigCoreOpts(shared.Clock, configCoreModuleConfig{
 		topology:         shared.Topology,
-		pg:               shared.PG,
+		pg:               configPG,
 		publisher:        shared.Publisher,
-		metricsProvider:  shared.MetricsProvider,
 		valueTransformer: vt,
 		onStaleCipher: func(_, _, _ string) {
 			// onStaleCipher fires deep in the PG repo read path with no request

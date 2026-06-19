@@ -6,7 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cellmodules/cellsecrets"
 	configcell "github.com/ghbvf/gocell/corecells/configcore"
 	configpg "github.com/ghbvf/gocell/corecells/configcore/postgres"
@@ -14,14 +13,11 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/framework/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/framework/kernel/lifecycle"
-	kernelmetrics "github.com/ghbvf/gocell/framework/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/capability"
-	obmetrics "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
-	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
 
 // configCoreModuleConfig bundles inputs for buildConfigCoreOpts.
@@ -29,15 +25,13 @@ type configCoreModuleConfig struct {
 	topology         bootstrap.Topology
 	pg               capability.PGProvider
 	publisher        outbox.Publisher
-	metricsProvider  kernelmetrics.Provider
 	valueTransformer kcrypto.ValueTransformer
 	onStaleCipher    func(key, storedKeyID, currentKeyID string)
 }
 
 // configCoreModuleResult bundles outputs from buildConfigCoreOpts.
 type configCoreModuleResult struct {
-	cellOptions   []configcell.Option
-	bootstrapOpts []bootstrap.Option
+	cellOptions []configcell.Option
 }
 
 // buildConfigCoreOpts selects storage-adapter options based on topology.
@@ -64,6 +58,12 @@ func buildConfigCoreOpts(clk clock.Clock, cfg configCoreModuleConfig) (configCor
 }
 
 // buildConfigCorePostgresOpts builds the configcore module result for postgres.
+//
+// The outbox relay is NOT built here (#2341): it is per-POOL assembly
+// infrastructure owned by the composition root (cmd/corebundle/cap_wiring.go),
+// which drives one relay per pool keyed by the pool's InfraInstanceKey. configcore
+// only wires its cell-level storage + outbox deps; it contributes no bootstrap opts
+// (RELAY-CONSTRUCTION-CELLMODULE-BAN-01).
 func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (configCoreModuleResult, error) {
 	if cfg.pg == nil {
 		return configCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -77,11 +77,6 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 	txMgr := cfg.pg.TxManager()
 	outboxWriter := cfg.pg.OutboxWriter()
 
-	relayWorker, rwErr := buildConfigCorePGRelay(clk, db, cfg)
-	if rwErr != nil {
-		return configCoreModuleResult{}, rwErr
-	}
-
 	storageOpt, storageErr := buildConfigCorePGStorage(clk, db, cfg)
 	if storageErr != nil {
 		return configCoreModuleResult{}, storageErr
@@ -92,51 +87,30 @@ func buildConfigCorePostgresOpts(clk clock.Clock, cfg configCoreModuleConfig) (c
 		configcell.WithOutboxDeps(outbox.WrapPublisherForCell(cfg.publisher), outbox.WrapWriterForCell(outboxWriter)),
 		configcell.WithTxManager(persistence.WrapForCell(txMgr)),
 	}
-	return configCoreModuleResult{
-		cellOptions:   cellOpts,
-		bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)},
-	}, nil
+	return configCoreModuleResult{cellOptions: cellOpts}, nil
 }
 
 // buildConfigCoreResult assembles the configcore module result: the cell, the
-// non-resource bootstrap opts (relay), and the single-source ManagedResource
-// list. When the KeyProvider is itself a ManagedResource (vault-transit) it is
-// returned ONLY in the resources slice — Builder.Build derives both the
-// steady-state bootstrap.WithManagedResource registration and the pre-Run
-// rollback from it. This function must NOT call bootstrap.WithManagedResource
-// (banned in cellmodules/ by WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+// non-resource bootstrap opts (always nil — relay moved to composition root,
+// #2341, RELAY-CONSTRUCTION-CELLMODULE-BAN-01), and the single-source
+// ManagedResource list. When the KeyProvider is itself a ManagedResource
+// (vault-transit) it is returned ONLY in the resources slice — Builder.Build
+// derives both the steady-state bootstrap.WithManagedResource registration and the
+// pre-Run rollback from it. This function must NOT call
+// bootstrap.WithManagedResource (banned in cellmodules/ by
+// WITHMANAGEDRESOURCE-CELLMODULE-FUNNEL-01).
+//
+//nolint:unparam // R2-approved: opts always nil post-#2341; signature kept for call-site symmetry
 func buildConfigCoreResult(
 	c *configcell.ConfigCore,
 	kp kcrypto.KeyProvider,
-	modResult configCoreModuleResult,
+	_ configCoreModuleResult,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource) {
-	opts := modResult.bootstrapOpts
-
 	var resources []kernellifecycle.ManagedResource
 	if kpRes, ok := kp.(kernellifecycle.ManagedResource); ok {
 		resources = append(resources, kpRes)
 	}
-	return c, opts, resources
-}
-
-// buildConfigCorePGRelay constructs the configcore PG relay.
-func buildConfigCorePGRelay(clk clock.Clock, db *pgxpool.Pool, cfg configCoreModuleConfig) (*outboxruntime.Relay, error) {
-	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayMetrics, rmErr := outbox.NewProviderRelayCollector(cfg.metricsProvider, "configcore")
-	if rmErr != nil {
-		return nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
-	}
-	relayCfg.Metrics = relayMetrics
-
-	pendingDepth, pdErr := obmetrics.NewOutboxPendingDepthCollector(cfg.metricsProvider, "configcore")
-	if pdErr != nil {
-		return nil, fmt.Errorf("configcore pending-depth collector: %w", pdErr)
-	}
-
-	pgStore := adapterpg.NewOutboxStore(db, clk)
-	relayWorker := outboxruntime.NewRelay(clk, pgStore, cfg.publisher, relayCfg)
-	relayWorker.WithPendingDepthObserver(pendingDepth)
-	return relayWorker, nil
+	return c, nil, resources
 }
 
 func buildConfigCorePGStorage(

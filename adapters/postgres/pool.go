@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/framework/kernel/worker"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/redaction"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -145,7 +146,12 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: parse DSN", err)
+		// redaction.RedactError scrubs any credentials (user:pass, DSN key-value pairs)
+		// that pgx may include in the parse-error message. This is a defense-in-depth
+		// layer on top of pgx's own URL.Redacted() masking: we never rely on a third-party
+		// library's internal redaction behavior as our sole credential-safety guarantee,
+		// especially under split topology where N distinct DSNs amplify the exposure surface.
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: parse DSN", redaction.RedactError(err))
 	}
 
 	poolCfg.MaxConns = cfg.MaxConns

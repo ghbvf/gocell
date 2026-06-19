@@ -565,6 +565,19 @@ func (b *Bootstrap) DeploymentTopology() DeploymentTopology {
 	return b.deploymentTopology
 }
 
+// ManagedResourceRegistrationOrder returns the type names (%T) of the registered
+// ManagedResources in registration order. Teardown runs the reverse (LIFO), so the
+// first entry is closed LAST. Read-only; intended for composition-root tests that pin
+// resource registration order (e.g. corebundle's pools → broker → relays, #2341, so
+// LIFO teardown is relays → broker → pools). Does not expand probes/workers/teardowns.
+func (b *Bootstrap) ManagedResourceRegistrationOrder() []string {
+	out := make([]string, len(b.managedResources))
+	for i, r := range b.managedResources {
+		out[i] = fmt.Sprintf("%T", r)
+	}
+	return out
+}
+
 // Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //

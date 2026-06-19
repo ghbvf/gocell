@@ -200,6 +200,46 @@ func RelayInstanceProbeName(base ProbeName, instanceID string) (ProbeName, error
 	return NewProbeName(string(base) + "_" + instanceID)
 }
 
+// postgresPoolProbeBases is the CLOSED set of base names PoolInstanceProbeName
+// accepts — the postgres serving-pool readiness probes. Values mirror
+// adapters/postgres.{ProbeReady, ProbeIndexesValidReady, ProbeAppRoleRestrictedReady};
+// healthz cannot import adapters/postgres (import direction), so they are mirrored
+// here and kept honest fail-closed: a pool probe rename in adapters/postgres makes
+// the composer reject the new name (split pool registration then fails fast, caught
+// by the bootstrap fan-out tests), never silently composing a stale name.
+var postgresPoolProbeBases = map[ProbeName]struct{}{
+	"postgres_ready":                     {},
+	"postgres_indexes_valid_ready":       {},
+	"postgres_app_role_restricted_ready": {},
+}
+
+// PoolInstanceProbeName composes the instance-scoped variant of a postgres
+// serving-pool readiness probe (base MUST be one of postgres_ready /
+// postgres_indexes_valid_ready / postgres_app_role_restricted_ready — enforced
+// against a closed allowlist) for a fanned-out per-cell pool that is NOT the
+// colocated default infra instance, so N pools expose globally-distinct probe
+// names (#2341). The colocated default keeps the bare base name (operations
+// contract unchanged); only additional split instances get the
+// "<base>_<instanceID>" suffix. This is the SOLE sanctioned composed-name
+// constructor for per-instance pool probes — a sibling of RelayInstanceProbeName.
+//
+// Budget: longest pool base "postgres_app_role_restricted_ready" (34) + "_" +
+// instanceID = ≤67 for a 32-char id, so a >29-char instanceID overflows
+// probeNameMaxLen (64) and NewProbeName fails fast at pool registration. Real
+// instance ids are cell IDs (≤~12 chars), well within budget.
+func PoolInstanceProbeName(base ProbeName, instanceID string) (ProbeName, error) {
+	if _, ok := postgresPoolProbeBases[base]; !ok {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: pool instance probe base must be a postgres serving-pool readiness probe "+
+				"(postgres_ready / postgres_indexes_valid_ready / postgres_app_role_restricted_ready)")
+	}
+	if instanceID == "" {
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"healthz: pool instance probe id must not be empty")
+	}
+	return NewProbeName(string(base) + "_" + instanceID)
+}
+
 // remoteCellReadyProbeNameSuffix is the terminal segment of the cross-cell
 // remote-peer readiness probe name ("<cellID>_remote_ready"). It is a
 // dependency-availability probe (the remote peer's listener is TCP-reachable),

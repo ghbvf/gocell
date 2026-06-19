@@ -41,7 +41,7 @@ operator env
      └─── CellModule.Provide(ctx, shared)       ← per-cell 各自读自己的 env
                GOCELL_<CELLID>_CURSOR_KEY
                GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
-               （PG URL / TxManager / OutboxWriter 经 shared.PG 取得）
+               （PG URL / TxManager / OutboxWriter 经 shared.PG.ForCell(<cellid>) 解析本 cell provider 取得）
                └─→ (composition.ModuleResult, error)   // {Cell, Opts, Resources}
 
      ↓
@@ -59,7 +59,7 @@ app.Run(ctx)   // *composition.App.Run → bootstrap.New(opts...).Run(ctx)
    统一构建，不在 CellModule 里重读或自行开 pool。
 2. **per-cell adapter 配置由 CellModule.Provide 自己读**: cursor key 等带
    `GOCELL_<CELLID>_` 前缀的 env 由对应 Module 自行解析；PG TxManager、
-   OutboxWriter 由 `shared.PG` 供给，互不干扰。
+   OutboxWriter 由 `shared.PG.ForCell(<cellid>)`（per-cell PGSet 路由，#2341）供给，互不干扰。
 
 ---
 
@@ -171,9 +171,8 @@ func (m module) Provide(
 
 	// 2. Storage-backend branching via shared.Topology + shared.PG.
 	modResult, err := buildFooCoreOpts(shared.Clock, fooCoreModuleConfig{
-		topology:  shared.Topology,
-		pg:        shared.PG,
-		publisher: shared.EventBus,
+		topology: shared.Topology,
+		pg:       shared.PG,
 	})
 	if err != nil {
 		return composition.ModuleResult{}, err
@@ -252,14 +251,16 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/capability"
-	outboxruntime "github.com/ghbvf/gocell/framework/runtime/outbox"
 )
+
+// fooCellID is this cell's stable ID. It resolves foocore's pool provider from the
+// shared per-cell PGSet (#2341) and labels its capability.PGInstance.
+const fooCellID = "foocore"
 
 // fooCoreModuleConfig bundles inputs for buildFooCoreOpts.
 type fooCoreModuleConfig struct {
-	topology  bootstrap.Topology
-	pg        capability.PGProvider
-	publisher outbox.Publisher
+	topology bootstrap.Topology
+	pg       capability.PGSet
 }
 
 // fooCoreModuleResult bundles outputs from buildFooCoreOpts.
@@ -279,7 +280,10 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 				"foocore postgres mode requires the postgres capability provider "+
 					"(the composition root must provision the postgres capability on SharedDeps before composition.Build)")
 		}
-		db, err := cellsecrets.PgxPoolFromProvider(cfg.pg)
+		// Resolve THIS cell's pool provider from the shared PGSet (#2341): colocated →
+		// the shared pool; split → foocore's own pool. Fails closed if foocore has no
+		// provisioned pool.
+		pg, err := cfg.pg.ForCell(fooCellID)
 		if err != nil {
 			return fooCoreModuleResult{}, fmt.Errorf("foocore: %w", err)
 		}
@@ -290,11 +294,8 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 		// composition.WithMigrations(ns, fs) and apply/verify it
 		// (adapters/postgres.MigrationSet.ApplyAll / VerifyAll) BEFORE Build —
 		// see docs/guides/cell-external-repo-quickstart.md "Migrations".
-		txMgr := cfg.pg.TxManager()
-		outboxWriter := cfg.pg.OutboxWriter()
-
-		pgStore := adapterpg.NewOutboxStore(db, clk)
-		relayWorker := outboxruntime.NewRelay(clk, pgStore, cfg.publisher, outboxruntime.DefaultRelayConfig())
+		txMgr := pg.TxManager()
+		outboxWriter := pg.OutboxWriter()
 
 		// Composition root wraps raw infra types as sealed markers;
 		// cell.go public Options reject raw types at compile time
@@ -303,11 +304,19 @@ func buildFooCoreOpts(clk clock.Clock, cfg fooCoreModuleConfig) (fooCoreModuleRe
 			foocorecell.WithTxManager(persistence.WrapForCell(txMgr)),
 			foocorecell.WithOutboxWriter(outbox.WrapWriterForCell(outboxWriter)),
 		}
+		// NB: the outbox RELAY is NOT built here. Per #2341 the relay is per-POOL
+		// assembly infrastructure (one relay drains one pool's outbox table); it is
+		// constructed in the composition root beside the pool it drains — your
+		// cap_wiring (see cmd/corebundle/cap_wiring.go), registered via WithRelay keyed
+		// by the pool's InfraInstanceKey. A cell module building its own relay
+		// resurrects the dual-path that RELAY-CONSTRUCTION-CELLMODULE-BAN-01 forbids
+		// (in colocated mode N cells share one outbox table → N cell relays double-drain
+		// it). So bootstrapOpts stays empty; the cell only writes to the outbox via
+		// WithOutboxWriter and the composition-root relay drains it.
 		return fooCoreModuleResult{
-			cellOptions:   cellOpts,
-			bootstrapOpts: []bootstrap.Option{bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)},
-			// provisional is empty for foocore postgres path — pool is owned by
-			// shared.PG (shared across cells); only cell-exclusive resources go here.
+			cellOptions: cellOpts,
+			// bootstrapOpts empty: the relay is owned by the composition root (see above).
+			// provisional empty: the pool is owned by shared.PG (shared across cells).
 		}, nil
 
 	case "memory":
@@ -362,27 +371,30 @@ Close）；单源把两个阶段绑定到**同一个** `Resources` 声明——�
 > steady-state 路径只在**成功**时由 `bootstrap.Run` 接管——两条路径互斥，同一资源在 bootstrap
 > managed 集合中至多出现一次。
 
-后台 worker 型资源（例如 outbox relay）走独立的
-`bootstrap.WithRelay(bootstrap.DefaultInstanceKey(), relayWorker)` 进 `ModuleResult.Opts`
-（**不**进 `Resources`、**不**经 `WithManagedResource`）。`WithRelay` 第一参是
-`bootstrap.InfraInstanceKey`——共址（colocated）单池用 `bootstrap.DefaultInstanceKey()`；split
-拓扑下每个去重基建实例用 `bootstrap.NewInfraInstanceKey(<id>)` 各注册一个 relay（#2152 PR-1 fan-out）。
+后台 worker 型资源（outbox relay）走独立的 `bootstrap.WithRelay(<InfraInstanceKey>, relayWorker)`
+（**不**进 `Resources`、**不**经 `WithManagedResource`）——**但 relay 不由 cell module 构造/注册**：per
+#2341 relay 是 **per-POOL** 基建（一 pool 一 relay，drain 该 pool 的 outbox 表），由**开 pool 的
+composition root**（你的 cap_wiring，对标 `cmd/corebundle/cap_wiring.go`）在开 pool 处构造并注册。
+cell module 构造自己的 relay 会复活 `RELAY-CONSTRUCTION-CELLMODULE-BAN-01` 禁的 dual-path（共址下 N
+cell 共享一 outbox 表 → N cell relay 双重 drain）。`WithRelay` 第一参是 `bootstrap.InfraInstanceKey`——
+共址（colocated）单池用 `bootstrap.DefaultInstanceKey()`；split 拓扑下每个去重池实例用
+`bootstrap.NewInfraInstanceKey(<rep>)` 各注册一个 relay（#2152 PR-1 fan-out / #2341 N 池消费）。
 `WithRelay` 是 relay 的 **唯一** 注册入口：相关的 `Checkers()/Worker()/Close()` 由 package-private
 `relayAdapter` 包装到 ManagedResource 流水线（详见 ADR
 `docs/architecture/202605201400-adr-relay-managedresource-isolation.md` + archtest
-`RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01`）——`*Relay` 自身不实现
-ManagedResource，直接传给 `WithManagedResource` 是编译期 type-mismatch；对**同一 instance key**
-二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
+`RELAY-NOT-MANAGEDRESOURCE-01` / `RELAY-SOLE-HOLDER-01` / `RELAY-CONSTRUCTION-CELLMODULE-BAN-01`）——
+`*Relay` 自身不实现 ManagedResource，直接传给 `WithManagedResource` 是编译期 type-mismatch；对**同一
+instance key** 二次调用 `WithRelay` 会通过 panic-taxonomy funnel 触发
 `panicregister.Approved + errcode.Assertion(B 类)` panic（不同 key 累加 = 正常 fan-out）。
-**共享** PG pool 由 `SharedDeps.PG` 持有，其 ManagedResource 在 composition root 的 base
-options 中先于所有 cell opts 注册 → LIFO 下最后 Close（晚于每个 cell 的 relay）；只有 cell
-**独占**的资源才进 `ModuleResult.Resources`。foocore 走共享 pool，故其 `Resources` 为空，
-只经 `Opts` 返回 `WithRelay`。
+**共享** PG pool 由 `SharedDeps.PG` 持有，其 ManagedResource 在 composition root 的 base options 中
+先于所有 cell opts 注册 → LIFO 下最后 Close（晚于 relay 与每个 cell）；只有 cell **独占**的资源才进
+`ModuleResult.Resources`。foocore 走共享 pool 且**不拥有 relay**，故其 `Resources` 与（postgres 路径的）
+`Opts` 均为空——relay 由 composition root 的 cap_wiring 注册。
 
 ```
 每个 module Provide 返回 ModuleResult{Cell, Opts, Resources}:
-  Resources = [resX]                        // 单源——Builder 派生 steady-state + rollback
-  Opts      = [..., bootstrap.WithRelay(DefaultInstanceKey(), w)] // 后台 worker（非 ManagedResource）
+  Resources = [resX]                        // cell 独占资源（单源——Builder 派生 steady-state + rollback）
+  Opts      = [...]                         // 非资源 bootstrap.Option（relay 不在此——由 composition root 的 cap_wiring 经 WithRelay 注册，#2341）
 
 —— 全部成功 ——
 Builder 从各 module 的 Resources 派生 WithManagedResource(resX)
@@ -456,17 +468,26 @@ func TestFooCoreModule_Postgres_SchemaMatched(t *testing.T) {
 	// provisions the postgres capability before composition.Build. Without this,
 	// buildFooCoreOpts sees a nil cfg.pg and fails the postgres branch.
 	shared := buildMinimalTestSharedDeps(t) // cross-cutting deps; PG injected below
-	shared.PG = capability.NewPGProvider(
-		adapterpg.NewTxManager(pool),
-		adapterpg.NewOutboxWriter(shared.Clock),
-		pool.DB(),
-	)
+	// Wrap the migrated pool into a single-instance PGSet (#2341): colocated shape with
+	// one pool serving foocore. shared.PG.ForCell(fooCellID) then resolves this provider.
+	pgSet, err := capability.NewPGSet([]capability.PGInstance{{
+		Provider: capability.NewPGProvider(
+			adapterpg.NewTxManager(pool),
+			adapterpg.NewOutboxWriter(shared.Clock),
+			pool.DB(),
+		),
+		Cells: []string{fooCellID},
+	}})
+	require.NoError(t, err)
+	shared.PG = pgSet
 
 	res, err := foocore.Module().Provide(ctx, shared)
 	require.NoError(t, err)
 	require.NotNil(t, res.Cell)
-	assert.NotEmpty(t, res.Opts) // relay bootstrap option present
-	_ = res.Resources
+	// foocore owns no relay and no exclusive resources post-#2341: the relay is built
+	// by the composition root (cap_wiring), the pool is shared via shared.PG.
+	assert.Empty(t, res.Opts)
+	assert.Empty(t, res.Resources)
 	_ = pool.Close(ctx)
 }
 ```
