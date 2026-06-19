@@ -162,9 +162,12 @@ func WithOnEnqueue(hook func(context.Context, command.Entry)) Option {
 	}
 }
 
-// WithPendingLimit overrides the per-device Pending command cap (F-S-005 #822),
-// replacing the NewService default (defaultMaxPendingPerDevice). It is wired by
-// the composition root from GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE.
+// WithPendingLimit caps per-device Pending commands at n (F-S-005 #822).
+// Non-positive n is ignored — the bounded default stays, the cap can never be
+// disabled.
+//
+// Replaces the NewService default (defaultMaxPendingPerDevice). Wired by the
+// composition root from GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE.
 //
 // Only a positive n takes effect; a non-positive n is ignored, leaving the
 // (bounded) default in place. This is NOT a disable path — maxPending stays ≥1
@@ -322,6 +325,11 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, fmt.Errorf("device-command: count pending: %w", err)
 	}
 	if len(pending) >= s.maxPending {
+		s.logger.Warn("device-command: per-device pending command limit reached",
+			slog.String("device_id", deviceID),
+			slog.Int("pending_count", len(pending)),
+			slog.Int("limit", s.maxPending),
+		)
 		return command.Entry{}, errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited,
 			errPendingLimitMsg, errcode.WithDetails(errcode.PublicInt("limit", s.maxPending)))
 	}

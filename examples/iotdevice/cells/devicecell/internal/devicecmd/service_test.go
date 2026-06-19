@@ -753,6 +753,38 @@ func TestEnqueue_BareCtx_NoIdempotencyKeyNoDeadline(t *testing.T) {
 	assert.Empty(t, transitions, "bare-ctx commands have no OverallDeadline — Sweeper must not expire them")
 }
 
+// TestService_Enqueue_ScanActiveError tests the fail-closed path in the pending
+// guard (F-S-005 #822): when ScanActive returns an error, Enqueue must propagate
+// it (fail-closed — no enqueue allowed when the count is unknown) and the error
+// message must contain "count pending" for operability.
+func TestService_Enqueue_ScanActiveError(t *testing.T) {
+	devRepo := mem.NewDeviceRepository()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+
+	scanErr := errors.New("storage: transient scan failure")
+	svc, err := NewService(clock.Real(), &scanErrStubQueue{
+		InMemQueue: commandtest.NewInMemQueue(),
+		scanErr:    scanErr,
+	}, devRepo, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+
+	_, enqErr := svc.Enqueue(context.Background(), "dev-1", "reboot", "payload")
+	require.Error(t, enqErr)
+	assert.ErrorContains(t, enqErr, "count pending")
+}
+
+// scanErrStubQueue wraps InMemQueue and overrides ScanActive to return an error.
+// It satisfies command.QueueWithScanner without any new methods beyond the embedded type.
+type scanErrStubQueue struct {
+	*commandtest.InMemQueue
+	scanErr error
+}
+
+// ScanActive overrides InMemQueue.ScanActive to inject a test error.
+func (q *scanErrStubQueue) ScanActive(_ context.Context, _ command.ScanFilter) ([]command.Entry, error) {
+	return nil, q.scanErr
+}
+
 // TestWithOnEnqueue_FiredAfterSuccessfulEnqueue asserts that the onEnqueue hook
 // fires exactly once after a successful Enqueue, carrying the enqueued entry.
 // It also asserts the hook does NOT fire when Enqueue fails (unknown device).

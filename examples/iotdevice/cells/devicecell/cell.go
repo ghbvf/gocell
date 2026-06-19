@@ -159,6 +159,7 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 // #822). The composition root supplies it from
 // GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE; an unset/zero value leaves the
 // devicecmd.NewService default (defaultMaxPendingPerDevice) in place.
+// 对应 service 层的 devicecmd.WithPendingLimit。
 func WithMaxPendingPerDevice(n int) Option {
 	return func(c *DeviceCell) { c.maxPendingPerDevice = n }
 }

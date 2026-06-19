@@ -54,9 +54,10 @@ const envMaxPendingPerDevice = "GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE"
 
 // maxPendingPerDeviceCellOpts derives the per-device Pending cap cell option
 // from envMaxPendingPerDevice (F-S-005 #822). Empty when unset (the devicecmd
-// default applies); it fail-fasts on a non-positive/invalid value rather than
-// silently falling back (no soft fallback).
-func maxPendingPerDeviceCellOpts() ([]devicecell.Option, error) {
+// default applies); fail-fasts on a non-positive/invalid value (no soft
+// fallback). Logs an Info when the env override is in effect so the limit is
+// visible at startup without requiring the caller to inspect the value.
+func maxPendingPerDeviceCellOpts(logger *slog.Logger) ([]devicecell.Option, error) {
 	v := os.Getenv(envMaxPendingPerDevice)
 	if v == "" {
 		return nil, nil
@@ -65,6 +66,7 @@ func maxPendingPerDeviceCellOpts() ([]devicecell.Option, error) {
 	if err != nil || n <= 0 {
 		return nil, fmt.Errorf("%s must be a positive integer, got %q", envMaxPendingPerDevice, v)
 	}
+	logger.Info("iotdevice: per-device pending limit override", slog.Int("limit", n))
 	return []devicecell.Option{devicecell.WithMaxPendingPerDevice(n)}, nil
 }
 
@@ -196,7 +198,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 	// Per-device Pending command cap (F-S-005 #822). The default lives in
 	// devicecmd; the env only overrides it.
-	pendingOpts, err := maxPendingPerDeviceCellOpts()
+	pendingOpts, err := maxPendingPerDeviceCellOpts(logger)
 	if err != nil {
 		return err
 	}
