@@ -47,7 +47,7 @@ correct choice for most assemblies and requires no configuration change.
 ## Current status: `topology.groups` authoring + runtime role selection (PR-2)
 
 `topology.groups` is the authoring model (#2278 PR-1, replacing the earlier
-single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/13/14),
+single-process `colocated/remote` form). `gocell validate` (TOPO-10/11/14),
 `gocell generate` (emits `generatedTopologyGroups()`), and the catalog export all
 operate on groups.
 

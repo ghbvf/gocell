@@ -395,6 +395,24 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 			wantRoles: []string{"core", "edge", "extra"},
 		},
 		{
+			// Two independent cross-process events accumulate into one role set;
+			// "edge" is an endpoint of BOTH (sub of A, pub of B) yet appears once
+			// (exercises the cross-contract set-dedup, not just intra-contract fan-out).
+			name:   "two cross-process events → union of roles, deduped",
+			groups: []metadata.TopologyGroup{core, edge, extra},
+			contracts: map[string]*metadata.ContractMeta{
+				"event.a.v1": {
+					ID: "event.a.v1", Kind: "event", Lifecycle: "active", Transports: amqp,
+					Endpoints: metadata.EndpointsMeta{Publisher: "accesscore", Subscribers: []string{"auditcore"}},
+				},
+				"event.b.v1": {
+					ID: "event.b.v1", Kind: "event", Lifecycle: "active", Transports: amqp,
+					Endpoints: metadata.EndpointsMeta{Publisher: "auditcore", Subscribers: []string{"configcore"}},
+				},
+			},
+			wantRoles: []string{"core", "edge", "extra"},
+		},
+		{
 			name:      "registered event with empty transports → fail-closed error",
 			groups:    []metadata.TopologyGroup{core, edge},
 			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", []string{}, "accesscore", "auditcore")},

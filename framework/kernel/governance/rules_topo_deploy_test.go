@@ -20,28 +20,60 @@ import (
 // (validateSplitTopologyBroker, keyed off the codegen-derived
 // RequiresBrokerForCrossProcessEvents signal) as the sole broker-mandatory
 // enforcement point.
+//
+// Non-vacuous via a DIFFERENTIAL: it compares two structurally-identical split
+// projects that differ ONLY in whether the amqp event crosses a group boundary.
+// A static broker gate (such as the removed TOPO-13) would add an error to the
+// cross-process variant alone, so the variants' error counts would differ. With
+// TOPO-13 gone the counts are equal — and this test would have FAILED before the
+// removal (proper RED→GREEN), unlike a bare findByCode("TOPO-13") which is
+// vacuously empty once the code no longer exists.
 func TestBrokerBackedSplit_NoStaticBrokerGate(t *testing.T) {
 	pub := metadatatest.CellIDCellA
 	sub := metadatatest.CellIDCellB
-	contract := topoTestContract("event.data.v1", "event", pub)
-	contract.Transports = []string{"amqp"}
-	contract.Endpoints.Subscribers = []string{sub}
-	pm := &metadata.ProjectMeta{
-		Cells:     map[string]*metadata.CellMeta{pub: topoTestCell(pub), sub: topoTestCell(sub)},
-		Slices:    map[string]*metadata.SliceMeta{},
-		Contracts: map[string]*metadata.ContractMeta{"event.data.v1": contract},
-		Journeys:  map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{
-			"testasm": topoTestAssembly([]string{pub, sub}, metadata.TopologyMeta{Groups: []metadata.TopologyGroup{
-				{Role: "core", Cells: []string{pub}, Endpoint: "core.svc:9090"},
-				{Role: "edge", Cells: []string{sub}, Endpoint: "edge.svc:9090"},
-			}}),
-		},
+	bystander := metadatatest.CellIDCellC
+
+	// errs builds a 2-group split whose active amqp event is published by pub and
+	// subscribed by sub; crossProcess toggles whether sub sits in pub's group.
+	errs := func(crossProcess bool) []ValidationResult {
+		var groups []metadata.TopologyGroup
+		if crossProcess {
+			groups = []metadata.TopologyGroup{
+				{Role: "core", Cells: []string{pub}, Endpoint: "https://core.svc:9443"},
+				{Role: "edge", Cells: []string{sub, bystander}, Endpoint: "https://edge.svc:9443"},
+			}
+		} else {
+			groups = []metadata.TopologyGroup{
+				{Role: "core", Cells: []string{pub, sub}, Endpoint: "https://core.svc:9443"},
+				{Role: "edge", Cells: []string{bystander}, Endpoint: "https://edge.svc:9443"},
+			}
+		}
+		contract := topoTestContract("event.data.v1", "event", pub)
+		contract.Transports = []string{"amqp"}
+		contract.Endpoints.Subscribers = []string{sub}
+		pm := &metadata.ProjectMeta{
+			Cells: map[string]*metadata.CellMeta{
+				pub: topoTestCell(pub), sub: topoTestCell(sub), bystander: topoTestCell(bystander),
+			},
+			Slices:    map[string]*metadata.SliceMeta{},
+			Contracts: map[string]*metadata.ContractMeta{"event.data.v1": contract},
+			Journeys:  map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{
+				"testasm": topoTestAssembly([]string{pub, sub, bystander}, metadata.TopologyMeta{Groups: groups}),
+			},
+		}
+		results, err := NewValidator(pm, ".", clock.Real()).ValidateStrict(context.Background(), false, false)
+		require.NoError(t, err)
+		return FilterErrors(results)
 	}
-	results, err := NewValidator(pm, ".", clock.Real()).ValidateStrict(context.Background(), false, false)
-	require.NoError(t, err)
-	assert.Empty(t, findByCode(results, RuleCode("TOPO-13")),
-		"broker-backed split must not trip a static broker gate (TOPO-13 removed, #2196)")
+
+	cross := errs(true)
+	same := errs(false)
+	assert.Equal(t, len(same), len(cross),
+		"a cross-process amqp event must NOT add a static error vs the same colocated event "+
+			"(broker-backed split passes static validation; TOPO-13 removed, #2196)")
+	// Belt: the retired code never appears.
+	assert.Empty(t, findByCode(cross, RuleCode("TOPO-13")))
 }
 
 // --- helpers ---

@@ -751,9 +751,19 @@ func buildTopologyGroupsData(topo metadata.TopologyMeta, brokerRoles map[string]
 // Scope mirrors the (now-deleted) TOPO-13 structure, reusing metadata.CellGroup
 // for placement:
 //   - < 2 groups → no process boundary → empty set (all-colocated / single role).
-//   - only event contracts matter (the in-memory EventBus is the bus a broker
-//     replaces; sync HTTP/CellTransport contracts cross processes without one).
+//   - only EVENT contracts matter (the in-memory EventBus is the bus a broker
+//     replaces). Sync HTTP/CellTransport contracts cross processes without one;
+//     COMMAND contracts are also excluded — command relay dispatches in-process
+//     and is never published to the broker (outbox/relay_command.go;
+//     relay_command_test.go asserts "command must NOT be published to the broker"),
+//     so a cross-group command needs no broker. This matches the removed static
+//     TOPO-13's event-only scope (no regression).
 //   - only active contracts (draft/deprecated carry no live broker requirement).
+//   - the signal keys off cross-group pub/sub EDGES (a publisher cell AND a
+//     subscriber cell in different groups). A publisher-only active event (no
+//     subscriber) yields no edge → no broker requirement — consistent with it
+//     being a dead event (ADV-05 warns separately); the in-memory bus delivers it
+//     to no one, so no cross-process loss occurs.
 //   - only amqp-transported events; a registered event with an EMPTY transports
 //     set fails generation closed (the fail-open hazard documented on
 //     collectBrokerCells — explicit `transports: []` is malformed metadata).

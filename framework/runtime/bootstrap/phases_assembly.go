@@ -357,7 +357,7 @@ func (b *Bootstrap) resolveHealthAggregator() error {
 const terminationGraceSafetyMargin = 10 * time.Second
 
 // errMsgSplitTopologyRequiresBroker — MESSAGE-CONST-LITERAL-01.
-const errMsgSplitTopologyRequiresBroker = "split deployment topology (remote cells) requires a real event broker; " +
+const errMsgSplitTopologyRequiresBroker = "split deployment topology with cross-process events requires a real event broker; " +
 	"the in-memory EventBus cannot deliver events across process boundaries — " +
 	"set GOCELL_CELL_ADAPTER_MODE=postgres (+ GOCELL_ADAPTER_MODE=real) and a per-cell " +
 	"GOCELL_<CELLID>_AMQP_URL (fallback GOCELL_AMQP_URL; see docs/ops/env-vars.md) so " +

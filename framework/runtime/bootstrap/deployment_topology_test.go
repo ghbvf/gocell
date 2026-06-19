@@ -913,6 +913,16 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			wantErr:            false,
 		},
 		{
+			// A sync-only split that nonetheless wires a real broker is legal — the
+			// gate only DEMANDS a broker when the signal is true, it never forbids one.
+			name:               "GREEN: sync-only split (signal false) + real-broker kind → accepted (over-provisioned)",
+			deploymentTopology: syncOnlySplitDT,
+			kind:               RealBrokerEventTransport(),
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
+			wantErr:            false,
+		},
+		{
 			name:               "GREEN: colocated topology + in-memory kind → accepted (no remote cells)",
 			deploymentTopology: colocatedDT,
 			kind:               InMemoryEventTransport(),
