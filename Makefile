@@ -149,7 +149,8 @@ verify:
 # install-hooks points git at the tracked hack/githooks/ dir (per-repo
 # config, shared across all worktrees of this repo). Run once after clone
 # and after `git worktree add`. The pre-push hook runs the fast CI subset
-# (gofumpt / build+vet / codegen staleness) AI co-authors most often skip.
+# (gofumpt / build+vet / codegen staleness) AI co-authors most often skip;
+# CPU-heavy golangci-lint stays in CI / explicit developer commands.
 install-hooks:
 	git config core.hooksPath hack/githooks
 	@echo "core.hooksPath -> hack/githooks (pre-push active)"
