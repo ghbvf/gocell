@@ -634,6 +634,7 @@ endpoints:
   http:
     method: POST
     path: /api/v1/fixture/ping/
+    permission: fixture:write
     successStatus: 201
     noContent: false
     responses:
