@@ -183,13 +183,21 @@ const grpcPkgPath = "google.golang.org/grpc"
 // name is resolved to a runtime/grpc/interceptor function via go/types before
 // the order is compared, so a same-named decoy from another package will not
 // match.
+//
+// PR-12 (#1155) extends the unary chain with RateLimit + CircuitBreaker (between
+// Metrics and Auth, protection-chain parity with HTTP) and ErrcodeMap just outside
+// Recovery (so errcode→grpc/codes mapping fires before Recovery's panic collapse
+// is observed by the outer interceptors).
 var grpcChainExpectedOrder = []string{
 	"UnaryRequestID",
 	"UnaryCellAttribution",
 	"UnaryTracing",
 	"UnaryAccessLog",
 	"UnaryMetrics",
+	"UnaryRateLimit",
+	"UnaryCircuitBreaker",
 	"UnaryAuth",
+	"UnaryErrcodeMap",
 	"UnaryRecovery",
 }
 
@@ -231,8 +239,9 @@ func TestArchtest_GRPCInterceptorChainOrder(t *testing.T) {
 						Line: p.Fset.Position(call.Pos()).Line,
 						Message: fmt.Sprintf(
 							"GRPC-INTERCEPTOR-CHAIN-ORDER-01: interceptor order must be "+
-								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→Auth→Recovery "+
-								"(RequestID outermost, Recovery innermost), each resolved to a "+
+								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→RateLimit→CircuitBreaker→Auth→ErrcodeMap→Recovery "+
+								"(RequestID outermost, Recovery innermost, RateLimit+CircuitBreaker between Metrics and Auth, "+
+								"ErrcodeMap just outside Recovery), each resolved to a "+
 								"runtime/grpc/interceptor constructor; got %v. "+
 								"See runtime/grpc/interceptor package doc.",
 							got,
@@ -481,14 +490,21 @@ const grpcRuntimePkgPath = PlatformFrameworkModulePath + "/runtime/grpc"
 // handler's context is drain-bound while the outer observability interceptors
 // still see the final status). Each name is resolved to a runtime/grpc/interceptor
 // function via go/types before the order is compared.
+//
+// PR-12 (#1155) extends the stream chain with StreamRateLimit + StreamCircuitBreaker
+// (between Metrics and Auth) and StreamErrcodeMap just outside StreamRecovery —
+// parallel to the unary extensions.
 var grpcStreamChainExpectedOrder = []string{
 	"StreamRequestID",
 	"StreamCellAttribution",
 	"StreamTracing",
 	"StreamAccessLog",
 	"StreamMetrics",
+	"StreamRateLimit",
+	"StreamCircuitBreaker",
 	"StreamAuth",
 	"StreamDrain",
+	"StreamErrcodeMap",
 	"StreamRecovery",
 }
 
@@ -530,8 +546,9 @@ func TestArchtest_GRPCStreamChainOrder(t *testing.T) {
 						Line: p.Fset.Position(call.Pos()).Line,
 						Message: fmt.Sprintf(
 							"GRPC-STREAM-CHAIN-ORDER-01: stream interceptor order must be "+
-								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→Auth→Drain→Recovery "+
-								"(RequestID outermost, Recovery innermost, Drain just inside Auth), each "+
+								"RequestID→CellAttribution→Tracing→AccessLog→Metrics→RateLimit→CircuitBreaker→Auth→Drain→ErrcodeMap→Recovery "+
+								"(RequestID outermost, Recovery innermost, RateLimit+CircuitBreaker between Metrics and Auth, "+
+								"Drain just inside Auth, ErrcodeMap just outside Recovery), each "+
 								"resolved to a runtime/grpc/interceptor constructor; got %v. "+
 								"See runtime/grpc/interceptor package doc.",
 							got,
