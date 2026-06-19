@@ -52,20 +52,21 @@ CREATE TABLE IF NOT EXISTS saga_projection_dead_letters (
     PRIMARY KEY (cell_id, projection_id, global_seq)
 );
 
--- Append-only for the serving role: the poison registry must not be tampered with
--- or deleted by the application path. deploy/postgres/init/10-restricted-role.sh
--- grants gocell_app default SELECT/INSERT/UPDATE/DELETE on every future table, so
--- this table is born with the destructive privileges; revoke UPDATE/DELETE so the
--- DB engine enforces append-only (the role keeps SELECT for ops/replay reads +
--- INSERT for Record). Operator recovery cleanup (DELETE recovered rows) is an admin
--- action, not a serving-path one. The IF EXISTS guard makes this a no-op where
--- gocell_app is not provisioned (dev/memory mode, template-build migration). Mirrors
--- projection_events (058) and the #1676 restricted-role posture.
+-- Least-privilege for the serving role: the Tailer only INSERTs poison entries
+-- (DeadLetterStore.Record) and never reads from this table. Ops/replay reads are
+-- admin actions served by a dedicated admin/read-only role — not the serving role.
+-- deploy/postgres/init/10-restricted-role.sh grants gocell_app the default
+-- SELECT/INSERT/UPDATE/DELETE on every future table, so this table is born with all
+-- four privileges; revoke SELECT/UPDATE/DELETE so the DB engine enforces INSERT-only
+-- (least-privilege: serving role retains only INSERT). This is stricter than
+-- projection_events (058) which keeps SELECT for replay/Position reads — here there
+-- is no serving-path read at all. The IF EXISTS guard makes this a no-op where
+-- gocell_app is not provisioned (dev/memory mode, template-build migration).
 -- +goose StatementBegin
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gocell_app') THEN
-    REVOKE UPDATE, DELETE ON saga_projection_dead_letters FROM gocell_app;
+    REVOKE SELECT, UPDATE, DELETE ON saga_projection_dead_letters FROM gocell_app;
   END IF;
 END $$;
 -- +goose StatementEnd
