@@ -32,3 +32,15 @@ func mustID(t testing.TB, raw string) scaffoldid.ScaffoldID {
 	}
 	return id
 }
+
+// mustRefs builds a same-module []ScaffoldCellRef from known-valid cell ids —
+// the terse fixture constructor for AssemblyScaffoldSpec.Cells. Cross-module
+// fixtures construct ScaffoldCellRef{ID: mustID(...), Module: ...} literals.
+func mustRefs(t testing.TB, ids ...string) []ScaffoldCellRef {
+	t.Helper()
+	refs := make([]ScaffoldCellRef, len(ids))
+	for i, id := range ids {
+		refs[i] = ScaffoldCellRef{ID: mustID(t, id)}
+	}
+	return refs
+}

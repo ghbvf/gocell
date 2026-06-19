@@ -227,10 +227,14 @@ type AssemblyScaffoldSpec struct {
 	// scaffoldid.Parse — callers cannot supply an unvalidated raw string
 	// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01).
 	ID scaffoldid.ScaffoldID
-	// Cells lists the cell IDs that compose this assembly, in startup order.
-	// Each entry must reference an existing cells/{cellID}/cell.yaml. Typed
-	// for the same reason as ID.
-	Cells []scaffoldid.ScaffoldID
+	// Cells lists the cells that compose this assembly, in startup order. Each
+	// entry is a ScaffoldCellRef carrying a typed cell ID plus an optional Go
+	// module path. A same-module entry (empty Module) must reference an existing
+	// cells/{cellID}/cell.yaml; a cross-module entry (foreign Module) is NOT
+	// required to exist locally — its module-cache metadata read is #1515's
+	// scope and its existence is ultimately established when the generated
+	// modules_gen.go is built (#1516).
+	Cells []ScaffoldCellRef
 	// OwnerTeam, OwnerRole identify the maintainers of this assembly.
 	// Both required; written verbatim to assembly.yaml owner.
 	OwnerTeam string
@@ -242,8 +246,25 @@ type AssemblyScaffoldSpec struct {
 	Deploy string
 	// SkipGenerate when true causes PlanAssemblyScaffold to return only the
 	// 3 skeleton PlannedFiles (assembly.yaml + cmd/{id}/run.go + cmd/{id}/app.go),
-	// skipping in-memory codegen for the 3 K#10 derived files.
+	// skipping in-memory codegen for the 3 K#10 derived files. Cross-module cells
+	// force this behavior implicitly (see PlanAssemblyScaffold) because their
+	// metadata is not locally resolvable.
 	SkipGenerate bool
+}
+
+// ScaffoldCellRef is one cell entry in an AssemblyScaffoldSpec: a typed cell ID
+// plus an optional Go module path. ID stays typed (scaffoldid.ScaffoldID) so the
+// (^[a-z][a-z0-9]+$) constraint is established at construction time
+// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). Module is empty for the common
+// same-module case; a non-empty Module references a cell developed in an
+// independent Go module (#1086/#1516) and is rendered as the object form
+// `{id, module}` in assembly.yaml. Module hygiene (no characters that could break
+// out of the generated import string literal) is enforced by the single closed
+// funnel validateAssemblyScaffoldSpec via metadata.MatchAssemblyModulePath — the
+// same validator the assembly.yaml decoder uses.
+type ScaffoldCellRef struct {
+	ID     scaffoldid.ScaffoldID
+	Module string
 }
 
 // scaffoldAssemblyContext is the template context for the K#09 scaffold
@@ -253,12 +274,23 @@ type AssemblyScaffoldSpec struct {
 // that wraps user input through yamlsafe.Quote.
 type scaffoldAssemblyContext struct {
 	ID             yamlsafe.Scalar
-	Cells          []yamlsafe.Scalar
+	Cells          []scaffoldAssemblyCellYAML // per-cell {id[, module]} entries for the assembly.yaml cells block
 	OwnerTeam      yamlsafe.Scalar
 	OwnerRole      yamlsafe.Scalar
 	DeployTemplate yamlsafe.Scalar             // empty when --deploy=k8s (default — omitted from yaml)
+	CompositionAPI bool                        // true when any cell is cross-module — emits build.compositionAPI: true
 	HelperName     string                      // run{ID-PascalCase} for runXxx() in run.go (Go identifier, not YAML scalar)
 	CellModules    []scaffoldAssemblyCellEntry // {StructName + Module suffix, cellID} pairs for run.go stubs
+}
+
+// scaffoldAssemblyCellYAML is one rendered cells[] entry. Module is the zero
+// yamlsafe.Scalar for the same-module scalar shorthand (`- id`); a non-empty
+// Module triggers the cross-module object form (`- {id: ID, module: MODULE}`).
+// Both fields route through yamlsafe.Quote so YAML metacharacters in user input
+// cannot break out of the (flow-mapping) scalar (YAML-QUOTE-FUNNEL-01).
+type scaffoldAssemblyCellYAML struct {
+	ID     yamlsafe.Scalar
+	Module yamlsafe.Scalar
 }
 
 // scaffoldAssemblyCellEntry pairs a generated *Module struct name with the
@@ -511,7 +543,27 @@ func (g *Generator) generateModulesGenLegacy(
 // than the assembly's own (g.module). An empty ref.Module, or one equal to
 // g.module, is same-module.
 func (g *Generator) isCrossModule(ref metadata.AssemblyCellRef) bool {
-	return ref.Module != "" && ref.Module != g.module
+	return g.crossModule(ref.Module)
+}
+
+// crossModule is the single predicate behind every cross-module decision: a
+// non-empty module that differs from the assembly's own module. Used by
+// isCrossModule (codegen) and the scaffold path (existence-skip, compositionAPI,
+// derived-file skip) so all three stay aligned.
+func (g *Generator) crossModule(module string) bool {
+	return module != "" && module != g.module
+}
+
+// specHasCrossModule reports whether any cell in the scaffold spec is
+// cross-module — the trigger for compositionAPI emission and the implicit
+// derived-file skip (cross-module cell metadata is not locally resolvable).
+func (g *Generator) specHasCrossModule(spec AssemblyScaffoldSpec) bool {
+	for _, c := range spec.Cells {
+		if g.crossModule(c.Module) {
+			return true
+		}
+	}
+	return false
 }
 
 // moduleOf returns the Go module path a cell's cellmodules/ package lives in:
@@ -949,7 +1001,12 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 		return nil, err
 	}
 
-	if spec.SkipGenerate {
+	// Cross-module cells force the skeleton-only plan: their cellmodules/ metadata
+	// is not locally resolvable (that read is #1515's scope), and the composition
+	// modules_gen.go they require is incompatible with the legacy run.go skeleton.
+	// The CLI surfaces an actionable "run gocell generate assembly" hint, mirroring
+	// the explicit --skip-generate contract (#1516).
+	if spec.SkipGenerate || g.specHasCrossModule(spec) {
 		return plan, nil
 	}
 
@@ -1062,12 +1119,14 @@ func synthesizeAssemblyMeta(spec AssemblyScaffoldSpec) *metadata.AssemblyMeta {
 		// which the boundary sourceFingerprint depends on.
 		deployTemplate = "k8s"
 	}
-	// Scaffolded assemblies are always same-module (cross-module authoring is a
-	// hand-edit / future scaffold flag, tracked in backlog); synthesize bare
-	// same-module cell refs via the metadata.CellRefs constructor.
+	// synthesizeAssemblyMeta is only reached for same-module scaffolds:
+	// PlanAssemblyScaffold short-circuits (skeleton-only plan) when any cell is
+	// cross-module, so the derived-file path that calls this never sees a foreign
+	// module. Every spec.Cells entry here is therefore same-module — synthesize
+	// bare same-module refs via the metadata.CellRefs constructor (#1516).
 	cellIDs := make([]string, len(spec.Cells))
 	for i, c := range spec.Cells {
-		cellIDs[i] = c.String()
+		cellIDs[i] = c.ID.String()
 	}
 	return &metadata.AssemblyMeta{
 		ID:    spec.ID.String(),
@@ -1126,12 +1185,15 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 	}
 
 	cellModuleEntries := make([]scaffoldAssemblyCellEntry, 0, len(spec.Cells))
-	quotedCells := make([]yamlsafe.Scalar, 0, len(spec.Cells))
-	for _, cellID := range spec.Cells {
-		cellIDStr := cellID.String()
+	cellYAMLs := make([]scaffoldAssemblyCellYAML, 0, len(spec.Cells))
+	for _, ref := range spec.Cells {
+		cellIDStr := ref.ID.String()
 		cellMeta := g.cells.Get(cellIDStr)
-		// Cell existence already validated; fall back to cellID when
-		// GoStructName is unset so legacy cells still produce a compilable stub.
+		// Same-module cell existence is validated upstream; cross-module cells are
+		// not locally present (g.cells.Get == nil) so structName falls back to the
+		// cell id. The run.go stub it feeds is only material for same-module
+		// (legacy) scaffolds — cross-module scaffolds skip the derived files that
+		// reference it.
 		structName := cellIDStr
 		if cellMeta != nil && !cellMeta.GoStructName.IsZero() {
 			structName = cellMeta.GoStructName.String()
@@ -1140,15 +1202,23 @@ func (g *Generator) buildScaffoldContext(spec AssemblyScaffoldSpec) (scaffoldAss
 			Name: structName + "Module",
 			ID:   cellIDStr,
 		})
-		quotedCells = append(quotedCells, yamlsafe.Quote(cellIDStr))
+		// Module is the zero Scalar for same-module (scalar shorthand); a non-empty
+		// Module renders the cross-module object form. Both routed through
+		// yamlsafe.Quote (YAML-QUOTE-FUNNEL-01) — safe in flow-mapping context.
+		entry := scaffoldAssemblyCellYAML{ID: yamlsafe.Quote(cellIDStr)}
+		if ref.Module != "" {
+			entry.Module = yamlsafe.Quote(ref.Module)
+		}
+		cellYAMLs = append(cellYAMLs, entry)
 	}
 
 	return scaffoldAssemblyContext{
 		ID:             yamlsafe.Quote(spec.ID.String()),
-		Cells:          quotedCells,
+		Cells:          cellYAMLs,
 		OwnerTeam:      yamlsafe.Quote(spec.OwnerTeam),
 		OwnerRole:      yamlsafe.Quote(spec.OwnerRole),
 		DeployTemplate: deployTemplate,
+		CompositionAPI: g.specHasCrossModule(spec),
 		HelperName:     helperName,
 		CellModules:    cellModuleEntries,
 	}, nil
@@ -1182,14 +1252,19 @@ func (g *Generator) renderAssemblyScaffoldFiles(
 	return plan, nil
 }
 
-// validateAssemblyScaffoldSpec checks required fields and verifies that every
-// cell in spec.Cells exists in the parsed project. Identifier pattern
-// validation is no longer performed here: spec.ID and spec.Cells[] are typed
-// (scaffoldid.ScaffoldID), so the AssemblyIDPattern (`^[a-z][a-z0-9]+$`)
-// constraint is established at construction time via scaffoldid.Parse
-// (SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01). Free-text rules (OwnerTeam /
-// OwnerRole) still route through kernel/metadata.IsValidMetadataText —
-// the metadata package is the sole declaration site.
+// validateAssemblyScaffoldSpec is the single closed funnel every scaffold spec
+// traverses before rendering. Identifier pattern validation is established at
+// construction time via the typed ID (scaffoldid.ScaffoldID,
+// SCAFFOLD-INPUT-CONTRACT-TYPED-ID-01); this funnel adds the runtime-value
+// guards: required fields + free-text hygiene (OwnerTeam / OwnerRole via
+// kernel/metadata.IsValidMetadataText) and the per-cell checks in
+// validateScaffoldCells — module-path hygiene, duplicate-cell rejection, and
+// same-module existence. Putting module hygiene HERE (not only at the CLI flag
+// layer) closes the funnel: a spec built by any caller — not just the CLI —
+// cannot reach rendering with a module string that could break out of the
+// generated import literal (mirrors how the assembly.yaml decoder validates via
+// the same metadata.MatchAssemblyModulePath). AI-robust: Medium runtime
+// fail-closed guard, peer to the decoder + Owner guards.
 //
 // ref: kubernetes/apimachinery pkg/util/validation/validation.go —
 // IsDNS1123Label single-helper validation; same pattern applied here.
@@ -1225,15 +1300,41 @@ func validateAssemblyScaffoldSpec(g *Generator, spec AssemblyScaffoldSpec) error
 			"assembly scaffold: --deploy must be one of [k8s compose binary]",
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("deploy=%q", spec.Deploy))))
 	}
-	// spec.Cells is []scaffoldid.ScaffoldID — the AssemblyIDPattern
-	// (^[a-z][a-z0-9]+$) is identical to CellIDPattern, so a typed entry has
-	// already passed pattern validation at scaffoldid.Parse time. We still
-	// verify each cell exists in the parsed project.
-	for _, cellID := range spec.Cells {
-		if g.cells.Get(cellID.String()) == nil {
+	return g.validateScaffoldCells(spec.Cells)
+}
+
+// validateScaffoldCells runs the per-cell scaffold guards: duplicate-cell
+// rejection, cross-module module-path hygiene, and same-module existence. Cell
+// ID pattern is already established by the typed ScaffoldCellRef.ID. Lifted out
+// of validateAssemblyScaffoldSpec to keep cognitive complexity within budget.
+func (g *Generator) validateScaffoldCells(cells []ScaffoldCellRef) error {
+	seen := make(map[string]bool, len(cells))
+	for _, ref := range cells {
+		id := ref.ID.String()
+		if seen[id] {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"assembly scaffold: --cells references unknown cell",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", cellID.String()))))
+				"assembly scaffold: duplicate cell",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", id))))
+		}
+		seen[id] = true
+
+		if g.crossModule(ref.Module) {
+			// Cross-module: module-path hygiene via the same single-source validator
+			// the assembly.yaml decoder uses; existence is NOT checked here (the cell
+			// lives in another module, resolved at `go build` / #1515 time).
+			if !metadata.MatchAssemblyModulePath(ref.Module) {
+				return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+					"assembly scaffold: cell module path has invalid character",
+					errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q module=%q", id, ref.Module))))
+			}
+			continue
+		}
+
+		// Same-module (or explicit module == own module): must exist locally.
+		if g.cells.Get(id) == nil {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"assembly scaffold: cell references unknown cell",
+				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("cell=%q", id))))
 		}
 	}
 	return nil

@@ -8,7 +8,6 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/kernel/metadata/metadatatest"
-	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // synthesisFieldExemptions lists AssemblyMeta yaml-bearing field paths that
@@ -78,7 +77,7 @@ func TestAssemblyMetaSynthesisFieldGuard(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myasm"),
-		Cells:     []scaffoldid.ScaffoldID{mustID(t, "mycell")},
+		Cells:     mustRefs(t, "mycell"),
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "binary", // pick non-default so DeployTemplate is non-zero
@@ -174,7 +173,7 @@ func TestAssemblyMetaSynthesisFieldGuard_DefaultK8sDerivation(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myasm"),
-		Cells:     []scaffoldid.ScaffoldID{mustID(t, "mycell")},
+		Cells:     mustRefs(t, "mycell"),
 		OwnerTeam: "platform",
 		OwnerRole: "maintainer",
 		Deploy:    "", // empty → must derive to "k8s" mirroring parser
