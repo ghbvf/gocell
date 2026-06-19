@@ -292,12 +292,14 @@ func crossProcessTestProject(groups []metadata.TopologyGroup, contracts map[stri
 	}
 }
 
-// xpEvent builds an event ContractMeta with explicit publisher/subscriber
-// endpoints. The generator reads c.Endpoints directly (it does not run the
-// parser's deriveEventSubscribers), so the test sets them by hand.
-func xpEvent(id, lifecycle string, transports []string, publisher string, subscribers ...string) *metadata.ContractMeta {
+// xpEvent builds the fixed-ID event ContractMeta "event.x.v1" with explicit
+// publisher/subscriber endpoints. The generator reads c.Endpoints directly (it
+// does not run the parser's deriveEventSubscribers), so the test sets them by
+// hand. The contract ID is constant across cases, so it is baked in (the map key
+// in each case must match "event.x.v1").
+func xpEvent(lifecycle string, transports []string, publisher string, subscribers ...string) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
-		ID:         id,
+		ID:         "event.x.v1",
 		Kind:       "event",
 		Lifecycle:  lifecycle,
 		Transports: transports,
@@ -334,17 +336,17 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 		{
 			name:      "empty topology → none (no process boundary)",
 			groups:    nil,
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore")},
 		},
 		{
 			name:      "single group → none (<2 groups)",
 			groups:    []metadata.TopologyGroup{{Role: "mono", Cells: []string{"accesscore", "auditcore"}, Endpoint: "mono.svc:9000"}},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore")},
 		},
 		{
 			name:      "cross-process active amqp event → both endpoint roles",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore")},
 			wantRoles: []string{"core", "edge"},
 		},
 		{
@@ -358,44 +360,44 @@ func TestCollectCrossProcessBrokerEventRoles(t *testing.T) {
 		{
 			name:      "non-amqp event crossing groups → none (sync transport)",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", []string{"http"}, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", []string{"http"}, "accesscore", "auditcore")},
 		},
 		{
 			name:      "draft event crossing groups → none (not active)",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "draft", amqp, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("draft", amqp, "accesscore", "auditcore")},
 		},
 		{
 			name:      "colocated event (same group) → none (anti-vacuity GREEN, ≥2 groups)",
 			groups:    []metadata.TopologyGroup{{Role: "core", Cells: []string{"accesscore", "auditcore"}, Endpoint: "core.svc:9000"}, extra},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore")},
 		},
 		{
 			name:      "external-actor publisher (not a cell) → none",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "externalsystem", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "externalsystem", "auditcore")},
 		},
 		{
 			name:      "_framework sentinel publisher → none (not in any group)",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "_framework", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "_framework", "auditcore")},
 		},
 		{
 			name:      "external subscriber skipped, cell subscriber counts",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "externalsystem", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "externalsystem", "auditcore")},
 			wantRoles: []string{"core", "edge"},
 		},
 		{
 			name:      "fan-out to multiple groups → all involved roles",
 			groups:    []metadata.TopologyGroup{core, edge, extra},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", amqp, "accesscore", "auditcore", "configcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", amqp, "accesscore", "auditcore", "configcore")},
 			wantRoles: []string{"core", "edge", "extra"},
 		},
 		{
 			name:      "registered event with empty transports → fail-closed error",
 			groups:    []metadata.TopologyGroup{core, edge},
-			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("event.x.v1", "active", []string{}, "accesscore", "auditcore")},
+			contracts: map[string]*metadata.ContractMeta{"event.x.v1": xpEvent("active", []string{}, "accesscore", "auditcore")},
 			wantErr:   true,
 		},
 	}

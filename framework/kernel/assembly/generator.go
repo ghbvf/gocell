@@ -769,31 +769,46 @@ func (g *Generator) collectCrossProcessBrokerEventRoles(asm *metadata.AssemblyMe
 	events := g.contracts.ByKind(string(cellvocab.ContractEvent))
 	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
 	for _, c := range events {
-		if cellvocab.ContractLifecycle(c.Lifecycle) != cellvocab.ContractLifecycleActive {
-			continue
-		}
-		if len(c.Transports) == 0 {
-			return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-				"event contract has an empty transports set",
-				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", c.ID))))
-		}
-		if !contractIsBrokerTransported(c) {
-			continue
-		}
-		pubGroup, ok := metadata.CellGroup(asm, c.Endpoints.Publisher)
-		if c.Endpoints.Publisher == "" || !ok {
-			continue
-		}
-		for _, sub := range c.Endpoints.Subscribers {
-			subGroup, ok := metadata.CellGroup(asm, sub)
-			if !ok || pubGroup.Role == subGroup.Role {
-				continue
-			}
-			roles[pubGroup.Role] = struct{}{}
-			roles[subGroup.Role] = struct{}{}
+		if err := addCrossProcessBrokerEventRoles(asm, c, roles); err != nil {
+			return nil, err
 		}
 	}
 	return roles, nil
+}
+
+// addCrossProcessBrokerEventRoles marks (into roles) the deployment-group roles on
+// both sides of every cross-process edge of event contract c — i.e. the publisher
+// and subscriber roles whenever the two fall in different groups. It returns a
+// fail-closed error if c is an active event with an EMPTY transports set (the
+// fail-open hazard documented on collectCrossProcessBrokerEventRoles). Non-event,
+// non-active, non-amqp, or placement-unresolvable contracts are skipped (no-op).
+// Extracted to keep collectCrossProcessBrokerEventRoles within the cognitive-
+// complexity budget.
+func addCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta, c *metadata.ContractMeta, roles map[string]struct{}) error {
+	if cellvocab.ContractLifecycle(c.Lifecycle) != cellvocab.ContractLifecycleActive {
+		return nil
+	}
+	if len(c.Transports) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"event contract has an empty transports set",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", c.ID))))
+	}
+	if !contractIsBrokerTransported(c) {
+		return nil
+	}
+	pubGroup, ok := metadata.CellGroup(asm, c.Endpoints.Publisher)
+	if c.Endpoints.Publisher == "" || !ok {
+		return nil
+	}
+	for _, sub := range c.Endpoints.Subscribers {
+		subGroup, ok := metadata.CellGroup(asm, sub)
+		if !ok || pubGroup.Role == subGroup.Role {
+			continue
+		}
+		roles[pubGroup.Role] = struct{}{}
+		roles[subGroup.Role] = struct{}{}
+	}
+	return nil
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new
