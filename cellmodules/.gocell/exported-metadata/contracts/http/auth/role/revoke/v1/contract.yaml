@@ -1,0 +1,34 @@
+id: http.auth.role.revoke.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.role.revoked.v1
+endpoints:
+  server: accesscore
+  clients:
+    - accesscore
+  http:
+    method: POST
+    path: /internal/v1/access/roles/revoke
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    responses:
+      400:
+        description: "Bad request — request body decode failure, or userId/roleId/tenantId blank or malformed (tenantId must be a valid UUID) (ErrAuthRBACInvalidInput)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid service token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller_cell not in contract.clients allowlist (ERR_AUTH_INVALID_CALLER_CELL), OR ERR_AUTH_LAST_ADMIN_PROTECTED when revoking the admin role from this user would leave the system with no effective admin (status='active' AND admin role) [S4.0]"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

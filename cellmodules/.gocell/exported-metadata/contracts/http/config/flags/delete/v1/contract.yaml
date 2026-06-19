@@ -1,0 +1,43 @@
+id: http.config.flags.delete.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: configcore
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/flags/{key}
+    permission: flag:write
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 256
+    queryParams:
+      expectedVersion:
+        $ref: "../../../../../shared/cas/v1/expected_version.schema.json"
+        required: true
+    successStatus: 204
+    auth:
+      responses:
+        - 503
+    noContent: true
+    responses:
+      400:
+        description: "Bad request — path parameter key is too short or too long"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the flag:write permission; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — flag key does not exist (ERR_FLAG_NOT_FOUND)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — expectedVersion does not match current version (ERR_VERSION_CONFLICT)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"

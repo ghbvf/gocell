@@ -1,0 +1,56 @@
+# X-Tenant-ID header (required, string, UUID — normalized to canonical lowercase)
+# ----------------------------------------------------------------
+# Callers MUST supply a valid per-tenant UUID in the X-Tenant-ID request header.
+# The handler parses it via tenant.ParseTenantID (fail-closed); the accept/reject
+# semantics are single-sourced by tenant.ParseTenantID (identical to the
+# login/setup pre-auth tenant header path):
+#   - a valid UUID in ANY case is ACCEPTED and normalized to canonical lowercase
+#     (e.g. an uppercase UUID succeeds — it is NOT rejected as non-canonical)
+#   - absent or empty value → 400 ERR_VALIDATION_FAILED
+#   - not a UUID (malformed) → 400 ERR_VALIDATION_FAILED
+#   - reserved nil-UUID ("00000000-0000-0000-0000-000000000000") → 400 ERR_VALIDATION_FAILED
+# There is no SystemTenantID fallback — every call must carry a real tenant UUID.
+id: http.config.internal.get.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: configcore
+  clients:
+    - accesscore
+  http:
+    method: GET
+    path: /internal/v1/config/{key}
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 256
+    headers:
+      X-Tenant-ID:
+        type: string
+        format: uuid
+        required: true
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — (1) path parameter key too short/long; (2) X-Tenant-ID header absent, malformed (non-UUID), or nil-UUID"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid service token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller_cell not in contract.clients allowlist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Config key not found"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

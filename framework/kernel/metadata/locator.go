@@ -340,6 +340,20 @@ func IsInExamplesSubtree(p string) bool {
 	return strings.HasPrefix(filepath.ToSlash(p), "examples/")
 }
 
+// IsInCorecellsSubtree reports whether p is a file under the GoCell monorepo's
+// corecells/ platform-cell module (#1560 flat layout, e.g.
+// "corecells/accesscore/cell.yaml"). The "corecells/" path-prefix literal stays
+// inside the Locator funnel (LOCATOR-DISCOVERY-FUNNEL-01) so callers that need to
+// distinguish platform cells from example cells — e.g. the cellmodules exported-
+// metadata bundle generator (#1515), which publishes the platform metadata closure
+// for external Operator-SDK consumers — do not open-code the prefix. corecells is
+// GoCell's single platform-cell module: every cell distributed via
+// cellmodules/<x>.Module() is defined here. External-repo callers under Manifest
+// mode without a corecells/ subtree always get false.
+func IsInCorecellsSubtree(p string) bool {
+	return strings.HasPrefix(filepath.ToSlash(p), "corecells/")
+}
+
 // IsConventionalAssemblyPath reports whether p is an assembly YAML file under
 // the conventional assemblies/<id>/ directory (e.g.
 // "assemblies/corebundle/assembly.yaml"). Exposed here so the "assemblies/"

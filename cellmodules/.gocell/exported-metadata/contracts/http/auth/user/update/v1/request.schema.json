@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.user.update.v1.request",
+  "type": "object",
+  "properties": {
+    "email": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
+    }
+  },
+  "additionalProperties": false
+}

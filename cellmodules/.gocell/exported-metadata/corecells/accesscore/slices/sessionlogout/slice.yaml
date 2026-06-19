@@ -1,0 +1,37 @@
+id: sessionlogout
+belongsToCell: accesscore
+consistencyLevel: L2
+lifecycle: asset
+contractUsages:
+  - contract: http.auth.session.delete.v1
+    role: serve
+  - contract: event.session.revoked.v1
+    role: publish
+  - contract: event.role.assigned.v1
+    role: subscribe
+    handler: HandleRoleChanged
+    group: accesscore-rbac-session-sync
+    field: rbacSessionConsumer
+  - contract: event.role.revoked.v1
+    role: subscribe
+    handler: HandleRoleChanged
+    group: accesscore-rbac-session-sync
+    field: rbacSessionConsumer
+verify:
+  unit:
+    - unit.sessionlogout.service
+  contract:
+    - contract.http.auth.session.delete.v1.serve
+    - contract.event.session.revoked.v1.publish
+  waivers:
+    - contract: event.role.assigned.v1
+      owner: platform-team
+      reason: consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go
+      expiresAt: 2026-07-01
+    - contract: event.role.revoked.v1
+      owner: platform-team
+      reason: consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go
+      expiresAt: 2026-07-01
+
+allowedFiles:
+  - corecells/accesscore/slices/sessionlogout/**

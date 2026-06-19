@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.audit.get.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "eventType": {
+          "type": "string"
+        },
+        "actorId": {
+          "type": "string"
+        },
+        "subjectId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string",
+          "description": "Tenant boundary id the audit row belongs to (epic #1337 PR-12). Surfaced behind the ResourceProjection column-masking funnel: an admin sees the value, lower-privilege/device callers may see it masked per the FieldMask obligation. Empty for tenant-less system rows (scope=\"system\") and for entries predating its introduction."
+        },
+        "correlationId": {
+          "type": "string",
+          "description": "Operator-diagnostic column: opaque cross-cell correlation identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
+        },
+        "traceId": {
+          "type": "string",
+          "description": "Operator-diagnostic column: opaque distributed trace identifier from the originating request context. Visible to admin/tenant-scope callers; value-masked (\"<REDACTED>\") for non-admin (self) and device callers per the FieldMask obligation (epic #1337 PR-12). Empty for entries predating its introduction."
+        },
+        "occurredAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Producer-clock event time. null when no producer clock was recorded (legacy rows predating #1229); the key is always present (stable column set, #1875) and this column is never value-masked. Distinct from timestamp (the ledger/HMAC persistence time, required)."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "scope": {
+          "type": "string",
+          "description": "Row classification: \"tenant\" means the row belongs to a tenant (the owning tenant id is in the tenantId field; for a super-admin cross-tenant read the row may belong to any tenant, carried in tenantId); \"system\" for tenant-less framework/system rows (e.g. bootstrap.auth.fail) that are surfaced to every tenant. Empty for rows predating its introduction."
+        },
+        "payload": {}
+      },
+      "required": [
+        "id",
+        "eventId",
+        "eventType",
+        "actorId",
+        "subjectId",
+        "tenantId",
+        "correlationId",
+        "traceId",
+        "occurredAt",
+        "timestamp",
+        "scope",
+        "payload"
+      ]
+    }
+  },
+  "required": [
+    "data"
+  ]
+}

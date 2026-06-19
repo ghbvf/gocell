@@ -1,0 +1,58 @@
+# Response cookies (documentation; codegen does not emit response headers —
+# cookie clearing is applied by httpcookie.Middleware in the slice handler):
+#
+#   Set-Cookie: __Host-gocell_rt=; HttpOnly; Secure; SameSite=Strict;
+#               Path=/; Max-Age=0
+#
+#     Emitted on: 204 (successful logout) only. The middleware is a no-op on
+#                 4xx/5xx responses — a failing logout must not disturb the
+#                 cookie state (e.g. a 401 from an expired bearer token must
+#                 leave the __Host-gocell_rt cookie intact for the next refresh).
+#     Purpose:    Deletes the httpOnly refresh cookie (__Host-gocell_rt) that the
+#                 login and refresh endpoints set. Clients that use the cookie
+#                 path for silent re-authentication must rely on this header
+#                 to invalidate their local cookie on explicit logout.
+#     Codegen:    contractgen does not emit Set-Cookie / response-header params.
+#                 The clearing is enforced at runtime via httpcookie.Middleware
+#                 wrapping the generated handler in RegisterRoutes.
+id: http.auth.session.delete.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.session.revoked.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/access/sessions/{id}
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    successStatus: 204
+    noContent: true
+    auth:
+      serviceOwned: true
+      passwordResetExempt: true
+      reason: "{id} is a session id, not a user id, so a route-level owner gate cannot be expressed; the service validates ownership by comparing the principal subject against the session user_id."
+      responses:
+        - 503
+    ownership:
+      subjectPath: ctx.subjectID
+      resourcePath: path.id.userID
+    responses:
+      400:
+        description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token, or principal subject missing (defense-in-depth)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — session id not found, or owned by another user (IDOR-safe collapse)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json

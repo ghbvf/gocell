@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.user.patch.v1.request",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "email": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "requirePasswordReset": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false
+}

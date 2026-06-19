@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.user.change-password.v1.request",
+  "type": "object",
+  "properties": {
+    "oldPassword": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 72
+    },
+    "newPassword": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 72
+    }
+  },
+  "required": ["oldPassword", "newPassword"],
+  "additionalProperties": false
+}

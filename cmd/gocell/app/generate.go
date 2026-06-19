@@ -109,6 +109,17 @@ var generateSubcommands = []subcommand[func(ctx context.Context, args []string) 
 		run: func(_ context.Context, a []string) error { return generateSharedSchema(a) },
 	},
 	{
+		name: "cellmodule-metadata",
+		help: []string{
+			"Derive cellmodules/.gocell/exported-metadata/ — the platform metadata",
+			"closure (corecells cell.yaml + slice.yaml + referenced root contracts +",
+			"shared schemas) published in the cellmodules module cache for external",
+			"Operator-SDK consumers (#1515). --all (required) [--dry-run].",
+			"CI: commit the bundle and run `gocell verify codegen-cellmodule-metadata`.",
+		},
+		run: func(_ context.Context, a []string) error { return generateCellModuleMetadata(a) },
+	},
+	{
 		name: "saga-coverage",
 		help: []string{
 			"Render the saga fanout artifacts from the saga.Status /",

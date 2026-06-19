@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.update.v1.request",
+  "description": "PUT = full replacement. All three fields are required so callers cannot implicitly zero-write a field they did not intend to change. Use POST /{key}/toggle for the partial 'just flip enabled' workflow.",
+  "type": "object",
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "description": { "type": "string", "maxLength": 1024 },
+    "expectedVersion": { "$ref": "../../../../../shared/cas/v1/expected_version.schema.json" }
+  },
+  "required": ["enabled", "rolloutPercentage", "description", "expectedVersion"],
+  "additionalProperties": false
+}

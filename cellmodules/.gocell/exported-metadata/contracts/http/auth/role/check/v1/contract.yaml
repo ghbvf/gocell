@@ -1,0 +1,41 @@
+id: http.auth.role.check.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/roles/{userID}/{roleName}
+    pathParams:
+      userID:
+        type: string
+        format: uuid
+      roleName:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responseProjection: true
+    responses:
+      400:
+        description: "Bad request — path parameter userID is not a valid UUID (ERR_VALIDATION_INVALID_UUID) or roleName is blank"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the role:read permission and is not the target user — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; the baseline also grants role:read to the admin and super-admin roles."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      501:
+        description: "Not Implemented — a super-admin's principal derives cross-tenant (RowScopeAll) row visibility, but accesscore has no cross-tenant read pool (unlike audit's gocell_audit_admin, #1810): its tables are served only by the app pool under FORCE RLS, so this read fail-closes unconditionally (ports.RowScopeAllUnsupportedError, #1709). Distinct from a negative membership result, which signals the user does not hold the role."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

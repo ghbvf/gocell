@@ -123,9 +123,14 @@ string, so set membership is inherently a runtime guard.
 
 ## Deferred (backlog, not silent)
 
-- **Operator-SDK module-cache metadata read** (`go list -json` to read a
-  dependency module's cell.yaml): no in-repo consumer until examples/ split into
-  modules (M11 #1092). Tracked as a backlog issue.
+- **Operator-SDK module-cache metadata read** — SUPERSEDED by #1515 /
+  ADR 202606200300: rather than reading `corecells` cell.yaml raw from the cache
+  (which leaves corecells' root-module contracts unresolved → broker-cell
+  fail-open under-count), cellmodules publishes a drift-guarded metadata CLOSURE
+  bundle (cells + slices + referenced root contracts) under
+  `cellmodules/.gocell/exported-metadata/`; `gocell generate assembly` reads it via
+  `cellModuleImportPath` → `go list -json` → owning module dir (#1515-PR2). Bundle
+  + drift guard landed in #1515-PR1.
 - **Scaffold `--module` flag** (cross-module assembly scaffolding): `gocell
   scaffold assembly` emits same-module string-form cells; cross-module entries
   are hand-authored. Backlog.

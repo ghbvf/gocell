@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.list.v1.response",
+  "description": "Paginated list of contract registrations, projected from the kernel ContractRegistration (#2233). Ordered by registration id; nextCursor is the last id of the page.",
+  "type": "object",
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ],
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "state",
+          "submitter",
+          "approver",
+          "payloadSchema",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "Lifecycle state; the sealed RegistrationState wire spelling."
+          },
+          "submitter": {
+            "type": "string"
+          },
+          "approver": {
+            "type": ["string", "null"],
+            "description": "Admin identity that approved the registration; null until approved."
+          },
+          "payloadSchema": {
+            "type": ["string", "null"],
+            "description": "Payload schema ref; null when not yet provided."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "nextCursor": {
+      "type": "string",
+      "description": "Opaque cursor (the last registration id of this page); empty when hasMore is false."
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
+  }
+}

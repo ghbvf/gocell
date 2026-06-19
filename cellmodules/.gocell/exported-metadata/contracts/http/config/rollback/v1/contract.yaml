@@ -1,0 +1,48 @@
+id: http.config.rollback.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.config.entry-upserted.v1
+  - event.config.rollback.v1
+endpoints:
+  server: configcore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/config/{key}/rollback
+    permission: config:publish
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 256
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — malformed JSON body or oversized payload"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the config:publish permission; the built-in baseline grants the admin and super-admin roles."
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not Found — config key or target version does not exist (ERR_CONFIG_REPO_NOT_FOUND)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — expectedVersion does not match current version (ERR_VERSION_CONFLICT)"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

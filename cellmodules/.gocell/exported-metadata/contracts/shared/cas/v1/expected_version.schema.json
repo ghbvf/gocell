@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/cas/expected-version-v1.schema.json",
+  "title": "GoCell CAS expectedVersion guard",
+  "description": "Compare-and-swap guard. Must equal the resource's current version; mismatch returns 409 ERR_VERSION_CONFLICT.",
+  "type": "integer",
+  "minimum": 1,
+  "maximum": 99999
+}

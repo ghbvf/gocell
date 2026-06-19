@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.refresh.v1.request",
+  "type": "object",
+  "properties": {
+    "refreshToken": { "type": "string", "minLength": 20, "maxLength": 4096 }
+  },
+  "required": [],
+  "additionalProperties": false
+}

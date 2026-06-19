@@ -110,6 +110,16 @@ var verifySubcommands = []subcommand[func(ctx context.Context, args []string) er
 		run: verifyCodegenSharedSchema,
 	},
 	{
+		name: "codegen-cellmodule-metadata",
+		help: []string{
+			"Verify cellmodules/.gocell/exported-metadata/ matches the platform",
+			"metadata closure: Layer-1 byte regenerate diff + Layer-2 semantic",
+			"closure equivalence (re-parsed bundle == monorepo platform closure).",
+			"In-process, no sandbox needed.",
+		},
+		run: verifyCodegenCellModuleMetadata,
+	},
+	{
 		name: "archtest",
 		help: []string{
 			"Run the GoCell archtest suite (tools/archtest).",

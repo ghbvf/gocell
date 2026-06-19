@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.decide.v1.request",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "The action to check, as a registered permission name (e.g. \"audit:read\", \"user:read\"). An unregistered action is rejected with 400. The decision subject is the authenticated caller (JWT) — this request carries no subject."
+    },
+    "resource": {
+      "type": "string",
+      "maxLength": 256,
+      "description": "Optional target resource id forwarded to the PDP for ownership-scoped actions (e.g. the user id for \"user:read\"). Omit for coarse action checks. NOTE: omitting it is NOT \"check self\" — an absent resource makes the ownership condition (subject.sub == resource.id) unsatisfiable, so owner-scoped actions evaluate as if querying an unknown resource."
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "additionalProperties": false
+}

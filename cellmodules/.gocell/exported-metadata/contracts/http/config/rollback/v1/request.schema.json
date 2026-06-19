@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.rollback.v1.request",
+  "type": "object",
+  "properties": {
+    "version": { "type": "integer", "minimum": 1, "maximum": 99999 },
+    "expectedVersion": { "$ref": "../../../../shared/cas/v1/expected_version.schema.json" }
+  },
+  "required": ["version", "expectedVersion"],
+  "additionalProperties": false
+}

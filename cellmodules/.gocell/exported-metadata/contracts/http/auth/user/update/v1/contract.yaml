@@ -1,0 +1,42 @@
+id: http.auth.user.update.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+triggers:
+  - event.user.updated.v1
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: PUT
+    path: /api/v1/access/users/{id}
+    pathParams:
+      id:
+        type: string
+        format: uuid
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID) or request body decode failure"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — caller lacks the user:write permission and is not the target user — self-access (subject == resource.id) is granted by the built-in baseline ownership rule via the ABAC PDP (#1977), NOT a request-shape exemption; the baseline also grants user:write to the admin and super-admin roles. PUT request schema only carries 'email'; status changes are not in PUT scope and live on the PATCH surface (last-admin protection 403 is declared on http.auth.user.patch.v1)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — user with given id does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -17,12 +17,16 @@
 //
 //   - A2 (caller-allowlist): a composite literal that SETS the
 //     `codegen.WriteOptions.Headerless` field (any value, not just the literal
-//     `true`) must only appear in package `tools/codegen/sharedschema`. The
-//     `Headerless` escape-hatch exists solely so sharedschema can write JSON
-//     mirrors without the standard gocell generated-file header (which would
-//     corrupt the JSON). Any other callsite is forbidden — it would silently
-//     bypass the single-source funnel. Locking field-presence (not the literal
-//     value) defeats value laundering via const / bool-expr / selector.
+//     `true`) must only appear in a sanctioned byte-copy generator package —
+//     `tools/codegen/sharedschema` (JSON shared-schema mirrors) or
+//     `tools/codegen/cellmodulemeta` (#1515, the cellmodules exported-metadata
+//     bundle: verbatim cell.yaml/contract.yaml/schema/proto copies whose re-parse
+//     requires byte-identity, so they carry no gocell header). The `Headerless`
+//     escape-hatch exists solely so those generators can write header-less
+//     non-Go artifacts (a header would corrupt JSON / break byte-identity). Any
+//     other callsite is forbidden — it would silently bypass the single-source
+//     funnel. Locking field-presence (not the literal value) defeats value
+//     laundering via const / bool-expr / selector.
 //
 // AI-robust grade (funnel double-lock):
 //
@@ -44,12 +48,13 @@
 //     Validated by TestSharedSchemaMirror_SubsetHelper_CatchesRogue.
 //     (A copy under a testdata/ tree is out of A1's scan scope — see Carve-out.)
 //
-//   - ② Headerless escape-hatch misused in a package other than sharedschema
-//     (a caller sets the Headerless field — by ANY value, including a const or
-//     expression that launders the literal — to bypass the header guard on an
-//     unrelated file write): covered by A2 — typed AST scan over production
-//     packages rejects any composite literal that sets Headerless outside the
-//     allowlist. Validated by TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (production)
+//   - ② Headerless escape-hatch misused in a package outside the sanctioned
+//     byte-copy generators (sharedschema / cellmodulemeta) (a caller sets the
+//     Headerless field — by ANY value, including a const or expression that
+//     launders the literal — to bypass the header guard on an unrelated file
+//     write): covered by A2 — typed AST scan over production packages rejects any
+//     composite literal that sets Headerless outside the allowlist set.
+//     Validated by TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2 (production)
 //     and TestSharedSchemaMirror_HeaderlessMatcher_CatchesNonLiteral (matcher).
 //
 //   - ③ Mirror byte-equality gate stops running in CI: covered in-process by
@@ -217,10 +222,19 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 	require.NoError(t, err, "read module path")
 
 	writeOptsPkgPath := modPath + "/tools/codegen"
-	allowedPkg := modPath + "/tools/codegen/sharedschema"
+	// Headerless is reserved for sanctioned byte-identical-copy generators that
+	// write non-Go artifacts carrying no gocell header: the shared-schema mirror
+	// (JSON mirrors) and the cellmodules exported-metadata bundle (#1515 —
+	// verbatim cell.yaml/contract.yaml/schema/proto copies whose re-parse requires
+	// byte-identity, so they cannot carry a header). Both are drift-guarded by
+	// their own verify gate; any OTHER callsite is forbidden.
+	allowedPkgs := map[string]bool{
+		modPath + "/tools/codegen/sharedschema":   true,
+		modPath + "/tools/codegen/cellmodulemeta": true,
+	}
 
 	diags := Run(t, Production(TypedOpts{Tests: false}), func(p *Pass) []Diagnostic {
-		if p.Pkg != nil && p.Pkg.Path() == allowedPkg {
+		if p.Pkg != nil && allowedPkgs[p.Pkg.Path()] {
 			return nil
 		}
 		var ds []Diagnostic
@@ -237,8 +251,9 @@ func TestSHARED_SCHEMA_MIRROR_FUNNEL_01_A2(t *testing.T) {
 				ds = append(ds, Diagnostic{
 					Rel:  rel,
 					Line: pos.Line,
-					Message: "forbidden: codegen.WriteOptions sets the Headerless field outside " +
-						"tools/codegen/sharedschema — Headerless is reserved for the shared-schema mirror funnel " +
+					Message: "forbidden: codegen.WriteOptions sets the Headerless field outside the " +
+						"sanctioned byte-copy generators (tools/codegen/sharedschema, tools/codegen/cellmodulemeta) — " +
+						"Headerless is reserved for header-less verbatim non-Go artifact copies " +
 						"(value is irrelevant: opting in at all is the violation)",
 				})
 			})

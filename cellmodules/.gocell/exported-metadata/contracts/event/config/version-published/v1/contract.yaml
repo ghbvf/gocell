@@ -1,0 +1,13 @@
+id: event.config.version-published.v1
+kind: event
+ownerCell: configcore
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: configcore
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: eventId
+deliverySemantics: at-least-once

@@ -1,0 +1,16 @@
+id: authorizationdecide
+belongsToCell: accesscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages:
+  - contract: http.auth.decide.v1
+    role: serve
+verify:
+  unit:
+    - unit.authorizationdecide.service
+  contract:
+    - contract.http.auth.decide.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/accesscore/slices/authorizationdecide/**
