@@ -9,107 +9,91 @@
 | Info | 生命周期、迁移、consumer 加入 |
 | Debug | 本地诊断，生产默认关闭 |
 
-禁止 Debug dump 完整请求、响应或 payload。错误日志必须带结构化关联字段。
+日志使用 `slog` 和结构化字段。禁止 Debug dump 完整请求、响应或 payload。
+错误日志必须带 request、tenant、cell、correlation 等可定位字段，敏感值必须先清洗。
 
 ## Redaction
 
 errcode 的 Message、Public Details、Internal Details 三层分工见
 `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`。
 
-trace span 和 slog sink 都必须 fail-closed redaction：
+trace span、slog sink 和持久化 `last_error` 都必须 fail-closed redaction：
 
 - span error 统一走 `pkg/redaction.RedactError`。
 - span string attribute 先按 key 判敏感，再做 free-form scrub。
 - slog sink 对敏感 attr 做统一清洗。
-- last_error 持久化走同一 redaction 包。
+- `last_error` 持久化走同一 redaction 包。
 
 没有业务 opt-out。需要原始诊断时走受控服务端日志，不写入 trace 或 wire。
 
-## Readyz probe
+## Readyz Probe
 
 - 依赖可用性 probe 用 `_ready` 后缀。
 - 运行时操作 probe 不带 `_ready`。
 - probe 名是运维契约，改名必须同步 docs/ops、dashboard、alert。
 - cell repo readiness 由 cell 边界显式注册，禁止静默吞掉缺失 repo。
+- remote peer readiness 只探测 resolved endpoint 的 TCP 可达性，不反向调用对端 `/readyz`。
+- peer 不可达只影响 readiness，不影响 liveness。
 
-## Metrics cell label
+verbose readyz 输出分 wire 响应、server log、trace、metrics 四通道。wire 必须裁剪敏感
+error；server log 是主诊断通道；trace 默认跳过 health endpoint。
 
-HTTP 与 gRPC metrics 的 `cell` label 必须来自 closed set。合法值是 assembly
-声明的 cell 集合；缺失、未知、越界归 `_runtime` 或 fail-fast，具体由 sealed resolver
-定义。禁止业务代码手写裸 string label。
+## Metrics Label
 
-gRPC unary 和 stream interceptor 顺序必须保证 cell attribution 在 metrics/access log
+metric label 值集必须冻结或经 typed enum 入口。新增 label value 同步更新 schema、
+tests 和 docs/ops。高 cardinality 输入不能直接进入 label。
+
+### HTTP Metrics cell Label
+
+HTTP Metrics `cell` Label 与 gRPC metrics 的 `cell` label 必须来自 assembly 声明的
+closed set。缺失、未知、越界归 `_runtime` 或 fail-fast，具体由 sealed resolver 定义。
+禁止业务代码手写裸 string label。
+
+gRPC unary 和 stream interceptor 顺序必须保证 cell attribution 在 metrics 和 access log
 之前完成。
 
-## Cross-cell transport
+### Reconcile Metrics result Label
 
-跨 cell 同步（http）contract 调用经 `runtime/transport.CellTransport` seam 时，必须按
-`transport_mode ∈ {in_proc, remote}` 二值区分——`cell_transport_requests_total{transport_mode, outcome}`
-metric label + trace span attribute（ADR `202606131142-1423` D4：「透明」不得变成「不可诊断」）。
-`transport_mode` 是 sealed `transport.TransportMode`（unexported 字段 + `ModeInProc()`/`ModeRemote()`
-唯一构造），值集由类型系统闭合——包外不可 mint 第三值，metric Record 取 typed 参数故裸 string 不可
-表达（Hard）。二值天然低基数，故 metrics **可**按 transport_mode 过滤（非 trace-only）。L0 cell 不经
-此 seam 调用，豁免。新增 mode 须同步 `allTransportModes` 注册表（anti-vacuity）+ 本节。
+`reconcile_total{result}` 的 result 值集必须闭合；新增或改名必须同步 schema、
+tests、dashboard、alert 与 emit site。
 
-第二个 label `outcome` 区分分发结局（#1966 review P2.6）：**每次**分发都 Record（成功 + 每条失败
-出口），不只成功路径——否则失败率被低报。`outcome` 是 sealed `transport.TransportOutcome`
-（unexported 字段 + accessor 唯一构造），闭值集 = `{success, dial_error, timeout, canceled,
-resolver_error, rewrite_error}`：success 含任意 HTTP 响应（5xx 在传输层仍是 success，由调用方决定
-重试/熔断）；失败 kind 与 remote transport 的 errcode Kind 同源分类（timeout→504 / canceled→499 /
-dial→503，见 P2.8）。`error.type` 超出该有界 kind 的细节留在 trace span（`span.RecordError`），
-不进 metric label，保持低基数（success + 5 个有界失败 kind × 二值 mode = ≤12 series）。新增 outcome
-须同步 `allTransportOutcomes` 注册表（anti-vacuity，`TestTransportOutcome_FrozenRegistry`）+ 本节。
+### HTTP Idempotency state Label
 
-**span tracer 单源（#2251 P1.3，D4 span 半闭合）**：remote 调用的 span 与 metrics 同源——
-metrics + tracer 由 sealed `transport.CrossCellObs`（unexported 字段）捆绑承载，`celltransport.Resolve`
-收**一个**预建捆绑参（非分离的 metrics + tracer），故「接 metrics 忘 tracer」在 Resolve 边界类型级
-不可表达（Hard sealed-param）。tracer 单源 = `SharedDeps.Tracer`：Builder 同时 append
-`bootstrap.WithTracer`（router + in-proc + event-router）并注入捆绑（remote），保证 remote 与 in-proc
-span 用同一 tracer。`SharedDeps.Tracer` 可为 nil 或 typed-nil（无 tracing，经 `validation.IsNilInterface`
-归一降级 NoopTracer——构造边界统一用该 helper，bare `== nil` 会漏 typed-nil 致 remote `Start` panic）；
-今生产 seam-only（未接真 otel）。**「remote 与 in-proc span 同源」的 minter 评级分层**
-（funnel 双向锁）：下游 = **Hard**（`CrossCellObs` 字段 unexported，包外不可 struct-literal 伪造，唯一 mint
-路径是构造器）；上游「唯一 minter = `composition.Builder`」= **Medium**，由 caller-funnel
-`CROSSCELLOBS-MINTER-FUNNEL-01`（type-aware AST scan，allowlist 仅 `framework/runtime/composition`）守——
-`NewCrossCellObs` 是跨模块 exported 构造器，Go 可见性不可表达「只 composition mint」，同
-`EVENT-TRANSPORT-KIND-MINTER-FUNNEL-01` 族的文档化 Go 天花板。
+`idempotency_requests_total{state}` 的 state 值集必须闭合；新增或改名必须同步 schema、
+tests、dashboard、alert 与 middleware emit site。
 
-**remote peer readiness（#2251 P2.7）**：split topology 下 `celltransport.Resolve` 的 remote 分支
-经 `ModuleResult.Resources` 注册一个 `<cell>_remote_ready` readiness probe（typed
-`healthz.RemoteCellReadyProbeName`，`_ready` 依赖可用性约定）。probe 只对 resolved endpoint 做
-**TCP dial**（`transport.EndpointDialTarget` 解析，与 rewriteToAbsolute 同源），**不**打远端
-`/readyz`——cascade-safe：避免 A↔B 互探 readiness 死锁。peer 不可达 → 本 cell `/readyz` 降级（运维
-据此摘流量），但只进 readiness aggregator、**不** kill liveness。更丰富的 peer health（HTTP /readyz
-深度探测、多副本、依赖环检测）归 EPIC「类 k8s cell 运行时管理」。
+adapter、webhook、MQTT 等 metrics 也遵守同一 label 闭值集规则。
 
-## Redis namespace
+## Cross-cell Transport
+
+跨 cell 同步 HTTP contract 调用经 `runtime/transport.CellTransport` seam 时，必须记录：
+
+- `transport_mode`：仅允许 `in_proc`、`remote`。
+- `outcome`：每次分发都记录，不能只记录成功路径。
+
+`transport_mode` 与 `outcome` 都必须通过 sealed typed value 表达。metric label 保持低基数；
+超出闭值集的错误细节只写 trace span，不进入 metric label。
+
+remote 调用的 metrics 和 tracer 必须同源注入。`SharedDeps.Tracer` 为空或 typed-nil 时统一降级
+NoopTracer，禁止在 remote span start 边界裸用 `== nil` 判断。
+
+## Redis Namespace
 
 Redis key namespace 使用 owner 维度表达：cell、role、resource。禁止把 service token、
 outbox、projection 等跨域 key 混入 `_runtime` 前缀而丢失所有权。
 
-**`_runtime` 哨兵 carve-out（sanctioned shared-infra）**：少数**框架级、无 cell 上下文**的
-shared-infra 原语显式使用 `_runtime` 哨兵——当前仅 outbox 消费幂等 claimer
-（`_runtime:{eventID}:lease|done`）与 HTTP 幂等 store（`_runtime:<tenant>:{key}:resp|lease|fp`）。
-二者 key 格式**结构性互斥**（不同段数/段义），故共用哨兵**不丢所有权**、不冲突——这正是上文禁令
-真正要防的（careless 混入致归属不可辨），而非禁止任何 `_runtime` 使用。单源在
-`adapters/redis/keyns.go`（命名空间值集 + 格式校验）与 `cellmodules/replaydeps`
-（claimer/nonce resolver，#825/#2017）。新增 shared-infra 原语欲用 `_runtime` 必须：key 格式与上述
-两者结构性互斥 + 在此登记。否则用显式 role/resource namespace。
+`_runtime` 只用于框架级、无 cell 上下文的 shared-infra 原语。当前允许：
 
-## Readyz verbose
+- outbox 消费幂等 claimer：`_runtime:{eventID}:lease|done`
+- HTTP 幂等 store：`_runtime:<tenant>:{key}:resp|lease|fp`
 
-verbose readyz 输出分四通道：wire 响应、server log、trace、metrics。wire 必须裁剪敏感
-error；server log 是主诊断通道；trace 默认跳过 health endpoint。
+新增 shared-infra 原语若使用 `_runtime`，key 格式必须与既有格式结构性互斥，并在本节登记。
+否则使用显式 role/resource namespace。
 
-## Outbox envelope
+## Outbox Envelope
 
 trace、correlation、principal、occurred_at 等 envelope 字段由 `outbox.NewEntry` 和
 sealed option 注入。业务不得通过 metadata 伪造 reserved key。
-
-## Reconcile / idempotency / adapter metrics
-
-metric label 值集必须冻结或经 typed enum 入口。新增 label value 同步更新 schema、
-tests 和 docs/ops。高 cardinality 输入不能直接进入 label。
 
 ## Audit
 
