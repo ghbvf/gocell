@@ -15,18 +15,18 @@ endpoints:
   clients: []
   http:
     method: GET
-    path: /api/v1/deviceidentity/status
+    path: /api/v1/deviceidentity/status/{deviceId}
     successStatus: 200
     noContent: false
     responseProjection: true
-    queryParams:
+    pathParams:
       deviceId:
         type: string
-        required: true
+        minLength: 1
         maxLength: 256
     responses:
       400:
-        description: "Bad request — missing required query parameter or invalid format"
+        description: "Bad request — invalid deviceId path parameter (empty or exceeds maxLength)"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"

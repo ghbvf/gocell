@@ -27,8 +27,11 @@ const ContractID = "http.deviceidentity.status.v1"
 // It is the L0 status read layer: reads from the in-memory cert repository,
 // projects via the identity field mask, and returns typed response envelopes.
 //
-// Gate: auth.RequirePermission(authz.PermDeviceRead()) — coarse admin/operator read.
-// Device-self (query-param deviceId == subject) lands in PR-2.
+// Gate: auth.RequirePermissionForResource("deviceId", authz.PermDeviceRead()) — the
+// owner-scoped device:read shape (the deviceId path param is forwarded to the PDP as
+// the ABAC resource, matching cellmodules/deviceserving). The accesscore baseline
+// grants device:read to admin/super-admin (fleet read) and to the device itself
+// (device-self); device-self reads await device-token auth in PR-2.
 type Service struct {
 	repo Repository
 	clk  clock.Clock
@@ -69,13 +72,22 @@ func (s *Service) Status(ctx context.Context, req *statusv1.Request) (statusv1.S
 		}, nil
 	}
 
+	// Map the domain state to the wire enum. An unknown / zero state has no valid enum
+	// member, so fail closed with a framework 5xx rather than emit a schema-invalid 200
+	// with status:"" (#2426 F5).
+	stateEnum, known := certStateToEnum(rec.State)
+	if !known {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal,
+			"device certificate has unknown state")
+	}
+
 	rd := statusv1.ResponseData{
 		DeviceID: rec.DeviceID,
 		CertRef: &statusv1.ResponseDataCertRef{
 			Issuer: rec.Issuer,
 			Serial: rec.Serial,
 		},
-		Status:    certStateToEnum(rec.State),
+		Status:    stateEnum,
 		NotBefore: rec.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:  rec.NotAfter.UTC().Format(time.RFC3339),
 		Epoch:     rec.Epoch,
@@ -93,15 +105,20 @@ func (s *Service) Status(ctx context.Context, req *statusv1.Request) (statusv1.S
 }
 
 // FrameworkRoute builds the bootstrap.FrameworkServedRoute that mounts
-// http.deviceidentity.status.v1 (GET /api/v1/deviceidentity/status?deviceId=<string>)
-// on the primary listener, gated by auth.RequirePermission(authz.PermDeviceRead()).
-//
-// The contract is ownerCell: _framework / lifecycle: draft. Serving it here is the
-// interim §6.1 pattern (ADR-1939 D3): external cell serves draft contract; the
-// framework active-ization PR is backlogged. The Group.CellID is intentionally
+// http.deviceidentity.status.v1 (GET /api/v1/deviceidentity/status/{deviceId})
+// on the primary listener, gated by
+// auth.RequirePermissionForResource("deviceId", authz.PermDeviceRead()) — the
+// owner-scoped gate forwards the canonical deviceId to the PDP as the ABAC resource
+// (matching cellmodules/deviceserving), so the engine decides per-device ownership
+// rather than an all-or-nothing coarse gate. The Group.CellID is intentionally
 // empty (framework-owned, no cell binding per ADR-1939).
+//
+// The contract is ownerCell: _framework / lifecycle: draft; flipping it to active
+// (platform corebundle serve + journey) is tracked in #2431, blocked-by the
+// framework-owned HTTP permission-overlay path #2403. Until then mdm is the sole
+// server of this route.
 func (s *Service) FrameworkRoute() bootstrap.FrameworkServedRoute {
-	h := statusv1.NewHandler(s, auth.RequirePermission(authz.PermDeviceRead()))
+	h := statusv1.NewHandler(s, auth.RequirePermissionForResource("deviceId", authz.PermDeviceRead()))
 	return bootstrap.FrameworkServedRoute{
 		ContractID: ContractID,
 		Group: kcell.RouteGroup{

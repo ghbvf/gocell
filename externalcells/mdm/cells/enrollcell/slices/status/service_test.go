@@ -91,28 +91,62 @@ func adminCtx(authorizer auth.Authorizer) context.Context {
 
 const statusPath = "/api/v1/deviceidentity/status"
 
-// TestStatus_MissingDeviceID: the generated handler returns 400 when deviceId is absent.
-func TestStatus_MissingDeviceID(t *testing.T) {
+// statusURL builds the path-param status URL for a deviceId. The contract is
+// GET /api/v1/deviceidentity/status/{deviceId} (path param, #2426 F1), so the
+// deviceId is a trailing segment, not a query parameter.
+func statusURL(deviceID string) string { return statusPath + "/" + deviceID }
+
+// TestStatus_NoDeviceID_NotFound: the bare /api/v1/deviceidentity/status path (no
+// deviceId segment) does not match the path-param route ⇒ 404. With a path-param
+// deviceId the "missing identifier" case is a routing miss, not a 400 validation
+// failure (#2426 F1; mirrors cellmodules/deviceserving TestDevicestate_NoDeviceID_NotFound).
+func TestStatus_NoDeviceID_NotFound(t *testing.T) {
 	repo := newInMemRepo()
 	handler := newMux(t, repo, allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, statusPath, nil)
-	ctx := adminCtx(allowAuthorizer(t))
-	req = req.WithContext(ctx)
+	req = req.WithContext(adminCtx(allowAuthorizer(t)))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("no deviceId segment: got %d, want 404 (route miss); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStatus_DeviceIDTooLong: a 257-char deviceId exceeds maxLength 256, so the
+// generated handler rejects it with 400 before reaching the service (#2426 F7).
+func TestStatus_DeviceIDTooLong(t *testing.T) {
+	repo := newInMemRepo()
+	handler := newMux(t, repo, allowAuthorizer(t))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, statusURL(strings.Repeat("x", 257)), nil)
+	req = req.WithContext(adminCtx(allowAuthorizer(t)))
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("missing deviceId: got %d, want 400; body=%s", rec.Code, rec.Body.String())
+		t.Errorf("257-char deviceId: got %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	// Error body must follow the canonical wire format.
-	var errBody struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+	if body := rec.Body.String(); !strings.Contains(body, `"error"`) {
+		t.Errorf("400 body must use the canonical error envelope, got %s", body)
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
-		t.Errorf("400 body is not valid JSON: %v; body=%s", err, rec.Body.String())
+}
+
+// TestStatus_DeviceIDMaxLength: a 256-char deviceId is exactly at the upper bound, so
+// it passes path-param validation and reaches the service; with an empty repo that is
+// a 404 (not a 400) — proving the boundary is inclusive (#2426 F7).
+func TestStatus_DeviceIDMaxLength(t *testing.T) {
+	repo := newInMemRepo()
+	handler := newMux(t, repo, allowAuthorizer(t))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, statusURL(strings.Repeat("x", 256)), nil)
+	req = req.WithContext(adminCtx(allowAuthorizer(t)))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("256-char deviceId (upper bound): got %d, want 404 (passes validation, not found); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -122,7 +156,7 @@ func TestStatus_UnknownDevice(t *testing.T) {
 	handler := newMux(t, repo, allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=not-found", nil)
+	req := httptest.NewRequest(http.MethodGet, statusURL("not-found"), nil)
 	req = req.WithContext(adminCtx(allowAuthorizer(t)))
 	handler.ServeHTTP(rec, req)
 
@@ -153,7 +187,7 @@ func TestStatus_OK_FullSchema(t *testing.T) {
 	handler := newMux(t, repo, allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=dev-1", nil)
+	req := httptest.NewRequest(http.MethodGet, statusURL("dev-1"), nil)
 	req = req.WithContext(adminCtx(allowAuthorizer(t)))
 	handler.ServeHTTP(rec, req)
 
@@ -233,7 +267,7 @@ func TestStatus_OK_RenewalTimeNull(t *testing.T) {
 	handler := newMux(t, repo, allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=dev-null-renewal", nil)
+	req := httptest.NewRequest(http.MethodGet, statusURL("dev-null-renewal"), nil)
 	req = req.WithContext(adminCtx(allowAuthorizer(t)))
 	handler.ServeHTTP(rec, req)
 
@@ -247,11 +281,10 @@ func TestStatus_OK_RenewalTimeNull(t *testing.T) {
 	}
 }
 
-// TestStatus_StateEnumMapping: verifies that each certlifecycle.State maps to the
-// correct ResponseDataStatus enum value in the response body.
-// The zero/unknown State case verifies the default branch returns "" (empty string),
-// NOT the internal s.String() representation — preventing internal state strings
-// from leaking to the wire.
+// TestStatus_StateEnumMapping verifies that each KNOWN certlifecycle.State maps to
+// the correct ResponseDataStatus enum value in the 200 response body. The unknown /
+// zero-value State is not a valid wire enum; that case fails closed and is covered by
+// TestStatus_UnknownState_FailClosed (#2426 F5).
 func TestStatus_StateEnumMapping(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -266,8 +299,6 @@ func TestStatus_StateEnumMapping(t *testing.T) {
 		{"rotated", certlifecycle.StateRotated(), "rotated"},
 		{"revoked", certlifecycle.StateRevoked(), "revoked"},
 		{"expired", certlifecycle.StateExpired(), "expired"},
-		// Zero-value State must map to empty string — not the internal String() output.
-		{"zero-value", certlifecycle.State{}, ""},
 	}
 
 	for _, tc := range cases {
@@ -286,26 +317,52 @@ func TestStatus_StateEnumMapping(t *testing.T) {
 			handler := newMux(t, repo, allowAuthorizer(t))
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=dev-state", nil)
+			req := httptest.NewRequest(http.MethodGet, statusURL("dev-state"), nil)
 			req = req.WithContext(adminCtx(allowAuthorizer(t)))
 			handler.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("want 200, got %d; body=%s", rec.Code, rec.Body.String())
 			}
-			body := rec.Body.String()
-			if tc.wantEnum == "" {
-				// Zero/unknown state: status field must be "" (JSON empty string),
-				// not absent and not an internal representation.
-				if !strings.Contains(body, `"status":""`) {
-					t.Errorf("zero-value state: want status=\"\" in body, got %s", body)
-				}
-			} else {
-				if !strings.Contains(body, `"`+tc.wantEnum+`"`) {
-					t.Errorf("status field: want %q in body, got %s", tc.wantEnum, body)
-				}
+			if body := rec.Body.String(); !strings.Contains(body, `"`+tc.wantEnum+`"`) {
+				t.Errorf("status field: want %q in body, got %s", tc.wantEnum, body)
 			}
 		})
+	}
+}
+
+// TestStatus_UnknownState_FailClosed: a CertRecord whose State is the zero value (or
+// any state outside the contract enum) must NOT serialize as a schema-invalid 200
+// with status:"" — the service fails closed with a framework 5xx instead (#2426 F5).
+// response.schema.json's status enum has no empty member, so emitting "" would be an
+// out-of-contract wire value.
+func TestStatus_UnknownState_FailClosed(t *testing.T) {
+	repo := newInMemRepo()
+	repo.put(CertRecord{
+		DeviceID:  "dev-unknown-state",
+		Issuer:    "CN=CA",
+		Serial:    "01",
+		State:     certlifecycle.State{}, // zero value — not a valid contract enum
+		NotBefore: fixedNow,
+		NotAfter:  fixedNow.Add(365 * 24 * time.Hour),
+		Epoch:     1,
+	})
+	handler := newMux(t, repo, allowAuthorizer(t))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, statusURL("dev-unknown-state"), nil)
+	req = req.WithContext(adminCtx(allowAuthorizer(t)))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("unknown state: want 500 (fail-closed framework 5xx), got %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"error"`) {
+		t.Errorf("fail-closed body must use the canonical error envelope, got %s", body)
+	}
+	// Must NOT leak a schema-invalid empty status enum to the wire.
+	if strings.Contains(rec.Body.String(), `"status":""`) {
+		t.Errorf("must not emit schema-invalid status:\"\" on unknown state; got %s", rec.Body.String())
 	}
 }
 
@@ -315,7 +372,7 @@ func TestStatus_Unauthenticated(t *testing.T) {
 	handler := newMux(t, repo, allowAuthorizer(t))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=dev-1", nil)
+	req := httptest.NewRequest(http.MethodGet, statusURL("dev-1"), nil)
 	// No principal injected into ctx — only authorizer.
 	ctx := auth.WithAuthorizer(context.Background(), allowAuthorizer(t))
 	handler.ServeHTTP(rec, req.WithContext(ctx))
@@ -331,7 +388,7 @@ func TestStatus_Forbidden(t *testing.T) {
 	handler := newMux(t, repo, denyAuthorizer())
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, statusPath+"?deviceId=dev-1", nil)
+	req := httptest.NewRequest(http.MethodGet, statusURL("dev-1"), nil)
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "no-role", Roles: nil, AuthMethod: "test",
 	})

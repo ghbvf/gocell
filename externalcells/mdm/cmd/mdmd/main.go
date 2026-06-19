@@ -126,7 +126,7 @@ func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error 
 		slog.String("primary", addrs.primary),
 		slog.String("internal", addrs.internal),
 		slog.String("health", addrs.health),
-		slog.String("status_endpoint", "GET "+addrs.primary+"/api/v1/deviceidentity/status?deviceId=<id>"),
+		slog.String("status_endpoint", "GET "+addrs.primary+"/api/v1/deviceidentity/status/<deviceId>"),
 		slog.String("auth", "JWT Bearer; roles: "+enrollcell.RoleMDMAdmin+" or "+enrollcell.RoleMDMOperator+" for device:read"),
 	)
 	return app.Run(ctx)
@@ -250,7 +250,7 @@ func buildMemSharedDeps(addrs listenerAddrs) (*composition.SharedDeps, error) {
 		slog.String("jwt_audience", devJWTAudience),
 		slog.String("service_token_auth", "HMAC keyring backed by hardcoded demo key; production must source per-cell secret from env"),
 		slog.String("metrics", "NopProvider (metrics disabled)"),
-		slog.String("status", "GET /api/v1/deviceidentity/status?deviceId=<id> requires JWT with mdm-admin or mdm-operator role"),
+		slog.String("status", "GET /api/v1/deviceidentity/status/<deviceId> requires JWT with mdm-admin or mdm-operator role"),
 		slog.String("verbose_readyz", "disabled (VerboseDisabled=true; postgres topology enables it)"),
 	)
 

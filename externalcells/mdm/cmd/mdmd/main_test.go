@@ -248,11 +248,11 @@ func issueAppJWT(t *testing.T, env appTestEnv, subject string, roles []string) s
 	return tok
 }
 
-// doStatusGET executes GET /api/v1/deviceidentity/status?deviceId=<deviceID>
-// against the primary listener, optionally with a Bearer token.
+// doStatusGET executes GET /api/v1/deviceidentity/status/<deviceID>
+// against the primary listener, optionally with a Bearer token (path-param, #2426 F1).
 func doStatusGET(t *testing.T, primaryAddr, deviceID, bearerToken string) *http.Response {
 	t.Helper()
-	url := fmt.Sprintf("http://%s/api/v1/deviceidentity/status?deviceId=%s", primaryAddr, deviceID)
+	url := fmt.Sprintf("http://%s/api/v1/deviceidentity/status/%s", primaryAddr, deviceID)
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
