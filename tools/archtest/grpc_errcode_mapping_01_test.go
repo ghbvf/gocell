@@ -113,9 +113,9 @@ func TestGRPCErrcodeMapping01_ReverseFixture(t *testing.T) {
 			return scanErrcodeKindSwitches(p)
 		})
 
-	require.NotEmpty(t, diags,
-		"GRPC-ERRCODE-MAPPING-01 reverse fixture: non-exhaustive errcode.Kind switch "+
-			"must be flagged; an empty result means the scanner regressed (vacuous pass)")
+	require.Len(t, diags, 1,
+		"GRPC-ERRCODE-MAPPING-01 reverse fixture: expected exactly 1 diagnostic (one non-exhaustive "+
+			"errcode.Kind switch in the fixture); a different count means the scanner regressed or the fixture changed")
 
 	// The fixture omits KindUnprocessable and KindGone — both must be named.
 	var joined strings.Builder

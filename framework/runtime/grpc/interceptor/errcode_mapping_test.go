@@ -147,6 +147,41 @@ func TestErrToStatus_5xxKindUnavailable_UsesGenericMessage(t *testing.T) {
 	}
 }
 
+func TestErrToStatus_AlreadyStatusUnknown_RemapsAsNonErrcode(t *testing.T) {
+	// A status.Error(codes.Unknown, ...) is NOT an *errcode.Error. errToStatus sees
+	// ok=true from status.FromError but code==Unknown, so it falls through to the
+	// errors.As(*errcode.Error) check — which fails — and maps to codes.Internal
+	// (fail-closed non-errcode path).
+	t.Parallel()
+	unknownStatus := status.Error(codes.Unknown, "x")
+	got := errToStatus(unknownStatus)
+	if got == nil {
+		t.Fatal("errToStatus returned nil for status.Error(codes.Unknown, ...)")
+	}
+	if code := status.Code(got); code != codes.Internal {
+		t.Errorf("already-Unknown non-errcode status: code = %v, want Internal (fail-closed)", code)
+	}
+	msg := status.Convert(got).Message()
+	if msg != msgInternalServerError {
+		t.Errorf("already-Unknown non-errcode status: message = %q, want generic %q", msg, msgInternalServerError)
+	}
+}
+
+func TestErrToStatus_ErrcodeWrappedAsUnknownStatus(t *testing.T) {
+	// A plain *errcode.Error (KindInvalid) is reported as codes.Unknown by
+	// status.FromError (grpc-go synthetic Unknown for non-status errors). errToStatus
+	// must remap it to the correct code (InvalidArgument) via the errors.As path.
+	t.Parallel()
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "field is required")
+	got := errToStatus(ec)
+	if got == nil {
+		t.Fatal("errToStatus returned nil for *errcode.Error")
+	}
+	if code := status.Code(got); code != codes.InvalidArgument {
+		t.Errorf("*errcode.Error(KindInvalid) via Unknown path: code = %v, want InvalidArgument", code)
+	}
+}
+
 func TestUnaryErrcodeMap_PassThrough_OnNil(t *testing.T) {
 	t.Parallel()
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}

@@ -143,21 +143,44 @@ that is not added to the table fails CI.
 The same PII discipline as HTTP applies:
 
 - **4xx-equivalent (`Kind.IsClient()` true)**: the `errcode.Error.Message` is forwarded
-  on the wire; `WithDetails(PublicString/PublicInt/...)` attrs are included in
-  `google.rpc.Status.Details`.
+  on the wire. **Note**: `WithDetails(PublicString/PublicInt/...)` public attrs are
+  intentionally NOT carried in `google.rpc.Status.Details` today — only the message is
+  forwarded (fail-safe default). 4xx-details parity with HTTP is tracked in **#2482**.
 - **5xx-equivalent (`!Kind.IsClient()`)**: the wire message is replaced with a generic
   constant; public attrs are stripped. `WithInternal(InternalAttr)` data goes only to
   server-side `slog`, never to the wire.
 
 Handlers must not construct the gRPC status themselves — that would bypass redaction.
+Do NOT implement `GRPCStatus()` on `*errcode.Error` for the same reason (it bypasses
+this interceptor's 5xx redaction).
+
+**KindGone retry semantics**: `KindGone` maps to `codes.NotFound`. Consumers MUST NOT
+infer retryability from `codes.NotFound` alone — it covers both "never existed" and
+"permanently gone". Handlers that mean "permanently gone" must signal this via an
+app-level field or event, not solely via the gRPC code.
 
 ### Auth / authz denial
 
 Denials from the auth interceptor carry a `google.rpc.ErrorInfo` detail with a sealed
-`Reason` code (`NO_MAPPING`, `NOT_WIRED`, `DENIED`, `OBLIGATION`, `UNAVAILABLE`,
-`INVALID_TOKEN`, `PASSWORD_RESET`) and `Domain="gocell.authz.grpc"`. The `Metadata`
-map carries only `method` and `permission` (non-PII) — never subject, token, or resource
-value.
+`Reason` code and `Domain="gocell.authz.grpc"`. The closed set of reason values is:
+
+| Reason | Meaning |
+|---|---|
+| `INVALID_AUTH_METADATA` | Missing or malformed authorization header |
+| `AUTHENTICATION_REQUIRED` | No bearer token present |
+| `INVALID_TOKEN` | Token failed cryptographic / expiry verification |
+| `AUTHN_SERVICE_UNAVAILABLE` | Token verifier (session store / key provider) unavailable |
+| `PASSWORD_RESET_REQUIRED` | Token is valid but the caller must reset their password |
+| `NO_PERMISSION_MAPPING` | Method has no permission overlay (config / codegen error) |
+| `AUTHZ_NOT_WIRED` | No Authorizer configured in the composition root |
+| `INSUFFICIENT_PERMISSIONS` | PDP denied the request (no matching allow rule) |
+| `AUTHORIZATION_DENIED` | PDP explicit deny (forbid rule or default-deny) |
+| `OBLIGATIONS_UNSUPPORTED` | PDP allow carries obligations the gate cannot enforce |
+| `PDP_UNAVAILABLE` | Policy store unavailable (fail-closed) |
+| `RESOURCE_UNRESOLVED` | Owner-scoped method's resource field extraction failed structurally |
+
+The `Metadata` map carries only `method` and `permission` (non-PII) — never subject,
+token, or resource value.
 
 ## Interceptor Chain Order
 
@@ -204,7 +227,7 @@ interceptor is a no-op passthrough.
 // In the composition root (e.g. examples/iotdevice/run.go):
 deps := interceptor.Deps{
     // Required fields (always populated by NewServerInterceptors):
-    //   Clock, Logger, MetricsProvider, Authorizer, ...
+    //   Tracer, Collector, Clock, Verifier, Authorizer, MetricsProvider, CellIDClosedSet, ...
 
     // Optional protection chain:
     RateLimiter: myRateLimiter,   // implements interceptor.RateLimiter
@@ -217,17 +240,22 @@ The interfaces:
 
 ```go
 // RateLimiter.Allow returns true to pass, false to deny (→ codes.ResourceExhausted).
-// key is the gRPC peer address.
+// key is the gRPC peer address (port stripped).
 type RateLimiter interface {
     Allow(key string) bool
 }
 
 // Allower.Allow returns (true, done) to pass, (false, nil) to reject (→ codes.Unavailable).
-// done(err) is called after the call completes; err=nil for success.
+// done(err) is called after the call completes; err=nil for success or client error.
+// A non-nil done MUST be returned whenever allowed==true; nil done triggers fail-open + log.
 type Allower interface {
-    Allow() (ok bool, done func(error))
+    Allow() (allowed bool, done func(err error))
 }
 ```
+
+**RateLimit and CircuitBreaker run BEFORE Auth** in the chain — unauthenticated requests
+also consume rate-limit / circuit-breaker budget (deliberate, symmetric with HTTP middleware
+ordering). Set lenient burst limits to avoid starving legitimate principals.
 
 **Shared instance**: the concrete limiter/breaker can be the same instance serving both
 HTTP middleware and gRPC interceptors — the interfaces are transport-agnostic. Wire once

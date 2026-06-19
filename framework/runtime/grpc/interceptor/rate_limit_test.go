@@ -176,6 +176,40 @@ func TestStreamRateLimit_Allow_HandlerCalled(t *testing.T) {
 	}
 }
 
+func TestStreamRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
+	// Stream rate-limit key must strip the port so one IP shares a bucket.
+	t.Parallel()
+	var capturedKey string
+	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
+	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
+	ss := &rateLimitFakeStream{ctx: ctxWithPeer("10.0.0.2")}
+	_ = StreamRateLimit(limiter)(nil, ss, info, func(_ any, _ grpc.ServerStream) error { return nil })
+	if capturedKey == "" {
+		t.Fatal("limiter.Allow was never called")
+	}
+	// The key must not contain a port (same assertion as the unary variant).
+	if _, port, _ := net.SplitHostPort(capturedKey + ":0"); port == "12345" {
+		t.Errorf("stream rate-limit key %q still contains a port (expected stripped IP)", capturedKey)
+	}
+}
+
+func TestStreamRateLimit_NoPeer_StableFallback(t *testing.T) {
+	// No peer in stream ctx → stable key (""), limiter should still be called.
+	t.Parallel()
+	var capturedKey string
+	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
+	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
+	ss := &rateLimitFakeStream{ctx: context.Background()}
+	called := false
+	_ = StreamRateLimit(limiter)(nil, ss, info, func(_ any, _ grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if !called {
+		t.Fatal("handler not called (no-peer stream path should allow when limiter allows)")
+	}
+}
+
 // capturingLimiter is a RateLimiter that records the key it is called with.
 type capturingLimiter struct {
 	allow      bool

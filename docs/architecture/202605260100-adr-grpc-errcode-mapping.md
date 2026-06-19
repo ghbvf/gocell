@@ -71,8 +71,12 @@ Non-obvious choices rationale:
   would imply the system is in a wrong state for the operation; that is a different
   semantic.
 - **KindGone → NotFound**: gRPC has no equivalent of "was here, now permanently gone".
-  `NotFound` is the least-wrong choice; clients should not retry. `Unimplemented` is
-  reserved for protocol-gap cases, not resource lifecycle.
+  `NotFound` is the least-wrong choice. **Consumer guidance**: `KindGone → NotFound` is a
+  deliberate lossy mapping; consumers MUST NOT infer retryability from `codes.NotFound`
+  alone — a `NotFound` may indicate either "never existed" or "permanently gone". Handlers
+  that need to signal permanent deletion must do so via an app-level signal (e.g., a
+  response field or dedicated event) — the gRPC code alone is insufficient. `Unimplemented`
+  is reserved for protocol-gap cases, not resource lifecycle.
 - **KindUnprocessable → InvalidArgument**: 422 is HTTP-specific validation semantics.
   The gRPC vocabulary doesn't separate syntactic vs semantic validation; `InvalidArgument`
   covers both and is the correct client-error signal.
@@ -93,8 +97,10 @@ The `ErrcodeMap` interceptor applies the same redaction discipline as the HTTP
 `httputil` 5xx projection:
 
 - **4xx-equivalent errors** (`Kind.IsClient()` returns true): the `errcode.Error.Message`
-  is forwarded on the wire as the gRPC status message; `Details` (public attrs) are
-  included in the `google.rpc.Status.Details` field.
+  is forwarded on the wire as the gRPC status message. **Note**: `WithDetails` public attrs
+  are intentionally NOT carried in `google.rpc.Status.Details` today — only the message is
+  forwarded (fail-safe default while the structured-detail encoding is unspecified).
+  4xx-details parity with HTTP is tracked in **#2482**.
 - **5xx-equivalent errors** (`!Kind.IsClient()`): the wire message is replaced with a
   generic constant literal; `WithDetails` public attrs are stripped. Only
   `WithInternal(InternalAttr)` data reaches server-side `slog`, never the wire.
@@ -137,20 +143,30 @@ the final status; the failure classification uses the same code set as unary.
 Both interceptors reuse the transport-agnostic cores. The composition root (e.g., the winmdm/MDM
 agent) supplies a concrete limiter/breaker; `corebundle` leaves both fields nil.
 
+**RateLimit and CircuitBreaker run BEFORE Auth** in the chain (see D6). This is deliberate
+and symmetric with the HTTP middleware ordering: unauthenticated or invalid-token requests
+also consume rate-limit / circuit-breaker budget. Deployers should configure lenient burst
+limits so that legitimate principals are not starved by pre-auth traffic.
+
 ### D5 — Chain-presence guard: resolved by #1752 (no new guard added)
 
 Issue #1155's 2026-06-01 comment asked to Hard-ify a "gRPC chain-presence guard" to prevent
 a composition root from building an unauthenticated gRPC server (i.e., skipping the auth
-interceptor). This is **already closed at Hard strength** by the #1752 refactor:
+interceptor). This is **already closed** by the #1752 refactor:
 
-- `adapters/grpc.Config.Interceptors` is a required, `Validate()`-gated field.
+- `adapters/grpc.Config.Interceptors` is a required, `Validate()`-gated field (Hard —
+  the `required` tag + `Validate()` make it a compile-time structural constraint).
 - The only valid `Interceptors` value comes from `interceptor.NewServerInterceptors(deps)`
   (the sole public construction funnel), which hardcodes the full auth chain.
 - Archtests `GRPC-WIRING-BUNDLE-CALLER-01` and `GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01`
-  (both Hard — codegen golden + caller-allowlist) seal the funnel.
+  guard the funnel: **Medium downstream** (go/types caller-allowlist); **Hard upstream is
+  unreachable** — a permanent Go-language ceiling (the constructors `NewServiceRegistrar`
+  and `NewDrainSignal` are exported, so Go visibility cannot seal their callers). The
+  required+Validate()-gated `Interceptors` field is the actual Hard guarantee; the
+  archtests are the Medium backstop on the registrar/drain source.
 
 No new guard is added in PR-12; the chain-presence requirement is documented here as
-resolved-at-Hard-strength, superseding the issue's open action item.
+resolved, superseding the issue's open action item.
 
 ### D6 — Chain order after PR-12
 

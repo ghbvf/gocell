@@ -97,6 +97,16 @@ func toGRPCCode(k errcode.Kind) codes.Code {
 //   - *errcode.Error: map via toGRPCCode. 4xx use the errcode message (wire-safe
 //     const literal); 5xx use msgInternalServerError (no internal detail on wire).
 //   - Any other error → codes.Internal with msgInternalServerError (fail-closed).
+//
+// # PublicDetails parity (backlogged)
+//
+// Only the errcode message is forwarded on the gRPC wire today. errcode PublicDetails
+// (WithDetails(PublicString/PublicInt/…) attrs) are intentionally NOT carried in
+// google.rpc.Status.Details — fail-safe default while the structured-detail encoding
+// is unspecified. 4xx-details parity with HTTP is tracked in #2482.
+//
+// Do NOT implement GRPCStatus() on *errcode.Error: that would bypass this
+// interceptor's 5xx redaction (5xx messages would reach the wire unredacted).
 func errToStatus(err error) error {
 	if err == nil {
 		return nil

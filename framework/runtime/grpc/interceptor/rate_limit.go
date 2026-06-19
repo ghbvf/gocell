@@ -18,8 +18,8 @@ package interceptor
 // in-process call, unit test without peer), the key is "" — the limiter still
 // runs and may or may not restrict anonymous callers, depending on its policy.
 //
-// ref: sony/gobreaker TwoStepCircuitBreaker
-// ref: go-kratos/aegis circuitbreaker
+// ref: golang.org/x/time/rate TokenBucket (rate.Limiter)
+// ref: go-zero/core/limit TokenLimiter
 
 import (
 	"context"
@@ -45,6 +45,12 @@ type RateLimiter interface {
 // peerKey extracts the rate-limit key from the gRPC peer context. The key is
 // the peer's IP address with the port stripped via net.SplitHostPort. If no
 // peer is present or the address cannot be parsed, "" is returned.
+//
+// Note: when the limiter is non-nil and the peer is unavailable (in-process
+// call, unix socket, or unit test without peer injection), all such calls
+// collapse to the "" bucket. Deployers enabling a limiter on a listener that
+// also carries in-process or unix-socket traffic should configure a lenient
+// policy for the empty key to avoid starving legitimate in-process callers.
 func peerKey(ctx context.Context) string {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p == nil {
@@ -78,6 +84,10 @@ func UnaryRateLimit(limiter RateLimiter) grpc.UnaryServerInterceptor {
 
 // StreamRateLimit returns a stream server interceptor that rate-limits by peer IP.
 // Semantics mirror UnaryRateLimit: nil limiter is a pass-through.
+//
+// Note: this interceptor gates at stream ESTABLISHMENT only — one Allow() call
+// per stream open. Per-message flow control (allowing/denying individual messages
+// within an established stream) is out of scope and tracked separately.
 func StreamRateLimit(limiter RateLimiter) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if limiter == nil {

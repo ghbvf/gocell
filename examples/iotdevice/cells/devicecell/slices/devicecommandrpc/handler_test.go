@@ -217,10 +217,17 @@ func TestServer_IssueCommand_OverCap_ResourceExhausted(t *testing.T) {
 	defer cancel()
 
 	req := &commandv1.IssueCommandRequest{DeviceId: seededDeviceID, CommandType: "reboot", Payload: []byte("{}")}
-	if _, err := client.IssueCommand(ctx, req); err != nil {
+	firstResp, err := client.IssueCommand(ctx, req)
+	if err != nil {
 		t.Fatalf("first IssueCommand (fills cap): unexpected error: %v", err)
 	}
-	_, err := client.IssueCommand(ctx, req)
+	if !strings.HasPrefix(firstResp.GetAckId(), "cmd-") {
+		t.Errorf("first IssueCommand ack_id = %q, want a cmd- prefixed enqueued command id", firstResp.GetAckId())
+	}
+	if got := firstResp.GetAcknowledgedAtUnixNano(); got != fixedTime.UnixNano() {
+		t.Errorf("first IssueCommand acknowledged_at_unix_nano = %d, want %d (injected clock)", got, fixedTime.UnixNano())
+	}
+	_, err = client.IssueCommand(ctx, req)
 	if err == nil {
 		t.Fatalf("expected over-cap error on second IssueCommand, got nil")
 	}

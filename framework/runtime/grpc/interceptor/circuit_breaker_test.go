@@ -259,3 +259,32 @@ func TestStreamCircuitBreaker_Closed_ServerFailure_DoneErr(t *testing.T) {
 		t.Errorf("stream: done must be called with non-nil for server failure code")
 	}
 }
+
+func TestStreamCircuitBreaker_Closed_ClientError_DoneNil(t *testing.T) {
+	// Handler returns NotFound (client error) → done(nil) is called (not a health signal).
+	t.Parallel()
+	cb := &stubAllower{allowed: true}
+	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
+	ss := &cbFakeStream{ctx: context.Background()}
+	handlerErr := status.Error(codes.NotFound, "not found")
+	err := StreamCircuitBreaker(cb)(nil, ss, info,
+		func(_ any, _ grpc.ServerStream) error { return handlerErr })
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("stream handler error not propagated: got code=%v, want NotFound (err=%v)", status.Code(err), err)
+	}
+	if !cb.doneNil {
+		t.Errorf("stream: done must be called with nil for a client error (not a failure signal)")
+	}
+}
+
+func TestStreamCircuitBreaker_NilDone_FailOpen(t *testing.T) {
+	// done == nil (contract violation) → fail-open (no-op), handler result propagated.
+	t.Parallel()
+	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
+	ss := &cbFakeStream{ctx: context.Background()}
+	err := StreamCircuitBreaker(nilDoneAllower{})(nil, ss, info,
+		func(_ any, _ grpc.ServerStream) error { return nil })
+	if err != nil {
+		t.Fatalf("stream nil-done fail-open: unexpected error: %v", err)
+	}
+}

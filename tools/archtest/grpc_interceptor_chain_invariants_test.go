@@ -10,11 +10,12 @@
 //   - INVARIANT: GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01
 //   - INVARIANT: GRPC-WIRING-BUNDLE-CALLER-01
 //
-// The STREAM-* invariants (PR-10 #1153) are the streaming counterparts of the
-// unary chain guards, with the same AI-robust ratings and Go-ceiling caveats:
-// GRPC-STREAM-CHAIN-ORDER-01 pins the 8-arg order of the single
-// grpc.ChainStreamInterceptor call in newStreamChain (RequestID outermost, Drain
-// just inside Auth, Recovery innermost); GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
+// The STREAM-* invariants (PR-10 #1153, extended by PR-12 #1155) are the streaming
+// counterparts of the unary chain guards, with the same AI-robust ratings and
+// Go-ceiling caveats: GRPC-STREAM-CHAIN-ORDER-01 pins the 11-arg order of the
+// single grpc.ChainStreamInterceptor call in newStreamChain (RequestID outermost,
+// RateLimit+CircuitBreaker between Metrics and Auth, Drain just inside Auth,
+// ErrcodeMap just outside Recovery, Recovery innermost); GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01
 // pins WHO may call grpc.ChainStreamInterceptor (sole site = newStreamChain in
 // stream.go) — Hard-upstream is the same Go-language ceiling as the unary
 // CALLER-01 (third-party exported func, won't-do gh #1394). The single-wiring-object
@@ -48,7 +49,8 @@
 // arguments MUST be, in order:
 //
 //	UnaryRequestID, UnaryCellAttribution, UnaryTracing, UnaryAccessLog,
-//	UnaryMetrics, UnaryAuth, UnaryRecovery
+//	UnaryMetrics, UnaryRateLimit, UnaryCircuitBreaker, UnaryAuth,
+//	UnaryErrcodeMap, UnaryRecovery
 //
 // i.e. RequestID outermost and Recovery innermost — mirroring the HTTP
 // listener-root order (CellAttribution → Tracing → AccessLog → Metrics). The
@@ -59,6 +61,11 @@
 //     (AccessLog, Metrics) so the owning cell is in ctx when they observe it.
 //   - AccessLog after Tracing (so trace_id, set on a propagated trace, is in
 //     ctx) and OUTER to Auth (so auth rejections are still logged).
+//   - RateLimit + CircuitBreaker between Metrics and Auth (protection chain,
+//     mirroring HTTP middleware ordering; unauthenticated requests also consume budget).
+//   - ErrcodeMap just outside Recovery so that Recovery's codes.Internal result
+//     passes through ErrcodeMap as an already-status error (code != Unknown)
+//     and is not double-mapped.
 //   - Recovery innermost so a handler panic is collapsed into codes.Internal
 //     *before* the outer Metrics and Tracing interceptors observe the result;
 //     otherwise a panic would be recorded as a raw failure rather than a clean

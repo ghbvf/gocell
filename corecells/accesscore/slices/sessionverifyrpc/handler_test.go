@@ -248,10 +248,9 @@ func assertClaimsProjection(t *testing.T, resp *sessionverifyv1.VerifyTokenRespo
 // returns a connected client + cleanup. A server-side unary interceptor injects a
 // caller principal in callerTenant — standing in for the production auth
 // interceptor — so the handler's F2 tenant bind has a caller to compare against.
-// UnaryErrcodeMap (PR-12 #1155) is chained so *errcode.Error values from the
-// handler are mapped to the correct gRPC status codes on the wire, matching
-// the production chain (NewServerInterceptors). Used by multiple bufconn round-trip
-// tests.
+// UnaryErrcodeMap (PR-12 #1155) is chained, applying only UnaryErrcodeMap for
+// errcode→status projection (it does not wire the full production chain).
+// Used by multiple bufconn round-trip tests.
 func newBufconnClient(
 	t *testing.T, handler sessionverifyv1.SessionVerifyServiceServer, callerTenant string,
 ) sessionverifyv1.SessionVerifyServiceClient {

@@ -105,7 +105,7 @@ func cbDoneErr(err error) error {
 // (opt-in protection: deployers without a circuit-breaker configured are not
 // penalized).
 func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if cb == nil {
 			// nil cb: opt-in protection not configured; pass through.
 			return handler(ctx, req)
@@ -118,7 +118,8 @@ func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
 			// Contract violation: allowed but no done callback. Fail open
 			// so the request proceeds; the slog.Error surfaces the bug.
 			slog.ErrorContext(ctx, "grpc circuit-breaker Allow() returned nil done — fail-open",
-				"interceptor", "UnaryCircuitBreaker")
+				"interceptor", "UnaryCircuitBreaker",
+				"method", info.FullMethod)
 			return handler(ctx, req)
 		}
 		resp, err := handler(ctx, req)
@@ -131,7 +132,7 @@ func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
 // setup through cb. Semantics mirror UnaryCircuitBreaker: nil cb is a
 // pass-through, nil done triggers fail-open + log.
 func StreamCircuitBreaker(cb Allower) grpc.StreamServerInterceptor {
-	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if cb == nil {
 			// nil cb: opt-in protection not configured; pass through.
 			return handler(srv, ss)
@@ -143,7 +144,8 @@ func StreamCircuitBreaker(cb Allower) grpc.StreamServerInterceptor {
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open.
 			slog.ErrorContext(ss.Context(), "grpc circuit-breaker Allow() returned nil done — fail-open",
-				"interceptor", "StreamCircuitBreaker")
+				"interceptor", "StreamCircuitBreaker",
+				"method", info.FullMethod)
 			return handler(srv, ss)
 		}
 		err := handler(srv, ss)

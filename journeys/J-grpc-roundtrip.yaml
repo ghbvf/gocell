@@ -16,6 +16,8 @@ passCriteria:
     mode: auto
     checkRef: journey.J-grpc-roundtrip.errcode-mapping
   - text: 5xx-class 错误（KindInternal）在 wire 上出现 codes.Internal，且 status message 为 generic 常量（不泄露原始错误上下文）；4xx-class 错误 message 与 errcode.Error.Message 一致
-    mode: manual
+    mode: auto
+    checkRef: journey.J-grpc-roundtrip.errcode-5xx-redaction
   - text: PDP gate 同构 HTTP — 无 token → Unauthenticated；缺 permission → PermissionDenied；由 Auth 拦截器执行，handler 未触达；denyReason 通过 google.rpc.ErrorInfo detail 机器可读（Reason/Domain/Metadata）
-    mode: manual
+    mode: auto
+    checkRef: journey.J-grpc-roundtrip.auth-errorinfo
