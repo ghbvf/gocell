@@ -286,7 +286,7 @@ func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 // permission-based route gate (registry:approve|reject|retire) resolves against —
 // the approval authority is here, not a handler role literal. registry:submit/read
 // are intentionally absent (their baseline grant is deferred to corebundle
-// composition, US6 #2235), so they are NOT asserted here.
+// composition, open #2477), so they are NOT asserted here.
 func TestBuiltinBaseline_RegistrycorePerms(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 
@@ -322,10 +322,11 @@ func TestBuiltinBaseline_RegistrycorePerms(t *testing.T) {
 }
 
 // TestBuiltinBaseline_RegistrySubmitReadNotBaselineGranted pins the deliberate gap
-// (303-US7 / US6 #2235): registry:submit and registry:read have NO baseline grant
-// yet — migrating their route gate to the resolver path did not add one. An admin
-// is denied by default-deny until corebundle composition wires a tenant policy /
-// baseline grant. This guards against silently assuming the migration granted them.
+// (303-US7; composition tracked by open #2477): registry:submit and registry:read
+// have NO baseline grant yet — migrating their route gate to the resolver path did
+// not add one. An admin is denied by default-deny until corebundle composition
+// wires a tenant policy / baseline grant. Guards against silently assuming the
+// migration granted them.
 func TestBuiltinBaseline_RegistrySubmitReadNotBaselineGranted(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 	resolver := attributeResolver{principal: &auth.Principal{
@@ -334,7 +335,7 @@ func TestBuiltinBaseline_RegistrySubmitReadNotBaselineGranted(t *testing.T) {
 	}}
 	for _, action := range []string{authz.PermRegistrySubmit().String(), authz.PermRegistryRead().String()} {
 		dec, _ := svc.evaluate(nil, resolver, action)
-		assert.False(t, dec.IsAllow(), "%s must NOT be baseline-granted (deferred to US6 #2235)", action)
+		assert.False(t, dec.IsAllow(), "%s must NOT be baseline-granted (deferred to composition #2477)", action)
 	}
 }
 

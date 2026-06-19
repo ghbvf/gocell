@@ -279,7 +279,8 @@ func PermSessionVerify() Permission { return permSessionVerify }
 // singleton shape as the corecells perms (reassigning a func is a compile error
 // → Hard immutability). The PDP baseline grant for approve/reject/retire lands in
 // accesscore builtinBaselineRules (admin-conditioned); submit/read baseline grant
-// is still deferred to corebundle composition (US6 — #2235).
+// is still deferred to corebundle composition (open #2477; the closed #2235 was the
+// US4 skeleton where submit/read were minted, not the composition owner).
 var (
 	permRegistrySubmit  = newPermission("registry:submit", scopeCoarse)
 	permRegistryRead    = newPermission("registry:read", scopeCoarse)

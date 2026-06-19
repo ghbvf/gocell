@@ -26,6 +26,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/corecells/registrycore/internal/mem"
+	"github.com/ghbvf/gocell/corecells/registrycore/internal/ports"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registryadmin"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registryread"
 	"github.com/ghbvf/gocell/corecells/registrycore/slices/registrywrite"
@@ -57,6 +58,25 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *RegistryCore) { c.cursorCodec = codec }
 }
 
+// registryStore is the durable contract-registration store the cell drives: the
+// ports.Registry CRUD/transition surface plus the RepoReady readiness probe the
+// cell registers. mem.Registry satisfies it; a durable PG repo MUST too (its
+// RepoReady performing a real connectivity check, unlike the in-memory always-ready
+// stub). Real PG store + DB-ping readiness wiring is the composition follow-up (#2477).
+type registryStore interface {
+	ports.Registry
+	RepoReady(context.Context) error
+}
+
+// WithRegistry injects the durable contract-registration store (ports.Registry +
+// readiness probe). Required in durable mode — initInternal() fails fast if nil so
+// a durable assembly cannot silently serve in-process state from the in-memory
+// store behind an always-ready probe (mirrors the txManager / cursorCodec guards).
+// Demo topology falls back to mem.NewRegistry.
+func WithRegistry(store registryStore) Option {
+	return func(c *RegistryCore) { c.registry = store }
+}
+
 // WithLogger sets an optional structured logger. When omitted the cell uses
 // slog.Default().
 func WithLogger(l *slog.Logger) Option {
@@ -84,6 +104,10 @@ type RegistryCore struct {
 	// cursorCodec is the HMAC codec for list cursors. When nil, demo mode
 	// falls back to the dev key; durable mode fails fast.
 	cursorCodec *query.CursorCodec
+	// registry is the durable contract-registration store. When nil, demo mode
+	// falls back to an in-memory store; durable mode fails fast (a durable assembly
+	// MUST inject a real store via WithRegistry).
+	registry registryStore
 	// logger is the structured logger; defaults to slog.Default().
 	logger *slog.Logger
 
@@ -127,6 +151,13 @@ var registryCursorDevKey = []byte("registrycore-list-cursor-dev-key-0001!!")
 const msgCellMissingCodecDurable = "registrycore durable mode requires a cursor codec; " +
 	"use WithCursorCodec(query.NewCursorCodec(secret)) — " +
 	"the built-in demo key is public in the source tree"
+
+// msgCellMissingStoreDurable is the fail-closed message when durable mode is wired
+// without an injected registry store: the in-memory store (always-ready probe,
+// process-local state) must never back a durable assembly.
+const msgCellMissingStoreDurable = "registrycore durable mode requires an injected registry store; " +
+	"use WithRegistry(store) — the in-memory store must not back a durable assembly " +
+	"(it serves process-local state behind an always-ready probe)"
 
 // initInternal is the K#04 hand-written init hook invoked by the generated Init
 // after BaseCell.Init and before the generated route-group mount. It builds the
@@ -185,7 +216,20 @@ func (c *RegistryCore) initInternal(_ context.Context, reg cell.Registrar) error
 	// validation). The PG cellmodule will pass RunModeForDemo(false).
 	runMode := query.RunModeForDemo(durabilityMode == outbox.DurabilityDemo)
 
-	store := mem.NewRegistry(c.clk)
+	// Resolve store: nil → demo fallback (in-memory, warn); durable → fail-closed so
+	// a durable assembly cannot serve process-local state from the in-memory store
+	// behind mem's always-ready probe (mirrors the txManager / cursorCodec guards).
+	// Real PG store wiring + a true DB-ping readiness probe are the composition
+	// follow-up (topology resolver, #2477), not this US7 endpoint slice.
+	store := c.registry
+	if store == nil {
+		if durabilityMode == outbox.DurabilityDurable {
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCellMissingStoreDurable)
+		}
+		store = mem.NewRegistry(c.clk)
+		c.logger.Warn("registrycore: using in-memory registry store (demo mode)",
+			slog.String("cell", c.ID()))
+	}
 	gate := governance.NewRegistrationGate(registry.NewContractRegistrar(c.clk), c.clk)
 
 	writeSvc, err := registrywrite.NewService(store, gate, registrywrite.WithTxManager(txMgr))

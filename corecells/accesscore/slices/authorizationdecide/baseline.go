@@ -131,8 +131,9 @@ var builtinBaseline = []abac.Rule{
 	// + role-conditioned shape as the config/policy/user coarse grants above — the
 	// approval authority lives HERE as an ABAC condition, never as a handler role
 	// literal (tenancy.md §"ABAC authz 接线"). registry:submit/read are NOT granted
-	// here: their baseline grant is deferred to corebundle composition (US6 #2235);
-	// migrating their gate to the resolver path (this PR) did not change that.
+	// here: their baseline grant is deferred to corebundle composition (open #2477;
+	// NOT the closed US4 #2235); migrating their gate to the resolver path (this PR)
+	// did not change that.
 	{
 		ID:         "baseline-registry-approve-admin",
 		Name:       "Baseline: allow admin/super-admin to approve contract registrations",

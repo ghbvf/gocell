@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
+	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
@@ -201,6 +202,37 @@ func TestInitInternal_DurableMode_DemoTxManager_Errors(t *testing.T) {
 	err = c.initInternal(context.Background(), rec)
 	if err == nil {
 		t.Fatal("initInternal(durable, demo txManager) must return error (CheckNotNoop)")
+	}
+}
+
+// cellTestTxRunner is a non-Nooper CellTxManager for durable-guard tests: it passes
+// outbox.CheckNotNoop (unlike DemoCellTxManager) so a durable test can advance past
+// the txManager guard and exercise a later guard.
+type cellTestTxRunner struct{}
+
+func (cellTestTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+// TestInitInternal_DurableMode_NilStore_Errors pins that durable mode without an
+// injected registry store is a startup error (fail-closed, 303-US7 review F1): the
+// in-memory store (process-local state, always-ready probe) must not back a durable
+// assembly. A real tx + cursor are supplied so the store guard (last) is the one
+// that fires.
+func TestInitInternal_DurableMode_NilStore_Errors(t *testing.T) {
+	devKey := []byte("registrycore-cell-test-key-32bytes!")
+	codec, err := query.NewCursorCodec(devKey)
+	if err != nil {
+		t.Fatalf("NewCursorCodec: %v", err)
+	}
+	c := New(clockmock.New(testEpoch),
+		WithTxManager(persistence.WrapForCell(cellTestTxRunner{})), // non-Nooper → passes CheckNotNoop
+		WithCursorCodec(codec),
+		// no WithRegistry → the store guard must fire
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), outbox.DurabilityDurable)
+	if err := c.initInternal(context.Background(), rec); err == nil {
+		t.Fatal("initInternal(durable, no registry store) must return error (fail-closed)")
 	}
 }
 
