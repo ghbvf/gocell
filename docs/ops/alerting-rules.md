@@ -1015,6 +1015,31 @@ checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：
       tailer is not the leader. Inspect gocell_saga_journal_tailer_drain_total{result}.
 ```
 
+### SagaTailerDrainErrors
+
+drain 主路径失败率——`ok` 是有进展的健康 drain，必须排除；只对
+`head_error` / `store_error` / `apply_error` 报警，并保留 `result` 维度用于直接定位根因。
+
+```yaml
+- alert: GoCellSagaTailerDrainErrors
+  expr: |
+    sum by (cell, projection, result) (
+      rate(gocell_saga_journal_tailer_drain_total{result=~"head_error|store_error|apply_error"}[5m])
+    ) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer drain failing ({{ $labels.cell }}/{{ $labels.projection }}, {{ $labels.result }})"
+    description: |
+      The saga-journal tailer is repeatedly failing drain with result={{ $labels.result }}.
+      result=head_error means HeadSeq cannot be read, so pending_events may stay stale
+      and GoCellSagaTailerLagHigh may not fire; GoCellSagaTailerStalled remains the
+      slower backstop. result=store_error means checkpoint LoadOffset failed.
+      result=apply_error means replay/apply or a non-stale advance path failed before
+      a clean tick could complete. See saga-runbook.md §"场景 5：投影 tailer 停滞".
+```
+
 ### SagaTailerLockAcquireFailures
 
 distlock 后端 I/O 故障率——`contended` 是正常竞争、必须排除，只对 `backend_error` 报警。
