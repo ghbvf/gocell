@@ -314,9 +314,19 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	// ActiveScanner — ScanActive is uncapped (no SQL LIMIT, no in-mem truncation)
 	// in both the in-mem and PG stores, so len() is an accurate Pending count.
 	// Only Pending (status=1) counts: in-flight Sent/Delivered commands resolve
-	// on their own and must not consume the cap. Unconditional + fail-closed: the
-	// resource-exhaustion bound has no opt-out. Runs after the device-existence
-	// check so an unknown/forbidden device still gets 404/403, not 429.
+	// on their own and must not consume the cap. The cap has no opt-out switch.
+	// Runs after the device-existence check so an unknown/forbidden device still
+	// gets 404/403, not 429.
+	//
+	// BEST-EFFORT, NOT a hard concurrent invariant: this ScanActive read and the
+	// Enqueue write below are NOT atomic — the Queue exposes them as independent
+	// ops (no count+insert under one lock / tx / constraint). Concurrent enqueues
+	// for the same device, within one process or across instances, can all pass
+	// this check before any write lands, transiently exceeding maxPending by the
+	// in-flight concurrency window. The guard bounds unbounded steady-state
+	// accumulation; it does NOT enforce a hard ceiling under concurrency. Making it
+	// a hard invariant requires sinking count+insert into the command.Queue write
+	// boundary (PG advisory lock / FOR UPDATE, in-mem same-lock) — tracked in #2457.
 	pending, err := s.queue.ScanActive(ctx, command.ScanFilter{
 		DeviceID: deviceID,
 		Statuses: []command.Status{command.StatusPending},
