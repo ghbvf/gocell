@@ -199,8 +199,6 @@ var httpAuthModeMigrationLedger = map[string]struct{}{
 	"http.device.list.v1":                  {},
 	"http.device.status.v1":                {},
 	"http.devicestate.v1":                  {},
-	"http.registry.contract.list.v1":       {},
-	"http.registry.contract.submit.v1":     {},
 
 	// examples/ (todoorder) — migrate to stay exemplary for external Cell authors.
 	"http.order.confirm.v1":            {},

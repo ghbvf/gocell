@@ -64,9 +64,9 @@
 
 ### US7 — Admin 审批 approve/reject/retire + RBAC（P2）→ #2238
 
-- [ ] T070 [US7] `approve.v1`/`reject.v1`/`retire.v1` 契约 + handler；路由门禁 `auth.RequirePermission(authz.Permission)` 接 accesscore admin（PDP，不硬编 role）
-- [ ] T071 [P] [US7] 状态机不变式（conformant→pending-approval→approved；reject 不可激活；active→retired 终态）+ 非 admin fail-closed 测试（approve/reject/retire 三端点对称）
-- [ ] T072 [US7] retire：`active→retired` 迁移 + 审计（US8）+ `contract-retired` 事件 + 触发数据面 remove（US11/US12 消费）；contract test 覆盖 retire handler + 非 admin deny（FR-001 五端点闭合）
+- [x] T070 [US7] `approve.v1`/`reject.v1`/`retire.v1` 契约 + handler；路由门禁经 `endpoints.http.permission` overlay → `auth.RequirePermissionForContract` 接 accesscore admin（permission-based PDP，不硬编 role）。附带：submit/list 一并迁出冻结 modeless ledger 到同一 resolver 范式（#2238）
+- [x] T071 [P] [US7] 状态机不变式（conformant→pending-approval→approved；reject 不可激活；active→retired 终态）+ 非 admin fail-closed 测试（approve/reject/retire 三端点对称）
+- [x] T072 [US7] retire：`active→retired` 迁移（本 US 交付）；contract test 覆盖 retire handler + 非 admin deny + 非法迁移（400）。审计 + `contract-retired` 事件归 US8（T080/T081），数据面 remove 归 US11/US12——非本 US 范围（FR-001 五端点闭合）
 
 ### US8 — 审批审计落账 + 激活/退役事件（P2）→ #2239
 
