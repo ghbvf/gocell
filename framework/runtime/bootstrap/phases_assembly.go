@@ -33,6 +33,17 @@ import (
 // the "first violation wins" ordering across multiple call sites; the nil
 // dependency sentinels are grouped into validateNilDependencySentinels to keep
 // this gate within the cognitive-complexity budget.
+// validateAdminControlPlaneEndpoints fails fast in phase0 for every framework
+// AdminListener control-plane endpoint that was opted in without its prerequisites
+// (projection rebuild, #1755 audit chain verify). Grouped into one phase0 step so
+// each new admin endpoint adds a call here, not a branch in phase0ValidateOptions.
+func (b *Bootstrap) validateAdminControlPlaneEndpoints() error {
+	if err := b.validateProjectionRebuildEndpoint(); err != nil {
+		return err
+	}
+	return b.validateAuditChainVerifyEndpoint()
+}
+
 func (b *Bootstrap) phase0ValidateOptions() error {
 	// Surface shutdown metrics registration errors before any component starts.
 	if b.shutdownMetricsErr != nil {
@@ -69,7 +80,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateHTTPListenerConfigs(); err != nil {
 		return err
 	}
-	if err := b.validateProjectionRebuildEndpoint(); err != nil {
+	if err := b.validateAdminControlPlaneEndpoints(); err != nil {
 		return err
 	}
 	if err := b.validateFrameworkServing(); err != nil {

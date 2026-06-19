@@ -45,7 +45,7 @@ require (
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
 	github.com/ghbvf/gocell/adapters/prometheus v0.0.0
 	github.com/ghbvf/gocell/adapters/rabbitmq v0.0.0 // indirect
-	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
+	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0
 	github.com/ghbvf/gocell/adapters/redis v0.0.0
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
 	github.com/ghbvf/gocell/cellmodules/grpclistener v0.0.0
