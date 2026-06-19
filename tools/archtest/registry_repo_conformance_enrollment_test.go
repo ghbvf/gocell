@@ -52,7 +52,12 @@
 // ref: tools/archtest/user_repo_conformance_enrollment_test.go (sibling pattern)
 package archtest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 // INVARIANT: REGISTRY-CONFORMANCE-ENROLLMENT-01
 
@@ -76,4 +81,25 @@ func TestRegistryRepoConformanceEnrollment(t *testing.T) {
 func TestRegistryRepoConformanceEnrollment_REDFixture(t *testing.T) {
 	t.Parallel()
 	runRepoEnrollmentREDFixture(t, registryPortsPkg, registryRepoIfaceName)
+}
+
+// TestRegistryRepoConformanceEnrollment_ExpectedImplREDFixture proves the
+// expectedImplPkgs anti-vacuity guard (#2388 F4) is non-vacuous: a collected impl
+// set missing a pinned package (PG dropped) must be flagged, while the full set is
+// accepted. This guards the "load-pattern gap leaves only mem enforced" risk the
+// zero-impl guard alone cannot catch — a pure-logic synthetic case (no packages.Load).
+func TestRegistryRepoConformanceEnrollment_ExpectedImplREDFixture(t *testing.T) {
+	t.Parallel()
+	spec := registryRepoConformanceSpec()
+	require.NotEmpty(t, spec.expectedImplPkgs, "registry spec must pin expected impl packages (anti-vacuity)")
+
+	// RED: PG impl package dropped from the collected set → flagged.
+	memOnly := map[string]bool{registryMemPkg + ".Registry": true}
+	assert.Contains(t, missingExpectedImplPkgs(spec.expectedImplPkgs, memOnly), registryPGPkg,
+		"dropping the PG impl package must be flagged as a vacuous-green risk")
+
+	// GREEN: both pinned packages present → nothing missing.
+	full := map[string]bool{registryMemPkg + ".Registry": true, registryPGPkg + ".Registry": true}
+	assert.Empty(t, missingExpectedImplPkgs(spec.expectedImplPkgs, full),
+		"the full impl set must satisfy every pinned expected package")
 }

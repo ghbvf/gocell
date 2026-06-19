@@ -7,20 +7,25 @@
 // catch a boundary divergence such as History returning nil vs an empty slice).
 //
 // The suite asserts the *documented* port contract, not byte-level impl detail:
-// History's "no events" result is checked with wantEmpty (the port godoc states
-// callers MUST NOT distinguish a nil from an empty slice), so the suite is purely
-// additive — it forces semantic equivalence without mandating a behavior change
-// in either store.
+// History's "no events" result is checked with a len()==0 assertion (the port
+// godoc states callers MUST NOT distinguish a nil from an empty slice), so the
+// suite is purely additive — it forces semantic equivalence without mandating a
+// behavior change in either store.
 //
 // Writes (Create/Transition) require an ambient tx (the port contract; the PG
 // store asserts it), so the factory hands back a persistence.TxRunner the suite
-// wraps every write in. Reads (Get/List/History) are issued directly: both stores
-// isolate by the explicit typed tenant parameter (PG additionally via a
-// WHERE tenant_id predicate), so no read needs an ambient tx under the test role.
-// (In production the PG read path also runs inside a tenant-scoped tx so FORCE
-// RLS fail-closes an unscoped read; that GUC/RLS behavior is exercised by the PG
-// RLS integration tests, not by this contract suite, which asserts the
-// tenant-parameter isolation common to both stores.)
+// wraps every write in. Reads (Get/List/History) of a valid tenant are issued
+// through getScoped/listScoped/historyScoped, which wrap each read in
+// tenant.WithScope(ctx, t) + TxRunner.RunInTx — modeling the production PG read
+// caller obligation (port godoc §"Read scoping under RLS": the RLS GUC is injected
+// (SET LOCAL) only inside TxManager.RunInTx). The mem store's pass-through runner
+// makes this a no-op wrapper, so the call shape is identical across stores. The
+// suite runs under the test pool's owner role, so it asserts the tenant-parameter
+// isolation common to both stores, not RLS fail-closed enforcement — the latter
+// (which needs the restricted serving role) is covered by the PG RLS integration
+// tests. The InvalidTenant sub-test calls reads directly (an invalid tenant cannot
+// be scoped): the repo's tenant.Validate must fail-close before any store access.
+//
 // There is no Features struct — unlike UserRepository there is no mem/PG behavior
 // fork to gate; every sub-test exercises one concrete path on both stores.
 //
@@ -31,6 +36,7 @@
 //
 // ref: corecells/accesscore/internal/ports/conformance/conformance.go (in-repo template)
 // ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go (factory + shared suite)
+// ref: corecells/configcore/internal/scopedread/scopedread.go (WithScope + RunInTx read funnel)
 package conformance
 
 import (
@@ -73,11 +79,11 @@ func mustParseTenant(s string) tenant.TenantID {
 }
 
 // RegistryFactory constructs a fresh ports.Registry, its paired
-// persistence.TxRunner (used to provide the ambient tx writes require — a
-// pass-through for stores that need none), and a cleanup func, for one sub-case.
-// The factory is called once per sub-test; cleanup is registered via t.Cleanup.
-// A store that needs no real ambient tx (e.g. the in-memory Registry) can pass
-// outbox.DemoTxRunner{} as the TxRunner.
+// persistence.TxRunner (used to provide the ambient tx writes require AND the
+// tenant-scoped read tx — a pass-through for stores that need neither), and a
+// cleanup func, for one sub-case. The factory is called once per sub-test; cleanup
+// is registered via t.Cleanup. A store that needs no real ambient tx (e.g. the
+// in-memory Registry) can pass outbox.DemoTxRunner{} as the TxRunner.
 type RegistryFactory func(t *testing.T) (repo ports.Registry, txRunner persistence.TxRunner, cleanup func())
 
 // RunRegistryConformance executes the full ports.Registry conformance suite.
@@ -169,9 +175,66 @@ func transition(
 	return out, err
 }
 
+// getScoped reads (t, id) inside a tenant-scoped tx (tenant.WithScope + RunInTx),
+// modeling the production PG read caller obligation; mem's pass-through runner makes
+// it a no-op wrapper. A read error fails the sub-test (no valid-tenant read should
+// error); callers assert on the (registration, ok) result.
+func getScoped(
+	t *testing.T, txRunner persistence.TxRunner, repo ports.Registry, tn tenant.TenantID, id string,
+) (registry.ContractRegistration, bool) {
+	t.Helper()
+	var (
+		out registry.ContractRegistration
+		ok  bool
+	)
+	err := txRunner.RunInTx(tenant.WithScope(context.Background(), tn), func(ctx context.Context) error {
+		var e error
+		out, ok, e = repo.Get(ctx, tn, id)
+		return e
+	})
+	fatalIfErr(t, err, "Get "+id)
+	return out, ok
+}
+
+// listScoped is getScoped's List counterpart (tenant-scoped read tx).
+func listScoped(
+	t *testing.T, txRunner persistence.TxRunner, repo ports.Registry,
+	tn tenant.TenantID, params query.ListParams, filter ports.ListFilter,
+) []registry.ContractRegistration {
+	t.Helper()
+	var out []registry.ContractRegistration
+	err := txRunner.RunInTx(tenant.WithScope(context.Background(), tn), func(ctx context.Context) error {
+		var e error
+		out, e = repo.List(ctx, tn, params, filter)
+		return e
+	})
+	fatalIfErr(t, err, "List")
+	return out
+}
+
+// historyScoped is getScoped's History counterpart (tenant-scoped read tx).
+func historyScoped(
+	t *testing.T, txRunner persistence.TxRunner, repo ports.Registry, tn tenant.TenantID, id string,
+) []registry.RegistrationEvent {
+	t.Helper()
+	var out []registry.RegistrationEvent
+	err := txRunner.RunInTx(tenant.WithScope(context.Background(), tn), func(ctx context.Context) error {
+		var e error
+		out, e = repo.History(ctx, tn, id)
+		return e
+	})
+	fatalIfErr(t, err, "History "+id)
+	return out
+}
+
 // submitInput is a small fixture builder for the common http submission shape.
 func submitInput(id string) registry.SubmitInput {
 	return registry.SubmitInput{ID: id, Kind: "http", Submitter: "alice"}
+}
+
+// pageParams builds a first-page ListParams with the canonical id-ASC sort.
+func pageParams(limit int) query.ListParams {
+	return query.ListParams{Limit: limit, Sort: idASC}
 }
 
 // ─── sub-tests ──────────────────────────────────────────────────────────────
@@ -189,15 +252,13 @@ func conformCreateRecordsSubmitted(t *testing.T, factory RegistryFactory) {
 	errUnless(t, reg.Submitter == "alice", "Create: submitter = %q, want alice", reg.Submitter)
 	errUnless(t, reg.State == registry.StateSubmitted(), "Create: state = %s, want submitted", reg.State)
 
-	got, ok, err := repo.Get(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, err, "Get")
+	got, ok := getScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	fatalUnless(t, ok, "Get: want ok=true for created registration")
 	errUnless(t, got.State == registry.StateSubmitted(), "Get: state = %s, want submitted", got.State)
 	errUnless(t, got.Submitter == "alice", "Get: submitter = %q, want alice", got.Submitter)
 
 	// Initial migration event: From = zero sentinel, To = submitted, Seq = 1.
-	evs, err := repo.History(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, err, "History")
+	evs := historyScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	fatalUnless(t, len(evs) == 1, "History: len = %d, want 1", len(evs))
 	errUnless(t, evs[0].From.IsZero(), "History: initial event From must be the zero sentinel")
 	errUnless(t, evs[0].To == registry.StateSubmitted(), "History: initial event To = %s, want submitted", evs[0].To)
@@ -255,8 +316,7 @@ func conformTransitionLegal(t *testing.T, factory RegistryFactory) {
 	fatalIfErr(t, err, "Transition")
 	errUnless(t, got.State == registry.StateProbing(), "Transition: state = %s, want probing", got.State)
 
-	evs, err := repo.History(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, err, "History")
+	evs := historyScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	fatalUnless(t, len(evs) == 2, "History: len = %d, want 2", len(evs))
 	errUnless(t, evs[1].From == registry.StateSubmitted(), "History: event[1] From = %s, want submitted", evs[1].From)
 	errUnless(t, evs[1].To == registry.StateProbing(), "History: event[1] To = %s, want probing", evs[1].To)
@@ -275,15 +335,11 @@ func conformTransitionIllegal(t *testing.T, factory RegistryFactory) {
 	})
 	assertCode(t, err, errcode.ErrRegistrationInvalidTransition, "Transition illegal")
 
-	// No half-write: still submitted, history unchanged (length 1). The reads must
-	// not swallow errors — a failed Get/History would otherwise masquerade as a
-	// state-drift assertion with no diagnostic context.
-	got, ok, gerr := repo.Get(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, gerr, "Get after illegal transition")
+	// No half-write: still submitted, history unchanged (length 1).
+	got, ok := getScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	fatalUnless(t, ok, "Get after illegal transition: want ok=true")
 	errUnless(t, got.State == registry.StateSubmitted(), "Transition illegal: state must stay submitted, got %s", got.State)
-	evs, herr := repo.History(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, herr, "History after illegal transition")
+	evs := historyScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	errUnless(t, len(evs) == 1, "Transition illegal: history must stay length 1, got %d", len(evs))
 }
 
@@ -343,8 +399,7 @@ func conformTransitionApprover(t *testing.T, factory RegistryFactory) {
 		_, err := transition(t, txRunner, repo, testTenantID, registry.AdvanceInput{ID: "http.foo.v1", To: to, Actor: "admin"})
 		fatalIfErr(t, err, "Transition to "+to.String())
 	}
-	got, ok, err := repo.Get(context.Background(), testTenantID, "http.foo.v1")
-	fatalIfErr(t, err, "Get")
+	got, ok := getScoped(t, txRunner, repo, testTenantID, "http.foo.v1")
 	fatalUnless(t, ok, "Get: want ok=true")
 	errUnless(t, got.State == registry.StateApproved(), "Approver: state = %s, want approved", got.State)
 	errUnless(t, got.Approver == "admin", "Approver: approver = %q, want admin", got.Approver)
@@ -352,11 +407,10 @@ func conformTransitionApprover(t *testing.T, factory RegistryFactory) {
 
 func conformGetUnknown(t *testing.T, factory RegistryFactory) {
 	t.Helper()
-	repo, _, cleanup := factory(t)
+	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	got, ok, err := repo.Get(context.Background(), testTenantID, "nobody")
-	fatalIfErr(t, err, "Get unknown")
+	got, ok := getScoped(t, txRunner, repo, testTenantID, "nobody")
 	errUnless(t, !ok, "Get unknown: want ok=false")
 	errUnless(t, got.ID == "" && got.State.IsZero(), "Get unknown: want the zero registration, got %+v", got)
 }
@@ -369,18 +423,16 @@ func conformListPaginated(t *testing.T, factory RegistryFactory) {
 	for _, id := range []string{"c", "a", "b", "d"} {
 		create(t, txRunner, repo, testTenantID, submitInput(id))
 	}
-	ctx := context.Background()
 
 	// Page 1: Limit=2 → FetchLimit=3; 4 rows → returns a,b,c (the +1 row signals hasMore).
-	page, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 2, Sort: idASC}, ports.ListFilter{})
-	fatalIfErr(t, err, "List page1")
+	page := listScoped(t, txRunner, repo, testTenantID, pageParams(2), ports.ListFilter{})
 	fatalUnless(t, len(page) == 3, "List page1: len = %d, want 3 (N+1)", len(page))
 	errUnless(t, page[0].ID == "a" && page[1].ID == "b" && page[2].ID == "c",
 		"List page1: ids = [%s %s %s], want [a b c]", page[0].ID, page[1].ID, page[2].ID)
 
 	// Page 2: cursor after the last visible id "b" → returns c,d (< FetchLimit → no more).
-	page2, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 2, Sort: idASC, CursorValues: []any{"b"}}, ports.ListFilter{})
-	fatalIfErr(t, err, "List page2")
+	page2 := listScoped(t, txRunner, repo, testTenantID,
+		query.ListParams{Limit: 2, Sort: idASC, CursorValues: []any{"b"}}, ports.ListFilter{})
 	fatalUnless(t, len(page2) == 2, "List page2: len = %d, want 2", len(page2))
 	errUnless(t, page2[0].ID == "c" && page2[1].ID == "d",
 		"List page2: ids = [%s %s], want [c d]", page2[0].ID, page2[1].ID)
@@ -388,11 +440,10 @@ func conformListPaginated(t *testing.T, factory RegistryFactory) {
 
 func conformListEmpty(t *testing.T, factory RegistryFactory) {
 	t.Helper()
-	repo, _, cleanup := factory(t)
+	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	page, err := repo.List(context.Background(), testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
-	fatalIfErr(t, err, "List empty")
+	page := listScoped(t, txRunner, repo, testTenantID, pageParams(10), ports.ListFilter{})
 	errUnless(t, len(page) == 0, "List empty: want 0 rows, got %d", len(page))
 }
 
@@ -405,29 +456,24 @@ func conformListStateFilter(t *testing.T, factory RegistryFactory) {
 	create(t, txRunner, repo, testTenantID, submitInput("b"))
 	_, err := transition(t, txRunner, repo, testTenantID, registry.AdvanceInput{ID: "b", To: registry.StateProbing(), Actor: "system"})
 	fatalIfErr(t, err, "Transition b→probing")
-	ctx := context.Background()
 
 	// submitted filter → only "a".
-	subPage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{State: registry.StateSubmitted()})
-	fatalIfErr(t, err, "List submitted")
+	subPage := listScoped(t, txRunner, repo, testTenantID, pageParams(10), ports.ListFilter{State: registry.StateSubmitted()})
 	fatalUnless(t, len(subPage) == 1, "List submitted: len = %d, want 1", len(subPage))
 	errUnless(t, subPage[0].ID == "a", "List submitted: id = %q, want a", subPage[0].ID)
 
 	// probing filter → only "b".
-	probePage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{State: registry.StateProbing()})
-	fatalIfErr(t, err, "List probing")
+	probePage := listScoped(t, txRunner, repo, testTenantID, pageParams(10), ports.ListFilter{State: registry.StateProbing()})
 	fatalUnless(t, len(probePage) == 1, "List probing: len = %d, want 1", len(probePage))
 	errUnless(t, probePage[0].ID == "b", "List probing: id = %q, want b", probePage[0].ID)
 
 	// a state with no rows → empty.
-	nonePage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{State: registry.StateApproved()})
-	fatalIfErr(t, err, "List approved")
+	nonePage := listScoped(t, txRunner, repo, testTenantID, pageParams(10), ports.ListFilter{State: registry.StateApproved()})
 	errUnless(t, len(nonePage) == 0, "List approved: want 0 rows, got %d", len(nonePage))
 
 	// Zero-value ListFilter{} means "all states" (the port contract): a mixed-state
 	// store must return every row, not silently treat the zero State as a predicate.
-	allPage, err := repo.List(ctx, testTenantID, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
-	fatalIfErr(t, err, "List all-states")
+	allPage := listScoped(t, txRunner, repo, testTenantID, pageParams(10), ports.ListFilter{})
 	fatalUnless(t, len(allPage) == 2, "List all-states: len = %d, want 2 (submitted a + probing b)", len(allPage))
 	errUnless(t, allPage[0].ID == "a" && allPage[1].ID == "b",
 		"List all-states: ids = [%s %s], want [a b]", allPage[0].ID, allPage[1].ID)
@@ -446,8 +492,7 @@ func conformHistoryOrdered(t *testing.T, factory RegistryFactory) {
 		fatalIfErr(t, err, "Transition to "+to.String())
 	}
 
-	evs, err := repo.History(context.Background(), testTenantID, "r1")
-	fatalIfErr(t, err, "History")
+	evs := historyScoped(t, txRunner, repo, testTenantID, "r1")
 	fatalUnless(t, len(evs) == 5, "History: len = %d, want 5 (submit + 4 transitions)", len(evs))
 	for i, ev := range evs {
 		errUnless(t, ev.Seq == i+1, "History: event[%d] Seq = %d, want %d (1-based contiguous)", i, ev.Seq, i+1)
@@ -455,17 +500,16 @@ func conformHistoryOrdered(t *testing.T, factory RegistryFactory) {
 }
 
 // conformHistoryUnknownEmpty pins the #2388 / F16 divergence: History on an
-// unknown id returns a no-events result on both stores. Asserted with wantEmpty
+// unknown id returns a no-events result on both stores. Asserted with len()==0
 // (NOT a nil-specific check): the port godoc states callers MUST NOT distinguish
 // a nil from an empty slice, so mem (nil) and PG (empty slice) are both
 // contract-conformant and the suite must treat them as equivalent.
 func conformHistoryUnknownEmpty(t *testing.T, factory RegistryFactory) {
 	t.Helper()
-	repo, _, cleanup := factory(t)
+	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	evs, err := repo.History(context.Background(), testTenantID, "nobody")
-	fatalIfErr(t, err, "History unknown")
+	evs := historyScoped(t, txRunner, repo, testTenantID, "nobody")
 	errUnless(t, len(evs) == 0, "History unknown: want a no-events result (nil or empty), got len %d", len(evs))
 }
 
@@ -475,17 +519,13 @@ func conformCrossTenantIsolation(t *testing.T, factory RegistryFactory) {
 	t.Cleanup(cleanup)
 
 	create(t, txRunner, repo, testTenantID, registry.SubmitInput{ID: "shared.id", Kind: "event", Submitter: "carol"})
-	ctx := context.Background()
 
-	// Tenant B cannot see tenant A's row by Get / List / History.
-	_, ok, err := repo.Get(ctx, testTenantIDOther, "shared.id")
-	fatalIfErr(t, err, "Get cross-tenant")
+	// Tenant B cannot see tenant A's row by Get / List / History (each scoped to B).
+	_, ok := getScoped(t, txRunner, repo, testTenantIDOther, "shared.id")
 	errUnless(t, !ok, "Get cross-tenant: tenant B must not see tenant A's row")
-	page, err := repo.List(ctx, testTenantIDOther, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
-	fatalIfErr(t, err, "List cross-tenant")
+	page := listScoped(t, txRunner, repo, testTenantIDOther, pageParams(10), ports.ListFilter{})
 	errUnless(t, len(page) == 0, "List cross-tenant: tenant B must see 0 rows, got %d", len(page))
-	evs, err := repo.History(ctx, testTenantIDOther, "shared.id")
-	fatalIfErr(t, err, "History cross-tenant")
+	evs := historyScoped(t, txRunner, repo, testTenantIDOther, "shared.id")
 	errUnless(t, len(evs) == 0, "History cross-tenant: tenant B must see 0 events, got %d", len(evs))
 
 	// Write-path isolation: tenant B cannot advance tenant A's registration. Probed
@@ -498,45 +538,56 @@ func conformCrossTenantIsolation(t *testing.T, factory RegistryFactory) {
 
 	// Per-tenant dedup: the same id is independently creatable under tenant B.
 	create(t, txRunner, repo, testTenantIDOther, registry.SubmitInput{ID: "shared.id", Kind: "http", Submitter: "bob"})
-	gotB, ok, err := repo.Get(ctx, testTenantIDOther, "shared.id")
-	fatalIfErr(t, err, "Get tenant B")
+	gotB, ok := getScoped(t, txRunner, repo, testTenantIDOther, "shared.id")
 	fatalUnless(t, ok, "Get tenant B: want ok=true")
 	errUnless(t, gotB.Submitter == "bob", "Get tenant B: submitter = %q, want bob", gotB.Submitter)
 
 	// Sanity: tenant A's row is still visible under its own tenant.
-	gotA, ok, err := repo.Get(ctx, testTenantID, "shared.id")
-	fatalIfErr(t, err, "Get tenant A")
+	gotA, ok := getScoped(t, txRunner, repo, testTenantID, "shared.id")
 	fatalUnless(t, ok, "Get tenant A: want ok=true")
 	errUnless(t, gotA.Submitter == "carol", "Get tenant A: submitter = %q, want carol", gotA.Submitter)
 }
 
-// conformInvalidTenantRejected asserts every method rejects an empty (invalid)
-// tenant with ErrValidationFailed — the typed tenant boundary fail-closes before
-// any store access.
+// conformInvalidTenantRejected asserts every method rejects an invalid tenant with
+// ErrValidationFailed — the typed tenant boundary fail-closes before any store
+// access. The invalid set covers the full TenantID.Validate rejection contract
+// (empty / reserved nil UUID / non-canonical), not just the empty symptom. Reads
+// are issued directly (NOT through the scoped helpers): an invalid tenant cannot be
+// scoped (tenant.WithScope of an invalid id is meaningless), and the repo's
+// tenant.Validate must reject before any tx/store access regardless of scoping.
 func conformInvalidTenantRejected(t *testing.T, factory RegistryFactory) {
 	t.Helper()
 	repo, txRunner, cleanup := factory(t)
 	t.Cleanup(cleanup)
 
-	zero := tenant.TenantID("")
+	invalids := []struct {
+		name string
+		tn   tenant.TenantID
+	}{
+		{"empty", tenant.TenantID("")},
+		{"reserved-nil-uuid", tenant.TenantID("00000000-0000-0000-0000-000000000000")},
+		{"uppercase-non-canonical", tenant.TenantID("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")},
+		{"malformed", tenant.TenantID("not-a-uuid")},
+	}
 	ctx := context.Background()
+	for _, inv := range invalids {
+		cErr := txRunner.RunInTx(ctx, func(ctx context.Context) error {
+			_, e := repo.Create(ctx, inv.tn, submitInput("x"))
+			return e
+		})
+		assertCode(t, cErr, errcode.ErrValidationFailed, "Create invalid tenant ("+inv.name+")")
 
-	cErr := txRunner.RunInTx(ctx, func(ctx context.Context) error {
-		_, e := repo.Create(ctx, zero, submitInput("x"))
-		return e
-	})
-	assertCode(t, cErr, errcode.ErrValidationFailed, "Create invalid tenant")
+		tErr := txRunner.RunInTx(ctx, func(ctx context.Context) error {
+			_, e := repo.Transition(ctx, inv.tn, registry.AdvanceInput{ID: "x", To: registry.StateProbing(), Actor: "s"})
+			return e
+		})
+		assertCode(t, tErr, errcode.ErrValidationFailed, "Transition invalid tenant ("+inv.name+")")
 
-	tErr := txRunner.RunInTx(ctx, func(ctx context.Context) error {
-		_, e := repo.Transition(ctx, zero, registry.AdvanceInput{ID: "x", To: registry.StateProbing(), Actor: "s"})
-		return e
-	})
-	assertCode(t, tErr, errcode.ErrValidationFailed, "Transition invalid tenant")
-
-	_, _, gErr := repo.Get(ctx, zero, "x")
-	assertCode(t, gErr, errcode.ErrValidationFailed, "Get invalid tenant")
-	_, lErr := repo.List(ctx, zero, query.ListParams{Limit: 10, Sort: idASC}, ports.ListFilter{})
-	assertCode(t, lErr, errcode.ErrValidationFailed, "List invalid tenant")
-	_, hErr := repo.History(ctx, zero, "x")
-	assertCode(t, hErr, errcode.ErrValidationFailed, "History invalid tenant")
+		_, _, gErr := repo.Get(ctx, inv.tn, "x")
+		assertCode(t, gErr, errcode.ErrValidationFailed, "Get invalid tenant ("+inv.name+")")
+		_, lErr := repo.List(ctx, inv.tn, pageParams(10), ports.ListFilter{})
+		assertCode(t, lErr, errcode.ErrValidationFailed, "List invalid tenant ("+inv.name+")")
+		_, hErr := repo.History(ctx, inv.tn, "x")
+		assertCode(t, hErr, errcode.ErrValidationFailed, "History invalid tenant ("+inv.name+")")
+	}
 }

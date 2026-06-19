@@ -65,6 +65,14 @@ const (
 	registryPortsPkg       = PlatformCellsModulePath + "/registrycore/internal/ports"
 	registryConformancePkg = PlatformCellsModulePath + "/registrycore/internal/ports/conformance"
 
+	// registryMemPkg / registryPGPkg are the two ports.Registry implementation
+	// packages the registry spec pins via expectedImplPkgs (#2388 review F4): the
+	// rule must collect BOTH, else dropping one (e.g. a load-pattern gap losing the
+	// PG package) would leave the guard enforcing only mem enrollment — vacuous-green
+	// for the missing impl. The zero-impl guard alone cannot catch that.
+	registryMemPkg = PlatformCellsModulePath + "/registrycore/internal/mem"
+	registryPGPkg  = PlatformCellsModulePath + "/registrycore/internal/adapters/postgres"
+
 	policyRepoIfaceName   = "PolicyRepository"
 	roleRepoIfaceName     = "RoleRepository"
 	userRepoIfaceName     = "UserRepository"
@@ -329,6 +337,11 @@ type repoConformanceSpec struct {
 	humanIface      string // e.g. "ports.PolicyRepository" for messages
 	emptyImplHint   string // e.g. "Expect at least mem.PolicyRepository."
 	callSuffix      string // factory-arg shape shown in the remediation message
+	// expectedImplPkgs, when non-empty, are impl package paths the rule MUST collect
+	// (anti-vacuity beyond the zero-impl guard): if any is absent from the collected
+	// impl set the check fails loud, so a load-pattern gap that drops one impl (e.g.
+	// the PG package) cannot leave the rule silently enforcing only the survivors.
+	expectedImplPkgs []string
 }
 
 func policyRepoConformanceSpec() repoConformanceSpec {
@@ -376,14 +389,15 @@ func userRepoConformanceSpec() repoConformanceSpec {
 // TestRegistryRepoConformanceEnrollment godoc.
 func registryRepoConformanceSpec() repoConformanceSpec {
 	return repoConformanceSpec{
-		ruleID:          ruleRegistryRepoConformanceEnrollment01,
-		portsPkg:        registryPortsPkg,
-		conformancePkg:  registryConformancePkg,
-		ifaceName:       registryRepoIfaceName,
-		conformanceFunc: registryConformanceFunc,
-		humanIface:      "ports.Registry",
-		emptyImplHint:   "Expect at least mem.Registry and postgres.Registry.",
-		callSuffix:      "(t, factory)",
+		ruleID:           ruleRegistryRepoConformanceEnrollment01,
+		portsPkg:         registryPortsPkg,
+		conformancePkg:   registryConformancePkg,
+		ifaceName:        registryRepoIfaceName,
+		conformanceFunc:  registryConformanceFunc,
+		humanIface:       "ports.Registry",
+		emptyImplHint:    "Expect at least mem.Registry and postgres.Registry.",
+		callSuffix:       "(t, factory)",
+		expectedImplPkgs: []string{registryMemPkg, registryPGPkg},
 	}
 }
 
@@ -392,6 +406,28 @@ func registryRepoConformanceSpec() repoConformanceSpec {
 // does not cross into it — ./corecells/... is required to load the iface + impls.
 func repoConformanceLoadPatterns(root string) []string {
 	return append([]string{"./corecells/..."}, prodscan.Patterns(root)...)
+}
+
+// missingExpectedImplPkgs returns the expectedImplPkgs absent from implSet (keys
+// are "pkgPath.TypeName"). Empty expectedImplPkgs disables the check (returns nil).
+// Used by the expected-impl anti-vacuity guard (#2388 F4).
+func missingExpectedImplPkgs(expectedImplPkgs []string, implSet map[string]bool) []string {
+	if len(expectedImplPkgs) == 0 {
+		return nil
+	}
+	present := map[string]bool{}
+	for implKey := range implSet {
+		if dot := strings.LastIndex(implKey, "."); dot > 0 {
+			present[implKey[:dot]] = true
+		}
+	}
+	var missing []string
+	for _, pkg := range expectedImplPkgs {
+		if !present[pkg] {
+			missing = append(missing, pkg)
+		}
+	}
+	return missing
 }
 
 // checkRepoConformanceEnrollment is the shared body for the three ports.*Repository
@@ -415,6 +451,20 @@ func checkRepoConformanceEnrollment(t *testing.T, spec repoConformanceSpec, cfg 
 			"%s: zero %s implementations collected — likely a type-universe regression "+
 				"(iface and impls must share one packages.Load). %s",
 			spec.ruleID, spec.ifaceName, spec.emptyImplHint)}}
+	}
+	// Anti-vacuity beyond the zero-impl guard (#2388 F4): every pinned impl package
+	// must be among the collected impls, else the rule would silently enforce only
+	// the survivors (e.g. a load-pattern gap dropping the PG package leaves mem the
+	// sole guarded impl — vacuous-green for PG).
+	if missing := missingExpectedImplPkgs(spec.expectedImplPkgs, implSet); len(missing) > 0 {
+		var diags []Diagnostic
+		for _, pkg := range missing {
+			diags = append(diags, Diagnostic{Rel: spec.portsPkg, Message: fmt.Sprintf(
+				"%s: expected impl package %q not among the collected %s implementations — "+
+					"the rule would be vacuous-green for it (type-universe regression or load-pattern gap). %s",
+				spec.ruleID, pkg, spec.ifaceName, spec.emptyImplHint)})
+		}
+		return diags
 	}
 
 	enrolledPkgs := map[string]bool{}
