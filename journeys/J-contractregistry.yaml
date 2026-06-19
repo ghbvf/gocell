@@ -8,10 +8,14 @@ cells:
   - registrycore
 contracts:
   # registrycore 的提交面（US4 骨架，in-mem ContractRegistrar #2233 承载）。
-  # 耐久 store（US5）、admin approve/reject/retire（US7）、审计/事件（US8）落地后
-  # 本 journey 扩展对应 passCriteria 并随之转 active。
+  # admin approve/reject/retire（US7 #2238）落地：路由门禁经契约派生 resolver →
+  # PDP（permission-based ABAC，非 handler role 字面量）+ 状态机迁移。
+  # 审计/事件（US8）、数据面 remove（US11/US12）落地后本 journey 扩展并转 active。
   - http.registry.contract.submit.v1
   - http.registry.contract.list.v1
+  - http.registry.contract.approve.v1
+  - http.registry.contract.reject.v1
+  - http.registry.contract.retire.v1
 passCriteria:
   - text: 已认证调用方 POST submit 合法契约（id + kind）返回 201，data.state=submitted（sealed RegistrationState）；同 id 重复提交返回 409
     mode: manual
@@ -20,4 +24,8 @@ passCriteria:
   - text: 缺 registry:submit 权限的提交、缺 registry:read 权限的列表分别被路由门禁拒绝（未认证 401 / 拒绝 403）
     mode: manual
   - text: 非法参数返回 400 + shared error envelope：submit malformed JSON body / 缺 id·kind；list limit 越界（0 或 501）或超长 cursor
+    mode: manual
+  - text: admin（registry:approve/reject/retire 经 PDP baseline 授予）POST approve 推进 pending-approval→approved、reject→rejected、retire 推进 active→retired；非 admin 被门禁拒绝（401/403），不触碰状态机
+    mode: manual
+  - text: 非法状态迁移返回 400（如对 submitted 契约 approve、对 pending-approval 契约 retire；ErrRegistrationInvalidTransition 为 KindInvalid→400，对齐 saga.Transition 约定）、未知 id 返回 404，均带 shared error envelope
     mode: manual

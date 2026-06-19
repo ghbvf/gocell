@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.retire.v1.request",
+  "description": "Retire an active contract registration (active → retired terminal transition). The id is the path parameter; the body carries an optional free-form retirement reason (recorded on the registration's append-only migration event as the transition Reason). The cross-cell contract-retired event and data-plane removal are US8 / US11-US12, not this endpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "type": "string",
+      "maxLength": 1024,
+      "description": "Optional free-form retirement reason recorded as the transition Reason."
+    }
+  }
+}
