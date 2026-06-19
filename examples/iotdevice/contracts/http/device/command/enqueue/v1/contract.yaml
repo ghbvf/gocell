@@ -1,4 +1,5 @@
-# commandType made required in-place on active v1 (#1694 F9) — permitted by the
+# commandType made required in-place on active v1 (#1694 F9); 429 added in-place
+# for the per-device Pending command cap (F-S-005 #822) — both permitted by the
 # Pre-GA wire-break window in .claude/rules/gocell/api-versioning.md §兼容窗口
 # (until 2026-12-31; no external wire consumers). After the window, breaking wire
 # changes rev the version dir.
@@ -27,6 +28,9 @@ endpoints:
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      429:
+        description: "Too Many Requests — device exceeded its pending command limit"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
