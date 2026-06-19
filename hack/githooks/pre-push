@@ -22,18 +22,21 @@
 #     generated/ edits can therefore pass here but fail CI (which runs from
 #     a clean checkout). This is inherent to pre-push hooks, not a bug —
 #     stage your work before relying on the result.
-#   - `go build -tags=integration ./...` has no standalone CI step; CI
+#   - `go build -tags=integration` has no standalone CI step; CI
 #     compiles the integration tag transitively inside `go test
 #     -tags=integration` (integration-test job). It is added here as an
 #     extra local guard because the integration-tag build break is a
 #     repeatedly-forgotten failure mode (project memory: integration-tag
-#     build). In pure go.work mode these commands run per workspace module
-#     through hack/lib/modules.sh; if a root go.mod exists, the root commands
-#     also mirror real CI steps (_build-lint.yml: go build ./... /
-#     go vet -tags=e2e ./tests/e2e/...;
-#     bare `go vet ./...` is intentionally absent from CI because govet
-#     is in golangci-lint v2's default linter set, but the hook still runs
-#     it as a fast standalone fail-fast independent of the lint step).
+#     build). All of build / build-tags=integration / vet run per workspace
+#     module through hack/lib/modules.sh — the repo root is a pure go.work
+#     workspace with no root module post-#1565, so there is no root-level
+#     `./...` form; the per-module build/vet mirror _build-lint.yml's
+#     per-module CI gates. The e2e-tagged vet (go vet -tags=e2e
+#     ./tests/e2e/...) stays at root because it resolves into the real
+#     ./tests module. bare `go vet ./...` is intentionally absent from CI
+#     because govet is in golangci-lint v2's default linter set, but the
+#     hook still runs per-module vet as a fast standalone fail-fast
+#     independent of the lint step).
 #   - archtest is NOT run here. PR #887 first round wired
 #     `SHARD_COUNT=4 bash hack/verify-archtest.sh` as a PR-time
 #     replacement after ADR 202605120000 §Amendment 2026-05-23-pr-time-
@@ -75,7 +78,7 @@
 #
 # Execution: every gate is independent (no shared mutable state; the Go
 # build/test cache is concurrency-safe across parallel `go` invocations),
-# so all of them — gofumpt / build×2 / vet×2 / golangci-lint / codegen-
+# so all of them — gofumpt / per-module build+vet / golangci-lint / codegen-
 # verify — run in a SINGLE parallel fan-out behind one wait barrier.
 # Wall cost is ~max(slowest gate), not the sum of serial tiers. Each gate
 # is still change-gated: a docs-only push launches nothing (~0s); a .go
@@ -307,8 +310,9 @@ lint_gate() {
 #
 #   Tier 1  gofumpt           — formatter drift on the changed .go files
 #                               (the exact gate that failed CI #525).
-#   Tier 2  build/vet ×4      — whole-module compile + vet; integration
-#                               and e2e tags are the header-documented
+#   Tier 2  build/vet         — per-module compile + vet via `go -C` over the
+#                               go.work funnel (root has no module post-#1565);
+#                               integration and e2e tags are header-documented
 #                               deliberate CI-structure deviations.
 #   Tier 4  golangci-lint     — CI-faithful PR-mode lint
 #                               (--new-from-merge-base=origin/develop);
@@ -339,35 +343,39 @@ if [[ ${go_changed} -eq 1 ]]; then
     [[ ${#fmt_targets[@]} -gt 0 ]] && \
         run_bg "gofumpt formatter (run: make fmt)" gofumpt_gate "${fmt_targets[@]}"
 
-    if [[ -f go.mod ]]; then
-        run_bg "go build ./..."                   go build ./...
-        run_bg "go build -tags=integration ./..." go build -tags=integration ./...
-        run_bg "go vet ./..."                     go vet ./...
-    fi
+    # The repo root is a pure go.work workspace with NO root module (#1565), so a
+    # bare `go build/vet ./...` from root matches no module and errors ("directory
+    # prefix . does not contain modules listed in go.work"). Every module is built
+    # and vetted per-module in the funnel loop below — there is no root-level
+    # whole-repo build/vet form. The lone gate that stays at root is the e2e-tagged
+    # vet: `./tests/e2e/...` is a tag+path-scoped target that resolves INTO the real
+    # `./tests` workspace module (so it works), and the funnel's plain `vet ./...`
+    # does not carry the e2e tag — an irreducible complement, not a redundant
+    # whole-repo `./...` gate.
     run_bg "go vet -tags=e2e ./tests/e2e/..." go vet -tags=e2e ./tests/e2e/...
-    # examples/* are their own go.work modules (#1556); root ./... stops at the
-    # nested-module boundary. Enumerate every satellite from the SAME go.work
-    # funnel the CI build/test gates use (hack/lib/modules.sh → `go work edit
-    # -json`) and build/vet each with `go -C`. A hardcoded import-path wildcard
+    # Enumerate every workspace module from the SAME go.work funnel the CI
+    # build/lint gates use (hack/lib/modules.sh → `go work edit -json`) and
+    # build/vet each with `go -C` — framework, adapters/*, examples/* (#1556),
+    # tests, and so on. A hardcoded import-path wildcard
     # (`github.com/ghbvf/gocell/examples/...`) silently mis-covers under an
-    # ambient GOWORK=off and never covers a future non-examples satellite — so
-    # iterate the funnel instead, fail-closed if it breaks.
+    # ambient GOWORK=off and never covers a future workspace module — so iterate
+    # the funnel instead, fail-closed if it breaks.
     # shellcheck source=../lib/util.sh
     source "${ROOT}/hack/lib/util.sh"
     # shellcheck source=../lib/modules.sh
     source "${ROOT}/hack/lib/modules.sh"
-    if satellite_dirs_raw="$(gocell::modules::dirs)"; then
+    if module_dirs_raw="$(gocell::modules::dirs)"; then
         while IFS= read -r moddir; do
             [[ -z "${moddir}" || "${moddir}" == "." ]] && continue
             run_bg "go build (${moddir})"                   go -C "${moddir}" build ./...
             run_bg "go build -tags=integration (${moddir})" go -C "${moddir}" build -tags=integration ./...
             run_bg "go vet (${moddir})"                     go -C "${moddir}" vet ./...
-        done <<<"${satellite_dirs_raw}"
+        done <<<"${module_dirs_raw}"
     else
         # Fail-closed: a broken go.work funnel (missing jq, malformed `use`) must
-        # not silently skip satellite coverage. The funnel already printed its
+        # not silently skip module coverage. The funnel already printed its
         # error to stderr above; block the push.
-        note "FAIL: go.work module enumeration (hack/lib/modules.sh) failed — examples/* satellites NOT built/vetted; install jq and fix go.work, then re-push"
+        note "FAIL: go.work module enumeration (hack/lib/modules.sh) failed — go.work modules NOT built/vetted; install jq and fix go.work, then re-push"
         fail=1
     fi
 
