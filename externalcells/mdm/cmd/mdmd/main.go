@@ -54,10 +54,18 @@ const (
 	devAccessTokenTTL = 15 * time.Minute
 )
 
+// demoOptInEnv gates the demo daemon. The MDM enrollment daemon is a demo/in-memory
+// skeleton (ephemeral JWT keys, a hardcoded service secret, no durable store) and so
+// refuses to start unless this env var is "1" — a fail-closed opt-in, not a warn
+// banner. The postgres topology (MDM-PR15) replaces the demo deps and drops the gate.
+// See run.
+const demoOptInEnv = "MDMD_DEMO"
+
 // listenerAddrs are the three listener bind addresses. They are a parameter (not
-// hard-coded inside the builder) so the startup smoke test can inject OS-assigned
-// free loopback ports. Only the primary listener is all-interfaces; internal and
-// health bind loopback per docs/ops/listener-topology.md.
+// hard-coded inside the builder) so the startup smoke test and run can inject
+// addresses. In the demo all three bind loopback (the daemon is for local
+// validation, behind the MDMD_DEMO opt-in); MDM-PR15's postgres topology sets the
+// real device-facing primary bind per docs/ops/listener-topology.md.
 type listenerAddrs struct {
 	primary  string
 	internal string
@@ -76,11 +84,13 @@ type prebuiltListeners struct {
 	health   net.Listener
 }
 
-// defaultAddrs are the production demo bind addresses (non-default ports to avoid
-// colliding with corebundle / other examples).
+// defaultAddrs are the demo bind addresses (non-default ports to avoid colliding
+// with corebundle / other examples). All three bind loopback: the demo daemon is for
+// local validation only, so even behind the MDMD_DEMO opt-in it is never exposed on
+// an external interface. MDM-PR15 sets the real device-facing primary bind.
 func defaultAddrs() listenerAddrs {
 	return listenerAddrs{
-		primary:  ":8085",
+		primary:  "127.0.0.1:8085",
 		internal: "127.0.0.1:9085",
 		health:   "127.0.0.1:9095",
 	}
@@ -94,15 +104,24 @@ func main() {
 	ctx, cancel := shutdown.NotifyContext(context.Background())
 	defer cancel()
 
-	if err := run(ctx); err != nil {
+	if err := run(ctx, defaultAddrs(), prebuiltListeners{}); err != nil {
 		slog.Error("mdmd: application failed", slog.Any("error", err))
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context) error {
-	addrs := defaultAddrs()
-	app, err := buildApp(ctx, addrs, prebuiltListeners{})
+// run gates the demo daemon behind an explicit opt-in and, when allowed, builds and
+// serves the app on addrs. The MDM enrollment daemon is a demo/in-memory skeleton —
+// NOT production-safe — so it refuses to start unless MDMD_DEMO=1 (fail-closed; the
+// buildMemSharedDeps warn banner records the degraded posture but is not the gate).
+// addrs + lns are parameters (lns mirrors buildApp's injection seam: production passes
+// the zero value and bootstrap binds addrs itself; the startup smoke test injects
+// pre-bound loopback listeners) so the gate and the boot path are unit-testable.
+func run(ctx context.Context, addrs listenerAddrs, lns prebuiltListeners) error {
+	if os.Getenv(demoOptInEnv) != "1" {
+		return fmt.Errorf("mdmd: refusing to start: demo/in-memory skeleton (NOT production-safe); set %s=1 to run the demo", demoOptInEnv)
+	}
+	app, err := buildApp(ctx, addrs, lns)
 	if err != nil {
 		return fmt.Errorf("mdmd: build app: %w", err)
 	}

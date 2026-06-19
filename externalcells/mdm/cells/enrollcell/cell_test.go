@@ -31,6 +31,30 @@ func TestEnrollCell_IdentityAndInit(t *testing.T) {
 	}
 }
 
+// TestEnrollCell_Startup is the verify.smoke.enrollcell.startup target (gocell
+// verify cell resolves smoke.enrollcell.startup to -run Startup in this package).
+// It drives the cell through its full lifecycle — Init → Start → Ready → Stop —
+// which is the cell-level smoke; the composition-root HTTP boot smoke lives in
+// cmd/mdmd's TestRun_HealthReadyzGreen. An empty cell registers nothing, so a nil
+// Registrar suffices. Mirrors the canonical pattern in examples/iotdevice devicecell.
+func TestEnrollCell_Startup(t *testing.T) {
+	c := NewEnrollCell()
+	ctx := context.Background()
+
+	if err := c.Init(ctx, nil); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if !c.Ready() {
+		t.Fatal("Ready() = false after Start, want true (cell never reached the started state)")
+	}
+	if err := c.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 // TestEnrollCell_Module covers the composition.CellModule surface: the module ID
 // matches the cell ID (composition.Build enforces this) and Provide returns the
 // constructed cell with no opts/resources. PR-0 Provide ignores SharedDeps, so nil

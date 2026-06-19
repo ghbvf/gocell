@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -19,14 +20,16 @@ const (
 )
 
 // TestRun_HealthReadyzGreen is the demo-topology startup smoke test (the
-// verify.smoke.enrollcell.startup target): it builds the full composition, boots it
-// on pre-bound loopback listeners, and asserts /healthz + /readyz are green. A
-// successful boot also proves composition.Build succeeded, so a separate wiring-only
-// test would be redundant.
+// verify.smoke.enrollcell.startup target): it drives the full run() path — opt-in
+// gate → composition build → serve — on pre-bound loopback listeners and asserts
+// /healthz + /readyz are green. Going through run (not buildApp directly) covers the
+// runnable wrapper too; a successful boot also proves composition.Build succeeded.
 func TestRun_HealthReadyzGreen(t *testing.T) {
+	t.Setenv(demoOptInEnv, "1") // run() is fail-closed without the explicit opt-in.
+
 	// Pre-bind the listeners and hand them to bootstrap via WithListenerNet (no
-	// listen→close→rebind window). bootstrap owns + closes them on shutdown, so the
-	// test must not close them itself.
+	// listen→close→rebind window) so /healthz can be polled on known ports. bootstrap
+	// owns + closes them on shutdown, so the test must not close them itself.
 	primaryLn := mustLoopbackListener(t)
 	internalLn := mustLoopbackListener(t)
 	healthLn := mustLoopbackListener(t)
@@ -40,17 +43,14 @@ func TestRun_HealthReadyzGreen(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	app, err := buildApp(ctx, addrs, prebuiltListeners{
-		primary:  primaryLn,
-		internal: internalLn,
-		health:   healthLn,
-	})
-	if err != nil {
-		t.Fatalf("buildApp: %v", err)
-	}
-
 	runErr := make(chan error, 1)
-	go func() { runErr <- app.Run(ctx) }()
+	go func() {
+		runErr <- run(ctx, addrs, prebuiltListeners{
+			primary:  primaryLn,
+			internal: internalLn,
+			health:   healthLn,
+		})
+	}()
 
 	deadline := time.Now().Add(startupPollTimeout)
 	for _, path := range []string{"/healthz", "/readyz"} {
@@ -64,10 +64,45 @@ func TestRun_HealthReadyzGreen(t *testing.T) {
 	select {
 	case err := <-runErr:
 		if err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("app.Run returned unexpected error: %v", err)
+			t.Fatalf("run returned unexpected error: %v", err)
 		}
 	case <-time.After(shutdownTimeout):
 		t.Fatalf("app did not shut down within %s of context cancel", shutdownTimeout)
+	}
+}
+
+// TestDefaultAddrs asserts every default listener binds loopback: even behind the
+// MDMD_DEMO opt-in the demo daemon is never exposed on an external interface (defense
+// in depth). MDM-PR15 sets the real device-facing primary bind.
+func TestDefaultAddrs(t *testing.T) {
+	addrs := defaultAddrs()
+	for name, addr := range map[string]string{
+		"primary":  addrs.primary,
+		"internal": addrs.internal,
+		"health":   addrs.health,
+	} {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			t.Fatalf("%s addr %q is not host:port: %v", name, addr, err)
+		}
+		if host != "127.0.0.1" {
+			t.Errorf("%s listener binds %q, want loopback 127.0.0.1 (demo must not be externally exposed)", name, host)
+		}
+	}
+}
+
+// TestRun_RefusesWithoutDemoOptIn asserts run is fail-closed: without MDMD_DEMO=1 it
+// returns an error naming the opt-in and never builds/serves the app (so defaultAddrs
+// is never bound). A warn banner is not a substitute for an explicit opt-in.
+func TestRun_RefusesWithoutDemoOptIn(t *testing.T) {
+	t.Setenv(demoOptInEnv, "0") // any value other than "1" must refuse.
+
+	err := run(context.Background(), defaultAddrs(), prebuiltListeners{})
+	if err == nil {
+		t.Fatal("run() returned nil without MDMD_DEMO=1, want a fail-closed refusal")
+	}
+	if !strings.Contains(err.Error(), demoOptInEnv) {
+		t.Errorf("refusal error %q does not name the opt-in env %q", err, demoOptInEnv)
 	}
 }
 
