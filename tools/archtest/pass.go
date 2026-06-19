@@ -146,7 +146,7 @@ type RunScope interface {
 type astRunScope struct{ fs Scope }
 
 // typedRunScope dispatches [Run] in typed mode loading patterns from the main
-// module root (resolved via findModuleRoot).
+// module root (resolved via [defaultScopeConfig]).
 type typedRunScope struct {
 	opts     TypedOpts
 	patterns []string
@@ -414,7 +414,7 @@ func collectASTFiles(t testing.TB, scope Scope) (
 //
 // Precondition: root must be a non-empty absolute path. The caller is
 // responsible for this guarantee — the [Typed] / [Fixture] dispatch satisfies
-// it via findModuleRoot, and the [StandaloneModule] dispatch satisfies it via
+// it via [defaultScopeConfig], and the [StandaloneModule] dispatch satisfies it via
 // the filepath.IsAbs guard. No runtime check is performed here to avoid
 // duplicating caller-side enforcement.
 //

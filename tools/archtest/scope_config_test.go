@@ -79,3 +79,21 @@ func TestScopeConfig_ScanDirsSingleSource(t *testing.T) {
 		t.Errorf("cfg.PlatformCellScanDirs() = %v, want %v (platformCellScanDirs)", got, want)
 	}
 }
+
+// TestScopeConfig_ScanDirsDefensiveCopy proves PlatformCellScanDirs() returns a
+// fresh copy each call: a caller that mutates the returned slice must not corrupt
+// the config's internal state (the accessor does make+copy, not an alias).
+func TestScopeConfig_ScanDirsDefensiveCopy(t *testing.T) {
+	cfg, err := DefaultScopeConfig()
+	if err != nil {
+		t.Fatalf("DefaultScopeConfig() error: %v", err)
+	}
+	got := cfg.PlatformCellScanDirs()
+	if len(got) == 0 {
+		t.Fatal("PlatformCellScanDirs() returned an empty slice; cannot test isolation")
+	}
+	got[0] = "MUTATED-BY-CALLER"
+	if again := cfg.PlatformCellScanDirs(); again[0] != PlatformCellsDir {
+		t.Errorf("PlatformCellScanDirs() is not a defensive copy: caller mutation leaked, got %q want %q", again[0], PlatformCellsDir)
+	}
+}

@@ -124,12 +124,15 @@ scan dirs 四维合并为单一密封值，是规则迁移的运行时载体：
 | `DOMAIN-AUTHZ-FIELD-PRIVATE-01` | importable，未注册 | 中 | 扫 domain.User 类型，allowlist 绑 accesscore internal，外部仓 → 消费仓如无同名 domain.User 则 vacuous-green，须标注此盲区 |
 | `AFTERCOMMIT-HOOK-PURE-TRANSIENT-01` | importable，未注册 | 中-高 | A3 drain-caller allowlist 含 GoCell-internal TxRunner 路径；注册前须支持 `ConfigForExternalCell.ExtraAllowlist` 或改为纯 ban（`RegisterAfterCommit` 调用即报，无豁免）—— 二选一 |
 | `ERRCODE-PREFIX-OWNERSHIP-01` | importable，未注册 | 高 | 扫 `pkg/errcode/testdata/prefix_set.golden`（GoCell-internal 文件），外部仓该文件不存在 → false-red；需 `RuntimeScopeConfig` 参数化 golden 路径才可迁移；归 conditional 桶或 batch-2 |
-| `DISTLOCK-LOCK-NOT-CONTEXT-01` | importable，未注册 | 低 | self-check：`runtime/distlock.Lock` 不 implement `context.Context`；scan scope = GoCell framework module，消费仓无该类型 → vacuous-green；不可迁移（应归 gocell-internal） |
 
-> **注**：上表为派生候选，不是冻结清单。`DISTLOCK-LOCK-NOT-CONTEXT-01` 经信号判定后
-> 归 gocell-internal，不应进入 batch-1，列出仅作对比说明口径正确性。`CLOCK-POSITIONAL-INJECTION-01`
+> **注**：上表为派生候选，不是冻结清单。`CLOCK-POSITIONAL-INJECTION-01`
 > 须在 #2333 中实证：若 carve-out allowlist 经 `isGoCellPlatformPkgPath` 绑定，则为纯 ban；
 > 若为路径字面量，则归 conditional 桶先行参数化。
+>
+> **对比反例（不进 batch-1）**：`DISTLOCK-LOCK-NOT-CONTEXT-01` 经 §2 信号判定归 gocell-internal
+> ——self-check（`runtime/distlock.Lock` 不 implement `context.Context`），scan scope = GoCell
+> framework module，消费仓无该目标类型 → vacuous-green，不可迁移。列此仅示口径如何排除 self-check
+> 类规则，**不是** batch-1 工作项。
 
 **真正适合 batch-1 的核心条件**：allowlist 要么为空（纯 ban），要么全部经 `isGoCellPlatformPkgPath`
 绑定（消费仓无对应包 → allowlist 运行时为空 → 等价纯 ban）。满足此条件的规则零改动可注册。

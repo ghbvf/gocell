@@ -1,6 +1,9 @@
 package archtest
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // RuntimeScopeConfig is the resolved, per-run scope context that bundles the
 // workspace root, target module path, framework/platform module paths, and
@@ -8,9 +11,9 @@ import "testing"
 //
 // # Motivation and single-source guarantee
 //
-// Before #2329 these four values were resolved independently at each call site
-// (lookupModuleRoot, moduleImportPath, PlatformFrameworkModulePath, PlatformCellsDir)
-// and passed as separate arguments to runTypedWithRoot / runProduction /
+// Before #2329 these values were resolved independently at each call site
+// (lookupModuleRoot, moduleImportPath, and the Platform* consts) and passed as
+// separate arguments to runTypedWithRoot / runProduction /
 // platformCellScanDirs — making it easy for a site to diverge or forget one
 // of the values. RuntimeScopeConfig is the single construction point: callers
 // obtain it via [DefaultScopeConfig] or [defaultScopeConfig], and the defaults-
@@ -68,11 +71,11 @@ func (c RuntimeScopeConfig) TargetModulePath() string { return c.targetModulePat
 func (c RuntimeScopeConfig) FrameworkModulePath() string { return c.frameworkModulePath }
 
 // PlatformModulePath returns the GoCell org/repo prefix shared by every GoCell
-// module. Equals [PlatformModulePath].
+// module. Equals the [PlatformModulePath] constant.
 func (c RuntimeScopeConfig) PlatformModulePath() string { return c.platformModulePath }
 
 // PlatformCellsModulePath returns the Go module path of GoCell's platform-cells
-// module. Equals [PlatformCellsModulePath].
+// module. Equals the [PlatformCellsModulePath] constant.
 func (c RuntimeScopeConfig) PlatformCellsModulePath() string { return c.platformCellsModulePath }
 
 // PlatformCellScanDirs returns a defensive copy of the repo-relative on-disk
@@ -97,11 +100,11 @@ func (c RuntimeScopeConfig) PlatformCellScanDirs() []string {
 func DefaultScopeConfig() (RuntimeScopeConfig, error) {
 	root, err := lookupModuleRoot()
 	if err != nil {
-		return RuntimeScopeConfig{}, err
+		return RuntimeScopeConfig{}, fmt.Errorf("archtest.DefaultScopeConfig: %w", err)
 	}
 	target, err := moduleImportPath(root)
 	if err != nil {
-		return RuntimeScopeConfig{}, err
+		return RuntimeScopeConfig{}, fmt.Errorf("archtest.DefaultScopeConfig: %w", err)
 	}
 	return RuntimeScopeConfig{
 		workspaceRoot:           root,
