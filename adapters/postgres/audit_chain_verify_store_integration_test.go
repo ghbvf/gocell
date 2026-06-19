@@ -95,11 +95,7 @@ func buildVerifyFixture(t *testing.T) (store *AuditChainVerifyStore, ownerPool *
 	appendRealChain(t, relayStore, "", 1)
 	appendRealChain(t, bootstrapStore, "", 2)
 
-	store, err = NewAuditChainVerifyStore(context.Background(), adminPool,
-		map[string]*ledger.Protocol{
-			string(relayProto.Namespace()):     relayProto,
-			string(bootstrapProto.Namespace()): bootstrapProto,
-		})
+	store, err = NewAuditChainVerifyStore(context.Background(), adminPool, relayProto, bootstrapProto)
 	require.NoError(t, err, "NewAuditChainVerifyStore")
 	return store, ownerPool
 }
@@ -165,8 +161,7 @@ func TestAuditChainVerifyStore_PG_UnknownNamespace(t *testing.T) {
 	relayProto := newVerifyProtocol(t, ctNSAuditcore, 0x00)
 
 	// Store registers ONLY the relay protocol — the bootstrap namespace is unknown.
-	store, err := NewAuditChainVerifyStore(context.Background(), adminPool,
-		map[string]*ledger.Protocol{string(relayProto.Namespace()): relayProto})
+	store, err := NewAuditChainVerifyStore(context.Background(), adminPool, relayProto)
 	require.NoError(t, err, "NewAuditChainVerifyStore")
 
 	valid, _, vErr := store.VerifyChain(context.Background(), ctNSBootstrap, "", 1, 1)
@@ -203,8 +198,7 @@ func TestAuditChainVerifyStore_PG_ConstructorRejectsServingPool(t *testing.T) {
 	servingPool := restrictedAppPool(t, dsn, ownerPool)
 	relayProto := newVerifyProtocol(t, ctNSAuditcore, 0x00)
 
-	_, err := NewAuditChainVerifyStore(context.Background(), servingPool,
-		map[string]*ledger.Protocol{string(relayProto.Namespace()): relayProto})
+	_, err := NewAuditChainVerifyStore(context.Background(), servingPool, relayProto)
 	require.Error(t, err, "serving pool must be rejected at construction")
 	var coded *errcode.Error
 	assert.True(t, errors.As(err, &coded), "expected *errcode.Error, got %T", err)

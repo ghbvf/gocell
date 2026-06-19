@@ -23,19 +23,34 @@ func TestOperatorAuthFromEnv_Absent(t *testing.T) {
 	}
 }
 
-// TestOperatorAuthFromEnv_PartialAbsent: a username without a password (or vice
-// versa) is treated as unconfigured (ok=false), not an error — the admin plane is
-// opt-in via BOTH credentials.
+// TestOperatorAuthFromEnv_PartialAbsent: a half-configured admin plane (exactly one
+// of username/password set) is a FAIL-FAST configuration error, not a silent disable
+// (#1755 F3). A typo'd secret/env must not be misread as "intentionally off". Both
+// absent = opt-out (covered by _Absent); exactly one absent = error naming the
+// missing env.
 func TestOperatorAuthFromEnv_PartialAbsent(t *testing.T) {
-	t.Setenv(operatorAdminUsernameEnv, "ops")
-	t.Setenv(operatorAdminPasswordEnv, "")
-	_, ok, err := operatorAuthFromEnv(clock.Real())
-	if err != nil {
-		t.Fatalf("operatorAuthFromEnv: %v", err)
-	}
-	if ok {
-		t.Fatal("operator admin plane must be disabled when only the username is set")
-	}
+	t.Run("password missing", func(t *testing.T) {
+		t.Setenv(operatorAdminUsernameEnv, "ops")
+		t.Setenv(operatorAdminPasswordEnv, "")
+		_, ok, err := operatorAuthFromEnv(clock.Real())
+		if err == nil {
+			t.Fatal("expected a fail-fast error when only the username is set")
+		}
+		if ok {
+			t.Fatal("a half-configured admin plane must not report enabled")
+		}
+	})
+	t.Run("username missing", func(t *testing.T) {
+		t.Setenv(operatorAdminUsernameEnv, "")
+		t.Setenv(operatorAdminPasswordEnv, "s3cret-operator-pw")
+		_, ok, err := operatorAuthFromEnv(clock.Real())
+		if err == nil {
+			t.Fatal("expected a fail-fast error when only the password is set")
+		}
+		if ok {
+			t.Fatal("a half-configured admin plane must not report enabled")
+		}
+	})
 }
 
 // TestOperatorAuthFromEnv_Present: both credentials present → a valid AuthOperator

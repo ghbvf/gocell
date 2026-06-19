@@ -525,22 +525,23 @@ func TestVerifyAll_TimedOut(t *testing.T) {
 
 	// An outer ctx whose deadline is already in the past makes the runner's internal
 	// context.WithTimeout child immediately DeadlineExceeded. With ignoreCtx the store
-	// still enumerates one chain, so the loop runs to completion and VerifyAll sets
-	// report.TimedOut from ctx.Err()==DeadlineExceeded — the truncation signal (F3),
-	// distinct from a real infra failure.
+	// still enumerates one chain, but the verify loop checks ctx.Err() at its TOP and
+	// breaks BEFORE issuing any VerifyChain query (F2: the 30s budget is a real
+	// execution cap, not just a post-hoc report flag — no canceled-query I/O and no
+	// per-chain error-log storm after the deadline). The skipped chain is counted in
+	// UnverifiedChains, NOT listed as an errored chain.
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
 	cap := &capturingHandler{}
 	logger := slog.New(cap)
 
-	// A truncated run is not all-valid (the in-flight chain errors under the expired
-	// ctx), so emit() logs the Warn run summary (F4) carrying timed_out=true.
 	store := &fakeVerifyStore{
 		ignoreCtx: true,
 		chains:    []ledger.ChainRef{ref("ns", "t", 1, 1)},
 		verify: func(_ context.Context, _, _ string, _, _ int64) (bool, int64, error) {
-			return false, 0, errors.New("truncated by deadline")
+			t.Error("VerifyChain must not be called after the run deadline is exceeded")
+			return false, 0, errors.New("should not run")
 		},
 	}
 	v, err := audit.NewChainVerifier(store, newRecordingProvider(), clockmock.New(time.Now()), logger)
@@ -555,7 +556,22 @@ func TestVerifyAll_TimedOut(t *testing.T) {
 	if !report.TimedOut {
 		t.Errorf("report.TimedOut=false, want true when the run deadline is already exceeded")
 	}
+	if report.TotalChains != 1 {
+		t.Errorf("report.TotalChains=%d, want 1 (one chain enumerated)", report.TotalChains)
+	}
+	if len(report.Results) != 0 {
+		t.Errorf("len(report.Results)=%d, want 0 (loop broke before verifying any chain)", len(report.Results))
+	}
+	if report.UnverifiedChains != 1 {
+		t.Errorf("report.UnverifiedChains=%d, want 1 (skipped chain counted, not errored)", report.UnverifiedChains)
+	}
+	if report.ErroredChains != 0 {
+		t.Errorf("report.ErroredChains=%d, want 0 (skipped != errored)", report.ErroredChains)
+	}
+	if report.AllValid() {
+		t.Error("a truncated run must not report AllValid()=true")
+	}
 	if !cap.hasWarn() {
-		t.Error("expected a Warn run summary when the run timed out with issues")
+		t.Error("expected a Warn run summary when the run timed out with unverified chains")
 	}
 }
