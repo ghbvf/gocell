@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.registry.contract.reject.v1.response",
+  "description": "The contract registration after the reject transition, projected from the kernel ContractRegistration (state advanced to 'rejected', a terminal state that is never activatable).",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "state",
+        "submitter",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "description": "Lifecycle state; the sealed RegistrationState wire spelling (after reject: 'rejected')."
+        },
+        "submitter": {
+          "type": "string",
+          "description": "Authenticated principal subject that submitted the registration."
+        },
+        "approver": {
+          "type": "string",
+          "description": "Authenticated admin subject that approved the registration; absent for a rejected registration unless previously approved."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}
