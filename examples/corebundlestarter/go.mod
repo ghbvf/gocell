@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/ghbvf/gocell/adapters/grpc v0.0.0-00010101000000-000000000000 // indirect
+	github.com/ghbvf/gocell/adapters/grpc v0.0.0 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
@@ -26,6 +26,7 @@ require (
 	github.com/ghbvf/gocell/adapters/ratelimit v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/redis v0.0.0 // indirect
 	github.com/ghbvf/gocell/adapters/vault v0.0.0 // indirect
+	github.com/ghbvf/gocell/cellmodules/grpclistener v0.0.0
 	github.com/ghbvf/gocell/corecells v0.0.0-00010101000000-000000000000 // indirect
 	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0 // indirect
@@ -95,3 +96,5 @@ replace github.com/ghbvf/gocell/framework => ../../framework
 replace github.com/ghbvf/gocell/tests => ../../tests
 
 replace github.com/ghbvf/gocell/adapters/softca => ../../adapters/softca
+
+replace github.com/ghbvf/gocell/cellmodules/grpclistener => ../../cellmodules/grpclistener

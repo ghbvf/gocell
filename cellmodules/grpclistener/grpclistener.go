@@ -5,11 +5,11 @@
 // serving a gRPC contract because those roots MUST wire a gRPC listener or
 // bootstrap fail-fasts (checkOrphanGRPCServices).
 //
-// Living in cellmodules/ (the composition-root layer that may depend on adapters/ +
-// runtime/) keeps the env→TLS→server logic single-sourced rather than copied per
-// root. Platform roots use PlatformEnv (GOCELL_GRPC_*); standalone examples can
-// pass their own EnvConfig prefix while retaining the same TLS and fail-closed
-// behavior.
+// The package has its own narrow module under cellmodules/ so standalone
+// examples can depend on this ability helper without inheriting the wider
+// platform cellmodules module graph. Platform roots use PlatformEnv
+// (GOCELL_GRPC_*); standalone examples can pass their own EnvConfig prefix while
+// retaining the same TLS and fail-closed behavior.
 package grpclistener
 
 import (
