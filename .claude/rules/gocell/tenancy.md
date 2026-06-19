@@ -63,8 +63,9 @@ app-serving role 必须非 owner 且无 bypass RLS 权限。
   `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
   短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
   delegated ownership（owner ≠ id，如 user 拥有 device）用 `subject.sub == resource.owner`（owner 由 PIP lookup
-  供）；device 读**自身**状态仍是 device-self `subject.sub == resource.id`（framework-owned devicestate，#2351；
-  delegated user-owns-device 待 device registry/PIP）。
+  供）；device 读**自身**状态是 **kind-gated** device-self `subject.kind == device AND subject.sub == resource.id`
+  （framework-owned devicestate，#2351 + #2400 F1——非 device 主体即便 id 相等也拒，与 user/role 的 kind-agnostic
+  self 规则不同）；delegated user-owns-device 待 device registry/PIP。
   owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
   owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
   精确集（identitymanage / rbaccheck / framework-owned deviceserving—devicestate #2351，scan 含 `./cellmodules/...`）

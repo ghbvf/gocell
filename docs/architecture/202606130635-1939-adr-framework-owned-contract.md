@@ -178,15 +178,20 @@ framework 契约的契约级覆盖是 bootstrap/cellmodules 框架层测试，�
 威胁矩阵其余行（Hard sealed ContractOwner / Hard D4 结构性 / Medium CONTRACT-OWNER-CELL-FUNNEL-01）在本 amendment 中评级不变，仅「active 框架契约静默 dead」行重评。
 
 **serving 授权形状（#2348 F3）**：active 锚点用 path-param `{id}` + `auth.RequirePermissionForResource("id", PermDeviceRead())`
-门禁——device id 作为 ABAC `resource` 进 PDP（baseline owner 规则 `subject.sub == resource.id`），引擎按 per-device
-ownership 决策，不是 all-or-nothing 的 coarse gate。这是 `PermDeviceRead()` godoc 文档化的形状，与同族 devicecommand
-（`OWNER-SCOPED-GATE-EXACT-SET-01` 冻结集内）一致。平台（accesscore）PDP baseline 暂无 device:read 规则，故 corebundle 上
-该端点对所有人 fail-closed（安全 deny 默认）直到 tenant policy 或 presence-backend PR 供给 device:read 授予。device
-ownership 的数据层（RowScope/tenant 隔离 + 真实 presence 数据）+ accesscore device:read baseline 留 presence-backend PR
-（#2351）。pre-GA wire 破坏窗口内 query→path 原地改 active 版本（§api-versioning 兼容窗口），完成扇出闭环
-（schema→generated→deviceserving service/test→integration→governance fixture→本 ADR）。**`OWNER-SCOPED-GATE-EXACT-SET-01`
-盲区**：该冻结守卫只扫 `corecells/`+`examples/`，不覆盖 `cellmodules/deviceserving` 的 framework-served gate——本 PR 用对了
-governed primitive，但该 gate 暂不受 owner-gate 冻结；是否扩扫描域归 governance 任务（#2351）。
+门禁——device id 作为 ABAC `resource` 进 PDP，引擎按 per-device ownership 决策，不是 all-or-nothing 的 coarse gate。这是
+`PermDeviceRead()` godoc 文档化的形状，与同族 devicecommand（`OWNER-SCOPED-GATE-EXACT-SET-01` 冻结集内）一致。
+
+**device:read baseline + gate 冻结（#2351 + #2400 F1，本节随 #2351 重写）**：平台（accesscore）PDP baseline 现提供
+device:read 两条规则——**kind-gated device-self**（`subject.kind == device` AND `subject.sub == resource.id`，仅设备读自身
+状态；非 device 主体即便 id 相等也拒，#2400 review F1）+ admin/super-admin（fleet read）。落地前该端点对所有认证主体
+fail-closed，本 PR 让 ownership 模型真生效。**仅**数据层（principal-derived RowScope/typed-tenant + RLS 隔离 + 真实 presence
+数据）+ `TenantID` 回填留 presence-backend PR（#1904/#1905）——无 presence 数据可隔离；delegated user-owns-device
+（`subject.sub == resource.owner` via PIP）待 device registry。安全：handler 恒返 `state=unknown`，无 device-existence
+oracle，故 presence 数据前开 grant 安全。`OWNER-SCOPED-GATE-EXACT-SET-01` 扫描域**已扩** `./cellmodules/...`，
+`cellmodules/deviceserving` 的 framework-served gate 现纳入冻结集（回退成 coarse `RequirePermission` 即 CI 红）；
+`BASELINE-OWNER-RULE-TENANT-FREEZE-01` 冻结 device:read 闭集 `{1 owner, 1 admin}` 并 pin kind qualifier。pre-GA wire 破坏窗口内
+query→path 原地改 active 版本（§api-versioning 兼容窗口），完成扇出闭环
+（schema→generated→deviceserving service/test→integration→governance fixture→本 ADR + PR-10a ADR amendment）。
 
 ## 参考
 

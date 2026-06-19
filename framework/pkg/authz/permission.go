@@ -329,9 +329,10 @@ func PermDeviceConsume() Permission { return permDeviceConsume }
 
 // PermDeviceRead authorizes reading a device's presence/status (devicestatus,
 // http.devicestate.v1). The gate uses auth.RequirePermissionForResource("id",
-// PermDeviceRead()); the platform baseline (corecells/accesscore, #2351) grants it
-// to the device itself (device-SELF ownership: subject.sub == resource.id) or to
-// admin / super-admin. (The iotdevice example's lightweight authorizer additionally
+// PermDeviceRead()); the platform baseline (corecells/accesscore, #2351, kind-gated per
+// #2400) grants it to the device ITSELF (device-SELF ownership: subject.kind == device AND
+// subject.sub == resource.id — a non-device principal whose id merely matches is denied) or
+// to admin / super-admin. (The iotdevice example's lightweight authorizer additionally
 // grants operator.)
 func PermDeviceRead() Permission { return permDeviceRead }
 

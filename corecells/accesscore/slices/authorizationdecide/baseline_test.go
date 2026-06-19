@@ -499,19 +499,17 @@ func TestBuiltinBaseline_AccessDecide(t *testing.T) {
 	})
 }
 
-// TestBuiltinBaseline_DeviceRead covers the device:read device-ownership baseline
-// pair (#2351): the self rule (subject.sub == resource.id) admits a device reading
-// its OWN presence state, and the admin rule admits admin/super-admin reading any
-// device — the {owner, admin} closed set frozen by BASELINE-OWNER-RULE-TENANT-FREEZE-01.
-// A non-owner non-admin is denied, an empty resource id is fail-closed, and the rule
-// is action-scoped (device:read does not leak into another action). device:read uses
-// device-SELF ownership (subject == resource.id), shape-identical to user:read-self.
-// The rule is principal-kind-agnostic: attributeResolver.resolveSubject reads
-// principal.Subject for the "sub" key regardless of Kind (attributes.go), so a
-// PrincipalUser whose subject == the device id exercises the IDENTICAL rule path a
-// real PrincipalDevice hits — hence selfPrincipal below is a plain user principal.
-// The device-principal HTTP path is separately covered by
-// cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership.
+// TestBuiltinBaseline_DeviceRead covers the device:read device-ownership baseline pair
+// (#2351 + #2400 F1): the self rule admits a DEVICE principal (subject.kind == device)
+// reading its OWN state (subject.sub == resource.id), and the admin rule admits
+// admin/super-admin reading any device — the {owner, admin} closed set frozen by
+// BASELINE-OWNER-RULE-TENANT-FREEZE-01. Critically (the #2400 F1 fix), device-self is NOT
+// kind-agnostic: a normal USER principal whose subject equals the device id is DENIED — the
+// self rule requires kind == device, so only a device reads its own state (the user-owns-device
+// path is the future delegated rule subject.sub == resource.owner via PIP, not this self rule).
+// A non-owner device, a non-device user, and an empty resource id are all denied; the rule is
+// action-scoped. (The device-principal HTTP path is also covered by
+// cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership.)
 func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 	svc := &Service{logger: slog.Default()}
 
@@ -519,11 +517,22 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 		selfID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 		otherID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
 	)
-	// selfPrincipal: the subject whose id == the requested device id (device-self).
-	// Kind is PrincipalUser because the ownership rule is kind-agnostic (see godoc).
-	selfPrincipal := &auth.Principal{
+	// deviceSelfPrincipal: a DEVICE principal whose subject == the requested device id.
+	// Kind == PrincipalDevice is required for the device-self rule (resolveSubject("kind")
+	// emits "device"). A bare device-principal literal is the in-package test convention
+	// (attributeResolver reads Kind/Subject directly, no seal — see service_test.go).
+	deviceSelfPrincipal := &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: selfID, TenantID: testTenantIDStr,
+	}
+	// userSubjectMatchPrincipal: a normal USER whose subject == the device id. Under the
+	// kind-gated device-self rule (#2400 F1) this must be DENIED — proving device-self is not
+	// kind-agnostic (a coincidental id match by a non-device principal does not grant read).
+	userSubjectMatchPrincipal := &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: selfID, TenantID: testTenantIDStr,
 		Roles: []string{"user"},
+	}
+	deviceOtherPrincipal := &auth.Principal{
+		Kind: auth.PrincipalDevice, Subject: otherID, TenantID: testTenantIDStr,
 	}
 	adminPrincipal := &auth.Principal{
 		Kind: auth.PrincipalUser, Subject: otherID, TenantID: testTenantIDStr,
@@ -538,20 +547,24 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 		wantAllow  bool
 	}{
 		{
-			name:      "device + device:read + resource==self → Allow (self rule)",
-			principal: selfPrincipal, resourceID: selfID, wantAllow: true,
+			name:      "device principal + device:read + resource==self → Allow (device-self rule)",
+			principal: deviceSelfPrincipal, resourceID: selfID, wantAllow: true,
 		},
 		{
-			name:      "device + device:read + resource==other → Deny (non-owner, non-admin)",
-			principal: selfPrincipal, resourceID: otherID, wantAllow: false,
+			name:      "USER principal + device:read + resource==self → Deny (#2400 F1: kind != device)",
+			principal: userSubjectMatchPrincipal, resourceID: selfID, wantAllow: false,
 		},
 		{
-			name:      "admin + device:read + resource==any → Allow (admin rule)",
+			name:      "device principal + device:read + resource==other → Deny (non-owner, non-admin)",
+			principal: deviceOtherPrincipal, resourceID: selfID, wantAllow: false,
+		},
+		{
+			name:      "admin + device:read + resource==any → Allow (admin rule, kind-agnostic)",
 			principal: adminPrincipal, resourceID: selfID, wantAllow: true,
 		},
 		{
-			name:      "device + device:read + empty resource → Deny (resource.id not-found, fail-closed)",
-			principal: selfPrincipal, resourceID: "", wantAllow: false,
+			name:      "device principal + device:read + empty resource → Deny (resource.id not-found, fail-closed)",
+			principal: deviceSelfPrincipal, resourceID: "", wantAllow: false,
 		},
 	}
 	for _, tt := range tests {
@@ -559,13 +572,13 @@ func TestBuiltinBaseline_DeviceRead(t *testing.T) {
 			resolver := attributeResolver{principal: tt.principal, resourceID: tt.resourceID}
 			dec, _ := svc.evaluate(nil, resolver, deviceRead)
 			assert.Equal(t, tt.wantAllow, dec.IsAllow(),
-				"resourceID=%q roles=%v", tt.resourceID, tt.principal.Roles)
+				"kind=%v resourceID=%q roles=%v", tt.principal.Kind, tt.resourceID, tt.principal.Roles)
 		})
 	}
 
 	// Action-scope guard: the device:read rules must NOT grant a different action.
 	t.Run("device:read self rule does not leak into config:read", func(t *testing.T) {
-		resolver := attributeResolver{principal: selfPrincipal, resourceID: selfID}
+		resolver := attributeResolver{principal: deviceSelfPrincipal, resourceID: selfID}
 		dec, _ := svc.evaluate(nil, resolver, authz.PermConfigRead().String())
 		assert.False(t, dec.IsAllow(),
 			"device:read self rule must not leak into an unrelated action (config:read)")

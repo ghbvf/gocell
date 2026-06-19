@@ -2,30 +2,30 @@
 
 package main
 
-// TestABACPDPGatesDevicestate is the device-ownership acceptance test for #2351:
-// the wired ABAC PDP must gate real HTTP traffic on the framework-owned
+// TestABACPDPGatesDevicestate is the device-ownership acceptance test for #2351 (+ #2400
+// review F1): the wired ABAC PDP must gate real HTTP traffic on the framework-owned
 // GET /api/v1/devicestate/{id} serving handler via the device:read baseline rules
-// (cellmodules/deviceserving + corecells/accesscore baseline). Before #2351 there
-// was no device:read baseline rule, so the endpoint fail-closed to deny on every
-// authenticated request; this test proves the new device-SELF ownership grant
-// (subject.sub == resource.id) and the admin grant fire, and that a non-owner /
-// cross-tenant subject is denied.
+// (cellmodules/deviceserving + corecells/accesscore baseline). Before #2351 there was no
+// device:read baseline rule, so the endpoint fail-closed to deny on every authenticated
+// request; this test proves the admin grant fires and that non-owner / cross-tenant / and —
+// critically (#2400 F1) — non-device-kind subjects are denied.
 //
-// device:read uses device-SELF ownership (subject == resource.id) — shape-identical
-// to user:read-self. The baseline rule is KIND-AGNOSTIC: it compares the JWT subject
-// against the canonical path-param id, so a non-admin user reading
-// /api/v1/devicestate/{own-sub} exercises exactly the same rule a real device
-// principal hits when reading its own id (the device-principal path is unit-covered
-// by cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership).
-// The handler always returns state "unknown" (no presence backend yet), so a 200
-// here proves the gate admitted the caller, not that real presence data leaked.
+// device:read self ownership is KIND-GATED (#2400 F1): the self rule is
+// subject.kind == device AND subject.sub == resource.id, so ONLY a device principal reads
+// its own state. The provisioning helper mints JWT USER principals (no device-cert path in
+// this harness), so this integration test cannot exercise the positive device-self 200 — that
+// is unit-covered (corecells .../baseline_test.go TestBuiltinBaseline_DeviceRead with a device
+// principal, and cellmodules/deviceserving/service_test.go TestDevicestate_PerDeviceOwnership).
+// What this test proves end-to-end against the REAL baseline:
+//   - admin GET /api/v1/devicestate/{anyID} → 200 (admin rule, kind-agnostic)
+//   - non-admin USER GET its OWN id → 403 (#2400 F1: kind != device, so id-match alone fails)
+//   - non-admin USER GET another id → 403 (not owner, no admin)
+//   - cross-tenant admin GET tenant-A id → 200 (admin rule is tenant-agnostic at the ROUTE gate)
+//   - cross-tenant USER GET tenant-A id → 403 (not device, not owner, not admin)
 //
-// Cases (mirrors TestABACPDPGatesAccesscore's ownership shape):
-//   - admin     GET /api/v1/devicestate/{anyID}   → 200 (baseline admin rule, device:read)
-//   - non-admin GET /api/v1/devicestate/{self}    → 200 (PDP ownership rule subject.sub == resource.id)
-//   - non-admin GET /api/v1/devicestate/{other}   → 403 + ERR_AUTH_FORBIDDEN + "insufficient permissions"
-//   - cross-tenant non-admin GET its OWN id       → 200 (positive control: token is live)
-//   - cross-tenant non-admin GET tenant-A id      → 403 (ownership rule is tenant-agnostic, #2026)
+// The honest "unknown" body on the 200s confirms no presence data is exposed (no backend yet).
+// The 403s asserting ERR_AUTH_FORBIDDEN + "insufficient permissions" (not 401) prove the deny
+// is a PDP decision on a LIVE, authenticated token — not a dead token or unwired Authorizer.
 
 import (
 	"net/http"
@@ -39,12 +39,10 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 	adminToken, userToken, userID, _ := provisionPDPAdminAndUser(t, base, testTenantID)
 
 	// A non-admin user (+ an admin) fully provisioned in a SECOND tenant (testTenantID2):
-	// the non-admin JWT carries sub=crossTenantUserID and tenant_id=tenantB, backed by a
-	// live session. Reading a tenant-A device id with the non-admin must 403 — the ownership
-	// rule compares request-local UUIDs and is tenant-agnostic, so a different-tenant subject
-	// is denied exactly like a same-tenant non-owner. The tenant-B admin token pins the
-	// admin-cross-tenant route behavior (see crossTenantAdmin case below).
-	crossTenantAdminToken, crossTenantUserToken, crossTenantUserID, _ := provisionPDPAdminAndUser(t, base, testTenantID2)
+	// the tenant-B admin pins the admin-cross-tenant ROUTE behavior; the tenant-B non-admin
+	// proves a cross-tenant non-device subject is denied (its 403 carrying "insufficient
+	// permissions" — not 401 — also confirms the token is live and reached the PDP).
+	crossTenantAdminToken, crossTenantUserToken, _, _ := provisionPDPAdminAndUser(t, base, testTenantID2)
 
 	devicePath := func(id string) string { return "/api/v1/devicestate/" + id }
 
@@ -56,34 +54,27 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
 	})
 
-	t.Run("non_admin_read_own_device_200_pdp_ownership", func(t *testing.T) {
+	// #2400 F1 regression guard at the integration level: a normal USER whose subject UUID
+	// equals the requested device id is DENIED, because the device-self rule requires
+	// subject.kind == device. A coincidental id match by a non-device principal must NOT grant
+	// device-self read. (A real device principal reading its own id IS allowed — unit-covered.)
+	t.Run("non_admin_user_read_own_id_403_not_device_kind", func(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath(userID), userToken, nil)
-		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"non-admin GET own device state (subject==resource.id) must be 200 via the PDP ownership rule "+
-				"(a non-admin has no baseline admin grant, so 200 here proves the device-self rule fired); body=%s", body)
-		assert.Contains(t, body, `"state":"unknown"`,
-			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+			"non-admin USER GET its own id must be 403 (#2400 F1: device-self requires kind==device, "+
+				"so a user whose subject==resource.id does NOT get device-self read); body=%s", body)
+		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "PDP deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
+		assert.Contains(t, body, "insufficient permissions",
+			"deny must be a PDP decision (%q), not a no-Authorizer gap; body=%s", "insufficient permissions", body)
 	})
 
 	t.Run("non_admin_read_other_device_403_pdp_deny", func(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), userToken, nil)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-			"non-admin GET another device's state must be 403 (PDP deny, not owner, no device:read); body=%s", body)
+			"non-admin GET another device's state must be 403 (PDP deny, not owner, not device, no admin); body=%s", body)
 		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "PDP deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
 		assert.Contains(t, body, "insufficient permissions",
 			"non-owner deny must be a PDP decision (%q), not a no-Authorizer gap; body=%s", "insufficient permissions", body)
-	})
-
-	// Positive control: the cross-tenant token is LIVE and ownership works in its OWN
-	// tenant (subject.sub == resource.id in tenant-B), so the 403 below is an
-	// ownership-specific denial, not a dead/invalid token surfacing as a blanket failure.
-	t.Run("cross_tenant_read_own_device_own_tenant_200", func(t *testing.T) {
-		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath(crossTenantUserID), crossTenantUserToken, nil)
-		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"tenant-B non-admin GET its OWN id must be 200 (ownership rule fires in its own tenant; proves the "+
-				"cross-tenant token is live, so the 403 below is ownership-specific); body=%s", body)
-		assert.Contains(t, body, `"state":"unknown"`,
-			"the 200 body must carry the honest unknown state (no presence backend); body=%s", body)
 	})
 
 	// admin cross-tenant is allowed AT THE ROUTE GATE by design: the admin baseline rule
@@ -103,14 +94,14 @@ func TestABACPDPGatesDevicestate(t *testing.T) {
 			"the 200 body must carry the honest unknown state (no presence backend → no cross-tenant data exposed); body=%s", body)
 	})
 
-	t.Run("cross_tenant_read_other_device_403_pdp_deny", func(t *testing.T) {
+	t.Run("cross_tenant_user_read_other_device_403_pdp_deny", func(t *testing.T) {
 		resp, body := pdpAccessReq(t, base, http.MethodGet, devicePath(userID), crossTenantUserToken, nil)
 		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-			"a tenant-B non-admin GET a tenant-A device id must be 403 (ownership rule subject.sub != resource.id; "+
-				"the JWT's tenant_id differs but the rule is tenant-agnostic); body=%s", body)
+			"a tenant-B non-admin GET a tenant-A device id must be 403 (not device, not owner, not admin; the "+
+				"JWT's tenant_id differs but the rules are tenant-agnostic); body=%s", body)
 		assert.Contains(t, body, "ERR_AUTH_FORBIDDEN", "cross-tenant deny must produce ERR_AUTH_FORBIDDEN; body=%s", body)
 		assert.Contains(t, body, "insufficient permissions",
-			"cross-tenant deny must be a PDP ownership decision (%q), not a no-Authorizer gap; body=%s",
+			"cross-tenant deny must be a PDP decision (%q), not a no-Authorizer gap; body=%s",
 			"insufficient permissions", body)
 	})
 }
