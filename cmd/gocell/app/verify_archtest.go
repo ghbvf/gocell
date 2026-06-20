@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -45,9 +46,13 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 	root := fs.String("root", "", "workspace root directory (default: auto-detect)")
 	rule := fs.String("rule", "", "optional INVARIANT rule ID, e.g. LAYER-05")
 	changed := fs.Bool("changed", false,
-		"run only tests whose tools/archtest/*_test.go file changed vs origin/develop"+
-			" (mechanical; NOT source→affected-rule mapping, see #1877)")
+		"run only rules a changed file (vs origin/develop) could affect: rules whose own"+
+			" *_test.go changed, plus rules whose static scan domain contains a changed source"+
+			" file; rules with an undeterminable scan domain always run (fast pre-filter, not a"+
+			" merge gate)")
 	shardStr := fs.String("shard", "", "shard selection N/K (e.g. 0/3)")
+	scopeFlag := fs.String("scope", string(archtestrunner.ScopeWorkspace),
+		"execution scope: workspace (full suite, default) | framework (portable StandardCellRules subset)")
 	formatFlag := fs.String("format", "text", "output format: "+strings.Join(printers.SupportedFormats(), " | "))
 	testJSONOut := fs.String("test-json-out", "", "optional file: write raw go test -json events")
 	listTestsFlag := fs.Bool("list-tests", false, "print selected test names to stdout and exit")
@@ -57,12 +62,22 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", parseErr
 	}
 	if *rule != "" && *changed {
-		return req, false, "", fmt.Errorf("--rule and --changed are mutually exclusive: use one or the other")
+		return req, false, "", fmt.Errorf(
+			"--rule and --changed are mutually exclusive: --changed already narrows by scan domain;" +
+				" to run one rule unfiltered, drop --changed and use --rule=<ID>",
+		)
 	}
 
 	shard, shardErr := parseShard(*shardStr)
 	if shardErr != nil {
 		return req, false, "", fmt.Errorf("--shard: %w", shardErr)
+	}
+
+	// Validate scope eagerly (fail fast on a misconfigured CI call, like --shard /
+	// --timeout); ResolveScope is the same validator Run / ListTests apply.
+	scope, scopeErr := archtestrunner.ResolveScope(archtestrunner.Scope(*scopeFlag))
+	if scopeErr != nil {
+		return req, false, "", fmt.Errorf("--scope: %w", scopeErr)
 	}
 
 	dur, durErr := time.ParseDuration(*timeout)
@@ -73,7 +88,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", fmt.Errorf(
 			"--timeout: must be a positive duration (e.g. 5m); got %q"+
 				" (0 disables go test timeout, hanging CI shards until GHA's 10m backstop)",
-			*timeout)
+			*timeout,
+		)
 	}
 
 	workspaceRoot := *root
@@ -86,19 +102,39 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 
 	req = archtestrunner.Request{
 		WorkspaceRoot: workspaceRoot,
-		// --scope flag intentionally not exposed: framework==workspace execution today
-		// (all archtest is one package requiring GOWORK). Internal Scope/WorkspaceRoot
-		// seam reserved for external-repo archtest (epic gh #1878).
-		Scope: archtestrunner.ScopeWorkspace,
+		// --scope=framework runs only the portable StandardCellRules subset; the
+		// default (workspace) runs the full suite. See #2331 / #1878.
+		Scope: scope,
 		Rule:  *rule,
-		// Mechanical --changed: changed archtest test files only; source→affected-rule
-		// mapping deferred (gh #1877).
+		// Source-aware --changed: a changed file selects the rules whose own *_test.go
+		// changed plus the rules whose static scan domain contains the change (gh #1877).
 		Changed:     *changed,
 		Shard:       shard,
 		TestJSONOut: *testJSONOut,
 		Timeout:     *timeout,
 	}
 	return req, *listTestsFlag, *formatFlag, nil
+}
+
+// emitChangedSelectionSummary writes, under --changed, a one-line summary of how
+// many rules were selected — to w (os.Stderr in production) so stdout stays
+// clean (test names for --list-tests, the printer payload for report mode). It
+// makes a 0-rule result diagnosable instead of an empty/clean output that reads
+// like "all passed". No-op when --changed is not set.
+func emitChangedSelectionSummary(w io.Writer, req archtestrunner.Request, selectedCount int) {
+	if !req.Changed {
+		return
+	}
+	// Note the active scope so a 0-result under --scope=framework --changed reads as
+	// "the framework set ∩ changed was empty", not "the full suite passed".
+	scopeNote := ""
+	if req.Scope == archtestrunner.ScopeFramework {
+		scopeNote = " --scope=framework"
+	}
+	// Best-effort diagnostic line; a stderr write failure must not fail the run.
+	_, _ = fmt.Fprintf(w,
+		"archtest --changed%s: %d test function(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+			" this is a pre-filter, not the authoritative full run\n", scopeNote, selectedCount)
 }
 
 // runArchtestListTests handles --list-tests mode: prints one name per line to
@@ -114,6 +150,7 @@ func runArchtestListTests(ctx context.Context, req archtestrunner.Request) error
 			return fmt.Errorf("write list-tests output: %w", werr)
 		}
 	}
+	emitChangedSelectionSummary(os.Stderr, req, len(names))
 	return ctxInterrupted(ctx, "archtest")
 }
 
@@ -132,6 +169,11 @@ func runArchtestReport(ctx context.Context, req archtestrunner.Request, format s
 	if ie := ctxInterrupted(ctx, "archtest"); ie != nil {
 		return ie
 	}
+
+	// Under --changed, make the selection explicit on stderr (shared with
+	// --list-tests) so a clean exit with 0 rules selected is not misread as
+	// "the full suite passed" — the full sharded run remains authoritative.
+	emitChangedSelectionSummary(os.Stderr, req, len(report.Selected))
 
 	results := mapReportToResults(report)
 	if err := printer.Print(results); err != nil {

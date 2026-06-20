@@ -86,6 +86,21 @@ assembly closed set 校验。行为与 HTTP 侧 `CellAttribution` 中间件对�
   `"OK"`/`"NOT_FOUND"`），区别于 HTTP access log `"http request"` 的 `status`（int，如
   `200`/`404`）——协议语义差异，跨协议日志查询时注意区分。
 
+### PR-12 ErrcodeMap 迁移后的 SLO 注意事项（#1155）
+
+PR-12 落地后，handler 返回的 `*errcode.Error` 在 wire 上从 `codes.Unknown`
+改为正确映射的 code（如 `codes.InvalidArgument`、`codes.NotFound`、`codes.Unavailable`
+等）。对告警的影响：
+
+- **以 `{code="Unknown"}` 为错误代理的 SLO 告警需更新**：PR-12 后 Unknown 率明显下降，
+  而特定 code（如 `Internal`、`InvalidArgument`）的率上升。建议将错误率告警改为
+  `{code=~"Internal|Unknown"}` 或按需拆成 per-code 告警，避免 SLO 基线静默漂移。
+- **RateLimit deny → `{code="ResourceExhausted"}`**（opt-in，仅在 `Deps.RateLimiter`
+  非 nil 时生效）。
+- **CircuitBreaker open → `{code="Unavailable"}`**（opt-in，仅在 `Deps.Allower` 非 nil
+  时生效）。两者目前无专用指标或结构化日志，追踪于 **#2485**；断路器打开导致的
+  `Unavailable` 尖峰是预期行为，不代表服务不可用。
+
 ## HTTP Body-Limit 拒绝计数器
 
 `gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件
@@ -952,7 +967,7 @@ Projection 投影 metric 同维度约定。readiness probe `<cell>_saga_tailer_<
 |---|---|---|
 | `saga_journal_tailer_lock_acquire_failed_total{reason}` | Counter | per-projection distlock 抢锁失败（leader gate 跳过该 tick），`reason ∈ {contended, ctx_canceled, backend_error}` |
 | `saga_journal_tailer_drain_total{result}` | Counter | 有进展或失败的 drain，`result ∈ {ok, head_error, store_error, apply_error}`（head_error = head 取上界失败；空闲 caught-up tick 不计） |
-| `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error}` |
+| `saga_journal_tailer_checkpoint_advance_total{result}` | Counter | 每次 AdvanceIfOwner，`result ∈ {ok, stale_owner, error, poison_skip}`（poison_skip = 跳过一个 dead-lettered poison event，#2110） |
 | `saga_journal_tailer_pending_events` | Gauge | 残余积压 = HeadSeq − checkpoint（上次干净 tick 后） |
 | `saga_journal_tailer_last_success_timestamp_seconds` | Gauge | 上次完整 tick 的 unix 时间（驱动停摆告警） |
 
@@ -1015,6 +1030,31 @@ checkpoint 长期不动（`last_success` 时间戳不前进）= tailer 停摆：
       tailer is not the leader. Inspect gocell_saga_journal_tailer_drain_total{result}.
 ```
 
+### SagaTailerDrainErrors
+
+drain 主路径失败率——`ok` 是有进展的健康 drain，必须排除；只对
+`head_error` / `store_error` / `apply_error` 报警，并保留 `result` 维度用于直接定位根因。
+
+```yaml
+- alert: GoCellSagaTailerDrainErrors
+  expr: |
+    sum by (cell, projection, result) (
+      rate(gocell_saga_journal_tailer_drain_total{result=~"head_error|store_error|apply_error"}[5m])
+    ) > 0
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer drain failing ({{ $labels.cell }}/{{ $labels.projection }}, {{ $labels.result }})"
+    description: |
+      The saga-journal tailer is repeatedly failing drain with result={{ $labels.result }}.
+      result=head_error means HeadSeq cannot be read, so pending_events may stay stale
+      and GoCellSagaTailerLagHigh may not fire; GoCellSagaTailerStalled remains the
+      slower backstop. result=store_error means checkpoint LoadOffset failed.
+      result=apply_error means replay/apply or a non-stale advance path failed before
+      a clean tick could complete. See saga-runbook.md §"场景 5：投影 tailer 停滞".
+```
+
 ### SagaTailerLockAcquireFailures
 
 distlock 后端 I/O 故障率——`contended` 是正常竞争、必须排除，只对 `backend_error` 报警。
@@ -1051,6 +1091,25 @@ checkpoint 推进故障——`stale_owner` 是良性交接、必须排除，只�
       {{ $labels.cell }}/{{ $labels.projection }}. result=stale_owner is a benign leader
       handoff (CAS fence) and is excluded. Sustained error means apply+advance cannot
       commit → checkpoint frozen. Inspect the projection.apply tx path and DB health.
+```
+
+poison event 被跳过——permanent apply error 被 dead-letter 并跳过（#2110）。这**不是停滞**
+（投影继续前进），但表示上游在产坏事件，需排查；处置见 saga-runbook §5b。
+
+```yaml
+- alert: GoCellSagaTailerPoisonEvents
+  expr: sum(rate(gocell_saga_journal_tailer_checkpoint_advance_total{result="poison_skip"}[15m])) by (cell, projection) > 0
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Saga journal tailer skipping poison events ({{ $labels.cell }}/{{ $labels.projection }})"
+    description: |
+      The tailer is dead-lettering and skipping poison events (permanent apply errors:
+      bad payload / unknown kind / malformed id) for {{ $labels.cell }}/{{ $labels.projection }}.
+      The projection is NOT frozen (the bad events are recorded to saga_projection_dead_letters
+      and skipped past), but a sustained rate means an upstream producer or the projection's
+      Apply is mis-handling events. Triage the dead-letter table and follow saga-runbook §5b.
 ```
 
 ---

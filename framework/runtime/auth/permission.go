@@ -17,26 +17,38 @@ import (
 // package from constructing the key and writing an Authorizer into context
 // through any path other than WithAuthorizer.
 //
-// AI-robust Grade: Hard — "sealed construction" + "single sanctioned holder"
-// from the ai-robust.md Hard 范本目录.
-//
-// INVARIANT: AUTHORIZER-CTX-FUNNEL-01
-// Upstream: WithAuthorizer is the SOLE injector of an Authorizer into context.
-// Downstream: AuthorizerFromContext and RequirePermission are the SOLE readers.
-// No other code may write to authorizerKey{} — the unexported type makes any
-// out-of-package attempt a compile error.
+// INVARIANT: AUTHORIZER-CTX-FUNNEL-01 — rated per dimension (not "overall Hard"):
+//   - Write MECHANISM: WithAuthorizer is the SOLE writer of authorizerKey{}; the
+//     unexported type makes any out-of-package context.WithValue a compile error.
+//     Hard ("sealed construction").
+//   - Readers: AuthorizerFromContext and RequirePermission are the SOLE readers;
+//     the unexported key makes any out-of-package read a compile error. Hard.
+//   - Caller IDENTITY (which packages may invoke the EXPORTED WithAuthorizer) is
+//     NOT sealed by the key — see WithAuthorizer's godoc and the Medium
+//     AUTH-WITHAUTHORIZER-CALLER-01 caller-allowlist.
 type authorizerKey struct{}
 
 // WithAuthorizer injects the PDP Authorizer into the context. It is the sole
-// upstream funnel entry point for the Authorizer-in-context path.
+// writer of the authorizerKey{} funnel (AUTHORIZER-CTX-FUNNEL-01).
 //
-// Composition roots (bootstrap, cellmodules) call this once when building the
-// request context chain (e.g. after AuthMiddleware). Business code — cells,
-// handlers, services — must never call this; they consume via
-// AuthorizerFromContext, or via RequirePermission which reads it from context.
+// Composition roots call this once when building the request context chain —
+// bootstrap installs it as primary-listener default middleware
+// (runtime/bootstrap.authorizerInjector) so RequirePermission gates find the PDP.
+// Business code — cells, handlers, services — must never call this; they consume
+// via AuthorizerFromContext, or via RequirePermission which reads it from context.
 //
-// AI-robust Grade: Hard sealed-construction; sole WithAuthorizer upstream +
-// sole AuthorizerFromContext/RequirePermission downstream (funnel 双向锁).
+// INVARIANT: AUTH-WITHAUTHORIZER-CALLER-01 (caller identity) — Medium.
+// WithAuthorizer is EXPORTED because the composition root (a different package)
+// must call it; Go visibility cannot scope an exported func to one caller, a
+// permanent GO-LANGUAGE CEILING (same family as AUTH-AUTHENTICATE-BEARER-CALLER-01).
+// This is a security boundary, not hygiene: a cell's RouteGroup.Middleware runs
+// BEFORE its own RequirePermission gate (RequirePolicy wraps INSIDE the handler in
+// wrapMountGuards; the router wraps RouteGroup.Middleware OUTSIDE), so a cell
+// calling WithAuthorizer(ctx, alwaysAllowPDP) in middleware could swap the PDP its
+// gate consults and silently neuter its declared permission gate. The production
+// caller set is therefore pinned to the sanctioned injection sites by the archtest
+// caller-allowlist AUTH-WITHAUTHORIZER-CALLER-01 (the strongest static form for an
+// exported cross-package symbol).
 func WithAuthorizer(ctx context.Context, a Authorizer) context.Context {
 	return context.WithValue(ctx, authorizerKey{}, a)
 }
@@ -213,8 +225,10 @@ func RequirePermissionForSelf(p authz.Permission) Policy {
 // RequirePermissionForResource, and RequirePermissionForSelf. resource is the
 // value forwarded to Authorizer.Authorize: r.URL.Path for RequirePermission; the
 // canonicalized path param for RequirePermissionForResource; the caller's own
-// canonicalized subject for RequirePermissionForSelf. Logging uses r.URL.Path
-// throughout for observability regardless of the resource argument.
+// canonicalized subject for RequirePermissionForSelf. Logging records both path
+// (r.URL.Path, always the full HTTP path for correlation) and resource (the value
+// actually forwarded to the PDP: owner=path-param UUID, self=subject,
+// coarse=URL.Path).
 func enforcePermission(r *http.Request, p authz.Permission, resource string) error {
 	// Zero Permission is a programmer error; fail-closed before any I/O.
 	if p.IsZero() {
@@ -249,7 +263,7 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 		return err
 	}
 
-	return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, principal.Subject, p.String())
+	return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, resource, principal.Subject, p.String())
 }
 
 // evaluatePermissionDecision maps a PDP Decision to the route-gate outcome:
@@ -260,13 +274,20 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 //     denied rather than silently dropped, which would widen what the caller sees).
 //   - Deny → 403.
 //
+// path is always r.URL.Path (full HTTP path, used for correlation in logs).
+// resource is the value actually forwarded to the PDP: the path-param UUID for
+// owner-scoped gates, the caller's subject for self-scoped gates, or r.URL.Path
+// for coarse gates. Both are recorded in deny/warn log lines so operators can
+// distinguish which resource triggered the gate decision.
+//
 // Extracted from RequirePermission to keep its cognitive complexity within budget.
-func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, subject, permission string) error {
+func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, resource, subject, permission string) error {
 	if dec.IsAllow() {
 		if obl := dec.Obligations(); !obl.IsZero() {
 			loggerFrom(ctx).Warn(
 				"authz: Allow carries obligations not enforceable at route gate — denying (fail-closed)",
 				slog.String("path", path),
+				slog.String("resource", resource),
 				slog.String("subject", subject),
 				slog.String("permission", permission),
 			)
@@ -278,6 +299,7 @@ func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, s
 	loggerFrom(ctx).Info(
 		"authz: permission denied by PDP",
 		slog.String("path", path),
+		slog.String("resource", resource),
 		slog.String("subject", subject),
 		slog.String("permission", permission),
 		slog.String("reason", dec.Reason()),

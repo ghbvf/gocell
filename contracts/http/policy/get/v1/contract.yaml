@@ -16,6 +16,7 @@ endpoints:
         minLength: 1
         maxLength: 128
     successStatus: 200
+    permission: policy:read
     auth:
       responses:
         - 503

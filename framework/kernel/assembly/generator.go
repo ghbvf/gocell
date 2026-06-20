@@ -196,6 +196,10 @@ type topologyGroupTemplateData struct {
 	Role     string
 	Cells    []string
 	Endpoint string
+	// RequiresBrokerForCrossProcessEvents is the codegen-derived per-role broker
+	// signal (#2196), stamped by buildTopologyGroupsData from the role set returned
+	// by collectCrossProcessBrokerEventRoles. Rendered onto bootstrap.TopologyGroup.
+	RequiresBrokerForCrossProcessEvents bool
 }
 
 // capabilityConstNames maps cell.yaml `requires` enum values to their
@@ -529,39 +533,71 @@ func cellModuleImportPath(module, cellID string) string {
 	return module + "/cellmodules/" + cellID
 }
 
-// generateModulesGenComposition emits the composition.CellModule form used by
-// platform assemblies (assembly.yaml build.compositionAPI: true).
-// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
-func (g *Generator) generateModulesGenComposition(
-	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
-) ([]byte, error) {
-	moduleCalls := make([]string, 0, len(asm.Cells))
-	importLines := make([]string, 0, len(asm.Cells))
-	seen := make(map[string]bool, len(asm.Cells))
-	for _, ref := range asm.Cells {
-		cm := g.cells.Get(ref.ID)
-		if cm == nil {
-			return nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
+// compositionImportLines builds the rendered import lines and the Module() call
+// list for the composition modules_gen.go. The import block is sorted by import
+// PATH (not by the rendered line) so it is gofumpt-canonical regardless of
+// cell-declaration order AND regardless of whether a cross-module (#1083)
+// cellmodule path sorts before or after the framework runtime imports: cellmodule
+// lines carry an alias while the framework imports are bare, so a plain string
+// sort over the rendered lines would put every bare `"..."` line ahead of any
+// aliased line and break path order — the defect behind #2429. moduleCalls stay
+// in assembly.yaml cell order for deterministic output; that order is NOT
+// runtime-significant (the former auditcore→accesscore BootstrapLedgerStore
+// handoff was removed in #1423 — cross-cell wiring is now event-driven).
+func (g *Generator) compositionImportLines(
+	assemblyID string, cells []metadata.AssemblyCellRef, hasCapabilities bool,
+) (importLines, moduleCalls []string, err error) {
+	type genImport struct{ path, line string }
+	imports := make([]genImport, 0, len(cells)+3)
+	moduleCalls = make([]string, 0, len(cells))
+	seen := make(map[string]bool, len(cells))
+	for _, ref := range cells {
+		if g.cells.Get(ref.ID) == nil {
+			return nil, nil, errcode.New(errcode.KindNotFound, errcode.ErrMetadataInvalid,
 				msgAssemblyUnknownCell,
 				errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyCellFmt, assemblyID, ref.ID))))
 		}
 		alias := "cellmodules" + ref.ID
 		if !seen[ref.ID] {
 			seen[ref.ID] = true
-			importLines = append(importLines, fmt.Sprintf("%s %q",
-				alias, cellModuleImportPath(g.moduleOf(ref), ref.ID)))
+			path := cellModuleImportPath(g.moduleOf(ref), ref.ID)
+			imports = append(imports, genImport{path: path, line: fmt.Sprintf("%s %q", alias, path)})
 		}
 		moduleCalls = append(moduleCalls, alias+".Module()")
 	}
-	// Sort import lines by their (alias, path) string so the rendered import
-	// block is gofmt-clean regardless of cell declaration order. The alias is
-	// "platform"+cellID and the path ends in /cellmodules/cellID, so string-sorting
-	// the import lines matches gofmt's path-based ordering. moduleCalls stay in
-	// cell (assembly.yaml) order for deterministic, predictable output — that
-	// order is NOT runtime-significant: the former auditcore→accesscore
-	// BootstrapLedgerStore handoff was removed in #1423 (cross-cell wiring is now
-	// event-driven), so module Provide order carries no runtime dependency.
-	sort.Strings(importLines)
+	// bootstrap (TopologyGroup) and composition (CellModule) are always referenced
+	// by the template body; capability only when the assembly has a non-empty
+	// capability union — emitting it unconditionally would be an unused import for
+	// cap-less assemblies, so it is gated on the same condition as
+	// generatedCapabilities().
+	frameworkImports := []string{
+		"github.com/ghbvf/gocell/framework/runtime/bootstrap",
+		"github.com/ghbvf/gocell/framework/runtime/composition",
+	}
+	if hasCapabilities {
+		frameworkImports = append(frameworkImports, "github.com/ghbvf/gocell/framework/runtime/capability")
+	}
+	for _, p := range frameworkImports {
+		imports = append(imports, genImport{path: p, line: fmt.Sprintf("%q", p)})
+	}
+	sort.Slice(imports, func(i, j int) bool { return imports[i].path < imports[j].path })
+	importLines = make([]string, len(imports))
+	for i, imp := range imports {
+		importLines[i] = imp.line
+	}
+	return importLines, moduleCalls, nil
+}
+
+// generateModulesGenComposition emits the composition.CellModule form used by
+// platform assemblies (assembly.yaml build.compositionAPI: true).
+// Each cell maps to cellmodules{cellID}.Module() with a matching import alias.
+func (g *Generator) generateModulesGenComposition(
+	assemblyID string, asm *metadata.AssemblyMeta, capConsts []string,
+) ([]byte, error) {
+	importLines, moduleCalls, err := g.compositionImportLines(assemblyID, asm.Cells, len(capConsts) > 0)
+	if err != nil {
+		return nil, err
+	}
 	projTopics, err := g.collectOutboxProjectionTopics(asm.Cells)
 	if err != nil {
 		return nil, err
@@ -574,7 +610,11 @@ func (g *Generator) generateModulesGenComposition(
 			"assembly topology validation failed before codegen", err,
 			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf(internalAssemblyQuotedFmt, assemblyID))))
 	}
-	topoData := buildTopologyGroupsData(asm.Topology)
+	brokerRoles, err := g.collectCrossProcessBrokerEventRoles(asm)
+	if err != nil {
+		return nil, err
+	}
+	topoData := buildTopologyGroupsData(asm.Topology, brokerRoles)
 	postgresCells := g.collectPostgresCells(asm.Cells)
 	brokerCells, err := g.collectBrokerCells(asm.Cells)
 	if err != nil {
@@ -707,23 +747,152 @@ func contractIsBrokerTransported(c *metadata.ContractMeta) bool {
 }
 
 // buildTopologyGroupsData translates the metadata.TopologyMeta into the flattened
-// template-serialisable form. Empty topology (no groups) returns a zero-value
-// topologyGroupsTemplateData so the template emits a nil-returning
-// generatedTopologyGroups() — the all-colocated default (no role split).
-func buildTopologyGroupsData(topo metadata.TopologyMeta) topologyGroupsTemplateData {
+// template-serialisable form, stamping each group's codegen-derived
+// RequiresBrokerForCrossProcessEvents bool from brokerRoles (the set of roles
+// returned by collectCrossProcessBrokerEventRoles, #2196). Empty topology (no
+// groups) returns a zero-value topologyGroupsTemplateData so the template emits a
+// nil-returning generatedTopologyGroups() — the all-colocated default (no role split).
+func buildTopologyGroupsData(topo metadata.TopologyMeta, brokerRoles map[string]struct{}) topologyGroupsTemplateData {
 	var d topologyGroupsTemplateData
 	if len(topo.Groups) == 0 {
 		return d
 	}
 	d.Groups = make([]topologyGroupTemplateData, 0, len(topo.Groups))
 	for _, g := range topo.Groups {
+		_, needsBroker := brokerRoles[g.Role]
 		d.Groups = append(d.Groups, topologyGroupTemplateData{
-			Role:     g.Role,
-			Cells:    append([]string(nil), g.Cells...),
-			Endpoint: g.Endpoint,
+			Role:                                g.Role,
+			Cells:                               append([]string(nil), g.Cells...),
+			Endpoint:                            g.Endpoint,
+			RequiresBrokerForCrossProcessEvents: needsBroker,
 		})
 	}
 	return d
+}
+
+// collectCrossProcessBrokerEventRoles returns the set of deployment-group roles
+// (in asm.Topology) that participate in cross-process event pub/sub and therefore
+// need a real broker. A role is in the set iff it is an endpoint (publisher OR
+// subscriber side) of at least one active, amqp-transported event contract whose
+// publisher cell and some subscriber cell fall in DIFFERENT groups. This is the
+// precise codegen-derived signal that drives the bootstrap broker-mandatory gate
+// (validateSplitTopologyBroker) since #2196 — replacing the coarse HasRemoteCells
+// proxy and the removed static TOPO-13 rule with a single derived fact. The bool
+// is projected per-role by bootstrap.SpecForRole and sealed into DeploymentTopology.
+//
+// Scope mirrors the (now-deleted) TOPO-13 structure, reusing metadata.CellGroup
+// for placement:
+//   - < 2 groups → no process boundary → empty set (all-colocated / single role).
+//   - only EVENT contracts matter (the in-memory EventBus is the bus a broker
+//     replaces). Sync HTTP/CellTransport contracts cross processes without one;
+//     COMMAND contracts are also excluded — command relay dispatches in-process
+//     and is never published to the broker (outbox/relay_command.go;
+//     relay_command_test.go asserts "command must NOT be published to the broker"),
+//     so a cross-group command needs no broker. This matches the removed static
+//     TOPO-13's event-only scope (no regression).
+//   - only active contracts (draft/deprecated carry no live broker requirement).
+//   - the signal keys off cross-group pub/sub EDGES (a publisher cell AND a
+//     subscriber cell in different groups). A publisher-only active event (no
+//     subscriber) yields no edge → no broker requirement — consistent with it
+//     being a dead event (ADV-05 warns separately); the in-memory bus delivers it
+//     to no one, so no cross-process loss occurs.
+//   - only amqp-transported events; a registered event with an EMPTY transports
+//     set fails generation closed (the fail-open hazard documented on
+//     collectBrokerCells — explicit `transports: []` is malformed metadata).
+//   - a SUBSCRIBER outside any declared group (external actor, or a cell not in
+//     this assembly) resolves to no group via CellGroup and is skipped — it has no
+//     in-assembly process placement the topology can govern.
+//   - a PUBLISHER outside any group (the _framework sentinel, an external actor, or
+//     empty) is FAIL-CLOSED when the event also has a grouped cell subscriber: its
+//     cross-process broker requirement is underivable from the group graph, and
+//     silently skipping would be fail-open (the gate would permit an in-memory bus
+//     and drop the event across the boundary). With NO grouped subscriber it is a
+//     safe skip (nothing is delivered cross-process). See
+//     addCrossProcessBrokerEventRoles.
+func (g *Generator) collectCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta) (map[string]struct{}, error) {
+	roles := make(map[string]struct{})
+	if len(asm.Topology.Groups) < 2 {
+		return roles, nil // no process boundary
+	}
+	events := g.contracts.ByKind(string(cellvocab.ContractEvent))
+	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
+	for _, c := range events {
+		if err := addCrossProcessBrokerEventRoles(asm, c, roles); err != nil {
+			return nil, err
+		}
+	}
+	return roles, nil
+}
+
+// addCrossProcessBrokerEventRoles marks (into roles) the deployment-group roles on
+// both sides of every cross-process edge of event contract c — i.e. the publisher
+// and subscriber roles whenever the two fall in different groups. It fails closed
+// (error) for two fail-open hazards: (1) an active event with an EMPTY transports
+// set; (2) an active amqp event whose publisher has no group placement (the
+// _framework sentinel, an external actor, or empty) yet has a grouped cell
+// subscriber — its cross-process broker requirement is underivable from the group
+// graph, so silently skipping would let the gate permit an in-memory bus and drop
+// the event across the boundary (model the publisher's serving placement or keep
+// the contract lifecycle: draft). Non-event, non-active, and non-amqp contracts are
+// skipped (no-op), as is an unresolvable publisher with NO grouped subscriber
+// (nothing is delivered cross-process within this assembly). Extracted to keep
+// collectCrossProcessBrokerEventRoles within the cognitive-complexity budget.
+func addCrossProcessBrokerEventRoles(asm *metadata.AssemblyMeta, c *metadata.ContractMeta, roles map[string]struct{}) error {
+	if cellvocab.ContractLifecycle(c.Lifecycle) != cellvocab.ContractLifecycleActive {
+		return nil
+	}
+	if len(c.Transports) == 0 {
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+			"event contract has an empty transports set",
+			errcode.WithInternal(errcode.InternalAttr("_", fmt.Sprintf("contract=%q", c.ID))))
+	}
+	if !contractIsBrokerTransported(c) {
+		return nil
+	}
+	pubGroup, ok := metadata.CellGroup(asm, c.Endpoints.Publisher)
+	if c.Endpoints.Publisher == "" || !ok {
+		// Fail-CLOSED (not silent skip), #2196 F1: an active amqp event whose
+		// publisher has no deployment-group placement — the _framework sentinel, an
+		// external actor, or an empty publisher — cannot have its cross-process
+		// broker requirement derived from the group graph. If it has a grouped cell
+		// subscriber, that subscriber's process WOULD receive the event across a
+		// boundary and needs a real broker; returning no roles here is fail-OPEN
+		// (the gate would then permit an in-memory bus and drop the event cross-
+		// process). Reject until the publisher's serving placement is modeled (or
+		// the contract stays lifecycle: draft). NO grouped subscriber → nothing is
+		// delivered cross-process within this assembly, so it is safe to skip.
+		if hasGroupedSubscriber(asm, c) {
+			return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
+				"active amqp event publisher has no deployment-group placement but a "+
+					"grouped cell subscriber: cross-process broker requirement is underivable; "+
+					"model the publisher's serving placement or keep the contract lifecycle: draft",
+				errcode.WithInternal(errcode.InternalAttr("contract", c.ID)),
+				errcode.WithInternal(errcode.InternalAttr("publisher", c.Endpoints.Publisher)))
+		}
+		return nil
+	}
+	for _, sub := range c.Endpoints.Subscribers {
+		subGroup, ok := metadata.CellGroup(asm, sub)
+		if !ok || pubGroup.Role == subGroup.Role {
+			continue
+		}
+		roles[pubGroup.Role] = struct{}{}
+		roles[subGroup.Role] = struct{}{}
+	}
+	return nil
+}
+
+// hasGroupedSubscriber reports whether event contract c has at least one
+// subscriber that resolves to a declared deployment group. Used by
+// addCrossProcessBrokerEventRoles to decide whether an unresolvable-publisher
+// event poses a real cross-process delivery (and thus broker) requirement.
+func hasGroupedSubscriber(asm *metadata.AssemblyMeta, c *metadata.ContractMeta) bool {
+	for _, sub := range c.Endpoints.Subscribers {
+		if _, ok := metadata.CellGroup(asm, sub); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanAssemblyScaffold builds the complete []pathsafe.PlannedFile for a new

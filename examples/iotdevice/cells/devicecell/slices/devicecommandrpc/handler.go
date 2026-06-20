@@ -81,8 +81,11 @@ func NewServer(clk clock.Clock, cmdSvc *devicecmd.Service, notifier *devicecmd.N
 // matching the HTTP devicecommand enqueue route gate (RequirePermission(PermDeviceCommand)).
 // The interceptor gate runs before any field validation, preserving the
 // 403-before-404 ordering so an unauthorized caller cannot probe device existence.
-// A domain error is returned as an *errcode.Error; the gRPC interceptor chain maps
-// it to a status code.
+//
+// A domain error is returned as the raw *errcode.Error; the runtime gRPC
+// UnaryErrcodeMap interceptor (PR-12 #1155) projects it to the mapped codes.Code
+// — KindInvalid → InvalidArgument, the per-device pending-limit KindRateLimited →
+// ResourceExhausted — so the handler carries no transport-status concern.
 func (s *Server) IssueCommand(
 	ctx context.Context,
 	req *commandv1.IssueCommandRequest,
@@ -99,6 +102,8 @@ func (s *Server) IssueCommand(
 	}
 	entry, err := s.cmdSvc.Enqueue(ctx, req.GetDeviceId(), req.GetCommandType(), string(req.GetPayload()))
 	if err != nil {
+		// Return the raw *errcode.Error; UnaryErrcodeMap maps it to the right
+		// codes.Code (KindRateLimited → ResourceExhausted) on the wire (#1155).
 		return nil, err
 	}
 	slog.InfoContext(ctx, "devicecommandrpc: command enqueued",

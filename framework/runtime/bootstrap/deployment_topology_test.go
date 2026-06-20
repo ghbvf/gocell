@@ -48,9 +48,10 @@ func TestDeploymentTopologyZeroExportedFields(t *testing.T) {
 // field set is frozen (anti-drift companion to the exported-zero test above).
 func TestDeploymentTopologyExpectedUnexportedFields(t *testing.T) {
 	wantFields := map[string]bool{
-		"explicit":  false,
-		"colocated": false,
-		"remote":    false,
+		"explicit":                            false,
+		"colocated":                           false,
+		"remote":                              false,
+		"requiresBrokerForCrossProcessEvents": false,
 	}
 	rt := reflect.TypeOf(DeploymentTopology{})
 	for i := 0; i < rt.NumField(); i++ {
@@ -527,8 +528,11 @@ func TestPhase0_OmittedDeploymentTopology_AllColocated(t *testing.T) {
 // HasRemoteCells predicate
 // ---------------------------------------------------------------------------
 
-// TestDeploymentTopologyHasRemoteCells verifies the HasRemoteCells predicate
-// used by the phase0 broker-mandatory gate (validateSplitTopologyBroker).
+// TestDeploymentTopologyHasRemoteCells verifies the HasRemoteCells predicate —
+// the generic "is this a split deployment?" signal consumed by the split-mTLS
+// gates and celltransport wiring. It is NOT the broker-mandatory trigger: since
+// #2196 that gate keys off the precise RequiresBrokerForCrossProcessEvents
+// signal (covered by its own test below).
 func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 	cases := []struct {
 		name string
@@ -578,6 +582,58 @@ func TestDeploymentTopologyHasRemoteCells(t *testing.T) {
 				t.Errorf("HasRemoteCells() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RequiresBrokerForCrossProcessEvents — codegen-derived per-role signal flow
+// ---------------------------------------------------------------------------
+
+// TestRequiresBrokerForCrossProcessEvents_Flow verifies the per-role broker
+// signal flows end-to-end through the single topology funnel without any second
+// wiring: TopologyGroup (codegen output) → SpecForRole (per-process projection)
+// → newDeploymentTopology (sealed) → RequiresBrokerForCrossProcessEvents()
+// accessor. Two groups, only one of which is an endpoint of a cross-process
+// event edge, so SpecForRole must project the SELECTED role's bool (not the
+// other group's, not an OR of all groups).
+func TestRequiresBrokerForCrossProcessEvents_Flow(t *testing.T) {
+	groups := []TopologyGroup{
+		{Role: "core", Cells: []string{"cellA"}, Endpoint: "https://core.svc:9443", RequiresBrokerForCrossProcessEvents: true},
+		{Role: "edge", Cells: []string{"cellB"}, Endpoint: "https://edge.svc:9443", RequiresBrokerForCrossProcessEvents: false},
+	}
+	cases := []struct {
+		role string
+		want bool
+	}{
+		{role: "core", want: true},
+		{role: "edge", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.role, func(t *testing.T) {
+			spec, err := SpecForRole(groups, tc.role)
+			if err != nil {
+				t.Fatalf("SpecForRole(%q): %v", tc.role, err)
+			}
+			if spec.RequiresBrokerForCrossProcessEvents != tc.want {
+				t.Errorf("spec.RequiresBrokerForCrossProcessEvents = %v, want %v", spec.RequiresBrokerForCrossProcessEvents, tc.want)
+			}
+			dt, err := newDeploymentTopology(spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: %v", err)
+			}
+			if got := dt.RequiresBrokerForCrossProcessEvents(); got != tc.want {
+				t.Errorf("DeploymentTopology.RequiresBrokerForCrossProcessEvents() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequiresBrokerForCrossProcessEvents_ZeroValue confirms the all-colocated
+// zero value (no explicit topology) reports false — an empty topology never
+// requires a broker.
+func TestRequiresBrokerForCrossProcessEvents_ZeroValue(t *testing.T) {
+	if (DeploymentTopology{}).RequiresBrokerForCrossProcessEvents() {
+		t.Error("zero DeploymentTopology must not require a broker")
 	}
 }
 
@@ -705,15 +761,33 @@ func assertSharedNonLoopbackRemoteEndpoint(t *testing.T, spec DeploymentTopology
 // Since #2211 the gate keys off the sealed EventTransportKind fact (minted only
 // by eventtransport.Resolve) rather than the StorageBackend()=="postgres" proxy.
 // The gate must:
-//   - reject split topology (≥1 remote) + in-memory kind
-//   - reject split topology + UNSET kind (composition root forgot the option →
+//   - reject split topology that REQUIRES a broker (cross-process events) + in-memory kind
+//   - reject such a split + UNSET kind (composition root forgot the option →
 //     fail-closed, same posture as a forgotten publisher/subscriber)
-//   - reject split topology + real-broker kind but nil/typed-nil publisher or
+//   - reject such a split + real-broker kind but nil/typed-nil publisher or
 //     subscriber (phase2 would degrade to in-memory bus — same security gap)
-//   - accept split topology + real-broker kind + non-nil publisher + subscriber
+//   - accept such a split + real-broker kind + non-nil publisher + subscriber
+//   - accept a sync-only split (remote cells but RequiresBrokerForCrossProcessEvents
+//     == false, i.e. only CellTransport/HTTP contracts) + in-memory kind: the
+//     precise codegen-derived signal does not demand a broker for sync-only remotes
+//     (#2196 blind-spot ① fix — was over-rejected when the gate keyed off the
+//     coarse HasRemoteCells proxy)
 //   - accept colocated / zero topology regardless of kind (gate does not fire)
 func TestValidateSplitTopologyBroker(t *testing.T) {
+	// splitSpec is a split topology whose codegen-derived cross-process-event
+	// signal is TRUE (some active amqp event crosses the process boundary) — the
+	// broker-mandatory case.
 	splitSpec := DeploymentTopologySpec{
+		Colocated:                           []string{"cellA"},
+		RequiresBrokerForCrossProcessEvents: true,
+		Remote: []RemoteCellEndpoint{
+			{CellID: "cellB", Endpoint: "cell-b:9090"},
+		},
+	}
+	// syncOnlySplitSpec is ALSO a split topology (remote cells) but its signal is
+	// FALSE: the only cross-process contracts are sync (CellTransport/HTTP), which
+	// need no broker. The gate must NOT fire (#2196 blind-spot ① fix).
+	syncOnlySplitSpec := DeploymentTopologySpec{
 		Colocated: []string{"cellA"},
 		Remote: []RemoteCellEndpoint{
 			{CellID: "cellB", Endpoint: "cell-b:9090"},
@@ -726,6 +800,10 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 	splitDT, err := newDeploymentTopology(splitSpec)
 	if err != nil {
 		t.Fatalf("newDeploymentTopology(split): %v", err)
+	}
+	syncOnlySplitDT, err := newDeploymentTopology(syncOnlySplitSpec)
+	if err != nil {
+		t.Fatalf("newDeploymentTopology(syncOnlySplit): %v", err)
 	}
 	colocatedDT, err := newDeploymentTopology(colocatedSpec)
 	if err != nil {
@@ -825,6 +903,29 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 			wantErr:            false,
 		},
 		{
+			// #2196 blind-spot ① fix: a split topology whose codegen-derived signal is
+			// FALSE (remote cells, but only sync CellTransport/HTTP contracts cross the
+			// boundary) must NOT require a broker — the in-memory bus is fine because no
+			// event crosses the process boundary. The OLD coarse HasRemoteCells proxy
+			// over-rejected this legal deployment.
+			name:               "GREEN: sync-only split (remote cells, signal false) + in-memory kind → accepted",
+			deploymentTopology: syncOnlySplitDT,
+			kind:               InMemoryEventTransport(),
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
+			wantErr:            false,
+		},
+		{
+			// A sync-only split that nonetheless wires a real broker is legal — the
+			// gate only DEMANDS a broker when the signal is true, it never forbids one.
+			name:               "GREEN: sync-only split (signal false) + real-broker kind → accepted (over-provisioned)",
+			deploymentTopology: syncOnlySplitDT,
+			kind:               RealBrokerEventTransport(),
+			publisher:          nonNilBus,
+			subscriber:         nonNilBus,
+			wantErr:            false,
+		},
+		{
 			name:               "GREEN: colocated topology + in-memory kind → accepted (no remote cells)",
 			deploymentTopology: colocatedDT,
 			kind:               InMemoryEventTransport(),
@@ -873,7 +974,8 @@ func TestValidateSplitTopologyBroker(t *testing.T) {
 // storage backend — the in-memory bus can no longer be reached in a split topology.
 func TestPhase0_RejectsSplitTopologyWithoutBrokerKind(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
-		Colocated: []string{"cellA"},
+		Colocated:                           []string{"cellA"},
+		RequiresBrokerForCrossProcessEvents: true,
 		Remote: []RemoteCellEndpoint{
 			{CellID: "cellB", Endpoint: "cell-b:9090"},
 		},
@@ -916,7 +1018,8 @@ func TestPhase0_RejectsSplitTopologyWithoutBrokerKind(t *testing.T) {
 // the dishonest pairing import-unexpressible, so this unit-test shortcut cannot leak.
 func TestPhase0_AcceptsSplitTopologyWithPostgres(t *testing.T) {
 	splitSpec := DeploymentTopologySpec{
-		Colocated: []string{"cellA"},
+		Colocated:                           []string{"cellA"},
+		RequiresBrokerForCrossProcessEvents: true,
 		Remote: []RemoteCellEndpoint{
 			{CellID: "cellB", Endpoint: "cell-b:9090"},
 		},

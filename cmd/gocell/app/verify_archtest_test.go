@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -11,6 +12,29 @@ import (
 	"github.com/ghbvf/gocell/cmd/gocell/internal/archtestrunner"
 	"github.com/ghbvf/gocell/framework/kernel/governance"
 )
+
+// TestEmitChangedSelectionSummary verifies the --changed selection summary is
+// written (with the count + pre-filter caveat) when Changed is set, and is a
+// no-op otherwise — so a 0-rule --changed run is diagnosable, not silent.
+func TestEmitChangedSelectionSummary(t *testing.T) {
+	t.Run("changed prints count + caveat", func(t *testing.T) {
+		var buf bytes.Buffer
+		emitChangedSelectionSummary(&buf, archtestrunner.Request{Changed: true}, 0)
+		out := buf.String()
+		assert.Contains(t, out, "0 test function(s) selected")
+		assert.Contains(t, out, "pre-filter")
+	})
+	t.Run("changed nonzero count", func(t *testing.T) {
+		var buf bytes.Buffer
+		emitChangedSelectionSummary(&buf, archtestrunner.Request{Changed: true}, 7)
+		assert.Contains(t, buf.String(), "7 test function(s) selected")
+	})
+	t.Run("not changed is silent", func(t *testing.T) {
+		var buf bytes.Buffer
+		emitChangedSelectionSummary(&buf, archtestrunner.Request{Changed: false}, 5)
+		assert.Empty(t, buf.String())
+	})
+}
 
 // ---------------------------------------------------------------------------
 // Flag / dispatch tests (use captureDispatch from dispatch_test.go)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 	sub2 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
@@ -43,6 +44,30 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.auth.decide.v1":               "access:decide",
+	"http.auth.role.check.v1":           "role:read",
+	"http.auth.role.list.v1":            "role:read",
+	"http.auth.user.change-password.v1": "user:write",
+	"http.auth.user.create.v1":          "user:write",
+	"http.auth.user.delete.v1":          "user:write",
+	"http.auth.user.get.v1":             "user:read",
+	"http.auth.user.lock.v1":            "user:write",
+	"http.auth.user.patch.v1":           "user:write",
+	"http.auth.user.unlock.v1":          "user:write",
+	"http.auth.user.update.v1":          "user:write",
+	"http.policy.create.v1":             "policy:write",
+	"http.policy.delete.v1":             "policy:write",
+	"http.policy.get.v1":                "policy:read",
+	"http.policy.list.v1":               "policy:read",
+	"http.policy.update.v1":             "policy:write",
+})
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registrar) error {

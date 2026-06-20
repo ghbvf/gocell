@@ -56,6 +56,11 @@ type Server struct {
 	// listen call, and back to false in gracefulStop() after drain completes.
 	serving atomic.Bool
 
+	// resolvedAddr stores the actual listener address observed in serve().
+	// cfg.Addr may be ":0" or differ from an injected listener, so shutdown logs
+	// use this value once serving has started.
+	resolvedAddr atomic.Value // string
+
 	// stopOnce ensures gracefulStop body runs exactly once regardless of how
 	// many callers (Worker.Stop vs Close) trigger it concurrently.
 	stopOnce sync.Once
@@ -209,11 +214,12 @@ func (s *Server) serve(ctx context.Context, lis net.Listener) error {
 	addr := lis.Addr().String()
 	warnIfInsecureNonLoopback(s.cfg.TLS.AllowInsecure, lis.Addr())
 
+	s.resolvedAddr.Store(addr)
+
 	// srvLog carries the resolved bound addr on every serve-lifecycle log line
 	// (started / serve-returned / force-stopped) so the field never drifts as new
-	// lifecycle logs are added here (#1791). gracefulStop's drain log lives in a
-	// separate method where addr is out of scope and is server-wide, not
-	// addr-specific, so it stays on the package logger.
+	// lifecycle logs are added here (#1791). gracefulStop reads the same resolved
+	// addr from Server state because it runs outside this function's scope.
 	srvLog := slog.Default().With(slog.String("addr", addr))
 
 	go func() {
@@ -307,6 +313,7 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 		// during a graceful stop is expected (see StreamMetrics godoc), not an
 		// outage.
 		slog.Info("grpc: draining — canceling in-flight streams before GracefulStop",
+			slog.String("addr", s.logAddr()),
 			slog.Duration("shutdown_timeout", s.cfg.ShutdownTimeout))
 		s.cfg.Interceptors.Drain().Trigger()
 
@@ -342,6 +349,13 @@ func (s *Server) gracefulStop(ctx context.Context) error {
 		}
 	})
 	return stopErr
+}
+
+func (s *Server) logAddr() string {
+	if addr, ok := s.resolvedAddr.Load().(string); ok && addr != "" {
+		return addr
+	}
+	return s.cfg.Addr
 }
 
 // buildCredentials returns the transport credentials for the given TLSConfig.

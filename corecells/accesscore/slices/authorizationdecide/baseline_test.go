@@ -280,6 +280,65 @@ func TestBuiltinBaseline_AccesscorePerms(t *testing.T) {
 	}
 }
 
+// TestBuiltinBaseline_RegistrycorePerms proves the 303-US7 (#2238) registrycore
+// admin-approval baseline rules grant approve/reject/retire to admin/super-admin
+// and Deny everyone else. This is the role-conditioned ABAC grant that the
+// permission-based route gate (registry:approve|reject|retire) resolves against —
+// the approval authority is here, not a handler role literal. registry:submit/read
+// are intentionally absent (their baseline grant is deferred to corebundle
+// composition, open #2477), so they are NOT asserted here.
+func TestBuiltinBaseline_RegistrycorePerms(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+
+	perms := []string{
+		authz.PermRegistryApprove().String(),
+		authz.PermRegistryReject().String(),
+		authz.PermRegistryRetire().String(),
+	}
+
+	roleCases := []struct {
+		name      string
+		roles     []string
+		wantAllow bool
+	}{
+		{"admin → Allow", []string{auth.RoleAdmin}, true},
+		{"super-admin → Allow", []string{auth.RoleSuperAdmin}, true},
+		{"ordinary user → Deny", []string{"viewer"}, false},
+		{"no roles → Deny", nil, false},
+	}
+
+	for _, action := range perms {
+		for _, rc := range roleCases {
+			t.Run(action+" / "+rc.name, func(t *testing.T) {
+				resolver := attributeResolver{principal: &auth.Principal{
+					Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
+					Roles: rc.roles,
+				}}
+				dec, _ := svc.evaluate(nil, resolver, action)
+				assert.Equal(t, rc.wantAllow, dec.IsAllow())
+			})
+		}
+	}
+}
+
+// TestBuiltinBaseline_RegistrySubmitReadNotBaselineGranted pins the deliberate gap
+// (303-US7; composition tracked by open #2477): registry:submit and registry:read
+// have NO baseline grant yet — migrating their route gate to the resolver path did
+// not add one. An admin is denied by default-deny until corebundle composition
+// wires a tenant policy / baseline grant. Guards against silently assuming the
+// migration granted them.
+func TestBuiltinBaseline_RegistrySubmitReadNotBaselineGranted(t *testing.T) {
+	svc := &Service{logger: slog.Default()}
+	resolver := attributeResolver{principal: &auth.Principal{
+		Kind: auth.PrincipalUser, Subject: "subj-1", TenantID: testTenantIDStr,
+		Roles: []string{auth.RoleAdmin},
+	}}
+	for _, action := range []string{authz.PermRegistrySubmit().String(), authz.PermRegistryRead().String()} {
+		dec, _ := svc.evaluate(nil, resolver, action)
+		assert.False(t, dec.IsAllow(), "%s must NOT be baseline-granted (deferred to composition #2477)", action)
+	}
+}
+
 // TestBuiltinBaseline_RulesAreNonEmpty guards anti-vacuity: the baseline must
 // contain at least one rule so an empty return from builtinBaselineRules()
 // cannot silently skip all enforcement.

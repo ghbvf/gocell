@@ -119,6 +119,46 @@ func TestFoldStatus_TerminalAbsorbing_TerminalKinds(t *testing.T) {
 	}
 }
 
+// TestFoldStatus_IdempotentNonTerminal asserts that applying the same
+// non-terminal kind to the same previous status twice returns identical results.
+// This documents the "bounded duplicate apply safety" guarantee for the leader
+// handoff window (ADR 202606191200-2110 D5(b)): during a leader transition, the
+// incoming leader may re-apply events already applied by the outgoing leader.
+// Because FoldStatus is a pure function with no side-effects, duplicate applies
+// of a non-terminal kind are safe — the read model converges to the same state.
+func TestFoldStatus_IdempotentNonTerminal(t *testing.T) {
+	t.Parallel()
+
+	// KindStepStarted is representative of the non-terminal class: it maps
+	// Running → Running regardless of how many times it is applied.
+	prevStates := []orderstatusgen.ResponseDataStatus{
+		orderstatusgen.ResponseDataStatus(""), // zero: no row yet
+		orderstatusgen.ResponseDataStatusRunning,
+	}
+
+	for _, prev := range prevStates {
+		prev := prev
+		t.Run("prev="+string(prev)+"/KindStepStarted", func(t *testing.T) {
+			t.Parallel()
+
+			first, err := projection.FoldStatus(prev, journal.KindStepStarted)
+			if err != nil {
+				t.Fatalf("first FoldStatus(%q, KindStepStarted) error: %v", prev, err)
+			}
+			second, err := projection.FoldStatus(prev, journal.KindStepStarted)
+			if err != nil {
+				t.Fatalf("second FoldStatus(%q, KindStepStarted) error: %v", prev, err)
+			}
+			if first != second {
+				t.Errorf("idempotent violation: first=%q second=%q — duplicate apply must return identical status", first, second)
+			}
+			if first != orderstatusgen.ResponseDataStatusRunning {
+				t.Errorf("FoldStatus(%q, KindStepStarted) = %q, want Running", prev, first)
+			}
+		})
+	}
+}
+
 // TestFoldStatus_UnknownKind asserts that an unknown/zero EventKind returns an
 // error and no status (fail-closed — never silently default).
 func TestFoldStatus_UnknownKind(t *testing.T) {

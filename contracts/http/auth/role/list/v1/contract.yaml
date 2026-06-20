@@ -25,6 +25,8 @@ endpoints:
         minimum: 1
         maximum: 500
     successStatus: 200
+    permission: role:read
+    resource: userID
     auth:
       responses:
         - 503

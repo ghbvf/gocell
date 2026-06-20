@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/registry"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/ctxkeys"
@@ -59,6 +60,13 @@ func denyAuthorizer(reason string) *mockAuthorizer {
 	return &mockAuthorizer{decision: authz.Deny(reason)}
 }
 
+// contractListResolver mirrors the cellHTTPResolver for registryread contract
+// tests: the contract-derived resolver maps the list contract to registry:read so
+// RegisterRoutes installs the same PDP gate production uses (#2205, 303-US7).
+var contractListResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	contractID: "registry:read",
+})
+
 // newMuxOver mounts the list handler over the given store under the
 // production-mirroring prefix /api/v1/registry. RegisterRoutes installs the
 // registry:read RequirePermission policy.
@@ -68,11 +76,11 @@ func newMuxOver(t *testing.T, store ports.Registry) http.Handler {
 	if err != nil {
 		t.Fatalf("NewCursorCodec: %v", err)
 	}
-	svc, err := NewService(store, c, query.RunModeDemo, nil)
+	svc, err := NewService(store, outbox.DemoCellTxManager(), c, query.RunModeDemo, nil)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, contractListResolver)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/registry", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

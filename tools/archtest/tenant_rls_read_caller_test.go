@@ -1,27 +1,42 @@
 //go:build archtest
 
-// tenant_rls_read_caller_test.go — closes the READ side of the accesscore
-// tenant-scope boundary (#1690), the future-drift counterpart to the scope-WRITE
-// funnels.
+// tenant_rls_read_caller_test.go — closes the READ side of the per-cell
+// tenant-scope boundary across enrolled corecells (#1690, #2392), the
+// future-drift counterpart to the scope-WRITE funnels.
 //
 //   - INVARIANT: TENANT-RLS-READ-CALLER-01
 //
 // # What this guards
 //
-// accesscore has three Postgres tables under FORCE ROW LEVEL SECURITY (users /
-// roles / role_assignments, migration 053). A production read of any of them MUST
-// run inside a transaction that wrote the app.tenant_id GUC (via scopedtx.Do /
-// scopedtx.ApplyScope / a post-auth txRunner.RunInTx whose ctxkeys fallback sets
-// the GUC) — a bare-pool read sees an UNSET GUC → tenant_id = NULL predicate →
-// fail-closed 0 rows under the restricted app-serving pool (#1676). PR #1678
-// finding F1 fixed the three sites that had drifted out of a scoped tx; today
-// there are 0 residual sites. This rule is the FUTURE-DRIFT guard: it freezes the
-// set of files that may reference an accesscore RLS-table read method DIRECTLY, so
-// a new such reference fails CI until it is consciously reviewed (and, by that
-// review, confirmed to run inside a scoped tx) and added to the allowlist with
-// rationale. A read reached only THROUGH A FACADE METHOD (which references the
-// facade type, not a ports read method) is NOT caught here — see §"Tool blind
-// spots"; the runtime RLS fail-closed (0 rows) is the correctness backstop for it.
+// Several corecells own Postgres tables under FORCE ROW LEVEL SECURITY. A
+// production read of such a table MUST run inside a transaction that wrote the
+// app.tenant_id GUC (via scopedtx.Do / scopedread.Do / a post-auth
+// txRunner.RunInTx whose ctxkeys fallback sets the GUC) — a bare-pool read sees
+// an UNSET GUC → tenant_id = NULL predicate → fail-closed 0 rows under the
+// restricted app-serving pool (#1676). This rule is the FUTURE-DRIFT guard: per
+// enrolled cell it freezes the set of files that may reference an RLS-table read
+// method DIRECTLY, so a new such reference fails CI until it is consciously
+// reviewed (and, by that review, confirmed to run inside a scoped tx) and added
+// to that cell's allowlist with rationale. A read reached only THROUGH A FACADE
+// METHOD (which references the facade type, not a ports read method) is NOT
+// caught here — see §"Tool blind spots"; the runtime RLS fail-closed (0 rows) is
+// the correctness backstop for it.
+//
+// # Enrolled cells (rlsReadCells)
+//
+//   - accesscore — users / roles / role_assignments (migration 053); reads on
+//     UserRepository / RoleRepository. PR #1678 finding F1 fixed the three sites
+//     that had drifted out of a scoped tx; today there are 0 residual sites.
+//   - registrycore — contract_registrations / contract_registration_events
+//     (migration 066, #2392); reads on Registry (Get / List / History). The sole
+//     production reader, registryread.List, wraps the read in scopedread.Do.
+//
+// configcore is the SAME pattern (FORCE RLS migration 052 + its own scopedread
+// funnel over ConfigRepository / FlagRepository) and is already a
+// TENANT-REPO-PARAM-FUNNEL-01 enrolled cell, but is NOT yet enrolled HERE —
+// deferred to #2450 (enrolling it requires classifying its read/write method sets
+// and confirming its read callers run scoped). Until then configcore reads rely
+// on the runtime RLS fail-closed backstop, same as the facade blind spots below.
 //
 // The scope-WRITE side is already funnel-locked (TENANT-TXSCOPE-WRITE-CALLER-01
 // pins tenant.WithScope; TENANT-APPLYSCOPE-WRITE-CALLER-01 pins the mid-tx GUC
@@ -30,8 +45,8 @@
 //
 // # Why a caller-allowlist, not a lexical body-gate
 //
-// accesscore reads pervasively run inside MULTI-LEVEL named *Tx helpers that
-// receive the tx-context as a parameter, e.g. identitymanage:
+// These reads pervasively run inside MULTI-LEVEL named *Tx helpers that receive
+// the tx-context as a parameter, e.g. accesscore identitymanage:
 //
 //	RunInTx(ctx, func(txCtx){ return s.applyUserUpdateTx(ctx, txCtx, …) })
 //	  → applyUserUpdateTx → guardUpdateStatusDemotion → checkLastAdminRemoval
@@ -43,31 +58,32 @@
 // The caller-allowlist is indirection-immune: it records WHICH FILE references a
 // read method, regardless of nesting depth. (The compile-time-Hard alternative —
 // a sealed ScopedCtx capability making an unscoped read unrepresentable — was
-// assessed and deferred: it adds ZERO confidentiality over this guard because the
-// runtime RLS fail-closed backstop catches an unscoped read in BOTH designs, while
-// costing a cx-4 signature fan-out plus an un-typeable use-after-tx hole. See the
-// follow-up issue.)
+// assessed and deferred to #1893: it adds ZERO confidentiality over this guard
+// because the runtime RLS fail-closed backstop catches an unscoped read in BOTH
+// designs, while costing a cx-4 signature fan-out plus an un-typeable
+// use-after-tx hole.)
 //
 // # Detection + anti-vacuity
 //
-// Use-based (info.Uses → *types.Func), receiver-bound to ports.UserRepository /
-// ports.RoleRepository (methodRecvTypeName). The receiver binding is what
-// excludes the same-named collisions: policymanage's PolicyRepository.GetByID,
-// the identitymanage *Service.GetByID handler method, and the mem/postgres
+// Use-based (info.Uses → *types.Func), receiver-bound to the cell's ports repo
+// interfaces (methodRecvTypeName). The receiver binding is what excludes the
+// same-named collisions: policymanage's PolicyRepository.GetByID, the
+// identitymanage *Service.GetByID handler method, and the mem/postgres
 // concrete-repo self-calls (a different receiver type / package) all resolve to a
-// non-matching owner and are skipped. The protected read set is DERIVED, not
-// hand-listed: it is the live interface method set MINUS the WRITE methods
-// (rlsWriteMethodsByIface — Create / Update* / Delete / Assign* …), which hit the
-// same RLS tables but always run inside RunInTx already (writes are inherently
-// transactional). Deriving from the interface makes read COMPLETENESS structural
-// — a new RLS read method is protected by default, and the classification guard
-// (TestTenantRLSReadCaller01_ReadMethodClassification) fails CI if a new method
-// escapes both sets, a write entry goes stale, or the interface starts embedding.
-// The anti-vacuity reverse check requires every allowlist entry to reference a
-// read method live, so a scanner regression or a removed reader (which would make
-// the freeze vacuously pass) fails CI. The RED fixture (internal/rlsreadfixture,
-// TestTenantRLSReadCaller01_FixtureCatchesRead) proves the detector fires on a
-// genuine read reference and not on a write.
+// non-matching owner and are skipped. The protected read set is DERIVED per cell,
+// not hand-listed: it is the live interface method set MINUS the WRITE methods
+// (spec.writeMethods — Create / Update* / Delete / Assign* / Transition …), which
+// hit the same RLS tables but always run inside RunInTx already (writes are
+// inherently transactional). Deriving from the interface makes read COMPLETENESS
+// structural — a new RLS read method is protected by default, and the
+// classification guard (TestTenantRLSReadCaller01_ReadMethodClassification) fails
+// CI if a new method escapes both sets, a write entry goes stale, or an interface
+// starts embedding. The anti-vacuity reverse check requires every allowlist entry
+// (across all enrolled cells) to reference a read method live, so a scanner
+// regression or a removed reader (which would make the freeze vacuously pass)
+// fails CI. The RED fixture (internal/rlsreadfixture,
+// TestTenantRLSReadCaller01_FixtureCatchesRead) proves the detector core fires on
+// a genuine read reference and not on a write.
 //
 // # AI-robust rating (charter §"Funnel 双向锁评级") — MEDIUM
 //
@@ -138,73 +154,130 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// accesscorePortsPkg (the package owning the UserRepository / RoleRepository
-// interfaces whose READ methods touch the RLS tables) is declared in
-// tenant_repo_param_funnel_test.go:104 (same package const) and reused here.
+// accesscorePortsPkg / registrycorePortsPkg (the packages owning the repo
+// interfaces whose READ methods touch the RLS tables) are declared in
+// tenant_repo_param_funnel_test.go (same package consts) and reused here.
 
 const (
-	userRepositoryTypeName = "UserRepository"
-	roleRepositoryTypeName = "RoleRepository"
+	userRepositoryTypeName     = "UserRepository"
+	roleRepositoryTypeName     = "RoleRepository"
+	registryRepositoryTypeName = "Registry"
 )
 
-// rlsRepoIfaces are the accesscore ports interfaces whose EVERY method touches an
-// RLS-protected table (users / roles / role_assignments). Because there is no
-// third category — each method is either a read or a write of those tables — the
-// protected READ set is DERIVED as (live interface method set − writes), not
-// hand-listed. That makes read completeness STRUCTURAL: a method newly added to
-// one of these interfaces is, by default, a protected read this rule catches —
-// closing the gap where a hand-list could silently omit a new RLS read method
-// (the anti-vacuity check only proves listed reads still have a live caller, not
-// that the list is complete).
-var rlsRepoIfaces = []string{userRepositoryTypeName, roleRepositoryTypeName}
+// rlsReadCellSpec enrolls one cell's RLS-table repo interfaces into this guard.
+// Per spec the protected READ set is DERIVED as (live interface method set −
+// writeMethods), so read completeness is STRUCTURAL per cell: a method newly
+// added to an enrolled interface is, by default, a protected read this rule
+// catches (the anti-vacuity check only proves listed readers stay live, not that
+// the list is complete — deriveRLSReadMethods gives the completeness half).
+type rlsReadCellSpec struct {
+	// name labels the cell in diagnostics.
+	name string
+	// portsPkg is the full import path of the package OWNING the repo interfaces
+	// whose read methods touch the RLS tables (matched against fn.Pkg().Path()).
+	portsPkg string
+	// portsDirRel is portsPkg's repo-relative dir, for the AST interface load.
+	portsDirRel string
+	// ifaces are the repo interface names in portsPkg whose EVERY method touches
+	// an RLS-protected table (each method is either a read or a write).
+	ifaces []string
+	// writeMethods is the SOLE hand-maintained classification: per interface, the
+	// WRITE methods. Writes hit the same RLS tables but are inherently
+	// transactional (always inside RunInTx), so the read-side allowlist does not
+	// freeze them; reads = live method set − this set. A NEW write method must be
+	// listed here, else it is (mis)derived as a protected read and flags at its
+	// call sites — fail-closed toward protection, by design.
+	writeMethods map[string]map[string]struct{}
+	// allowlist is the set of files that may reference a read method of this
+	// cell's ifaces. A NEW entry must be added consciously, after confirming the
+	// read runs inside a tenant-scoped tx.
+	allowlist map[string]struct{}
+}
 
-// rlsWriteMethodsByIface is the SOLE hand-maintained classification: the WRITE
-// methods on each rlsRepoIface. Writes hit the same RLS tables but are inherently
-// transactional (always issued inside RunInTx), so the read-side caller-allowlist
-// does not freeze them. deriveRLSReadMethods subtracts this set from the live
-// interface method set to obtain the protected read set; the classification guard
-// (TestTenantRLSReadCaller01_ReadMethodClassification) fails CI if an entry here
-// is not a live interface method (typo / stale) or if the interface embeds a
-// sub-interface (which would hide promoted methods from the AST scan). A NEW write
-// method must be added here, else it is (mis)derived as a protected read and flags
-// at its call sites — fail-closed toward protection, by design.
-var rlsWriteMethodsByIface = map[string]map[string]struct{}{
-	userRepositoryTypeName: {
-		"Create":                  {},
-		"Delete":                  {},
-		"UpdateProfile":           {},
-		"UpdateLockState":         {},
-		"UpdatePasswordResetFlag": {},
-		"UpdatePassword":          {},
-		"BumpAuthzEpoch":          {},
-		"UpdateLockoutFields":     {},
+// rlsReadCells is the closed set of cells enrolled in TENANT-RLS-READ-CALLER-01.
+// accesscore (users/roles/role_assignments, migration 053) and registrycore
+// (contract_registrations/contract_registration_events, migration 066, #2392)
+// are covered; configcore is the SAME pattern (FORCE RLS migration 052 + its own
+// scopedread funnel) but is NOT yet enrolled — tracked by #2450.
+var rlsReadCells = []rlsReadCellSpec{
+	{
+		name:        "accesscore",
+		portsPkg:    accesscorePortsPkg,
+		portsDirRel: "corecells/accesscore/internal/ports",
+		ifaces:      []string{userRepositoryTypeName, roleRepositoryTypeName},
+		writeMethods: map[string]map[string]struct{}{
+			userRepositoryTypeName: {
+				"Create":                  {},
+				"Delete":                  {},
+				"UpdateProfile":           {},
+				"UpdateLockState":         {},
+				"UpdatePasswordResetFlag": {},
+				"UpdatePassword":          {},
+				"BumpAuthzEpoch":          {},
+				"UpdateLockoutFields":     {},
+			},
+			roleRepositoryTypeName: {
+				"Create":                  {},
+				"AssignToUser":            {},
+				"RemoveFromUser":          {},
+				"RemoveFromUserIfNotLast": {},
+			},
+		},
+		// Production slices, internal helpers, and the test-support conformance /
+		// fixture packages that exercise the repos.
+		allowlist: map[string]struct{}{
+			"corecells/accesscore/slices/sessionlogin/service.go":         {},
+			"corecells/accesscore/slices/sessionrefresh/service.go":       {},
+			"corecells/accesscore/slices/sessionvalidate/service.go":      {},
+			"corecells/accesscore/slices/rbacassign/service.go":           {},
+			"corecells/accesscore/slices/rbaccheck/service.go":            {},
+			"corecells/accesscore/slices/identitymanage/service.go":       {},
+			"corecells/accesscore/internal/adminprovision/provisioner.go": {},
+			"corecells/accesscore/internal/sessionmint/sessionmint.go":    {},
+			// test-support readers (no scoped-tx obligation — they exercise the
+			// repos in tests, not on a production request path):
+			"corecells/accesscore/accesscoretest/fixture.go":                 {},
+			"corecells/accesscore/internal/ports/conformance/conformance.go": {},
+		},
 	},
-	roleRepositoryTypeName: {
-		"Create":                  {},
-		"AssignToUser":            {},
-		"RemoveFromUser":          {},
-		"RemoveFromUserIfNotLast": {},
+	{
+		name:        "registrycore",
+		portsPkg:    registrycorePortsPkg,
+		portsDirRel: "corecells/registrycore/internal/ports",
+		ifaces:      []string{registryRepositoryTypeName},
+		writeMethods: map[string]map[string]struct{}{
+			// Registry.Create/Transition write the projection + append-only history
+			// (L1); Get/List/History are the protected reads (#2392).
+			registryRepositoryTypeName: {
+				"Create":     {},
+				"Transition": {},
+			},
+		},
+		// registryread.List is the sole production reader; it wraps the read in
+		// scopedread.Do (tenant.WithScope + RunInTx) — see #2392.
+		allowlist: map[string]struct{}{
+			"corecells/registrycore/slices/registryread/service.go": {},
+		},
 	},
 }
 
-// deriveRLSReadMethods loads the live rlsRepoIface method sets (AST) and returns
-// (iface → read-method set) = full − rlsWriteMethodsByIface[iface]. It fails t on
-// any classification drift: an interface that embeds a sub-interface (promoted
+// deriveRLSReadMethods loads spec's live interface method sets (AST) and returns
+// (iface → read-method set) = full − spec.writeMethods[iface]. It fails t on any
+// classification drift: an interface that embeds a sub-interface (promoted
 // methods would escape the AST scan), a write-exclusion entry that is not a live
 // interface method (typo / stale — would shrink the write set and misclassify a
 // real write as a read), or an interface whose derived read set is empty (the
 // whole interface classified as writes — almost certainly a mistake that would
 // make the rule vacuous for it). This is the completeness half the anti-vacuity
 // check cannot give: anti-vacuity proves every observed read has a live caller;
-// this pins the read SET to the interface fact.
-func deriveRLSReadMethods(t *testing.T, root string) map[string]map[string]struct{} {
+// this pins the read SET to the interface fact, per enrolled cell.
+func deriveRLSReadMethods(t *testing.T, root string, spec rlsReadCellSpec) map[string]map[string]struct{} {
 	t.Helper()
-	const portsDirRel = "corecells/accesscore/internal/ports"
-	reads := make(map[string]map[string]struct{}, len(rlsRepoIfaces))
-	for _, ifaceName := range rlsRepoIfaces {
-		iface := loadInterfaceType(t, root, portsDirRel, ifaceName)
+	reads := make(map[string]map[string]struct{}, len(spec.ifaces))
+	for _, ifaceName := range spec.ifaces {
+		iface := loadInterfaceType(t, root, spec.portsDirRel, ifaceName)
 		if iface == nil {
-			t.Fatalf("TENANT-RLS-READ-CALLER-01: %s not found in %s", ifaceName, portsDirRel)
+			t.Fatalf("TENANT-RLS-READ-CALLER-01: %s not found in %s (cell %s)", ifaceName, spec.portsDirRel, spec.name)
 		}
 		if embedded := embeddedTypeNames(iface); len(embedded) > 0 {
 			t.Errorf("TENANT-RLS-READ-CALLER-01: %s must not embed sub-interfaces "+
@@ -215,11 +288,11 @@ func deriveRLSReadMethods(t *testing.T, root string) map[string]map[string]struc
 		for _, m := range methods {
 			methodSet[m] = struct{}{}
 		}
-		writes := rlsWriteMethodsByIface[ifaceName]
+		writes := spec.writeMethods[ifaceName]
 		for w := range writes {
 			if _, ok := methodSet[w]; !ok {
 				t.Errorf("TENANT-RLS-READ-CALLER-01: write-exclusion %q is not a method of %s "+
-					"(typo or stale entry); fix rlsWriteMethodsByIface", w, ifaceName)
+					"(typo or stale entry); fix the %s spec writeMethods", w, ifaceName, spec.name)
 			}
 		}
 		read := make(map[string]struct{}, len(methods))
@@ -235,25 +308,6 @@ func deriveRLSReadMethods(t *testing.T, root string) map[string]map[string]struc
 		reads[ifaceName] = read
 	}
 	return reads
-}
-
-// rlsReadCallerAllowlist: the files that legitimately reference an accesscore
-// RLS-table read method (production slices, internal helpers, and the test-support
-// conformance / fixture packages that exercise the repos). A NEW entry must be
-// added consciously, after confirming the read runs inside a tenant-scoped tx.
-var rlsReadCallerAllowlist = map[string]struct{}{
-	"corecells/accesscore/slices/sessionlogin/service.go":         {},
-	"corecells/accesscore/slices/sessionrefresh/service.go":       {},
-	"corecells/accesscore/slices/sessionvalidate/service.go":      {},
-	"corecells/accesscore/slices/rbacassign/service.go":           {},
-	"corecells/accesscore/slices/rbaccheck/service.go":            {},
-	"corecells/accesscore/slices/identitymanage/service.go":       {},
-	"corecells/accesscore/internal/adminprovision/provisioner.go": {},
-	"corecells/accesscore/internal/sessionmint/sessionmint.go":    {},
-	// test-support readers (no scoped-tx obligation — they exercise the repos in
-	// tests, not on a production request path):
-	"corecells/accesscore/accesscoretest/fixture.go":                 {},
-	"corecells/accesscore/internal/ports/conformance/conformance.go": {},
 }
 
 // rlsReadRef is one resolved reference to an RLS-table read method.
@@ -300,20 +354,32 @@ func collectRLSReadRefs(p *Pass, portsPkg string, ifaceReads map[string]map[stri
 	return out
 }
 
-// TestTenantRLSReadCaller01 asserts every production reference to an accesscore
-// RLS-table read method sits in rlsReadCallerAllowlist, and that every allowlist
-// entry is live (anti-vacuity).
+// TestTenantRLSReadCaller01 asserts every production reference to an enrolled
+// cell's RLS-table read method sits in that cell's allowlist, and that every
+// allowlist entry (across all enrolled cells) is live (anti-vacuity).
 func TestTenantRLSReadCaller01(t *testing.T) {
 	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping packages.Load-based archtest in -short mode")
 	}
+	root := findModuleRoot(t)
 
-	// Derive the protected read set from the live interface fact (completeness is
-	// structural, not a hand-list). The derivation's classification assertions are
-	// also exercised standalone by TestTenantRLSReadCaller01_ReadMethodClassification
-	// (AST-only, runs even in -short).
-	rlsReadMethodsByIface := deriveRLSReadMethods(t, findModuleRoot(t))
+	// Per cell: derive the protected read set from the live interface fact
+	// (completeness is structural, not a hand-list) and index its allowlist for
+	// the anti-vacuity reverse check. Allowlist files are disjoint across cells
+	// (each lives under its own cell dir), so a single observed set is sound.
+	type resolvedCell struct {
+		spec  rlsReadCellSpec
+		reads map[string]map[string]struct{}
+	}
+	cells := make([]resolvedCell, 0, len(rlsReadCells))
+	allowToCell := map[string]string{}
+	for _, spec := range rlsReadCells {
+		cells = append(cells, resolvedCell{spec: spec, reads: deriveRLSReadMethods(t, root, spec)})
+		for f := range spec.allowlist {
+			allowToCell[f] = spec.name
+		}
+	}
 
 	observed := map[string]struct{}{}
 	diags := Run(t, Production(TypedOpts{}), func(p *Pass) []Diagnostic {
@@ -321,43 +387,45 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 			return nil // detection is type-dependent (info.Uses); skip AST-only passes.
 		}
 		var d []Diagnostic
-		for _, ref := range collectRLSReadRefs(p, accesscorePortsPkg, rlsReadMethodsByIface) {
-			observed[ref.rel] = struct{}{}
-			if _, allowed := rlsReadCallerAllowlist[ref.rel]; !allowed {
-				// Message carries no ruleID prefix — Report prepends it (avoids a
-				// double "TENANT-RLS-READ-CALLER-01:" in the output).
-				d = append(d, Diagnostic{
-					Rel:  ref.rel,
-					Line: ref.line,
-					Message: fmt.Sprintf(
-						"%s.%s (a read of an RLS-protected table: users/roles/role_assignments, FORCE ROW LEVEL "+
-							"SECURITY migration 053) is referenced from %s, which is not a sanctioned RLS reader. The "+
-							"read MUST run inside a tenant-scoped tx (scopedtx.Do / scopedtx.ApplyScope / a post-auth "+
-							"RunInTx whose ctxkeys fallback writes app.tenant_id); a bare-pool read fail-closes to 0 rows "+
-							"under the restricted app-serving pool (#1676). If this IS a new sanctioned reader, confirm it "+
-							"runs inside a scoped tx and add %s to rlsReadCallerAllowlist with rationale.",
-						ref.iface, ref.method, ref.rel, ref.rel,
-					),
-				})
+		for _, c := range cells {
+			for _, ref := range collectRLSReadRefs(p, c.spec.portsPkg, c.reads) {
+				observed[ref.rel] = struct{}{}
+				if _, allowed := c.spec.allowlist[ref.rel]; !allowed {
+					// Message carries no ruleID prefix — Report prepends it (avoids a
+					// double "TENANT-RLS-READ-CALLER-01:" in the output).
+					d = append(d, Diagnostic{
+						Rel:  ref.rel,
+						Line: ref.line,
+						Message: fmt.Sprintf(
+							"%s.%s (a read of a %s RLS-protected table under FORCE ROW LEVEL SECURITY) is referenced "+
+								"from %s, which is not a sanctioned RLS reader. The read MUST run inside a tenant-scoped "+
+								"tx (scopedtx.Do / scopedread.Do / a post-auth RunInTx whose ctxkeys fallback writes "+
+								"app.tenant_id); a bare-pool read fail-closes to 0 rows under the restricted app-serving "+
+								"pool. If this IS a new sanctioned reader, confirm it runs inside a scoped tx and add %s "+
+								"to the %s cell allowlist in rlsReadCells with rationale.",
+							ref.iface, ref.method, c.spec.name, ref.rel, ref.rel, c.spec.name,
+						),
+					})
+				}
 			}
 		}
 		return d
 	})
 
-	// Anti-vacuity / no-stale reverse self-check: every allowlist entry must
-	// reference a read method live, else a scanner regression or a removed reader
-	// would make the freeze vacuously pass.
-	for f := range rlsReadCallerAllowlist {
+	// Anti-vacuity / no-stale reverse self-check: every allowlist entry (across
+	// all enrolled cells) must reference a read method live, else a scanner
+	// regression or a removed reader would make the freeze vacuously pass.
+	for f, cellName := range allowToCell {
 		if _, seen := observed[f]; !seen {
 			// Rel = the stale entry itself, so the diagnostic points at the file to
 			// drop; Message carries no ruleID prefix (Report prepends it).
 			diags = append(diags, Diagnostic{
 				Rel: f,
 				Message: fmt.Sprintf(
-					"allowlist entry %q is STALE — no live accesscore RLS read-method reference observed. Either "+
-						"the scanner regressed or the reader was removed; drop the dead allowlist entry so it cannot "+
+					"allowlist entry %q (%s) is STALE — no live RLS read-method reference observed. Either the "+
+						"scanner regressed or the reader was removed; drop the dead allowlist entry so it cannot "+
 						"become a silent bypass slot.",
-					f,
+					f, cellName,
 				),
 			})
 		}
@@ -367,15 +435,19 @@ func TestTenantRLSReadCaller01(t *testing.T) {
 }
 
 // TestTenantRLSReadCaller01_ReadMethodClassification pins the read/write
-// classification to the LIVE interface fact (AST-only, so it runs even in -short
-// mode, unlike the packages.Load production scan above). It is the completeness
-// guard: adding a method to UserRepository / RoleRepository without listing it as
-// a write in rlsWriteMethodsByIface makes it a derived protected read; a stale or
-// misspelled write entry, an emptied read set, or a newly embedded sub-interface
-// fails here. deriveRLSReadMethods carries the assertions.
+// classification to the LIVE interface fact for every enrolled cell (AST-only, so
+// it runs even in -short mode, unlike the packages.Load production scan above). It
+// is the completeness guard: adding a read method to an enrolled interface without
+// listing it as a write in the cell's spec.writeMethods makes it a derived
+// protected read; a stale or misspelled write entry, an emptied read set, or a
+// newly embedded sub-interface fails here. deriveRLSReadMethods carries the
+// assertions.
 func TestTenantRLSReadCaller01_ReadMethodClassification(t *testing.T) {
 	t.Parallel()
-	_ = deriveRLSReadMethods(t, findModuleRoot(t))
+	root := findModuleRoot(t)
+	for _, spec := range rlsReadCells {
+		_ = deriveRLSReadMethods(t, root, spec)
+	}
 }
 
 // TestTenantRLSReadCaller01_FixtureCatchesRead is the reverse self-check: the RED

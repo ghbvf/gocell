@@ -36,6 +36,18 @@ const (
 	testHandlerAdminSubject = "handler-admin"
 )
 
+// testResolver returns a MethodPolicyResolver seeded with the policymanage
+// contract→action map, mirroring the cellgen-wired resolver in cell_init.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.policy.create.v1": "policy:write",
+		"http.policy.get.v1":    "policy:read",
+		"http.policy.update.v1": "policy:write",
+		"http.policy.delete.v1": "policy:write",
+		"http.policy.list.v1":   "policy:read",
+	})
+}
+
 // The cell-level RouteGroup mounts policy slice at /api/v1/access/policies.
 const policiesPrefix = "/api/v1/access/policies"
 
@@ -103,7 +115,7 @@ func setupPolicyHandler(t testing.TB) http.Handler {
 		WithTxManager(persistence.WrapForCell(&stubPolicyTxRunner{})),
 	)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route(policiesPrefix, func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {
@@ -339,7 +351,7 @@ func TestHandler_Get_EmptyID(t *testing.T) {
 	// {id} path parameter. Send a request with no path value to trigger the guard.
 	getH := policyGet.NewHandler(
 		GetAdapter{s: newServiceForAdapterTest(t)},
-		auth.RequirePermission(authz.PermPolicyRead()),
+		auth.NewStaticMethodPolicyResolver(map[string]string{"http.policy.get.v1": "policy:read"}),
 	)
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/policies/", nil)
 

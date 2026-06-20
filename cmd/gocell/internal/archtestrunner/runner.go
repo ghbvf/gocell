@@ -14,8 +14,9 @@ import (
 // Injected via engine to enable unit-testing without spawning real subprocesses.
 type execFn func(ctx context.Context, dir string, extraEnv, args []string) ([]byte, error)
 
-// changedFilesFn is the function signature for retrieving changed archtest files.
-// Injected via engine to enable unit-testing without a live git repo.
+// changedFilesFn is the function signature for retrieving the repo-relative
+// changed files (of any kind) vs origin/develop. Injected via engine to enable
+// unit-testing without a live git repo.
 type changedFilesFn func(ctx context.Context, workspaceRoot string) ([]string, error)
 
 // engine holds the injected subprocess functions.
@@ -29,7 +30,7 @@ type engine struct {
 func newEngine() engine {
 	return engine{
 		exec:    defaultExec,
-		changed: changedArchtestFiles,
+		changed: changedRepoFiles,
 	}
 }
 
@@ -68,6 +69,13 @@ func ListTests(ctx context.Context, req Request) ([]string, error) {
 
 // run is the engine-scoped implementation of Run.
 func (e engine) run(ctx context.Context, req Request) (Report, error) {
+	// Validate inputs before touching the environment so a bad scope fails
+	// fail-closed regardless of GOWORK (never silently treated as workspace).
+	scope, err := ResolveScope(req.Scope)
+	if err != nil {
+		return Report{}, err
+	}
+	req.Scope = scope
 	if err := checkGOWORK(); err != nil {
 		return Report{}, err
 	}
@@ -136,6 +144,11 @@ func writeJSONArtifactIfRequested(req Request, output []byte) error {
 
 // listTests is the engine-scoped implementation of ListTests.
 func (e engine) listTests(ctx context.Context, req Request) ([]string, error) {
+	scope, err := ResolveScope(req.Scope)
+	if err != nil {
+		return nil, err
+	}
+	req.Scope = scope
 	if err := checkGOWORK(); err != nil {
 		return nil, err
 	}
@@ -155,17 +168,37 @@ func (e engine) resolveSelected(ctx context.Context, req Request) ([]string, err
 	return e.applyFilters(ctx, req, discovered)
 }
 
-// applyFilters applies shard / rule / changed filters to a pre-discovered test list.
-// Extracted as a pure-ish helper to allow testing without a real `go test -list` call.
+// applyFilters applies scope / shard / rule / changed filters to a pre-discovered
+// test list. Extracted as a pure-ish helper to allow testing without a real
+// `go test -list` call.
+//
+// Scope is the COARSEST filter and runs first: ScopeFramework narrows the
+// universe to the framework-portable rules' test functions, so shard/rule/changed
+// all operate within the scope (shard exactly-once holds per-scope; --list-tests
+// lists only the scope). ScopeWorkspace (and the empty default) is a pass-through.
 func (e engine) applyFilters(ctx context.Context, req Request, discovered []string) ([]string, error) {
-	// Apply shard partitioning first.
-	selected := applyShardSelection(discovered, req.Shard)
+	scoped, err := applyScope(req, discovered)
+	if err != nil {
+		return nil, err
+	}
 
-	// Apply rule filter (intersect).
+	// Apply shard partitioning (within the scoped universe).
+	selected := applyShardSelection(scoped, req.Shard)
+
+	// Apply rule filter (intersect). Under ScopeFramework the rule filter must use
+	// the same FUNC-LEVEL index as scope narrowing (buildFrameworkFuncIndex); else a
+	// --rule naming one rule in a theme-consolidated file would also pull in that
+	// file's OTHER framework rules — file-level buildRuleIndex conflates them
+	// (e.g. --scope=framework --rule=ERRCODE-KIND-LITERAL-01 leaking the sibling
+	// errcode portable rules). Workspace scope keeps file-level (--rule's
+	// established granularity).
 	if req.Rule != "" {
-		idx, err := buildRuleIndex(req.WorkspaceRoot)
-		if err != nil {
-			return nil, err
+		idx, ierr := buildRuleIndex(req.WorkspaceRoot)
+		if req.Scope == ScopeFramework {
+			idx, ierr = buildFrameworkFuncIndex(req.WorkspaceRoot)
+		}
+		if ierr != nil {
+			return nil, ierr
 		}
 		selected, err = selectByRule(idx, req.Rule, selected)
 		if err != nil {
@@ -173,20 +206,56 @@ func (e engine) applyFilters(ctx context.Context, req Request, discovered []stri
 		}
 	}
 
-	// Apply changed-files filter (intersect).
+	// Apply changed-source filter: keep only rules a changed file could affect.
 	if req.Changed {
 		changedFiles, err := e.changed(ctx, req.WorkspaceRoot)
 		if err != nil {
 			return nil, err
 		}
-		changedTests, err := changedFilesToTests(req.WorkspaceRoot, changedFiles)
+		selected, err = selectByChangedSource(req.WorkspaceRoot, selected, changedFiles)
 		if err != nil {
 			return nil, err
 		}
-		selected = intersect(selected, changedTests)
 	}
 
 	return selected, nil
+}
+
+// selectByChangedSource returns the subset of selected rules (test funcs) that a
+// changed file could affect (gh #1877): a rule is kept when a changed file falls
+// within its domain — the union of the source dirs it scans and its own defining
+// archtest files (so editing the rule's *_test.go OR any companion CheckXxx /
+// helper it reaches re-runs it). Rules whose scan domain cannot be statically
+// determined (the zero-value fileDomain returned for an absent index key) always
+// match — no false negatives. Selection preserves the discovery order.
+func selectByChangedSource(workspaceRoot string, selected, changedFiles []string) ([]string, error) {
+	domainIdx, err := buildFileDomainIndex(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	normChanged := make([]string, len(changedFiles))
+	for i, c := range changedFiles {
+		normChanged[i] = filepath.ToSlash(c)
+	}
+
+	var out []string
+	for _, name := range selected {
+		if anyChangeSelects(domainIdx[name], normChanged) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+// anyChangeSelects reports whether any changed file selects the given domain.
+func anyChangeSelects(d fileDomain, changed []string) bool {
+	for _, c := range changed {
+		if domainSelectsChange(d, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // discoverTests runs `go test -tags=archtest -list '^Test' ./tools/archtest`
@@ -236,21 +305,6 @@ func hasFailures(tests []TestResult) bool {
 		}
 	}
 	return false
-}
-
-// intersect returns the elements of a that are also in b, preserving a's order.
-func intersect(a, b []string) []string {
-	bSet := make(map[string]bool, len(b))
-	for _, s := range b {
-		bSet[s] = true
-	}
-	out := make([]string, 0, len(a))
-	for _, s := range a {
-		if bSet[s] {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // checkGOWORK returns an error if GOWORK=off. workspace modules are required

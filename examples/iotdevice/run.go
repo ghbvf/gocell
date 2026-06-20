@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/ghbvf/gocell/framework/kernel/auth"
 
@@ -45,6 +47,66 @@ import (
 )
 
 const envDurableSinglePod = "GOCELL_IOTDEVICE_DURABLE_SINGLE_POD"
+
+// envMaxPendingPerDevice overrides the per-device Pending command cap
+// (F-S-005 #822). Unset → the devicecmd.NewService default (1000); a set value
+// must be a positive integer (fail-fast otherwise).
+const envMaxPendingPerDevice = "GOCELL_IOTDEVICE_MAX_PENDING_PER_DEVICE"
+
+// maxPendingPerDeviceCellOpts derives the per-device Pending cap cell option
+// from envMaxPendingPerDevice (F-S-005 #822). Empty when unset (the devicecmd
+// default applies); fail-fasts on a non-positive/invalid value (no soft
+// fallback). Logs an Info when the env override is in effect so the limit is
+// visible at startup without requiring the caller to inspect the value.
+func maxPendingPerDeviceCellOpts(logger *slog.Logger) ([]devicecell.Option, error) {
+	v := os.Getenv(envMaxPendingPerDevice)
+	if v == "" {
+		return nil, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return nil, fmt.Errorf("%s must be a positive integer, got %q", envMaxPendingPerDevice, v)
+	}
+	logger.Info("iotdevice: per-device pending limit override", slog.Int("limit", n))
+	return []devicecell.Option{devicecell.WithMaxPendingPerDevice(n)}, nil
+}
+
+// buildDirectPublisher selects the device-event publish channel. The cell always
+// publishes device-registered events to the in-memory bus, where the in-process
+// devicebootstrap subscriber reactively consumes them and enqueues a bootstrap
+// command (the #1698 reactive loop). When GOCELL_IOTDEVICE_MQTT_BROKERS is set,
+// the returned publisher tees local eb + MQTT (an external observable mirror for
+// mosquitto_sub) and the returned bootstrap options wire the MQTT connection +
+// publisher lifecycle. The HTTP/WS main path is unchanged. See
+// examples/iotdevice/docs/mqtt.md.
+func buildDirectPublisher(
+	ctx context.Context, clk clock.Clock, eb *eventbus.InMemoryEventBus, logger *slog.Logger,
+) (outbox.Publisher, []bootstrap.Option, error) {
+	var directPub outbox.Publisher = eb
+	var mqttBootstrapOpts []bootstrap.Option
+	mqttPub, mqttConn, mqttOK, err := buildMQTTDirectPublisher(ctx, clk, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build mqtt publish channel: %w", err)
+	}
+	if mqttOK {
+		directPub = &teePublisher{local: eb, external: mqttPub}
+		// Register BOTH the connection (managed resource: mqtt_ready probe +
+		// disconnect) AND the publisher (managed closer: drains in-flight
+		// publishes). Connection.Close only disconnects — it does NOT drain, so
+		// the publisher closer is mandatory, not redundant (PR #1364 review F1).
+		// mqttChannelWiringFor derives both; its godoc documents the LIFO
+		// drain-before-disconnect ordering.
+		mqttBootstrapOpts = append(
+			mqttBootstrapOpts,
+			mqttChannelWiringFor(mqttPub, mqttConn).bootstrapOptions()...,
+		)
+	}
+	return directPub, mqttBootstrapOpts, nil
+}
+
+func envTrue(key string) bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(key)), "true")
+}
 
 // readyzVerboseHealthOpts gates /readyz?verbose (PR-A35 + PR269 round-3): the
 // health handler enforces a strict X-Readyz-Token check. When the operator sets
@@ -89,30 +151,12 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	// In-memory event bus for demo mode.
 	eb := eventbus.New(clk)
 
-	// Event publish channel selection. The cell always publishes device-registered
-	// events to the in-memory bus, where the in-process devicebootstrap subscriber
-	// reactively consumes them and enqueues a bootstrap command (the #1698 reactive
-	// loop). When GOCELL_IOTDEVICE_MQTT_BROKERS is set, directPub becomes a tee:
-	// local eb first, plus MQTT as an external observable mirror for mosquitto_sub.
-	// The HTTP/WS main path is unchanged. See examples/iotdevice/docs/mqtt.md.
-	var directPub outbox.Publisher = eb
-	var mqttBootstrapOpts []bootstrap.Option
-	mqttPub, mqttConn, mqttOK, err := buildMQTTDirectPublisher(ctx, clk, logger)
+	// Event publish channel selection (extracted to buildDirectPublisher to keep
+	// runIotdevice within its complexity budget — F-S-005 #822 added an env-driven
+	// option here).
+	directPub, mqttBootstrapOpts, err := buildDirectPublisher(ctx, clk, eb, logger)
 	if err != nil {
-		return fmt.Errorf("build mqtt publish channel: %w", err)
-	}
-	if mqttOK {
-		directPub = &teePublisher{local: eb, external: mqttPub}
-		// Register BOTH the connection (managed resource: mqtt_ready probe +
-		// disconnect) AND the publisher (managed closer: drains in-flight
-		// publishes). Connection.Close only disconnects — it does NOT drain, so
-		// the publisher closer is mandatory, not redundant (PR #1364 review F1).
-		// mqttChannelWiringFor derives both; its godoc documents the LIFO
-		// drain-before-disconnect ordering.
-		mqttBootstrapOpts = append(
-			mqttBootstrapOpts,
-			mqttChannelWiringFor(mqttPub, mqttConn).bootstrapOptions()...,
-		)
+		return err
 	}
 
 	// Resolve persistence: durable PG wiring when GOCELL_IOTDEVICE_DSN is set,
@@ -148,8 +192,7 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 	}
 
 	// Create the device cell with explicitly wired persistence.
-	dc := devicecell.NewDeviceCell(
-		clk,
+	cellOpts := []devicecell.Option{
 		devicecell.WithDeviceRepository(deviceRepo),
 		devicecell.WithDirectPublisher(outbox.WrapPublisherForCell(directPub)),
 		devicecell.WithBootstrapEmitter(crs.bootstrapEmitter),
@@ -157,7 +200,15 @@ func runIotdevice(ctx context.Context, assemblyID string, assemblyCellIDs []stri
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithCommandRegistry(commandReg),
 		devicecell.WithLogger(logger),
-	)
+	}
+	// Per-device Pending command cap (F-S-005 #822). The default lives in
+	// devicecmd; the env only overrides it.
+	pendingOpts, err := maxPendingPerDeviceCellOpts(logger)
+	if err != nil {
+		return err
+	}
+	cellOpts = append(cellOpts, pendingOpts...)
+	dc := devicecell.NewDeviceCell(clk, cellOpts...)
 	dc.RegisterCommandQueue(commandQueue)
 
 	// Build assembly and register the cell.

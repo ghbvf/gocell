@@ -279,8 +279,8 @@ func buildStarterBootstrapOpts(
 	if err != nil {
 		return nil, fmt.Errorf("grpc metrics collector: %w", err)
 	}
-	grpcAddr := grpclistener.AddrFromEnv()
-	grpcServer, err := grpclistener.ServerFromEnv(outbox.DurabilityDemo, grpcAddr, interceptor.Deps{
+	grpcAddr := grpclistener.AddrFromEnv(grpclistener.PlatformEnv)
+	grpcServer, err := grpclistener.ServerFromEnv(grpclistener.PlatformEnv, outbox.DurabilityDemo, grpcAddr, interceptor.Deps{
 		Verifier:        shared.JWTVerifier,
 		Clock:           shared.Clock,
 		Collector:       grpcCollector,

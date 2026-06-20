@@ -38,7 +38,7 @@ endpoints:
     auth:
       serviceOwned: true
       passwordResetExempt: true
-      reason: "{id} is a session id, not a user id, so a route-level owner gate cannot be expressed; the service validates ownership by comparing the principal subject against the session user_id."
+      reason: "{id} is a session id, not a user id; wiring resource: id would forward session-id to PDP as the resource, causing subject.sub == session-id to always be false (permanent deny for every caller including the owner). Ownership is therefore enforced by the service comparing the principal subject against the session's user_id field."
       responses:
         - 503
     ownership:

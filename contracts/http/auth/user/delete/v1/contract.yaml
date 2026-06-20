@@ -17,6 +17,7 @@ endpoints:
         type: string
         format: uuid
     successStatus: 204
+    permission: user:write
     auth:
       responses:
         - 503

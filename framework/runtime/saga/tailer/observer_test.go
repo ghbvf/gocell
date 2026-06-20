@@ -33,6 +33,7 @@ func TestObserverEnumValues(t *testing.T) {
 		{string(AdvanceOK), "ok"},
 		{string(AdvanceStaleOwner), "stale_owner"},
 		{string(AdvanceError), "error"},
+		{string(AdvancePoisonSkip), "poison_skip"},
 	}
 	for _, p := range pairs {
 		if p.got != p.want {

@@ -252,6 +252,25 @@ func TestConfig_Validate_V5_FailClosed_NoTLSNoInsecure(t *testing.T) {
 	assert.Equal(t, grpcadapter.ErrAdapterGRPCConfigInvalid, ec.Code, "V5 fail-closed must reject zero TLS config")
 }
 
+// TestNew_EmptyInterceptors_Error asserts the V6 validate gate: New with an
+// empty (zero-value) Interceptors bundle must return ErrAdapterGRPCConfigInvalid.
+// This behaviorally backs the "chain-presence gap closed by #1752" claim — an
+// unconfigured Interceptors field is caught at construction time, not at request time.
+func TestNew_EmptyInterceptors_Error(t *testing.T) {
+	t.Parallel()
+	// Config with a valid Addr + TLS but zero Interceptors — V6 must reject it.
+	cfg := grpcadapter.Config{
+		Addr: ":0",
+		TLS:  grpcadapter.TLSConfig{AllowInsecure: true},
+		// Interceptors deliberately NOT set (zero value).
+	}
+	_, err := grpcadapter.New(cfg)
+	require.Error(t, err, "zero-value Interceptors must be rejected by V6 validate gate")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, grpcadapter.ErrAdapterGRPCConfigInvalid, ec.Code)
+}
+
 // ─── New — happy paths (three TLS modes) ─────────────────────────────────────
 
 func TestNew_HappyPath_AllowInsecure(t *testing.T) {

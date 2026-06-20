@@ -138,7 +138,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 // sub-router structure — auth.Mount strips the canonical API prefix off
 // Contract.Path so requests match without any relative-alias magic.
 func buildMux(svc *Service) *celltest.TestMux {
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/access/users", func(sub kcell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {
@@ -256,6 +256,45 @@ func TestHttpAuthUserGetV1Serve(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+}
+
+// TestHttpAuthUserGetV1_OwnerSelfAccess proves that after the owner-scoped gate
+// migration (#2355), a user accessing their own resource (subject == path-param
+// id) still reaches the handler and receives a valid response when an allow
+// Authorizer is wired. This guards against regressions where the migration
+// breaks the PDP ownership baseline (subject.sub == resource.id).
+func TestHttpAuthUserGetV1_OwnerSelfAccess(t *testing.T) {
+	root := contracttest.ContractsRoot(t)
+	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+	c := contracttest.LoadByID(t, root, "http.auth.user.get.v1")
+	handler := setupContractHandler(t)
+
+	// Create a user via admin so we have a real user id to self-access.
+	userID := createUserForContractTest(t, handler, createContract)
+
+	// Build an owner context: subject == userID, allow Authorizer wired so the
+	// PDP ownership baseline (subject.sub == resource.id) can fire.
+	ownerCtx := withAllowAuthorizer(
+		ctxkeys.WithTenantID(auth.TestContext(userID, nil), "00000000-0000-0000-0000-000000000001"),
+	)
+
+	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req = req.WithContext(ownerCtx)
+	handler.ServeHTTP(rec, req)
+	// 200 means the owner gate (RequirePermissionForResource) passed and the
+	// service found the user. Any 2xx or 404 (user-not-found after authz pass)
+	// proves authz succeeded; 401/403 would mean the gate incorrectly rejected
+	// a legitimate self-access after the owner-scoped migration.
+	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("owner self-access must not be rejected by the authz gate: got %d (body=%s)",
+			rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for owner self-access, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
 func TestHttpAuthUserUpdateV1Serve(t *testing.T) {

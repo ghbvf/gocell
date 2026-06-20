@@ -234,3 +234,122 @@ func TestFMT42_ReasonWithoutOptOutForbidden(t *testing.T) {
 		t.Errorf("expected finding on endpoints.http.auth.reason, got %q", errs[0].Field)
 	}
 }
+
+// --- #2355 owner-scoped / self-scoped resource-shape guards ---
+
+// fmt42FieldErrors filters FMT-42 errors anchored on a specific field.
+func fmt42FieldErrors(results []ValidationResult, field string) []ValidationResult {
+	var out []ValidationResult
+	for _, r := range fmt42Errors(results) {
+		if r.Field == field {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestFMT42_ResourceWithoutPermission_Error: endpoints.http.resource without a
+// permission is an error — an owner-scoped gate still needs an action (#2355).
+func TestFMT42_ResourceWithoutPermission_Error(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) { h.Resource = "id" })
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: resource without permission must error, got none")
+	}
+}
+
+// TestFMT42_SelfScopedWithoutPermission_Error: endpoints.http.selfScoped without a
+// permission is an error — a self-scoped gate still needs an action (#2355).
+func TestFMT42_SelfScopedWithoutPermission_Error(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) { h.SelfScoped = true })
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.selfScoped")
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: selfScoped without permission must error, got none")
+	}
+}
+
+// TestFMT42_ResourceAndSelfScoped_Error: resource and selfScoped are mutually
+// exclusive (owner-scoped path-param vs self-scoped subject) (#2355).
+func TestFMT42_ResourceAndSelfScoped_Error(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "id"
+		h.SelfScoped = true
+	})
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: resource ⊕ selfScoped mutex must error, got none")
+	}
+}
+
+// TestFMT42_OwnerScopedPermissionWithoutResource_OK is the DELIBERATE-non-port-of-FMT-41
+// anti-regression guard: an owner-scoped permission (user:write) on an admin route
+// WITHOUT a resource must be accepted. The same action gates both owner routes (with
+// resource) and admin routes (without); porting FMT-41's "owner-scoped ⇒ resource
+// required" would falsely reject create/delete/lock/unlock. resource is a per-route
+// authoring choice, not permission-derived (#2355).
+func TestFMT42_OwnerScopedPermissionWithoutResource_OK(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) { h.Permission = "user:write" }) // owner-scoped action, NO resource
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) != 0 {
+		t.Fatalf("FMT-42: owner-scoped permission without resource must be OK (admin route), got %d error(s): %+v", len(errs), errs)
+	}
+}
+
+// TestFMT42_ResourceWithPermission_OK: a well-formed owner-scoped route (resource + a
+// registered action + matching pathParams entry) is accepted (#2355).
+func TestFMT42_ResourceWithPermission_OK(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "id"
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string"}}
+	})
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) != 0 {
+		t.Fatalf("FMT-42: resource + permission + matching pathParams must be OK, got %d error(s): %+v", len(errs), errs)
+	}
+}
+
+// TestFMT42_ResourceNotInPathParams_Error: endpoints.http.resource naming a path
+// parameter that is not declared in endpoints.http.pathParams is rejected (#2355 F6).
+func TestFMT42_ResourceNotInPathParams_Error(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "userId" // typo — path uses {id}, not {userId}
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string"}}
+	})
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) == 0 {
+		t.Fatal("FMT-42: resource not in pathParams must error, got none")
+	}
+}
+
+// TestFMT42_ResourceInPathParams_OK: endpoints.http.resource naming a declared
+// pathParams key is accepted — the canonical owner-scoped shape (#2355).
+func TestFMT42_ResourceInPathParams_OK(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "user:read"
+		h.Resource = "id"
+		h.Path = "/api/v1/access/users/{id}"
+		h.PathParams = map[string]metadata.ParamSchema{"id": {Type: "string", Format: "uuid"}}
+	})
+	errs := fmt42FieldErrors(NewValidator(project, "", clock.Real()).validateFMT42(), "endpoints.http.resource")
+	if len(errs) != 0 {
+		t.Fatalf("FMT-42: resource matching pathParams key must pass, got %d error(s): %+v", len(errs), errs)
+	}
+}
+
+// TestFMT42_SelfScopedWithPermission_OK: a well-formed self-scoped route (selfScoped +
+// a registered action) is accepted (#2355, the decide endpoint shape).
+func TestFMT42_SelfScopedWithPermission_OK(t *testing.T) {
+	project := fmt42Project(func(h *metadata.HTTPTransportMeta) {
+		h.Permission = "access:decide"
+		h.SelfScoped = true
+	})
+	errs := fmt42Errors(NewValidator(project, "", clock.Real()).validateFMT42())
+	if len(errs) != 0 {
+		t.Fatalf("FMT-42: selfScoped + permission must be OK, got %d error(s): %+v", len(errs), errs)
+	}
+}

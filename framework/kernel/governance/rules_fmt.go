@@ -1144,6 +1144,8 @@ func (v *Validator) validateFMT41PasswordResetExempt(c *metadata.ContractMeta, f
 // permission overlay field (endpoints.http.permission, #2205).
 const (
 	fieldEndpointsHTTPPermission = "endpoints.http.permission"
+	fieldEndpointsHTTPResource   = "endpoints.http.resource"
+	fieldEndpointsHTTPSelfScoped = "endpoints.http.selfScoped"
 	fieldEndpointsHTTPAuth       = "endpoints.http.auth"
 	fieldEndpointsHTTPAuthReason = "endpoints.http.auth.reason"
 )
@@ -1192,9 +1194,66 @@ func (v *Validator) validateFMT42() []ValidationResult {
 		if h != nil && h.Permission != "" {
 			results = append(results, v.validateFMT42ForContract(c, h)...)
 		}
+		if h != nil {
+			results = append(results, v.validateFMT42ResourceShape(c, h)...)
+		}
 		results = append(results, v.validateFMT42AuthMode(c)...)
 	}
 	return results
+}
+
+// validateFMT42ResourceShape runs the #2355 owner-scoped / self-scoped overlay guards
+// for a single http contract: endpoints.http.resource (owner-scoped path param) and
+// endpoints.http.selfScoped (self-scoped subject). The shape RULES live in the single
+// metadata.ValidateHTTPResourceShape oracle (shared with the contractgen buildHTTPSpec
+// Hard gate, mirroring ClassifyHTTPAuthMode / ValidateHTTPHeaders); this is the Medium
+// validate-time arm that maps each violation to a field-anchored finding + fix. It
+// includes resource ∈ pathParams referential integrity (a typo'd resource that JSON
+// Schema cannot catch). Runs for every http contract (not gated on permission) so
+// resource/selfScoped-without-permission is caught.
+//
+// DELIBERATE non-port of gRPC FMT-41: there is NO "owner-scoped permission ⇒ resource
+// required" guard. The same action (e.g. user:write) gates BOTH owner routes (with
+// resource) and admin routes (without) — see
+// TestFMT42_OwnerScopedPermissionWithoutResource_OK. resource presence is a per-route
+// authoring choice, not permission-derived.
+//
+// The resource⊕opt-out and selfScoped⊕opt-out mutexes are enforced transitively
+// (resource/selfScoped⇒permission here + permission⊕opt-out in validateFMT42ForContract),
+// so they are not re-checked here (no double-report).
+func (v *Validator) validateFMT42ResourceShape(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) []ValidationResult {
+	file := contractFile(c)
+	var results []ValidationResult
+	for _, viol := range metadata.ValidateHTTPResourceShape(h) {
+		field := fieldEndpointsHTTPResource
+		if viol.Field == "selfScoped" {
+			field = fieldEndpointsHTTPSelfScoped
+		}
+		issue, fix := fmt42ResourceShapeIssueFix(viol.Kind)
+		results = append(results, v.newError(codeFMT42, issue, file, field,
+			fmt.Sprintf("http contract %q %s", c.ID, viol.Message), fix))
+	}
+	return results
+}
+
+// fmt42ResourceShapeIssueFix maps a metadata resource-shape violation kind to FMT-42's
+// IssueType + remediation hint. Kept in the governance layer (not metadata) so the
+// fix guidance stays with governance while the metadata oracle owns pure detection.
+func fmt42ResourceShapeIssueFix(kind metadata.HTTPResourceShapeViolationKind) (IssueType, string) {
+	switch kind {
+	case metadata.HTTPResourceWithoutPermission:
+		return IssueRequired, "add endpoints.http.permission with the registered authz action this owner gate enforces (e.g. user:read)"
+	case metadata.HTTPSelfScopedWithoutPermission:
+		return IssueRequired, "add endpoints.http.permission with the registered authz action this self-scoped gate enforces (e.g. access:decide)"
+	case metadata.HTTPResourceSelfScopedMutex:
+		return IssueInvalid, "keep exactly one: endpoints.http.resource for a path-param-owned resource, " +
+			"or selfScoped for the caller's own subject"
+	case metadata.HTTPResourceNotInPathParams:
+		return IssueInvalid, "endpoints.http.resource must name a path parameter declared in " +
+			"endpoints.http.pathParams; check the path template for the correct placeholder name"
+	default:
+		return IssueInvalid, "fix the endpoints.http.resource / selfScoped shape"
+	}
 }
 
 // validateFMT42AuthMode is the governance (Medium, validate-time) arm of the #2020

@@ -8,9 +8,11 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock/clockmock"
 )
 
+const systemViewReportElapsed = 90 * time.Second
+
 func TestSystemView_Report(t *testing.T) {
 	start := time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
-	clk := clockmock.New(start.Add(90 * time.Second))
+	clk := clockmock.New(start.Add(systemViewReportElapsed))
 	lastDeployedAt := "2026-06-19T09:00:00Z"
 	view := New(clk, Config{
 		Build: BuildInfo{

@@ -4,12 +4,10 @@
 # memory: ai-robust.md §1). It is NOT a full `make verify` — only the
 # subset that is (a) deterministic offline, (b) sub-10s on a WARM cache,
 # (c) high "forgot to run" rate. Infra-bound gates (go test against
-# testcontainers) stay in CI. CI-faithful golangci-lint (deviation 4) is
-# the only inclusion that breaches the sub-10s budget on cold cache; it
-# is accepted because warm steady-state is ~7s alongside build/vet, and
-# the cold cost is unavoidable CI work that the push pays regardless.
+# testcontainers) and CPU-heavy static analysis stay in CI or explicit
+# developer-triggered commands instead of blocking `git push`.
 #
-# Not a 1:1 CI mirror — four deliberate deviations:
+# Not a 1:1 CI mirror — five deliberate deviations:
 #   - The gofumpt gate runs `go -C tools run mvdan.cc/gofumpt` (version
 #     resolved from tools/go.mod) rather than an ambient $PATH `gofumpt`. A host-installed
 #     gofumpt drifts from the version the CI formatter gate enforces
@@ -22,18 +20,21 @@
 #     generated/ edits can therefore pass here but fail CI (which runs from
 #     a clean checkout). This is inherent to pre-push hooks, not a bug —
 #     stage your work before relying on the result.
-#   - `go build -tags=integration ./...` has no standalone CI step; CI
+#   - `go build -tags=integration` has no standalone CI step; CI
 #     compiles the integration tag transitively inside `go test
 #     -tags=integration` (integration-test job). It is added here as an
 #     extra local guard because the integration-tag build break is a
 #     repeatedly-forgotten failure mode (project memory: integration-tag
-#     build). In pure go.work mode these commands run per workspace module
-#     through hack/lib/modules.sh; if a root go.mod exists, the root commands
-#     also mirror real CI steps (_build-lint.yml: go build ./... /
-#     go vet -tags=e2e ./tests/e2e/...;
-#     bare `go vet ./...` is intentionally absent from CI because govet
-#     is in golangci-lint v2's default linter set, but the hook still runs
-#     it as a fast standalone fail-fast independent of the lint step).
+#     build). All of build / build-tags=integration / vet run per workspace
+#     module through hack/lib/modules.sh — the repo root is a pure go.work
+#     workspace with no root module post-#1565, so there is no root-level
+#     `./...` form; the per-module build/vet mirror _build-lint.yml's
+#     per-module CI gates. The e2e-tagged vet (go vet -tags=e2e
+#     ./tests/e2e/...) stays at root because it resolves into the real
+#     ./tests module. bare `go vet ./...` is intentionally absent from CI
+#     because govet is in golangci-lint v2's default linter set, but the
+#     hook still runs per-module vet as a fast standalone fail-fast
+#     independent of the lint step).
 #   - archtest is NOT run here. PR #887 first round wired
 #     `SHARD_COUNT=4 bash hack/verify-archtest.sh` as a PR-time
 #     replacement after ADR 202605120000 §Amendment 2026-05-23-pr-time-
@@ -47,43 +48,20 @@
 #     Actions UI + workflow_dispatch rerun) — not in an implicit
 #     pre-push gate. Developers who want PR-time archtest feedback run
 #     `bash hack/verify-archtest.sh` or `make verify` explicitly.
-#   - golangci-lint runs CI-faithfully —
-#     `golangci-lint run --new-from-merge-base=origin/develop` per workspace
-#     module with the version pinned by hack/lib/golangci-lint.sh::
-#     GOLANGCI_LINT_VERSION (the project's single source of truth, which CI's
-#     lint step sources via the same gocell::golangci_lint::ensure; NOT go.mod
-#     like gofumpt — golangci-lint is not a go.mod tool dependency).
-#     Three honest caveats: (a) MEASURED cost is ~7s warm but ~295s
-#     (~5min) COLD — i.e. after `go clean -cache`, a dependency bump, or
-#     first use before golangci-lint's own ~/.cache is populated. This
-#     breaches the sub-10s budget in the cold case; it is accepted
-#     because the analysis is unavoidable work the push will incur in CI
-#     regardless — running it here shifts it earlier AND warms the cache
-#     for every subsequent push, and it rides the parallel fan-out so the
-#     warm steady state adds ≈0 wall time (7s alongside build/vet's ~7s).
-#     (b) base-ref is hard-pinned to origin/develop; PRs targeting
-#     main/release/* are linted against develop's merge-base, not their
-#     real target — a tolerated drift (develop is the integration branch
-#     for the overwhelming majority of PRs; the rare cross-target case is
-#     re-checked by PR-CI's own `--new-from-merge-base=origin/<base>`).
-#     (c) push-mode CI (ci.yml) runs golangci-lint with NO new-issues
-#     filter (full); this hook mirrors PR-mode CI (the gate that actually
-#     blocks merges), so it is intentionally *less* strict than push-CI,
-#     never more — it cannot produce "hook red / CI green". Resolution of
-#     the pinned binary failing (toolchain/install error) is fail-closed
-#     (run_bg sees non-zero → push blocked), per no-soft-fallback.
+#   - golangci-lint is NOT run here. It remains enforced by PR/push CI and
+#     available through explicit developer commands. The former hook-side
+#     inclusion regularly breached the sub-10s contract on cold caches and
+#     could monopolize CPU while Git held the push transaction open.
 #
 # Execution: every gate is independent (no shared mutable state; the Go
 # build/test cache is concurrency-safe across parallel `go` invocations),
-# so all of them — gofumpt / build×2 / vet×2 / golangci-lint / codegen-
-# verify — run in a SINGLE parallel fan-out behind one wait barrier.
+# so all of them — gofumpt / per-module build+vet / codegen-verify — run in
+# a SINGLE parallel fan-out behind one wait barrier.
 # Wall cost is ~max(slowest gate), not the sum of serial tiers. Each gate
 # is still change-gated: a docs-only push launches nothing (~0s); a .go
-# push on a WARM cache pays ~max(build/vet/lint) ≈ 7-15s. Cold-cache is
-# dominated by golangci-lint (~5min measured, see deviation 4 —
-# unavoidable CI work, paid once, then warm); a schema/contract push
-# additionally runs the codegen staleness probe in the same fan-out (no
-# extra wall time unless it is the slowest job).
+# push on a WARM cache pays ~max(build/vet) ≈ 7-15s. A schema/contract
+# push additionally runs the codegen staleness probe in the same fan-out
+# (no extra wall time unless it is the slowest job).
 #
 # Honest scope (ai-robust grading): this is Medium AI-robust — `git push
 # --no-verify` bypasses it and a fresh clone/worktree without
@@ -209,6 +187,7 @@ fail=0
 # (header deviation 1: tools/go.mod is the only SoR, no PATH ambient). Cost: warm ~200ms; cold
 # gofumpt compile +~2-3s; first-ever module download +~1-2s — still well
 # under the build/vet cost that dominates a cold-cache push.
+# shellcheck disable=SC2329 # invoked indirectly via run_bg command arguments.
 gofumpt_gate() {
     local out
     local -a tool_args=()
@@ -231,71 +210,6 @@ gofumpt_gate() {
     return 0
 }
 
-# lint_gate runs CI-faithful golangci-lint in PR mode
-# (`--new-from-merge-base=origin/develop`). See header deviation 5 for the
-# measured cost (warm ~7s / cold ~5min), the base-ref pin rationale, and
-# why mirroring PR-mode (not push-mode) CI cannot produce "hook red / CI
-# green". The binary version is resolved through the project's single
-# source of truth — hack/lib/golangci-lint.sh (GOLANGCI_LINT_VERSION), which
-# CI's lint step sources via the same gocell::golangci_lint::ensure — NOT
-# go.mod (golangci-lint is not a go.mod tool dep,
-# unlike gofumpt; this is the one place the no-PATH-ambient rule routes
-# through the lib instead of `go run`). Fail-closed: any sourcing /
-# resolver / install error returns non-zero so run_bg blocks the push
-# (no-soft-fallback — never silently skip the gate).
-lint_gate() {
-    local bin module_dirs dir build_tags
-    # shellcheck source=/dev/null
-    if ! source "${ROOT}/hack/lib/golangci-lint.sh" 2>/dev/null; then
-        printf 'golangci-lint gate: cannot source hack/lib/golangci-lint.sh\n'
-        return 1
-    fi
-    # shellcheck source=/dev/null
-    if ! source "${ROOT}/hack/lib/modules.sh" 2>/dev/null; then
-        printf 'golangci-lint gate: cannot source hack/lib/modules.sh\n'
-        return 1
-    fi
-    if ! bin="$(gocell::golangci_lint::ensure)"; then
-        printf 'golangci-lint gate: version resolve/install failed (hack/lib/golangci-lint.sh)\n'
-        return 1
-    fi
-    # --new-from-merge-base needs the base ref present locally. Surface the
-    # actionable hint here rather than letting golangci-lint emit a raw git
-    # error (operator-hint parity with the gofumpt/codegen gates). Still
-    # fail-closed: missing base blocks the push — it never falls back to a
-    # full-repo lint (that would flag every pre-existing issue and block
-    # unconditionally) nor silently skips (no-soft-fallback).
-    if ! git rev-parse --verify --quiet "${BASE_BRANCH}^{commit}" >/dev/null; then
-        printf 'golangci-lint gate: %s not found locally (run: git fetch origin develop)\n' "${BASE_BRANCH}"
-        return 1
-    fi
-    # --timeout overrides golangci-lint's default; PR-mode on a multi-commit
-    # merge-base..HEAD range (especially after a develop sync) routinely needs
-    # more than the default on cold-cache. CI invokes the same pinned binary via
-    # hack/lib/golangci-lint.sh (gocell::golangci_lint::ensure) without an
-    # explicit --timeout, so this generous 10m local cap only keeps the hook from
-    # aborting a slow cold-cache range — it does not change which findings the
-    # hook vs. CI report (verdict parity comes from the shared binary + config,
-    # not the timeout).
-    if ! "${bin}" config verify --config "${ROOT}/.golangci.yml"; then
-        return 1
-    fi
-    if ! module_dirs="$(gocell::modules::dirs)"; then
-        printf 'golangci-lint gate: workspace module enumeration failed\n'
-        return 1
-    fi
-    while IFS= read -r dir; do
-        [[ -n "${dir}" && "${dir}" != "." ]] || continue
-        build_tags=""
-        [[ "${dir#./}" == "tools" ]] && build_tags="--build-tags=archtest,releasesmoke"
-        (
-            cd "${ROOT}/${dir}"
-            # shellcheck disable=SC2086 # build_tags is intentionally split into CLI flags.
-            "${bin}" run --config "${ROOT}/.golangci.yml" "--new-from-merge-base=${BASE_BRANCH}" --timeout=10m ${build_tags} ./...
-        ) || return 1
-    done <<<"${module_dirs}"
-}
-
 # ---------------------------------------------------------------------------
 # Single parallel fan-out. Every gate below is independent (no shared
 # mutable state; the Go build/test cache is concurrency-safe across
@@ -307,12 +221,10 @@ lint_gate() {
 #
 #   Tier 1  gofumpt           — formatter drift on the changed .go files
 #                               (the exact gate that failed CI #525).
-#   Tier 2  build/vet ×4      — whole-module compile + vet; integration
-#                               and e2e tags are the header-documented
+#   Tier 2  build/vet         — per-module compile + vet via `go -C` over the
+#                               go.work funnel (root has no module post-#1565);
+#                               integration and e2e tags are header-documented
 #                               deliberate CI-structure deviations.
-#   Tier 4  golangci-lint     — CI-faithful PR-mode lint
-#                               (--new-from-merge-base=origin/develop);
-#                               warm ~7s, cold ~5min (deviation 4).
 #   Tier 3  codegen staleness — only when a codegen *source* changed; can
 #                               fire with go_changed=0 (schema/tmpl-only
 #                               push), so it has its own gate, not nested
@@ -339,39 +251,41 @@ if [[ ${go_changed} -eq 1 ]]; then
     [[ ${#fmt_targets[@]} -gt 0 ]] && \
         run_bg "gofumpt formatter (run: make fmt)" gofumpt_gate "${fmt_targets[@]}"
 
-    if [[ -f go.mod ]]; then
-        run_bg "go build ./..."                   go build ./...
-        run_bg "go build -tags=integration ./..." go build -tags=integration ./...
-        run_bg "go vet ./..."                     go vet ./...
-    fi
+    # The repo root is a pure go.work workspace with NO root module (#1565), so a
+    # bare `go build/vet ./...` from root matches no module and errors ("directory
+    # prefix . does not contain modules listed in go.work"). Every module is built
+    # and vetted per-module in the funnel loop below — there is no root-level
+    # whole-repo build/vet form. The lone gate that stays at root is the e2e-tagged
+    # vet: `./tests/e2e/...` is a tag+path-scoped target that resolves INTO the real
+    # `./tests` workspace module (so it works), and the funnel's plain `vet ./...`
+    # does not carry the e2e tag — an irreducible complement, not a redundant
+    # whole-repo `./...` gate.
     run_bg "go vet -tags=e2e ./tests/e2e/..." go vet -tags=e2e ./tests/e2e/...
-    # examples/* are their own go.work modules (#1556); root ./... stops at the
-    # nested-module boundary. Enumerate every satellite from the SAME go.work
-    # funnel the CI build/test gates use (hack/lib/modules.sh → `go work edit
-    # -json`) and build/vet each with `go -C`. A hardcoded import-path wildcard
+    # Enumerate every workspace module from the SAME go.work funnel the CI
+    # build/lint gates use (hack/lib/modules.sh → `go work edit -json`) and
+    # build/vet each with `go -C` — framework, adapters/*, examples/* (#1556),
+    # tests, and so on. A hardcoded import-path wildcard
     # (`github.com/ghbvf/gocell/examples/...`) silently mis-covers under an
-    # ambient GOWORK=off and never covers a future non-examples satellite — so
-    # iterate the funnel instead, fail-closed if it breaks.
+    # ambient GOWORK=off and never covers a future workspace module — so iterate
+    # the funnel instead, fail-closed if it breaks.
     # shellcheck source=../lib/util.sh
     source "${ROOT}/hack/lib/util.sh"
     # shellcheck source=../lib/modules.sh
     source "${ROOT}/hack/lib/modules.sh"
-    if satellite_dirs_raw="$(gocell::modules::dirs)"; then
+    if module_dirs_raw="$(gocell::modules::dirs)"; then
         while IFS= read -r moddir; do
             [[ -z "${moddir}" || "${moddir}" == "." ]] && continue
             run_bg "go build (${moddir})"                   go -C "${moddir}" build ./...
             run_bg "go build -tags=integration (${moddir})" go -C "${moddir}" build -tags=integration ./...
             run_bg "go vet (${moddir})"                     go -C "${moddir}" vet ./...
-        done <<<"${satellite_dirs_raw}"
+        done <<<"${module_dirs_raw}"
     else
         # Fail-closed: a broken go.work funnel (missing jq, malformed `use`) must
-        # not silently skip satellite coverage. The funnel already printed its
+        # not silently skip module coverage. The funnel already printed its
         # error to stderr above; block the push.
-        note "FAIL: go.work module enumeration (hack/lib/modules.sh) failed — examples/* satellites NOT built/vetted; install jq and fix go.work, then re-push"
+        note "FAIL: go.work module enumeration (hack/lib/modules.sh) failed — go.work modules NOT built/vetted; install jq and fix go.work, then re-push"
         fail=1
     fi
-
-    run_bg "golangci-lint (CI-faithful; run: make fmt / fix lint)" lint_gate
 fi
 
 if [[ ${codegen_changed} -eq 1 ]]; then

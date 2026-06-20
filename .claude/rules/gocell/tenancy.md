@@ -17,17 +17,16 @@ UUID。repo 和 service API 使用 typed tenant 参数，不传裸 string。
 - tenant / all 不带 subject。
 - SQLPredicate / Allows 是纯翻译器，不决定 all 是否可用。
 
-`RowScopeAll`（跨租户）不经 `NewRowVisibility`——它**拒绝** all（#1760）；唯一生产者是
-sealed `tenant.NewCrossTenantVisibility()`，sole production caller = `runtime/auth` 的
-super-admin 派生（与强制 FR-007 审计同址，`ROWSCOPEALL-AUDIT-FUNNEL-01`）。跨租户读取
-API 取 sealed `tenant.CrossTenantVisibility` 位置参（Hard typed funnel，漏传/伪造皆编译错）；
-minter 单调用方限制是文档化 Medium Go 天花板（#1282/#851/#893 同族）。
+`tenant.NewRowVisibility` 拒绝 `RowScopeAll`。跨租户可见性只能由
+`tenant.NewCrossTenantVisibility()` 生产；跨租户读取 API 必须接收 sealed
+`tenant.CrossTenantVisibility` 位置参，不能接收普通 `RowVisibility` 或裸 scope。
+`RowScopeAll` 只能从 `runtime/auth` 的 super-admin 派生路径进入业务；派生必须与
+FR-007 强制审计同址。
 
-audit read 的 **serving 池**（NOBYPASSRLS）对 `RowScopeAll` 始终 fail-closed
-（`RowScopeAllUnsupportedError` → 501，纵深防御）。super-admin 跨租户读取由**专用
-`gocell_audit_admin` admin 读取池**（角色限定 permissive RLS policy，非 BYPASSRLS）服务，
-未 provision 时优雅 fail-closed（501，不 fail-open）。机制/威胁矩阵见 ADR
-`202606131900-1810` + `202606071300-1618`/`202606071200-1676` 的 2026-06-13 amendment。
+audit read 的 serving 池对 `RowScopeAll` 始终 fail-closed，返回
+`RowScopeAllUnsupportedError` / 501。super-admin 跨租户 audit read 只能走专用
+`gocell_audit_admin` admin 读取池；该池必须使用角色限定 permissive RLS policy，
+不得使用 BYPASSRLS。admin 池未 provision 时返回 501，不 fail-open。
 
 ## Principal claim source
 
@@ -43,138 +42,116 @@ JWT tenant claim 在 auth 边界解析并写入 context。service principal 无 
 ## RLS 与 PG scope
 
 PG tenant scope 使用 `SET LOCAL` 注入当前事务。scope 写入只允许通过受控 helper；
-绕过 TxManager 直接借连接必须 fail-fast。RLS policy shape 由 schema guard 检查。
-app-serving role 必须非 owner 且无 bypass RLS 权限。
+绕过 TxManager 直接借连接必须 fail-fast。
 
-相关 enforcement 的完整 ID、评级和盲区写在对应 archtest godoc。
+RLS policy shape 由 schema guard 检查。app-serving role 必须非 owner 且无 bypass RLS
+权限。写端点依靠 typed tenant 参数、ctx tenant 与 PostgreSQL FORCE RLS 维护 tenant
+边界。
 
 ## ABAC authz 接线（permission-based）
 
-业务端点授权迁向 PDP 决策，不在 handler 硬编 role-name 字面量。
+业务端点授权走 PDP 决策，不在 handler 硬编 role-name 字面量。
 
-- 路由门禁用 `auth.RequirePermission(authz.Permission)`，不用 `auth.AnyRole`/`auth.SelfOr`
-  做授权分支。`authz.Permission` 是 sealed 闭值集（唯一 minter = registry，包外不可伪造）；
-  permission 单例经 accessor 函数（`authz.PermAuditRead()`）暴露而非可重赋值的导出 var——
-  函数不可重赋值 = 注册值类型级不可变（重赋值即编译错）。role 字符串不可传入 Permission 位
-  （概念隔离）。
-- **resource ownership 进 PDP**（#1977）：path-param 标识的 resource ownership 是 PDP ABAC 决策，
-  不是 handler 短路。owner-scoped 端点用 `auth.RequirePermissionForResource(pathParam, perm)`——它把
-  canonical 化的 path-param 转发给 PDP 作 `resource`，由 baseline ownership 规则
-  `subject.sub == resource.id`（`abac.OpEqualsAttr` 跨属性算子）判定，引擎决策、无 Go `isSelfAccess`
-  短路。「空参数 ≠ self」保留：空/非 canonical param → `resource.id` not-found → 规则不命中（fail-closed）。
-  delegated ownership（owner ≠ id，如 user 拥有 device）用 `subject.sub == resource.owner`（owner 由 PIP lookup
-  供）；device 读**自身**状态是 **kind-gated** device-self `subject.kind == device AND subject.sub == resource.id`
-  （framework-owned devicestate，#2351 + #2400 F1——非 device 主体即便 id 相等也拒，与 user/role 的 kind-agnostic
-  self 规则不同）；delegated user-owns-device 待 device registry/PIP。
-  owner-scoped 端点的 gate 形状由 `OWNER-SCOPED-GATE-EXACT-SET-01`（Medium）冻结守卫——把
-  owner gate 回退成裸 `auth.RequirePermission`（转发 `r.URL.Path` 而非 canonical resource id）即 CI 红；
-  精确集（identitymanage / rbaccheck / framework-owned deviceserving—devicestate #2351，scan 含 `./cellmodules/...`）
-  与盲区见该 archtest godoc。baseline owner-scoped action（user:read/write、role:read、device:read #2351；
-  authoritative set 见 freeze test）的授予面由 `BASELINE-OWNER-RULE-TENANT-FREEZE-01`（Medium，value-golden）
-  冻结：① 每条 owner self 规则须 = EffectAllow + 精确单 action + frozen owner condition
-  （`subject.sub == resource.id`）；② 每个 owner action 的 allow 规则闭集恰为 `{1 owner, 1 admin}`。真正的
-  owner→tenant widen 向量（PDP 跨规则 OR）——**新增一条 tenant 匹配 allow 规则**、替换 owner 条件、或扩
-  action——即 build-test lane 红（给现有规则加 AND 条件是收紧非 widen，仍按 forbidden drift 拒）。跨租户拒绝
-  是 tenant-agnostic ownership 规则（`subject.sub != resource.id`）的天然结果，由 e2e `cross_tenant_*` 用例
-  覆盖（#2026）。评级/盲区见对应测试 godoc。
-- self ownership **不扩大数据访问**：路由门禁放行只让 owner 过 coarse gate；行可见性仍由 principal 派生的
-  `RowScope`（身份决定，policy 改不动）独立治理（D3）。query-param self scoping 仍留 handler/service：如
-  audit 的空 `actorId` 对 admin 是全 actor permissioned 读，非隐式 self（只有显式 `param == subject` 经
-  PDP ownership 规则豁免门禁）。
-- Authorizer 经 composition root `bootstrap.WithPrimaryAuthorizer` 注入 primary listener
-  request ctx（唯一 `auth.WithAuthorizer` 上游 + `AuthorizerFromContext`/`RequirePermission`
-  下游）。Cell 不 import 兄弟 cell 的 Authorizer；强依赖缺失 fail-fast；可解析的 Authorizer
-  在 bootstrap router build（Init 后、serve 前）经 `ResolveAuthorizer` 预解析，nil provider
-  在启动期 fail-fast 而非首请求才暴露。
-- PDP fail-closed：缺 Authorizer / 缺租户 / store 不可用 / 无适用 permit → deny。内置 baseline
-  是 action-scoped + role-conditioned 的 allow 规则（复刻既有 role 门禁）；baseline ≠ 降级
-  allow-all。租户 policy 叠加在 baseline 上，可加 allow 也可加 deny（forbid-wins 保证 deny
-  优先）——故租户 allow 可放宽**路由门禁**，但**不能扩大数据访问**。读端点的数据可见性由
-  principal 派生的 `RowScope`（身份决定，policy 改不动）独立治理，租户给非 admin 授
-  `audit:read` 只让其过门禁，数据层仍按 RowScope=self 只返回本人行。写端点没有 RowScope
-  维度，隔离后盾是 typed tenant 参数 / ctx tenant 与 PostgreSQL FORCE RLS 的 tenant 边界。
-  路由门禁是数据边界之上的纵深防御，不是唯一控制点。
-- **allow 规则必带非空 Action（最小特异性，#1979）**：租户 / baseline 的 `EffectAllow` 规则**必须**声明
-  至少一个 `action`——一条空 Action 的 allow（叠加空 Conditions）会对任意 action、任意 subject 无条件
-  permit，一条误配/恶意租户 policy 即可放空所有 permission 的路由门禁。三层 enforcement：写侧
-  `abac.Rule.Validate` fail-closed（422）；读侧 evaluator `applyRule` 对空-Action allow fail-closed（视为
-  不适用、永不放行，纵深防御漏网/旧持久化规则——PG 读经 stored-read `ValidateStored` profile 对持久化行可达，
-  不复用 authoring `Validate` 误判致 503，#2409）；baseline 静态面由 archtest
-  `BASELINE-ALLOW-ACTION-NONEMPTY-01`（Medium，value-level 同包冻结 + anti-vacuity + RED case）守。
-  空 Action 仅对 `EffectDeny` 合法（deny-all，forbid-wins 覆盖全部 action）。wire 经契约
-  `http.policy.shared/v1/rule.schema.json` 的 `action` 字段承载（present-only optional：结构真相单源在域层
-  Validate，沿用 #1977 约定，非 schema 结构强制）。运行时谓词 `len(Action)>0` 不可在 Go 编译期表达，故
-  真正的 Hard 仅在 baseline 改用 codegen+byte-golden 时可达；当前三层为可达最强（评级/Hard 化路径见对应
-  archtest godoc 与 PR-10a ADR amendment）。
-- 路由门禁是 coarse allow/deny，不**执行** obligation（RowScope/FieldMask 由数据层 PEP 执行），
-  但对 Allow 携带的非零 obligation **fail-closed**（拒绝而非静默丢弃）——baseline obligation
-  为零，正常路径不受影响。
-- 业务 handler 无 role-literal 授权分支由 `PERMISSION-BASED-AUTHZ-01`（Medium）守卫，扫描范围
-  `corecells/` + `examples/`，**两条 arm**：① helper 形态 ban（`AnyRole`/`SelfOr`/`RequireAnyRole`），
-  allowlist 冻结为空（zero-exception）；② 手写 `(*auth.Principal).HasRole` 授权分支 ban（type-aware
-  receiver 解析），sanctioned 用法（两个 example PDP baseline + auditcore RowScope/FR-007 派生）收录独立
-  allowlist `permissionBasedAuthzHasRoleAllowlist`，每条带理由 + no-stale 反查。残留盲区：手写
-  `range p.Roles` 成员判定（identitymanage 字段级 admin guard）不在 `HasRole` 方法范围内、不被捕获。
-  Hard 化路径与完整盲区见对应 archtest godoc 与 PR-10a ADR。
-- **gRPC 方法授权与 HTTP 同构**（#2008）：非 public gRPC RPC 进 runtime 后由 auth interceptor 的
-  PDP gate 调同一 `auth.Authorizer`（composition root 经 `interceptor.Deps.Authorizer` 注入，
-  与 HTTP `WithPrimaryAuthorizer` 同源），按方法所需 permission 决策——不在 handler 手写谓词。
-  method→permission 由契约 `endpoints.grpc.methods[].permission` overlay 经 cellgen 派生入
-  `GRPCServiceSpec.MethodPermissions`，registrar 解析成 sealed `authz.Permission`（未知即启动 fail-fast）。
-  严格 fail-closed：非 public 方法缺 permission overlay = gate deny，且 codegen completeness 预检在构建期
-  拒绝（dead 403 不可静默上线）。
-  **owner-scoped per-message resource（#2207）**：coarse permission 的 resource = full method name；
-  owner-scoped permission（`authz.Permission` 的 typed `IsOwnerScoped()` 位——闭值集是机器源，由
-  `framework/pkg/authz/permission_test.go` 的 `TestPermissions_OwnerScopedPinnedSet` 冻结，规则文件不再
-  手写该清单）的 gRPC 方法须声明
-  `endpoints.grpc.methods[].resource: <请求消息字段>`，interceptor 用 protoreflect 取该字段、经与 HTTP 同一
-  `httputil.ParseCanonicalUUID` 规范化后作 PDP `resource`（HTTP `RequirePermissionForResource` 的 gRPC 对偶，
-  让设备 watch 自己的队列）。unary 在入口取 `req`；server-streaming 把整个 permission 门**延后到首个
-  `RecvMsg`**（`resourceGatedStream`，open 时跑 coarse 门会误拒 owner）。owner-scoped⟺resource 对称由 cellgen
-  generate-time 交叉校验强制（**Hard**：缺 resource = owner 静默锁死即 build 失败；coarse 带 resource 即失败）。
-  F3 fail-closed：仅结构性提取失败（非 proto.Message / 字段不存在 / 非 string）→ deny（`RESOURCE_UNRESOLVED`，
-  不回退 fullMethod）；空 / 非 UUID 值转发给 PDP（admin/operator coarse 仍过，不被误拒）。提取值绝不进 ErrorInfo
-  metadata（PII 安全）。resolver 单源 = chain.go（archtest `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01`）。
-  **启动期 fail-fast 与 HTTP 同构**（#2204）：spec 含 permission-gated 方法但未 wire Authorizer，注册期
-  （phase7b drain，Init 后 / serve 前）fail-fast，不再 boot+请求期才 403——对齐 HTTP `ResolveAuthorizer`；
-  overlay method-key 在注册期对本 spec 已注册方法集做闭集校验（stale/typo key fail-fast，非请求期 dead 403）。
-  **错误模型机器可读**：每个 deny 携 sealed `google.rpc.ErrorInfo`（`Reason` 闭值集 + `Domain=gocell.authz.grpc`
-  + 非 PII metadata：method/permission，无 subject/token），客户端无需解析英文文本区分 no-mapping/not-wired/
-  denied/obligation/unavailable。**PDP 决策指标同构**：gRPC PDP 决策经 `NewObservableAuthorizer` 包装（真实
-  provider 时，`kernelmetrics.IsReal` 单源与 HTTP `hasRealMetricsProvider` 共用），落同一 `auth_pdp_decision_*`
-  series（无 transport 标签，registerOrReuse 共享 family）。
-  **password-reset-exempt 第 4 契约派生维度（#1382）**：reset-required principal 默认在每个 gRPC 方法被
-  `auth.PasswordResetBlocked` 拦（fail-closed）；豁免口由 `endpoints.grpc.methods[].passwordResetExempt: true`
-  声明（与 `public` 互斥、与 `permission` 正交且必须共存——改密方法仍需 ABAC gate），经 cellgen 派生入
-  `GRPCServiceSpec.PasswordResetExemptMethods`，registrar `IsPasswordResetExemptMethod` 作运行时单源，
-  `chain.go` 装 `WithPasswordResetExempt(reg.…)`（OR-compose，与 public-method 同构）。与 public-method 同
-  载体链路：互斥/必带-permission 由 schema（Hard）+ 治理 `FMT-41` 双守，源单一性由 archtest
-  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01`（Medium，双维 + NegativeControl）守。机制/评级/威胁矩阵见
-  grpc-transport-adapter ADR §"Amendment 2026-06-15 — #2008" + §"Amendment 2026-06-16 — #2204"
-  + §"Amendment 2026-06-18 — #2207" + §"Amendment 2026-06-18 — #1382" + archtest
-  `GRPC-PERMISSION-GATE-WIRING-FUNNEL-01` / `GRPC-METHOD-RESOURCE-FIELD-FUNNEL-01` /
-  `GRPC-PASSWORD-RESET-EXEMPT-WIRING-FUNNEL-01` + 治理 `FMT-41`。
-- **HTTP 授权 contract-derived 化（#2205）**：HTTP route gate 与 gRPC 同源——
-  transport-neutral `authz.MethodPolicyResolver`（gRPC `ServiceRegistrar` 与 HTTP cell 级
-  `auth.NewStaticMethodPolicyResolver` 双实现），HTTP route→permission 由契约 `endpoints.http.permission`
-  overlay 经 cellgen 派生入 cell 级 resolver，生成 handler 经 `auth.RequirePermissionForContract`
-  解析（复用 `RequirePermission` 单一 PDP 路径，不新增第二入口）。来源合法性由治理 `FMT-42` 验证
-  （present-only：∈ closed authz registry + 与 public/bootstrap/clientsOnly/serviceOwned 互斥），
-  resolver 源单一性由 archtest `HTTP-PERMISSION-GATE-WIRING-FUNNEL-01`（Medium）守。
-- **默认 ABAC + 强制 AuthZ mode 声明（#2020）**：每个 `lifecycle: active` + `codegen` 的 HTTP 契约**必须**声明
-  恰好一个 AuthZ mode——ABAC 默认（`endpoints.http.permission`）或显式 opt-out（`public`/`bootstrap`/
-  `clientsOnly`/`serviceOwned`）；缺失（modeless）= codegen generate-time 完整性预检拒绝（**Hard 主载体**，
-  与 gRPC `Completeness (#2008)` 同构）+ FMT-42 `gocell validate` 早报（Medium 纵深）。opt-out 必带非空
-  `endpoints.http.auth.reason`（ABAC 自证、不带 reason；reason-without-opt-out 亦 forbidden）。判定收口为单一共享
-  oracle `metadata.ClassifyHTTPAuthMode`，**不可绕 Hard 核心 = `contractgen.buildHTTPSpec`** 内对每个被渲染契约
-  跑 classifier（所有渲染路径 generate / verify codegen-* / verify generated / cellgen stage_render / 直接
-  RenderContractArtifacts 必经，对标 k8s apiextensions 对象级校验）；纵深层 = `cmd` 项目级 `ValidateProjectHTTPAuthModes`
-  （CLI 聚合 UX）+ cellgen serve-scan + FMT-42（validate Medium），同一 oracle 多处复用。冻结迁移 ledger 单源在
-  `kernel/metadata/authz_mode.go`（`httpAuthModeMigrationLedger`）；frozen-subset（ledger ⊆ 不可变 37-ID 集，挡
-  grow+swap）+ no-stale 由 metadata 测试 + archtest `HTTP-AUTHZ-MODE-MANDATORY-01` 守，随 #2355/#2358 迁移收敛到空后删豁免。
-  runtime `auth.Mount` 经评估**不承载**此约束（serviceOwned≡nil-policy 设计本意 / operator·internal 鉴权来自
-  listener·Mount 不可见 / ContractSpec 不带 mode），与 gRPC 同。机制/威胁矩阵/PR-10a 重评见 ADR
-  `docs/architecture/202606190847-2020-adr-authz-default-abac.md`。未迁路由的手写 gate 迁移本体归 #2355 / #2358。
+- 路由门禁用 `auth.RequirePermission(authz.Permission)`、
+  `auth.RequirePermissionForResource(pathParam, perm)` 或
+  `auth.RequirePermissionForContract(...)`，不用 `auth.AnyRole` / `auth.SelfOr` /
+  `auth.RequireAnyRole` 做授权分支。
+- `authz.Permission` 是 sealed 闭值集；业务代码经 accessor 函数
+  （如 `authz.PermAuditRead()`）取得 permission，不传 role 字符串。
+- handler 不手写 `(*auth.Principal).HasRole` 或遍历 `Principal.Roles` 做授权。
+- `EffectAllow` 规则必须声明至少一个 action；空 action 只允许用于
+  `EffectDeny` 的 deny-all。写侧和读侧都必须 fail-closed。
+- 路由门禁只做 coarse allow/deny，不执行 RowScope / FieldMask obligation。Allow
+  规则携带非零 obligation 时必须 fail-closed。
 
-相关 enforcement 的完整 ID、评级、Hard 化路径和盲区写在对应 archtest godoc 与 PR-10a ADR
-（`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`）。
+## Resource ownership
+
+path-param 标识的 resource ownership 是 PDP ABAC 决策，不是 handler 短路。owner-scoped /
+self-scoped gate **contract-derived**（#2355）：契约声明 `endpoints.http.resource:
+<pathParam>`（owner-scoped）或 `endpoints.http.selfScoped: true`（self-scoped），生成
+handler 经单一 `auth.RequirePermissionForContract(contractSpec, resolver)` funnel 派生
+`RequirePermissionForResource(pathParam, perm)` / `RequirePermissionForSelf(perm)`——业务
+slice 不手写 gate。`resource`/`selfScoped` 各 ⇒ permission、二者互斥（schema + FMT-42 +
+ContractSpec.Validate 三重）。owner-scoped gate 把 canonical resource id（self-scoped 把
+调用者自身 subject）转发给 PDP。
+
+- baseline ownership 用 `subject.sub == resource.id` 判定。
+- **owner vs admin 同 permission**：同一 owner-scoped action（如 `user:write`）既用于带
+  resource 的 owner 路由（改自己），也用于不带 resource 的 admin 路由（coarse，改任意）。
+  故 HTTP **不照搬** gRPC FMT-41 的「owner-scoped permission ⇒ resource 必填」（会误拒 admin
+  路由）；`resource` 是 per-route 授权选择，不从 permission 派生。详见 ADR
+  `202606201500-2355`。
+- 空或非 canonical path-param 不等于 self；resource 不可解析时规则不命中并
+  fail-closed。
+- delegated ownership 用 `subject.sub == resource.owner`，owner 由 PIP lookup 供给。
+- device 读自身状态必须 kind-gated：`subject.kind == device AND subject.sub == resource.id`。
+- owner-scoped route gate 的 baseline allow surface 是 `{owner, admin}`；owner/self
+  不扩大数据访问，数据可见性仍由 principal 派生的 `RowScope` 独立治理。
+
+query-param self scoping 仍留在 handler / service：例如 audit 的空 `actorId` 对 admin
+表示全 actor permissioned 读，不是隐式 self；只有显式 `param == subject` 才走 PDP
+ownership 规则。
+
+## Authorizer 与 PDP
+
+Authorizer 经 composition root `bootstrap.WithPrimaryAuthorizer` 注入 primary listener
+request context。Cell 不 import 兄弟 Cell 的 Authorizer。
+
+强依赖缺失必须 fail-fast；可解析的 Authorizer 在 bootstrap router build（Init 后、
+serve 前）预解析。nil provider 在启动期 fail-fast，而不是首请求暴露。
+
+PDP 默认 fail-closed：缺 Authorizer、缺租户、store 不可用或无适用 permit 都 deny。
+baseline 是 action-scoped + role-conditioned 的 allow 规则，不是 allow-all。租户 policy
+可以叠加 allow / deny；deny 优先。
+
+租户 allow 可以放宽路由门禁，但不能扩大数据访问。读端点的数据可见性由 principal
+派生的 `RowScope` 决定；写端点没有 RowScope 维度，必须依赖 typed tenant 参数和 FORCE
+RLS 维护 tenant 边界。
+
+## gRPC 授权
+
+非 public gRPC RPC 进入 runtime 后由 auth interceptor 调同一 `auth.Authorizer`
+做 PDP gate，不在 handler 手写谓词。
+
+- method -> permission 由契约 `endpoints.grpc.methods[].permission` overlay 派生。
+- 非 public 方法缺 permission overlay 必须 fail-closed，并在生成或注册期拒绝上线。
+- 未知 permission 必须启动 fail-fast。
+- owner-scoped permission 必须声明 `endpoints.grpc.methods[].resource`，interceptor
+  从请求消息字段提取 resource 并 canonicalize 后转发给 PDP。
+- unary RPC 在入口取 resource；server-streaming owner-scoped RPC 将 permission gate
+  延后到首个 `RecvMsg`。
+- resource 提取失败（非 proto.Message、字段不存在、非 string）必须 deny，不回退到
+  full method；空或非 UUID 值转发给 PDP。提取值不得写入 ErrorInfo metadata。
+- `passwordResetExempt: true` 只允许用于非 public 且声明 permission 的方法。
+- 每个 deny 必须携带 sealed `google.rpc.ErrorInfo`，metadata 不含 subject / token /
+  resource value 等 PII。
+- gRPC 与 HTTP 使用同一 PDP 决策指标 family，不新增 transport 分叉。
+
+## HTTP 授权
+
+HTTP route gate 与 gRPC 同源。HTTP route -> permission 由契约
+`endpoints.http.permission` overlay 派生，生成 handler 通过
+`auth.RequirePermissionForContract(contractSpec, resolver)` 解析并进入同一 PDP 路径。owner-scoped
+（`endpoints.http.resource`）/ self-scoped（`endpoints.http.selfScoped`）由该同一 funnel 按
+`contractSpec.{Resource,SelfScoped}` 三分支派生，见 §Resource ownership 与 ADR `202606201500-2355`。
+
+每个 `lifecycle: active` 且 `codegen` 的 HTTP 契约必须声明恰好一个 AuthZ mode：
+
+- ABAC 默认：`endpoints.http.permission`
+- 显式 opt-out：`public` / `bootstrap` / `clientsOnly` / `serviceOwned`
+
+opt-out 必须带非空 `endpoints.http.auth.reason`。ABAC mode 不带 reason；
+reason-without-opt-out 必须拒绝。permission 与 opt-out mode 互斥。
+HTTP `passwordResetExempt` 不是 AuthZ mode；单独声明仍是 modeless，必须拒绝。
+
+`contractgen.buildHTTPSpec` 是 codegen 完整性门：modeless route 不得被渲染上线。
+`gocell validate` / governance 规则只做纵深检查，不能替代 codegen 强制门。
+
+## References
+
+- 规则文件职责：`docs/guides/agent-instruction-surfaces.md`
+- ABAC / permission 接线：`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`
+- audit / RLS / 跨租户读取：`docs/architecture/202606131900-1810-adr-super-admin-cross-tenant-audit-read.md`
+- HTTP AuthZ mode：`docs/architecture/202606190847-2020-adr-authz-default-abac.md`
+- gRPC 授权：`docs/architecture/202605260000-adr-grpc-transport-adapter.md`
+- HTTP owner/self-scoped contract-derived gate：`docs/architecture/202606201500-2355-adr-http-owner-scoped-contract-derived-authz.md`

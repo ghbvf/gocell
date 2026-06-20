@@ -99,6 +99,22 @@ type EnqueueOptions struct {
 	IdempotencyKey string
 	// Authz is invoked before any write; return non-nil to reject. Use nil to skip.
 	Authz AuthzFunc
+	// MaxPendingPerDevice caps how many Pending (status=1) commands a single
+	// device may hold. When > 0, Enqueue atomically rejects with
+	// KindRateLimited/ErrRateLimited if admitting this command would exceed the
+	// cap — the count and the insert run under one lock/transaction, so the cap is
+	// a HARD per-device invariant under concurrency and across instances (no
+	// read-then-write TOCTOU). 0 = uncapped.
+	//
+	// Same authority model as IdempotencyKey: the queue OWNS active-command state,
+	// so it is the correctness authority for "at most N Pending per device";
+	// producers MUST NOT reconstruct the cap from a separate ScanActive+check (that
+	// reintroduces the very read-then-write race this field exists to close). Only
+	// Pending counts — in-flight Sent/Delivered resolve on their own and free a
+	// slot. A re-enqueue coalesced by IdempotencyKey adds nothing and never trips
+	// the cap. Pinned by the commandtest conformance suite
+	// (Enqueue/MaxPendingPerDeviceCap) across the in-mem and PG implementations.
+	MaxPendingPerDevice int
 }
 
 // Queue is the kernel-level L4 command queue facade. Implementations live in

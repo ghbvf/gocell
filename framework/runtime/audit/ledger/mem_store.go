@@ -404,14 +404,15 @@ func entryFieldValue(e *Entry, field string) any {
 // Verify re-computes the HMAC-SHA256 hash for each entry in [fromSeq, toSeq]
 // and checks chain linkage (PrevHash). Returns valid=true and firstInvalidSeq=-1
 // when all entries are intact.
+//
+// The verify loop itself lives in the package helper verifyMemChain so the
+// ctx-scoped serving path (this method) and the explicit-(namespace, tenant)
+// admin path (MemChainVerifyStore.VerifyChain, #1755) share ONE HMAC/linkage
+// implementation — the security-critical tamper-evidence logic exists in a single
+// place and cannot drift between the two callers.
 func (m *MemStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if fromSeq < 1 || toSeq < fromSeq {
-		return false, fromSeq, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
-	}
 
 	// Verify the ctx-scoped tenant chain (#1618; "" system chain when unscoped —
 	// startup tail-verify runs unscoped over the system/bootstrap chain).
@@ -419,7 +420,22 @@ func (m *MemStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool
 	if chain := m.chains[tenantScopeOrSystem(ctx)]; chain != nil {
 		entries = chain.entries
 	}
+	return verifyMemChain(entries, m.protocol, fromSeq, toSeq)
+}
 
+// verifyMemChain re-computes the HMAC-SHA256 hash and checks PrevHash linkage for
+// each entry in [fromSeq, toSeq] of the supplied chain slice (indexed by SeqNo-1).
+// It is the single in-memory verify loop shared by MemStore.Verify (ctx-scoped
+// serving path) and MemChainVerifyStore.VerifyChain (explicit-chain admin path,
+// #1755). entries are the immutable stored entries of one (namespace, tenant)
+// chain; proto is that chain's protocol (its namespace + HMAC key must match the
+// chain, else every entry reports tampered). Callers hold the owning store's lock
+// while passing entries (Append only appends, never mutates existing entries).
+func verifyMemChain(entries []*Entry, proto *Protocol, fromSeq, toSeq int64) (valid bool, firstInvalidSeq int64, err error) {
+	if fromSeq < 1 || toSeq < fromSeq {
+		return false, fromSeq, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"audit ledger: Verify requires 1 <= fromSeq <= toSeq")
+	}
 	for seq := fromSeq; seq <= toSeq; seq++ {
 		idx := seq - 1
 		if int(idx) >= len(entries) {
@@ -436,7 +452,7 @@ func (m *MemStore) Verify(ctx context.Context, fromSeq, toSeq int64) (valid bool
 			return false, seq, nil
 		}
 
-		expectedHash := m.protocol.ComputeHash(e.PrevHash, e)
+		expectedHash := proto.ComputeHash(e.PrevHash, e)
 		if e.Hash != expectedHash {
 			return false, seq, nil
 		}

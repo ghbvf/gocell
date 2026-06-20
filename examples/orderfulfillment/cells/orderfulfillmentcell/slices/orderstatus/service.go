@@ -142,13 +142,12 @@ func (s *Service) GetOrderStatus(ctx context.Context, orderID string) (orderstat
 // the current read-model status, and upserts the result.
 //
 // Bad payload / unknown kind / malformed EventID → outbox.PermanentError. A
-// permanent apply error HALTS the Tailer's checkpoint advance (fail-closed — the
-// poison event blocks the projection until operator intervention); it does NOT
-// route to a DLX (the saga-journal Tailer has no dead-letter path, unlike the
-// outbox ConsumerBase). See runtime/saga/tailer.commitEvent: a non-nil apply
-// error aborts the apply+advance transaction so the checkpoint never moves past
-// the poison event.
-// Read-model write errors → transient error (retried by the Tailer next tick).
+// permanent apply error makes the Tailer SKIP the poison event: it records the
+// event to the dead-letter sink (saga_projection_dead_letters) AND advances the
+// checkpoint past it in one transaction, so a single bad event does not freeze the
+// projection (#2110). See runtime/saga/tailer.skipPoisonEvent. The durable journal
+// still retains the event at its global_seq for triage/recovery.
+// Read-model write errors → transient error (the Tailer stalls and retries next tick).
 func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.ProjectionEvent) error {
 	// Decode the SagaEventEnvelope from the event payload.
 	var env sagaprojection.SagaEventEnvelope
@@ -169,8 +168,8 @@ func (s *Service) HandleOrderEvent(ctx context.Context, event cellvocab.Projecti
 	// Extract orderID from EventID: "saga-journal:<globalSeq>@<instanceID>".
 	// In orderfulfillment the instanceID equals the orderID (single saga
 	// definition). A malformed EventID is a producer-side defect: return a
-	// permanent error so the Tailer HALTS its checkpoint advance at this poison
-	// event (fail-closed — see HandleOrderEvent godoc).
+	// permanent error so the Tailer dead-letters and skips this poison event
+	// (see HandleOrderEvent godoc).
 	_, orderID, err := sagaprojection.ParseSagaJournalEventID(event.EventID())
 	if err != nil {
 		return outbox.NewPermanentError(fmt.Errorf(

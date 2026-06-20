@@ -36,6 +36,7 @@ require (
 	github.com/ghbvf/gocell/adapters/grpc v0.0.0
 	github.com/ghbvf/gocell/adapters/mqtt v0.0.0
 	github.com/ghbvf/gocell/adapters/postgres v0.0.0
+	github.com/ghbvf/gocell/cellmodules/grpclistener v0.0.0
 	github.com/ghbvf/gocell/framework v0.0.0
 	github.com/ghbvf/gocell/generated v0.0.0
 	github.com/ghbvf/gocell/tests v0.0.0
@@ -103,3 +104,5 @@ replace github.com/ghbvf/gocell/generated => ../../generated
 replace github.com/ghbvf/gocell/framework => ../../framework
 
 replace github.com/ghbvf/gocell/tests => ../../tests
+
+replace github.com/ghbvf/gocell/cellmodules/grpclistener => ../../cellmodules/grpclistener

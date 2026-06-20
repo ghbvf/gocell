@@ -128,6 +128,7 @@ func sagaProjDeps(t *testing.T) []Option {
 	return []Option{
 		WithSagaJournalReader(newMemGlobalReader(t)),
 		WithSagaProjectionOwnerCheckpointStore(projection.NewMemOwnerCheckpointStore()),
+		WithSagaProjectionDeadLetterStore(projection.NewMemDeadLetterStore()),
 		WithProjectionTxRunner(fakeProjectionTxRunner{}),
 		WithSagaProjectionLocker(newSagaTestLocker(t)),
 	}
@@ -244,6 +245,7 @@ func TestDrainCellSagaProjections_FailsOnMissingDep(t *testing.T) {
 	}{
 		{"missing journal reader", "WithSagaJournalReader"},
 		{"missing owner store", "WithSagaProjectionOwnerCheckpointStore"},
+		{"missing dead-letter store", "WithSagaProjectionDeadLetterStore"},
 		{"missing tx runner", "WithProjectionTxRunner"},
 		{"missing locker", "WithSagaProjectionLocker"},
 	}
@@ -256,6 +258,7 @@ func TestDrainCellSagaProjections_FailsOnMissingDep(t *testing.T) {
 			}{
 				{"WithSagaJournalReader", WithSagaJournalReader(newMemGlobalReader(t))},
 				{"WithSagaProjectionOwnerCheckpointStore", WithSagaProjectionOwnerCheckpointStore(projection.NewMemOwnerCheckpointStore())},
+				{"WithSagaProjectionDeadLetterStore", WithSagaProjectionDeadLetterStore(projection.NewMemDeadLetterStore())},
 				{"WithProjectionTxRunner", WithProjectionTxRunner(fakeProjectionTxRunner{})},
 				{"WithSagaProjectionLocker", WithSagaProjectionLocker(newSagaTestLocker(t))},
 			}

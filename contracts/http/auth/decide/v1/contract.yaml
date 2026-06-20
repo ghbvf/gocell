@@ -11,6 +11,8 @@ endpoints:
     method: POST
     path: /api/v1/access/decide
     successStatus: 200
+    permission: access:decide
+    selfScoped: true
     responses:
       400:
         description: "Bad request — request body decode/schema failure, or action is blank or not a registered permission (ERR_AUTH_RBAC_INVALID_INPUT)"

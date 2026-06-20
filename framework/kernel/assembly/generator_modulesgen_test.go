@@ -337,6 +337,23 @@ func TestGenerateModulesGen_CompositionFormWithCapabilities(t *testing.T) {
 		"derived capabilities must be sorted (postgres before redis)")
 	assert.Equal(t, 1, strings.Count(content, "capability.Postgres"),
 		"postgres required by multiple cells must emit a single const")
+
+	// #2429: the framework import block must be gofumpt-canonical (alphabetical by
+	// import path): bootstrap < capability < composition. The pre-fix template
+	// hardcoded capability BEFORE bootstrap, producing a non-canonical block that
+	// trips the pre-push gofumpt gate the moment the file is regenerated. Imports
+	// are matched on their quoted path so the capability.Kind references in the
+	// function body cannot satisfy the assertion vacuously.
+	posBootstrap := indexOfStr(content, `"github.com/ghbvf/gocell/framework/runtime/bootstrap"`)
+	posCapability := indexOfStr(content, `"github.com/ghbvf/gocell/framework/runtime/capability"`)
+	posComposition := indexOfStr(content, `"github.com/ghbvf/gocell/framework/runtime/composition"`)
+	require.GreaterOrEqual(t, posBootstrap, 0, "bootstrap import must be present")
+	require.GreaterOrEqual(t, posCapability, 0, "capability import must be present")
+	require.GreaterOrEqual(t, posComposition, 0, "composition import must be present")
+	assert.Less(t, posBootstrap, posCapability,
+		"bootstrap import must precede capability (gofumpt path order, #2429)")
+	assert.Less(t, posCapability, posComposition,
+		"capability import must precede composition (gofumpt path order, #2429)")
 }
 
 // TestGenerateModulesGen_CompositionUnknownCellRef verifies the composition

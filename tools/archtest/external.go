@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/tools/archtest/scoperules"
 )
 
 // external.go — the importable public surface that lets an external Cell
@@ -281,17 +283,29 @@ type ConfigForExternalCell struct {
 //
 // An external consumer gets the rules migrated so far plus any cfg.ExtraRules
 // they add. The set expands as additional portable rules land in #1302.
+//
+// # Membership single source (#2331)
+//
+// The framework-scope MEMBERSHIP — which rule IDs belong to this curated set —
+// lives in exactly one place: [scoperules.FrameworkRuleIDs] (a zero-dependency
+// leaf). This function DERIVES its slice by iterating that list and pairing each
+// ID with its Run via runByID, so the set is never enumerated twice. The
+// `gocell verify archtest --scope=framework` runner reads the identical leaf, so
+// the CLI scope and this registry cannot drift (AI-robust Hard). runByID only
+// supplies the Run binding: a leaf ID with no Run here yields a nil-Run CellRule,
+// which validateCellRule rejects in [RunStandardCellRules] and
+// TestStandardCellRulesComposition asserts absent (Run-binding completeness).
 func StandardCellRules() []*CellRule {
-	return []*CellRule{
-		{ID: rulePanicRegistered01, Run: CheckPanicRegistered},
-		{ID: ruleErrcodeKindLiteral01, Run: CheckErrcodeKindLiteralBanned},
-		{ID: ruleMessageConstLiteral01, Run: CheckErrcodeMessageConstLiteral},
-		{ID: ruleExportedErrorNew01, Run: CheckExportedErrorNew},
+	runByID := map[string]func(*testing.T, ConfigForExternalCell) []Diagnostic{
+		scoperules.PanicRegistered01:     CheckPanicRegistered,
+		scoperules.ErrcodeKindLiteral01:  CheckErrcodeKindLiteralBanned,
+		scoperules.MessageConstLiteral01: CheckErrcodeMessageConstLiteral,
+		scoperules.ExportedErrorNew01:    CheckExportedErrorNew,
 		// SCAFFOLD-DERIVED-FORCEOVERWRITE-01: bans consumer code from calling the
 		// internal codegen primitive pathsafe.DerivedOverwrite outside the
 		// sanctioned planDerivedArtifact site (no such site in an external repo →
 		// pure ban). Cell-applicable; Hard downstream (types.Info caller-allowlist).
-		{ID: ruleScaffoldDerivedForceOverwrite01, Run: CheckScaffoldDerivedForceOverwrite},
+		scoperules.ScaffoldDerivedForceOverwrite01: CheckScaffoldDerivedForceOverwrite,
 		// OUTBOX-RECONSTRUCTION-CALLER-01: bans consumer code from calling the
 		// kernel reconstruction primitives outbox.UnmarshalEnvelope /
 		// (outbox.EntryScan).ToEntry — the sanctioned storage/wire-decode callers
@@ -300,14 +314,14 @@ func StandardCellRules() []*CellRule {
 		// platform package identity via isGoCellPlatformPkgPath, so a forged
 		// consumer rel path is not exempt; SelectorExpr + bare-Ident dot-import
 		// walk leaves no looks-like-but-isn't gap). See outbox_reconstruction_caller.go godoc.
-		{ID: ruleOutboxReconstructionCaller01, Run: CheckOutboxReconstructionCaller01},
+		scoperules.OutboxReconstructionCaller01: CheckOutboxReconstructionCaller01,
 		// PROJECTION-APPLY-HOOK-FUNNEL-01: bans consumer code from calling
 		// projection.Coordinator.Subscribe outside the sanctioned bootstrap drain
 		// (no such site in an external repo → pure ban). Cell-applicable; Medium
 		// downstream (archtest caller-allowlist; function-value forms are caught by
 		// a separate reverse blind-spot self-check, not the forward rule — permanent
 		// Go-language ceiling, gh #1372). See projection_apply_hook_funnel.go godoc.
-		{ID: ruleProjectionApplyHookFunnel01, Run: CheckProjectionApplyHookFunnel01},
+		scoperules.ProjectionApplyHookFunnel01: CheckProjectionApplyHookFunnel01,
 		// OUTBOX-HANDLERESULT-FACTORY-PREFERRED-01: business handlers must return
 		// outbox.Ack()/Requeue()/Reject() rather than construct outbox.HandleResult{}
 		// composite literals; the 3-file kernel/outbox allowlist is bound to platform
@@ -315,11 +329,11 @@ func StandardCellRules() []*CellRule {
 		// not exempt → pure ban on the literal form (HandleResult is exported and
 		// constructible, so this is a real consumer-usage constraint).
 		// Cell-applicable; Medium downstream (types.Info type-identity scan).
-		{ID: ruleOutboxHandleResultFactoryPreferred01, Run: CheckOutboxHandleResultFactoryPreferred01},
+		scoperules.OutboxHandleResultFactoryPref01: CheckOutboxHandleResultFactoryPreferred01,
 		// SAGA-STEP-COMPENSATE-PURE-01: bans consumer Compensate funcs from calling
 		// persistence interfaces (Compensate must be pure reverse rollback). See
 		// saga_invariants.go godoc.
-		{ID: sagaCompensatePureRuleID, Run: CheckSagaStepCompensatePure},
+		scoperules.SagaStepCompensatePure01: CheckSagaStepCompensatePure,
 		// PROD-MAIN-WIRING-NOOP-REJECT-01: bans a production composition-root (main)
 		// package — those a consumer declares in cfg.ProductionMainPkgs — from
 		// directly constructing a raw kernel/outbox noop sink (NoopWriter /
@@ -330,8 +344,14 @@ func StandardCellRules() []*CellRule {
 		// consumer that has not declared its composition roots (not a false-safety
 		// register — it is a real ban once opted in). Downstream Hard / upstream Medium.
 		// See prod_main_wiring_noop_reject.go godoc.
-		{ID: ruleProdMainWiringNoopReject01, Run: CheckProdMainWiringNoopReject},
+		scoperules.ProdMainWiringNoopReject01: CheckProdMainWiringNoopReject,
 	}
+	ids := scoperules.FrameworkRuleIDs()
+	rules := make([]*CellRule, 0, len(ids))
+	for _, id := range ids {
+		rules = append(rules, &CellRule{ID: id, Run: runByID[id]})
+	}
+	return rules
 }
 
 // RunStandardCellRules runs the curated [StandardCellRules] plus cfg.ExtraRules

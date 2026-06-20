@@ -134,8 +134,9 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		if gcErr != nil {
 			return nil, fmt.Errorf("build grpc metrics collector: %w", gcErr)
 		}
-		grpcAddr := grpclistener.AddrFromEnv()
+		grpcAddr := grpclistener.AddrFromEnv(grpclistener.PlatformEnv)
 		grpcServer, gsErr := grpclistener.ServerFromEnv(
+			grpclistener.PlatformEnv,
 			durabilityModeForTopology(compShared.Topology),
 			grpcAddr,
 			interceptor.Deps{

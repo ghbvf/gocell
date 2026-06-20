@@ -75,34 +75,42 @@ draft §2.7（同 key + 不同 payload 是语义不可处理的客户端错误�
 > 回退 409」因 Kind 集合无 `KindUnprocessable` 而采用；#1450 引入该 Kind 后取代。详见文末
 > §"Amendment 2026-06-04：422 升级 + per-field diff"。
 
-### 3. Middleware 位序 — Auth 之后、handler 之前（BodyLimit 之内）
+### 3. Middleware 位序 — BodyLimit 之后、Auth 之后、handler 之前
 
 `buildMux` 中的完整顺序（外层 → 内层）：
 
 ```
-...→ Auth（JWT/ServiceToken）→ BodyLimit → [Idempotency] → route dispatcher
+...→ RateLimit/CircuitBreaker → BodyLimit → listener/default auth → JWT Auth → [Idempotency] → route dispatcher
 ```
 
-具体实现：`router.go::buildMux` 在 `BodyLimit` 之后、`composeHandler()`
+具体实现：`router.go::buildMux` 在 `BodyLimit`、listener/default auth middleware、
+JWT `AuthMiddleware` 之后，`composeHandler()`
 之前调用 `r.use(idemhttp.Middleware(r.clock, r.idempotencyStore))`（当 `idempotencyStore != nil` 时）。
 
 位序理由：
 
-1. **Auth 必须先于 Idempotency**：Middleware 需要已认证的 Principal 提取 Subject/TenantID；
+1. **BodyLimit 必须先于 listener/default auth 与 JWT Auth**：超限请求体在进入
+   ServiceToken、mTLS/operator、JWT 等认证链前直接以 413 拒绝，避免未认证的大 body
+   消耗认证侧资源。public route 只绕过 JWT，不绕过 BodyLimit。
+2. **Auth 必须先于 Idempotency**：Middleware 需要已认证的 Principal 提取 Subject/TenantID；
    无 Principal 时直接 passthrough（fail-safe，不报错）。若 Idempotency 错误地放在 Auth
    之前，`extractIdentity` 取不到 Principal → passthrough，不构成安全漏洞，但失去幂等追踪。
-2. **BodyLimit 必须先于 Idempotency**（即 BodyLimit 是 Idempotency 的外层）：BodyLimit
+3. **BodyLimit 必须先于 Idempotency**（即 BodyLimit 是 Idempotency 的外层）：BodyLimit
    在超限时直接 413 拒绝，防止超大请求体在 `recordOrRelease` 的 `bufferingWriter` 路径
    消耗 lease——lease 一旦 Claim 就算耗费，oversized 请求不应消耗 lease。注意 `shouldRecord`
    只在 2xx/3xx 时记录（见 §决策 6），4xx 不记录；但 BodyLimit 拒绝在 Idempotency 内层
    时会先 Claim 再被 413，lease 被消耗，后续重试需等待 lease 过期（`DefaultLeaseTTL`
    5 分钟）。BodyLimit 外层可完全避免此问题。
-3. **body fingerprint 读取必须在 BodyLimit 之后**：`readBodyFingerprint` 用 `io.ReadAll`
+4. **body fingerprint 读取必须在 BodyLimit 之后**：`readBodyFingerprint` 用 `io.ReadAll`
    读全量 body 再还原 `r.Body`，BodyLimit 已保证 body 大小有界。
+
+> **Amendment 2026-06-19（#1988）**：BodyLimit 从 auth 内层前移到 listener/default auth
+> 和 JWT Auth 之前，形成 request-size-first gate。该调整不改变 Auth 必须先于 Idempotency、
+> BodyLimit 必须先于 Idempotency 的幂等约束，只收敛认证前的超限请求体资源面。
 
 **位序不用 archtest 守护**：路径锚点是 Soft（字符串排序位置），`ai-robust.md` 禁止
 Soft 立项。位序正确性由 `router_behavioral_test.go` 的 integration-style 测试覆盖（验证
-BodyLimit 拒绝不消耗 lease、Auth 缺失时 passthrough）——行为测试 > 结构 AST 测试。
+BodyLimit 拒绝不消耗 lease、超限请求不进入 auth/default middleware、Auth 缺失时 passthrough）——行为测试 > 结构 AST 测试。
 
 ### 4. 激活方式 — listener-wide install + header-gated + method-gated
 

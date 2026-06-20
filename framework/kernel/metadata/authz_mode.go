@@ -163,31 +163,18 @@ func ClassifyHTTPAuthMode(c *ContractMeta) HTTPAuthModeViolation {
 //
 // Grouped by migration wave for incremental sign-off; the authoritative ownerCell is
 // each contract's contract.yaml, not these headers. Keep alphabetically sorted within
-// a group, and update httpAuthModeLedgerFrozenSize when removing entries.
+// a group. Removing entries only shrinks the live set, which the immutable frozen set
+// in TestHTTPAuthModeLedger_FrozenSubset already permits — no size constant to update.
 var httpAuthModeMigrationLedger = map[string]struct{}{
-	// Wave #2355 — accesscore / auditcore / configcore / syscore (hand-wired
-	// RequirePermission gate, or a yet-to-be-classified internal/admin route).
-	"http.admin.health.cells.v1":        {},
-	"http.audit.list.v1":                {},
-	"http.auth.decide.v1":               {},
-	"http.auth.role.assign.v1":          {},
-	"http.auth.role.check.v1":           {},
-	"http.auth.role.list.v1":            {},
-	"http.auth.role.revoke.v1":          {},
-	"http.auth.user.change-password.v1": {},
-	"http.auth.user.create.v1":          {},
-	"http.auth.user.delete.v1":          {},
-	"http.auth.user.get.v1":             {},
-	"http.auth.user.lock.v1":            {},
-	"http.auth.user.patch.v1":           {},
-	"http.auth.user.unlock.v1":          {},
-	"http.auth.user.update.v1":          {},
-	"http.config.internal.get.v1":       {},
-	"http.policy.create.v1":             {},
-	"http.policy.delete.v1":             {},
-	"http.policy.get.v1":                {},
-	"http.policy.list.v1":               {},
-	"http.policy.update.v1":             {},
+	// Wave #2355 — accesscore user/role(list,check)/policy + decide migrated to
+	// contract-derived authz (#2355: endpoints.http.{permission,resource,selfScoped}).
+	// Survivors: admin/audit/internal + role.assign/revoke (internal clientsOnly,
+	// migrate with their own opt-out mode in a later wave).
+	"http.admin.health.cells.v1":  {},
+	"http.audit.list.v1":          {},
+	"http.auth.role.assign.v1":    {},
+	"http.auth.role.revoke.v1":    {},
+	"http.config.internal.get.v1": {},
 
 	// Wave #2358 — devicecore / registrycore.
 	"http.device.command.ack.v1":           {},
@@ -199,8 +186,6 @@ var httpAuthModeMigrationLedger = map[string]struct{}{
 	"http.device.list.v1":                  {},
 	"http.device.status.v1":                {},
 	"http.devicestate.v1":                  {},
-	"http.registry.contract.list.v1":       {},
-	"http.registry.contract.submit.v1":     {},
 
 	// examples/ (todoorder) — migrate to stay exemplary for external Cell authors.
 	"http.order.confirm.v1":            {},

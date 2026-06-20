@@ -40,14 +40,21 @@ type Handler struct {
 
 // NewHandler creates a Handler for http.config.flags.evaluate.v1.
 //
-// Authorization is contract-derived (#2205): endpoints.http.permission is
+// Authorization is contract-derived (#2205/#2355): endpoints.http.permission is
 // flag:read. NewHandler takes the cell-level
 // authz.MethodPolicyResolver (built by cellgen from the cell's served-contract
-// permission overlays) and constructs the route gate via
-// auth.RequirePermissionForContract(contractSpec.ID, resolver) — the HTTP sibling of
-// the gRPC interceptor's resolver lookup, replacing a hand-wired
+// permission overlays) and constructs the route gate via the single
+// auth.RequirePermissionForContract(contractSpec, resolver) funnel — which dispatches
+// on contractSpec.Resource / contractSpec.SelfScoped to RequirePermissionForResource /
+// RequirePermissionForSelf / RequirePermission — the HTTP sibling of the gRPC
+// interceptor's resolver + resource lookup, replacing a hand-wired
 // auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
 // construction (composition root must inject the cell resolver).
+// Note: the same permission can serve both an owner route (with resource) and an
+// admin route (without resource); the PDP ownership baseline (subject.sub ==
+// resource.id) is only triggered when the resource id is forwarded to the PDP
+// via RequirePermissionForResource — coarse RequirePermission routes do not carry
+// a resource argument and therefore do not invoke the ownership rule.
 func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
 	if resolver == nil {
 		// B-class assertion: argument-contract violation. errcode.Assertion routes
@@ -55,7 +62,7 @@ func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
 		// so PANIC-REGISTERED-01 stays clean.
 		panic(panicregister.Approved("http-config-flags-evaluate-v1-resolver-nil", errcode.Assertion("generated handler http.config.flags.evaluate.v1: resolver must not be nil (endpoints.http.permission contracts require the cell authz.MethodPolicyResolver; composition root must inject the cellgen-built resolver)")))
 	}
-	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec.ID, resolver)}
+	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec, resolver)}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
 		panic(panicregister.Approved("http-config-flags-evaluate-v1-standard-schema-compile-failed", errcode.Assertion("generated handler http.config.flags.evaluate.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))

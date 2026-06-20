@@ -80,8 +80,9 @@ func TestHTTPAuthModeLedger_MatchesProjectModeless(t *testing.T) {
 	stale, uncovered := diffAuthModeLedger(ledger, modeless)
 	for _, id := range stale {
 		t.Errorf("ledger entry %q is no longer a modeless active codegen HTTP route — delete it "+
-			"from httpAuthModeMigrationLedger in framework/kernel/metadata/authz_mode.go and "+
-			"decrement httpAuthModeLedgerFrozenSize (#2020 no-stale)", id)
+			"from httpAuthModeMigrationLedger in framework/kernel/metadata/authz_mode.go "+
+			"(removing shrinks the live set; the immutable frozenInitialLedgerIDs subset guard "+
+			"in TestHTTPAuthModeLedger_FrozenSubset stays green) (#2020 no-stale)", id)
 	}
 	for _, id := range uncovered {
 		t.Errorf("modeless active HTTP route %q is neither declared nor ledgered — add "+

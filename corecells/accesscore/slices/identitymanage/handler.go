@@ -264,26 +264,25 @@ type Handler struct {
 }
 
 // NewHandler creates an identity-manage Handler wiring all 8 contract handlers.
-// Route gates use ABAC PDP via auth.RequirePermission (admin-only endpoints) and
-// auth.RequirePermissionForResource (owner-scoped endpoints: get/update/patch/
-// change-password). RequirePermissionForResource forwards the "id" path param to
-// the PDP as resource; the baseline ownership rule (subject.sub == resource.id,
-// #1977 Batch B) grants self-access without a Go short-circuit — the PDP decides.
-// The baseline admin rule grants admin/super-admin (#1977 Batch B replaces PR-10c
-// RequirePermissionOrSelf). Fail-closed: absent Authorizer → 403 even for self.
-func NewHandler(svc *Service) *Handler {
-	userWrite := auth.RequirePermission(authz.PermUserWrite())
-	userReadOwnerGate := auth.RequirePermissionForResource("id", authz.PermUserRead())
-	userWriteOwnerGate := auth.RequirePermissionForResource("id", authz.PermUserWrite())
+// Authorization is contract-derived (#2355): each generated handler builds its own
+// route gate from its contract's endpoints.http.{permission,resource} overlay via the
+// single auth.RequirePermissionForContract funnel, so this slice only forwards the
+// cell-level resolver. The owner-scoped endpoints (get/update/patch/change-password,
+// resource: id) dispatch to RequirePermissionForResource, forwarding the "id" path
+// param to the PDP as resource; the baseline ownership rule (subject.sub == resource.id,
+// #1977 Batch B) grants self-access without a Go short-circuit — the PDP decides. The
+// admin endpoints (create/delete/lock/unlock, same user:write action but NO resource)
+// dispatch to the coarse RequirePermission. Fail-closed: absent Authorizer → 403.
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		createH:         creategen.NewHandler(CreateAdapter{svc}, userWrite),
-		getH:            getgen.NewHandler(GetAdapter{svc}, userReadOwnerGate),
-		updateH:         updategen.NewHandler(UpdateAdapter{svc}, userWriteOwnerGate),
-		patchH:          patchgen.NewHandler(PatchAdapter{svc}, userWriteOwnerGate),
-		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, userWrite),
-		lockH:           lockgen.NewHandler(LockAdapter{svc}, userWrite),
-		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, userWrite),
-		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, userWriteOwnerGate),
+		createH:         creategen.NewHandler(CreateAdapter{svc}, resolver),
+		getH:            getgen.NewHandler(GetAdapter{svc}, resolver),
+		updateH:         updategen.NewHandler(UpdateAdapter{svc}, resolver),
+		patchH:          patchgen.NewHandler(PatchAdapter{svc}, resolver),
+		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, resolver),
+		lockH:           lockgen.NewHandler(LockAdapter{svc}, resolver),
+		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, resolver),
+		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, resolver),
 	}
 }
 

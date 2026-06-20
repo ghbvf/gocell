@@ -18,16 +18,11 @@ import (
 	"context"
 	"errors"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sessionverifyv1 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
-
-const msgInfraUnavailable = "authentication service temporarily unavailable"
 
 // Server implements sessionverifyv1.SessionVerifyServiceServer.
 type Server struct {
@@ -81,10 +76,12 @@ func (s *Server) VerifyToken(
 	if err != nil {
 		var ec *errcode.Error
 		if errors.As(err, &ec) && ec.Kind == errcode.KindUnavailable {
-			// Infrastructure outage: propagate as codes.Unavailable so the caller
-			// can machine-distinguishably identify an outage vs. a credential failure.
-			// Do NOT downgrade to a uniform valid=false (that would pollute SLO buckets).
-			return nil, status.Error(codes.Unavailable, msgInfraUnavailable)
+			// Infrastructure outage: propagate the raw *errcode.Error (KindUnavailable)
+			// so the chain's UnaryErrcodeMap interceptor (PR-12 #1155) maps it to
+			// codes.Unavailable. This keeps the handler free of grpc/status imports
+			// while preserving machine-distinguishable outage vs. credential failure
+			// semantics at the gRPC wire level.
+			return nil, err
 		}
 		// Invalid / expired / revoked / wrong-intent: uniform valid=false (no
 		// reason enumeration). The verifier has already logged the cause server-side.
