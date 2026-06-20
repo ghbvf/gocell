@@ -15,7 +15,7 @@ import (
 const (
 	msgCrossBindNoPeer      = "mTLS peer certificate required for cross-cell identity binding"
 	msgCrossBindNoCertCell  = "mTLS peer certificate carries no cell SPIFFE ID (spiffe://<td>/cell/<cell>)"
-	msgCrossBindMixedTD     = "mTLS peer certificate carries cell SPIFFE IDs from more than one trust domain"
+	msgCrossBindBadCertSet  = "mTLS peer certificate carries an invalid cell SPIFFE ID set (non-canonical SPIFFE URI or more than one trust domain)"
 	msgCrossBindNoPrincipal = "service-token caller principal required for cross-cell identity binding"
 	msgCrossBindBadExpected = "cross-cell identity binding: service-token caller cell is not a valid SPIFFE cell token"
 	msgCrossBindMismatch    = "service-token caller cell is not in the mTLS peer certificate's cell set"
@@ -80,9 +80,10 @@ func verifyCrossBind(r *http.Request, expectedTrustDomain string) error {
 	}
 	certSet, err := spiffeid.CellSetFromURIs(peer.URIs)
 	if err != nil {
-		// The cert carries cell SPIFFE IDs from ≥2 trust domains — a workload
-		// belongs to one trust domain, so a bridging cert fails closed.
-		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindMixedTD)
+		// Invalid cell SPIFFE ID set: a non-canonical cell SPIFFE URI
+		// (userinfo/port/query/fragment) or cell IDs from ≥2 trust domains. Either
+		// is a malformed/forged identity; fail closed and keep the precise cause.
+		return errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindBadCertSet, err)
 	}
 	if certSet.IsEmpty() {
 		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, msgCrossBindNoCertCell)

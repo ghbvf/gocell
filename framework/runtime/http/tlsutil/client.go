@@ -19,7 +19,7 @@ const (
 	msgVerifyNoPeerCert     = "tlsutil: peer presented no certificate"
 	msgVerifyChainFailed    = "tlsutil: peer certificate chain verification failed"
 	msgVerifyNoCellID       = "tlsutil: peer certificate carries no cell SPIFFE ID (URI SAN spiffe://<td>/cell/<cell>)"
-	msgVerifyMixedTD        = "tlsutil: peer certificate carries cell SPIFFE IDs from more than one trust domain"
+	msgVerifyBadCellSet     = "tlsutil: peer certificate carries an invalid cell SPIFFE ID set (non-canonical SPIFFE URI or more than one trust domain)"
 	msgVerifyPeerIDMismatch = "tlsutil: expected target cell is not in the peer certificate's cell set"
 )
 
@@ -110,7 +110,10 @@ func verifyPeerCellIdentity(rootCAs *x509.CertPool, expectedPeerID spiffeid.Cell
 
 		peerSet, err := spiffeid.CellSetFromURIs(leaf.URIs)
 		if err != nil {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyMixedTD,
+			// Invalid cell SPIFFE ID set: a non-canonical cell SPIFFE URI
+			// (userinfo/port/query/fragment) or cell IDs from ≥2 trust domains.
+			// Fail closed and keep the precise cause in the wrapped chain.
+			return errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyBadCellSet, err,
 				errcode.WithInternal(errcode.InternalAttr("peer_subject", leaf.Subject.String())))
 		}
 		if peerSet.IsEmpty() {

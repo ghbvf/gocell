@@ -24,6 +24,12 @@
 // hand-rolled, mis-normalized string compare is unrepresentable at call sites and
 // the spiffe:// wire form stays single-sourced (canonical [CellID.String]).
 //
+// The constructors share ONE strict parser (parseCellURI): a cell-shaped SPIFFE
+// URI that is not canonical — carrying userinfo, a port, a query, a fragment, an
+// opaque part, or an invalid trust domain — is rejected, never normalized. Only
+// the exact spiffe://<td>/cell/<cell> form enters a [CellID] / [CellSet], so a
+// forged ID like spiffe://evil@td/cell/x cannot masquerade as a member.
+//
 // This package lives under framework/pkg/ (not runtime/http/tlsutil) so that
 // kernel/governance gocell-validate rules — which may only import the standard
 // library and pkg/ — can reference the cell-SPIFFE-ID shape (layer rule
@@ -58,6 +64,7 @@ const (
 	msgParseScheme        = "spiffeid: ID must use the spiffe:// scheme with a non-empty trust domain"
 	msgParseCellPath      = "spiffeid: ID path must be exactly /cell/<cell>"
 	msgMixedTrustDomains  = "spiffeid: certificate presents cell SPIFFE IDs from more than one trust domain"
+	msgCellURIComponents  = "spiffeid: cell SPIFFE ID must not carry userinfo, port, query, fragment, or an opaque part"
 )
 
 // CellID is the sealed SPIFFE ID of a GoCell cell at the transport layer:
@@ -97,22 +104,22 @@ func ValidateTrustDomain(td string) error {
 
 // Parse parses a canonical cell SPIFFE ID string (spiffe://<td>/cell/<cell>).
 // Any other shape — wrong scheme, empty host, a path that is not exactly
-// /cell/<non-empty>, or extra path segments — is rejected (KindInvalid).
+// /cell/<non-empty>, extra path segments, or non-canonical URL components
+// (userinfo, port, query, fragment, opaque part) — is rejected (KindInvalid).
 func Parse(raw string) (CellID, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != scheme || u.Host == "" {
 		return CellID{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgParseScheme,
 			errcode.WithInternal(errcode.InternalAttr("raw", raw)))
 	}
-	cell, ok := cellFromPath(u.Path)
+	id, ok, perr := parseCellURI(u)
 	if !ok {
 		return CellID{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgParseCellPath,
 			errcode.WithInternal(errcode.InternalAttr("raw", raw)))
 	}
-	// u.Host carries the trust domain (and only the trust domain — a spiffe URL
-	// has no userinfo/port in canonical form). Validate it the same way ForCell
-	// does so Parse and ForCell accept exactly the same trust-domain set.
-	return ForCell(u.Host, cell)
+	// ok == true: u is cell-shaped; perr carries any non-canonical-component or
+	// invalid-trust-domain rejection (the precise reason), nil on success.
+	return id, perr
 }
 
 // CellSet is the sealed set of cell SPIFFE IDs carried on a single mTLS workload
@@ -133,8 +140,16 @@ type CellSet struct {
 
 // CellSetFromURIs extracts the set of cell SPIFFE IDs from a certificate's URI
 // SANs (e.g. crypto/x509.Certificate.URIs, after the framework's mTLS middleware
-// has copied them into pkg/ctxkeys.PeerIdentity.URIs). Non-cell SPIFFE IDs and
-// non-spiffe URIs are ignored; duplicate identical cell IDs collapse.
+// has copied them into pkg/ctxkeys.PeerIdentity.URIs). Foreign SANs — non-spiffe
+// URIs and spiffe URIs that are not /cell/ workload IDs — are ignored; duplicate
+// identical cell IDs collapse.
+//
+// A cell-shaped SPIFFE URI (spiffe scheme + /cell/<cell> path) that is NOT
+// canonical — carrying userinfo, a port, a query, a fragment, an opaque part, or
+// an invalid trust domain — is REJECTED (KindInvalid), never silently ignored: a
+// non-canonical ID that resembles a cell must fail closed, because silently
+// dropping it (or, worse, normalizing it) would let e.g. spiffe://evil@td/cell/x
+// be read as the legitimate spiffe://td/cell/x member.
 //
 // All cell SPIFFE IDs MUST share one trust domain: a certificate carrying cell IDs
 // from two distinct trust domains is rejected (KindInvalid) — a workload belongs
@@ -145,16 +160,12 @@ type CellSet struct {
 func CellSetFromURIs(uris []*url.URL) (CellSet, error) {
 	set := CellSet{}
 	for _, u := range uris {
-		if u == nil || u.Scheme != scheme || u.Host == "" {
-			continue
-		}
-		cell, ok := cellFromPath(u.Path)
-		if !ok {
-			continue // a spiffe:// URI that is not a /cell/ workload ID — ignore.
-		}
-		id, err := ForCell(u.Host, cell)
+		id, ok, err := parseCellURI(u)
 		if err != nil {
-			continue // malformed trust domain on a cell-shaped path — ignore, not ours.
+			return CellSet{}, err
+		}
+		if !ok {
+			continue // not a cell SPIFFE URI — a foreign SAN, ignore.
 		}
 		if set.cells == nil {
 			set.trustDomain = id.trustDomain
@@ -252,6 +263,46 @@ func (c CellID) Equal(other CellID) bool {
 
 // IsZero reports whether c is the zero (unconstructed) value.
 func (c CellID) IsZero() bool { return c.trustDomain == "" && c.cell == "" }
+
+// parseCellURI is the single strict translator from a SAN URL to a cell SPIFFE
+// ID, shared by [Parse] and [CellSetFromURIs] so the canonical funnel has exactly
+// one definition (it closes the bug class where two parse sites disagreed on what
+// a cell URI may contain). Its three outcomes:
+//
+//   - ok=false, err=nil  → u is not a cell SPIFFE URI at all (not the spiffe
+//     scheme, or a path that is not /cell/<cell>). Foreign SANs are ignored — a
+//     workload cert may legitimately carry non-cell URI SANs.
+//   - ok=true,  err!=nil → u IS cell-shaped (spiffe scheme + /cell/<cell> path)
+//     but non-canonical: it carries URL components a SPIFFE ID must never have
+//     (userinfo / port / query / fragment / opaque) or an invalid trust domain.
+//     This is a malformed or forged identity and MUST fail closed — never be
+//     silently normalized to the canonical spiffe://<td>/cell/<cell> it resembles.
+//   - ok=true,  err=nil  → u is a canonical cell SPIFFE ID; id is its value.
+func parseCellURI(u *url.URL) (id CellID, ok bool, err error) {
+	if u == nil || u.Scheme != scheme {
+		return CellID{}, false, nil
+	}
+	cell, isCell := cellFromPath(u.Path)
+	if !isCell {
+		return CellID{}, false, nil
+	}
+	// Cell-shaped: it MUST now be canonical. url.Parse stashes userinfo, port,
+	// query, and fragment OUTSIDE Host/Path, so a Host/Path-only check would read
+	// spiffe://evil@td/cell/x?q#f as the clean spiffe://td/cell/x. A SPIFFE ID
+	// carries none of these components; reject them at the funnel (fail closed).
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.Port() != "" {
+		return CellID{}, true, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msgCellURIComponents,
+			errcode.WithInternal(errcode.InternalAttr("raw", u.String())))
+	}
+	// Hostname() (== Host here, port already rejected) carries the trust domain;
+	// validate it the same way ForCell does so every entry point accepts exactly
+	// the same trust-domain set.
+	id, ferr := ForCell(u.Hostname(), cell)
+	if ferr != nil {
+		return CellID{}, true, ferr
+	}
+	return id, true, nil
+}
 
 // cellFromPath returns the cell token of a "/cell/<cell>" path. ok is false when
 // the path is not exactly that shape (wrong prefix, empty cell, or extra

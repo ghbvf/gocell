@@ -42,7 +42,7 @@ WM-32 trade-off 明文：**大规模 mTLS 卸载在 K8s/Service Mesh 解决，�
 5. **PeerIdentity 放 `pkg/ctxkeys/`**：与 `request_id` / `real_ip` / `trace_id`
    同族 request-scope；让 cells/ 与 runtime/ 共同消费时无 import 环。
 6. **不引入 spiffe/go-spiffe 依赖**：URIs 保留 raw `*url.URL`，业务侧若需
-   SPIFFE typed-ID 自行调 `spiffeid.FromURI`。
+   SPIFFE typed-ID 自行经 `spiffeid.Parse`（单 ID）/ `spiffeid.CellSetFromURIs`（证书 URI SAN 集合）解析。
 7. **不做动态证书 reload / OCSP / `GetCertificate` callback / 出站 client
    builder**：K8s/mesh 领域 + 当前 0 消费者。
 

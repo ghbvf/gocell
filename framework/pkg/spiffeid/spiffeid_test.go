@@ -65,6 +65,13 @@ func TestParse(t *testing.T) {
 		{name: "extra path segments", raw: "spiffe://example.org/cell/accesscore/extra", wantErr: true},
 		{name: "empty host", raw: "spiffe:///cell/accesscore", wantErr: true},
 		{name: "empty", raw: "", wantErr: true},
+		// Non-canonical URL components on a cell-shaped URI must fail closed and
+		// must NOT be normalized to the clean ID they resemble (#2297 F1).
+		{name: "userinfo rejected", raw: "spiffe://evil@example.org/cell/accesscore", wantErr: true},
+		{name: "query rejected", raw: "spiffe://example.org/cell/accesscore?x=1", wantErr: true},
+		{name: "fragment rejected", raw: "spiffe://example.org/cell/accesscore#frag", wantErr: true},
+		{name: "port rejected", raw: "spiffe://example.org:8443/cell/accesscore", wantErr: true},
+		{name: "userinfo+query+fragment combined rejected", raw: "spiffe://evil@example.org/cell/accesscore?x#y", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,6 +236,49 @@ func TestCellSetFromURIs(t *testing.T) {
 				mustURL(t, "spiffe://other.org/cell/configcore"),
 			},
 			wantErr: true,
+		},
+		// A cell-shaped SPIFFE URI with non-canonical components must fail closed,
+		// not be silently dropped or normalized to a member (#2297 F1).
+		{
+			name:    "cell-shaped with userinfo -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://evil@example.org/cell/accesscore")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with query -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore?x=1")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with fragment -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore#frag")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with port -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org:8443/cell/accesscore")},
+			wantErr: true,
+		},
+		{
+			// Fail-closed: a forged non-canonical ID presented ALONGSIDE a clean
+			// member must reject the whole cert, not normalize evil@ to the member.
+			name: "clean member + forged userinfo id -> error (whole cert rejected)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://evil@example.org/cell/accesscore?x#y"),
+			},
+			wantErr: true,
+		},
+		{
+			// Boundary: non-cell-shaped spiffe SANs are foreign and stay IGNORED
+			// even when they carry components — only cell-shaped URIs are gated.
+			name: "non-cell spiffe with query ignored (only cell-shaped is gated)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/ns/edge/sa/wl-1?x=1"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+			},
+			wantTD:    "example.org",
+			wantCells: []string{"configcore"},
 		},
 	}
 	for _, tc := range tests {

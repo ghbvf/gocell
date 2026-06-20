@@ -35,10 +35,12 @@ const (
 		" the cross-bind guard needs the server cert's SPIFFE trust domain (set WithListenerTLS with a cell cert)"
 	msgCrossBindServerCertNoID = "bootstrap: listener server certificate carries no cell SPIFFE ID" +
 		" (URI SAN spiffe://<td>/cell/<cell>); the cross-bind guard cannot derive the expected peer trust domain"
-	// msgCrossBindServerCertMixedTD は混合 trust domain 情况（cert 携带了来自 ≥2 个不同 trust
-	// domain 的 cell SPIFFE ID）的专用错误消息，与无 cell SPIFFE ID 的情况（msgCrossBindServerCertNoID）区分。
-	msgCrossBindServerCertMixedTD = "bootstrap: listener server certificate carries cell SPIFFE IDs from more than one trust domain;" +
-		" a workload cert must belong to exactly one trust domain (the cross-bind guard requires a single peer trust domain)"
+	// msgCrossBindServerCertBadSet 是非法 cell SPIFFE ID 集合（非 canonical SPIFFE URI，或携带
+	// 来自 ≥2 个不同 trust domain 的 cell SPIFFE ID）的专用错误消息，与无 cell SPIFFE ID 的情况
+	// （msgCrossBindServerCertNoID）区分。
+	msgCrossBindServerCertBadSet = "bootstrap: listener server certificate carries an invalid cell SPIFFE ID set" +
+		" (a non-canonical SPIFFE URI or cell IDs from more than one trust domain);" +
+		" a workload cert must present canonical cell SPIFFE IDs from exactly one trust domain"
 )
 
 // kauth.AuthProvider is the kernel-defined interface for auth provider cells.
@@ -185,8 +187,10 @@ func serverCertTrustDomain(tlsCfg *tls.Config) (string, error) {
 	}
 	set, err := spiffeid.CellSetFromURIs(leaf.URIs)
 	if err != nil {
-		// cert 携带了来自 ≥2 个不同 trust domain 的 cell SPIFFE ID（混合 TD）——独立根因。
-		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertMixedTD)
+		// cert 携带了非法 cell SPIFFE ID 集合：非 canonical SPIFFE URI
+		// （userinfo/port/query/fragment），或来自 ≥2 个不同 trust domain 的 cell
+		// SPIFFE ID。两者都是独立根因——fail closed 并保留精确原因。
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCrossBindServerCertBadSet, err)
 	}
 	if set.IsEmpty() {
 		// cert 不含任何 cell SPIFFE ID URI SAN。

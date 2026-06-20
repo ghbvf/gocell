@@ -322,7 +322,7 @@ openssl x509 -req -in edge.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 - 各 peer 逐个检查：非 loopback peer + 无 client identity → **启动 fail-fast**。
 - cert chain 验证失败 → **TLS 握手拒绝**（连接终止，不静默通过）。
 - server cert cell 集合不含 targetCell → **TLS 握手拒绝**（出站 `VerifyConnection` 集合成员判定失败）。
-- client cert cell 集合不含 callerCell（service-token 声明的调用方） → **401**（入站 cross-bind middleware）。
+- client cert cell 集合不含 callerCell（service-token 声明的调用方） → **403**（入站 cross-bind middleware `verifyCrossBind`，`CellSet.Contains`）；**401 仅出现在无 peer 证书时**（cross-bind 前 peer 层未携带 cert）。
 
 ### assembly.yaml 要求
 

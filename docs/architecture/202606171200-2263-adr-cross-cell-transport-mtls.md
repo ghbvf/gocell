@@ -43,7 +43,8 @@ PeerIdentity ctx hook（`pkg/ctxkeys.PeerIdentity`），并显式推迟了「出
 ### GoCell 不 vendor go-spiffe 的决策
 
 ADR 049 已裁定「不引入 spiffe/go-spiffe 依赖」（Decision §6）——URIs 保留 raw `*url.URL`，
-业务侧需要 SPIFFE typed-ID 自行调 `spiffeid.FromURI`。#2263 遵循同一决策，在 framework 层
+业务侧需要 SPIFFE typed-ID 自行经 `spiffeid.Parse`（单 ID）/ `spiffeid.CellSetFromURIs`
+（证书 URI SAN 集合）解析。#2263 遵循同一决策，在 framework 层
 不引入 `github.com/spiffe/go-spiffe`：SPIFFE URI SAN 用 raw `net/url.URL` 解析，对等认证
 逻辑由框架内置的 `framework/pkg/spiffeid` 最小类型 + 原生 URI SAN 解析实现。
 
@@ -63,8 +64,9 @@ spiffe://<trustDomain>/cell/<cellID>
 - leaf cert 必须同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth` 双 EKU——
   同一证书兼作 server cert（被 peer 验证）和 client cert（向 peer 出示）。
 
-`framework/pkg/spiffeid` 提供最小 `SPIFFEID` 类型，内部存 cellID + trustDomain，
-暴露 `ParseFromURI(uri *url.URL) (SPIFFEID, error)` + `CellID() string` + `TrustDomain() string`。
+`framework/pkg/spiffeid` 提供 sealed `CellID` 类型，内部存 cell + trustDomain，单 ID 经
+`Parse(raw string) (CellID, error)` / `ForCell(trustDomain, cell string) (CellID, error)` 构造，
+暴露 `Cell() string` + `TrustDomain() string` + `String() string` + `Equal(CellID) bool`。
 只做类型解析，不做 CA 信任决策。
 
 **#2297 Amendment**：workload 证书的 URI SAN 携带该进程承载的**全部** cell SPIFFE ID（多-SAN
