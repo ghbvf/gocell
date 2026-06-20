@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.admin.system.v1.response",
+  "description": "System metadata and process runtime snapshot for operator/admin consoles. The response uses the GoCell {data: {...}} business API envelope. Sensitive host/process details such as PID, hostname, listener addresses, deployment topology, and environment variables are intentionally omitted.",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "build",
+        "runtime",
+        "assembly",
+        "environment",
+        "deployment"
+      ],
+      "properties": {
+        "build": {
+          "type": "object",
+          "required": [
+            "version",
+            "commit",
+            "commitDate",
+            "buildDate",
+            "goVersion",
+            "dirty"
+          ],
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "Release version or dev fallback."
+            },
+            "commit": {
+              "type": "string",
+              "description": "Short VCS commit hash when available, otherwise empty."
+            },
+            "commitDate": {
+              "type": "string",
+              "description": "RFC3339 timestamp for the commit when available, otherwise empty."
+            },
+            "buildDate": {
+              "type": "string",
+              "description": "RFC3339 build timestamp when injected, otherwise empty."
+            },
+            "goVersion": {
+              "type": "string",
+              "description": "Go toolchain version that built the binary."
+            },
+            "dirty": {
+              "type": "boolean",
+              "description": "Whether the VCS tree was dirty at build time when known."
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "required": [
+            "uptimeSeconds",
+            "goroutines",
+            "memoryAllocBytes",
+            "gcPauseTotalNs"
+          ],
+          "properties": {
+            "uptimeSeconds": {
+              "type": "integer",
+              "description": "Whole seconds since process startup."
+            },
+            "goroutines": {
+              "type": "integer"
+            },
+            "memoryAllocBytes": {
+              "type": "integer",
+              "description": "runtime.MemStats.Alloc in bytes. Presentation layers own MB/MiB formatting."
+            },
+            "gcPauseTotalNs": {
+              "type": "integer"
+            }
+          }
+        },
+        "assembly": {
+          "type": "object",
+          "required": [
+            "name",
+            "cells"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "cells": {
+              "type": "array",
+              "description": "Mounted cell IDs in assembly registration order.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "environment": {
+          "type": "object",
+          "required": [
+            "env",
+            "containerized"
+          ],
+          "properties": {
+            "env": {
+              "type": "string",
+              "enum": ["dev", "staging", "prod", "unknown"],
+              "description": "Sanitized deployment environment. One of: dev | staging | prod | unknown."
+            },
+            "containerized": {
+              "type": "boolean"
+            }
+          }
+        },
+        "deployment": {
+          "type": "object",
+          "required": [
+            "available",
+            "lastDeployedAt",
+            "source"
+          ],
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "lastDeployedAt": {
+              "type": ["string", "null"],
+              "format": "date-time",
+              "description": "RFC3339 deployment timestamp when injected by the deployment platform."
+            },
+            "source": {
+              "type": "string",
+              "description": "deployment metadata source, or unavailable."
+            }
+          }
+        }
+      }
+    }
+  }
+}

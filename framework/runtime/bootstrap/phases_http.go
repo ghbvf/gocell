@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/framework/runtime/syshealth"
+	"github.com/ghbvf/gocell/framework/runtime/sysinfo"
 	runtimewebhook "github.com/ghbvf/gocell/framework/runtime/webhook"
 )
 
@@ -413,8 +414,10 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		// constructible here. Symmetric to the Authorizer injector; absence of the
 		// view in ctx (which never happens on the primary listener) is the handler's
 		// fail-closed 503 signal.
-		opts = append(opts, router.WithDefaultMiddleware(
-			healthViewInjector(syshealth.New(b.assemblyCore, b.healthAggregator))))
+		opts = append(opts,
+			router.WithDefaultMiddleware(healthViewInjector(syshealth.New(b.assemblyCore, b.healthAggregator))),
+			router.WithDefaultMiddleware(systemViewInjector(sysinfo.New(b.clock, b.systemInfoConfigForAssembly()))),
+		)
 	}
 
 	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
@@ -523,6 +526,27 @@ func healthViewInjector(view syshealth.HealthView) func(http.Handler) http.Handl
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			r = r.WithContext(syshealth.WithHealthView(r.Context(), view))
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func (b *Bootstrap) systemInfoConfigForAssembly() sysinfo.Config {
+	cfg := b.systemInfoConfig
+	if b.assemblyCore != nil {
+		cfg.Assembly.Name = b.assemblyCore.ID()
+		cfg.Assembly.Cells = b.assemblyCore.CellIDs()
+	}
+	return cfg
+}
+
+// systemViewInjector injects the runtime sysinfo.SystemView into every primary
+// listener request. The syscore admin system handler reads it from context and
+// fail-closes to 503 if the request did not pass through this bootstrap path.
+func systemViewInjector(view sysinfo.SystemView) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = r.WithContext(sysinfo.WithSystemView(r.Context(), view))
 			next.ServeHTTP(w, r)
 		})
 	}

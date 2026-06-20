@@ -1,0 +1,16 @@
+id: systemread
+belongsToCell: syscore
+consistencyLevel: L0
+lifecycle: asset
+contractUsages:
+  - contract: http.admin.system.v1
+    role: serve
+verify:
+  unit:
+    - unit.systemread.service
+  contract:
+    - contract.http.admin.system.v1.serve
+  waivers: []
+
+allowedFiles:
+  - corecells/syscore/slices/systemread/**

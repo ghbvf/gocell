@@ -34,7 +34,11 @@
 build:
 	mkdir -p bin
 	go generate ./cmd/corebundle/
-	go build -tags=catalog_gen -o bin/ ./cmd/corebundle
+	go build -tags=catalog_gen -ldflags "\
+	  -X main.buildVersion=$$(git describe --tags --always --dirty) \
+	  -X main.buildCommit=$$(git rev-parse --short=12 HEAD) \
+	  -X main.buildCommitDate=$$(git log -1 --format=%cI) \
+	  -X main.buildDate=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o bin/ ./cmd/corebundle
 	go build -o bin/ ./cmd/gocell
 
 # check-build is the full-repo compile check (no artefacts). Module-aware

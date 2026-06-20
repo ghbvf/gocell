@@ -45,6 +45,7 @@ import (
 	runtimeoutbox "github.com/ghbvf/gocell/framework/runtime/outbox"
 	"github.com/ghbvf/gocell/framework/runtime/saga/tailer"
 	"github.com/ghbvf/gocell/framework/runtime/shutdown"
+	"github.com/ghbvf/gocell/framework/runtime/sysinfo"
 	"github.com/ghbvf/gocell/framework/runtime/transport"
 	"github.com/ghbvf/gocell/framework/runtime/worker"
 )
@@ -133,6 +134,7 @@ type Bootstrap struct {
 	circuitBreakerNil     bool
 	healthCheckers        []namedChecker
 	adapterInfo           map[string]string
+	systemInfoConfig      sysinfo.Config
 	readyzDeadline        time.Duration
 
 	// healthAggregator is the shared healthz.Aggregator that bootstrap owns.

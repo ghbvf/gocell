@@ -131,6 +131,14 @@ func tsDocComment(doc string) string {
 //   - any/[]any        → unknown/unknown[]
 //   - enumType (GoType == some enum TypeName) → GoType (the named TS union type)
 func tsGoType(f DTOField) string {
+	base := tsGoTypeBase(f)
+	if f.Nullable {
+		return base + " | null"
+	}
+	return base
+}
+
+func tsGoTypeBase(f DTOField) string {
 	// Object field: ItemDTO is the key signal
 	if f.ItemDTO != "" {
 		if f.IsList {

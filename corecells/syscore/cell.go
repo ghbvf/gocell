@@ -1,8 +1,9 @@
 // Package syscore implements the syscore Cell: a stateless platform
 // system/observability boundary cell (#1860). Its sole slice, healthread, serves
-// the aggregated cell-health contract http.admin.health.cells.v1 on the primary
-// listener, gated by the system:read permission. The cross-cell health data is a
-// framework-provided read view (runtime/syshealth.HealthView) injected into
+// the aggregated cell-health contract http.admin.health.cells.v1, and systemread
+// serves process system metadata via http.admin.system.v1 on the primary
+// listener. Both routes are gated by the system:read permission. The cross-cell
+// health data and system metadata are framework-provided read views injected into
 // request context by bootstrap — syscore never imports a sibling cell.
 //
 // It is L1 (the minimum for an HTTP contract provider; TOPO-05 reserves L0 for
@@ -15,6 +16,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/corecells/syscore/slices/healthread"
+	"github.com/ghbvf/gocell/corecells/syscore/slices/systemread"
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 )
 
@@ -29,6 +31,9 @@ type SysCore struct {
 
 	// +slice:route:slice=healthread,subPath=/health
 	healthHandler *healthread.Handler
+
+	// +slice:route:slice=systemread,subPath=/system
+	systemHandler *systemread.Handler
 }
 
 // New constructs the syscore cell. It takes no dependencies: the slice is
@@ -48,5 +53,11 @@ func (c *SysCore) initInternal(_ context.Context, _ cell.Registrar) error {
 		return fmt.Errorf("syscore: build healthread service: %w", err)
 	}
 	c.healthHandler = healthread.NewHandler(svc)
+
+	systemSvc, err := systemread.NewService()
+	if err != nil {
+		return fmt.Errorf("syscore: build systemread service: %w", err)
+	}
+	c.systemHandler = systemread.NewHandler(systemSvc, cellHTTPResolver)
 	return nil
 }

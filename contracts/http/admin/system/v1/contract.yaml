@@ -1,0 +1,30 @@
+id: http.admin.system.v1
+kind: http
+ownerCell: syscore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: syscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/admin/system
+    successStatus: 200
+    auth:
+      responses:
+        - 503
+    permission: system:read
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated principal lacks the system:read permission"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      503:
+        description: "Service Unavailable — the runtime system view is not wired (fail-closed) or the PDP store is unavailable"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

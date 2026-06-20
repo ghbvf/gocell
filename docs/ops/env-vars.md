@@ -373,6 +373,18 @@ service-token channel) is a future capability tracked as #2290.
 | `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). Required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
 | `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the verbose-readiness invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
 
+## System Information Endpoint
+
+`GET /api/v1/admin/system` returns a security-filtered build/runtime summary for
+authenticated administrators with `system:read`. The response intentionally omits
+hostnames, process IDs, listener bind addresses, remote topology, and environment
+dumps.
+
+| Variable | Purpose | Default | Required | Notes |
+|---|---|---|---|---|
+| `GOCELL_ENV` | Deployment environment label surfaced in the system information response | `unknown` | No | Free-form operator label such as `dev`, `staging`, or `prod`; it is TrimSpace-normalized and does not change startup mode or security posture. |
+| `GOCELL_DEPLOYED_AT` | Deployment timestamp surfaced in the system information response | — | No | Use an RFC 3339 timestamp such as `2026-06-19T08:30:00Z`. When unset, the endpoint reports deployment metadata as unavailable instead of guessing. Invalid timestamps are also reported as unavailable with source `invalid:GOCELL_DEPLOYED_AT`; the raw invalid value is not exposed. |
+
 ## Adapter Mode
 
 | Variable | Purpose | Default | Accepted Values |

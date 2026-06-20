@@ -25,6 +25,9 @@ func TestTSGoType(t *testing.T) {
 		{name: "float64", f: DTOField{GoType: "float64", BareJSONTag: "ratio"}, want: "number"},
 		{name: "bool", f: DTOField{GoType: "bool", BareJSONTag: "active"}, want: "boolean"},
 		{name: "ptr bool", f: DTOField{GoType: "*bool", BareJSONTag: "active"}, want: "boolean"},
+		{name: "nullable string", f: DTOField{GoType: "*string", BareJSONTag: "occurredAt", Nullable: true}, want: "string | null"},
+		{name: "nullable int64", f: DTOField{GoType: "*int64", BareJSONTag: "count", Nullable: true}, want: "number | null"},
+		{name: "nullable enum", f: DTOField{GoType: "*PayloadOutcome", BareJSONTag: "outcome", Nullable: true}, want: "PayloadOutcome | null"},
 		// object (pointer, non-list)
 		{name: "object ptr", f: DTOField{GoType: "*ResponseData", ItemDTO: "ResponseData", IsList: false}, want: "ResponseData"},
 		// object array
@@ -96,6 +99,37 @@ func TestRenderTS_BasicInterface(t *testing.T) {
 	// optional field: has '?'
 	if !strings.Contains(out, "count?: number;") {
 		t.Errorf("missing optional field 'count?: number;'; got:\n%s", out)
+	}
+}
+
+func TestRenderTS_NullableScalar(t *testing.T) {
+	t.Parallel()
+	spec := &ContractGenSpec{
+		PackageName: "auditlist",
+		ContractID:  "http.audit.list.v1",
+		Kind:        "http",
+		SourceFile:  "contracts/http/audit/list/v1/contract.yaml",
+		DTOs: []DTOSpec{
+			{
+				Name: "Response",
+				Fields: []DTOField{
+					{Name: "OccurredAt", BareJSONTag: "occurredAt", GoType: "*string", Required: true, Nullable: true},
+					{Name: "Count", BareJSONTag: "count", GoType: "*int64", Required: false, Nullable: true},
+				},
+			},
+		},
+	}
+
+	got, err := renderTS(spec)
+	if err != nil {
+		t.Fatalf("renderTS: %v", err)
+	}
+	out := string(got)
+	if !strings.Contains(out, "occurredAt: string | null;") {
+		t.Errorf("missing required nullable field 'occurredAt: string | null;'; got:\n%s", out)
+	}
+	if !strings.Contains(out, "count?: number | null;") {
+		t.Errorf("missing optional nullable field 'count?: number | null;'; got:\n%s", out)
 	}
 }
 
