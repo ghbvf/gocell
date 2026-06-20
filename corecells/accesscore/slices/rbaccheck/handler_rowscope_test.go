@@ -62,7 +62,7 @@ func setupRowScopeRbac(t *testing.T, userID, roleID string) http.Handler {
 		t.Fatalf("setupRowScopeRbac: NewService: %v", err)
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route(rbacRolesPrefix, func(s cell.RouteMux) {
 		require.NoError(t, h.RegisterRoutes(s))
 	})

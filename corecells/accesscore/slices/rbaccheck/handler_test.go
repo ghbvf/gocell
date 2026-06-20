@@ -127,7 +127,7 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 		panic(err)
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/roles", func(s cell.RouteMux) {
 		require.NoError(t, h.RegisterRoutes(s))
 	})
@@ -238,6 +238,18 @@ func TestHandler(t *testing.T) {
 			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
 			subject:    testutil.TestID("admin-user"),
 			roles:      []string{"admin"},
+			wantStatus: http.StatusForbidden,
+		},
+		// Owner-scoped check-role route: no Authorizer → 403 fail-closed.
+		// RequirePermissionForResource cannot consult the PDP without a wired
+		// Authorizer; the gate fails closed regardless of whether the subject
+		// matches the path param (this is the owner-scoped contract-derived gate
+		// per ADR 202606201500-2355).
+		{
+			name:       "GET /{userID}/{roleName} owner-scoped no Authorizer fail-closed 403",
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
+			subject:    testutil.TestID("user-1"),
+			roles:      nil,
 			wantStatus: http.StatusForbidden,
 		},
 		// Non-self, PDP deny: viewer reading another user → 403.

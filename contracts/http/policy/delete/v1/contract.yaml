@@ -22,6 +22,7 @@ endpoints:
         $ref: "../../../../shared/cas/v1/expected_version.schema.json"
         required: true
     successStatus: 204
+    permission: policy:write
     auth:
       responses:
         - 503

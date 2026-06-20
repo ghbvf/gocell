@@ -8,5 +8,7 @@ export * as httpSampleIdempotencyexemptV1 from './contracts/http/sample/idempote
 export * as httpSamplePasswordresetexemptV1 from './contracts/http/sample/passwordresetexempt/v1/types';
 export * as httpSamplePermissionV1 from './contracts/http/sample/permission/v1/types';
 export * as httpSamplePermissionpreV1 from './contracts/http/sample/permissionpre/v1/types';
+export * as httpSamplePermissionresourceV1 from './contracts/http/sample/permissionresource/v1/types';
+export * as httpSamplePermissionselfV1 from './contracts/http/sample/permissionself/v1/types';
 export * as httpSamplePublicV1 from './contracts/http/sample/public/v1/types';
 export * as httpSampleServiceownedV1 from './contracts/http/sample/serviceowned/v1/types';

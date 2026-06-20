@@ -225,8 +225,10 @@ func RequirePermissionForSelf(p authz.Permission) Policy {
 // RequirePermissionForResource, and RequirePermissionForSelf. resource is the
 // value forwarded to Authorizer.Authorize: r.URL.Path for RequirePermission; the
 // canonicalized path param for RequirePermissionForResource; the caller's own
-// canonicalized subject for RequirePermissionForSelf. Logging uses r.URL.Path
-// throughout for observability regardless of the resource argument.
+// canonicalized subject for RequirePermissionForSelf. Logging records both path
+// (r.URL.Path, always the full HTTP path for correlation) and resource (the value
+// actually forwarded to the PDP: owner=path-param UUID, self=subject,
+// coarse=URL.Path).
 func enforcePermission(r *http.Request, p authz.Permission, resource string) error {
 	// Zero Permission is a programmer error; fail-closed before any I/O.
 	if p.IsZero() {
@@ -261,7 +263,7 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 		return err
 	}
 
-	return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, principal.Subject, p.String())
+	return evaluatePermissionDecision(r.Context(), dec, r.URL.Path, resource, principal.Subject, p.String())
 }
 
 // evaluatePermissionDecision maps a PDP Decision to the route-gate outcome:
@@ -272,13 +274,20 @@ func enforcePermission(r *http.Request, p authz.Permission, resource string) err
 //     denied rather than silently dropped, which would widen what the caller sees).
 //   - Deny → 403.
 //
+// path is always r.URL.Path (full HTTP path, used for correlation in logs).
+// resource is the value actually forwarded to the PDP: the path-param UUID for
+// owner-scoped gates, the caller's subject for self-scoped gates, or r.URL.Path
+// for coarse gates. Both are recorded in deny/warn log lines so operators can
+// distinguish which resource triggered the gate decision.
+//
 // Extracted from RequirePermission to keep its cognitive complexity within budget.
-func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, subject, permission string) error {
+func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, resource, subject, permission string) error {
 	if dec.IsAllow() {
 		if obl := dec.Obligations(); !obl.IsZero() {
 			loggerFrom(ctx).Warn(
 				"authz: Allow carries obligations not enforceable at route gate — denying (fail-closed)",
 				slog.String("path", path),
+				slog.String("resource", resource),
 				slog.String("subject", subject),
 				slog.String("permission", permission),
 			)
@@ -290,6 +299,7 @@ func evaluatePermissionDecision(ctx context.Context, dec authz.Decision, path, s
 	loggerFrom(ctx).Info(
 		"authz: permission denied by PDP",
 		slog.String("path", path),
+		slog.String("resource", resource),
 		slog.String("subject", subject),
 		slog.String("permission", permission),
 		slog.String("reason", dec.Reason()),

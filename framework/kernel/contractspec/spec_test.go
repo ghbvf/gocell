@@ -320,3 +320,63 @@ func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
 		})
 	}
 }
+
+// TestContractSpec_OwnerSelfScoped_Validate covers the #2355 owner-scoped (Resource)
+// and self-scoped (SelfScoped) HTTP fields: they are http-only and mutually exclusive.
+func TestContractSpec_OwnerSelfScoped_Validate(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    contractspec.ContractSpec
+		wantErr bool
+	}{
+		{"http owner-scoped resource ok", contractspec.ContractSpec{
+			ID: "http.auth.user.get.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
+			Method: "GET", Path: "/api/v1/access/users/{id}", Resource: "id",
+		}, false},
+		{"http self-scoped ok", contractspec.ContractSpec{
+			ID: "http.auth.decide.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
+			Method: "POST", Path: "/api/v1/access/decide", SelfScoped: true,
+		}, false},
+		{"http resource ⊕ selfScoped rejected", contractspec.ContractSpec{
+			ID: "http.x.v1", Kind: cellvocab.ContractHTTP, Transport: "http",
+			Method: "GET", Path: "/api/v1/x/{id}", Resource: "id", SelfScoped: true,
+		}, true},
+		{"event must not carry Resource", contractspec.ContractSpec{
+			ID: "event.a.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "t", Resource: "id",
+		}, true},
+		{"event must not carry SelfScoped", contractspec.ContractSpec{
+			ID: "event.a.v1", Kind: cellvocab.ContractEvent, Transport: "amqp", Topic: "t", SelfScoped: true,
+		}, true},
+		{"grpc must not carry Resource", contractspec.ContractSpec{
+			ID: "grpc.a.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Proto: "contracts/grpc/a/v1/a.proto"}, Resource: "id",
+		}, true},
+		{"grpc must not carry SelfScoped", contractspec.ContractSpec{
+			ID: "grpc.a.v1", Kind: cellvocab.ContractGRPC, Transport: "grpc",
+			GRPC: &contractspec.GRPCEndpointSpec{Service: "s", Proto: "contracts/grpc/a/v1/a.proto"}, SelfScoped: true,
+		}, true},
+		{"command must not carry Resource", contractspec.ContractSpec{
+			ID: "command.a.v1", Kind: cellvocab.ContractCommand, Transport: "internal", Resource: "id",
+		}, true},
+		{"projection must not carry Resource", contractspec.ContractSpec{
+			ID: "projection.a.v1", Kind: cellvocab.ContractProjection, Transport: "internal", Resource: "id",
+		}, true},
+		{"webhook must not carry Resource", contractspec.ContractSpec{
+			ID: "webhook.a.v1", Kind: cellvocab.ContractWebhook, Transport: "internal", Resource: "id",
+		}, true},
+		{"saga must not carry Resource", contractspec.ContractSpec{
+			ID: "saga.a.v1", Kind: cellvocab.ContractSaga, Transport: "internal", Resource: "id",
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.spec.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}

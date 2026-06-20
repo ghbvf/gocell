@@ -266,7 +266,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.identityHandler = identitymanage.NewHandler(identitySvc)
+	c.identityHandler = identitymanage.NewHandler(identitySvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(identitymanage.SliceMetadata()))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
@@ -332,7 +332,7 @@ func (c *AccessCore) initSlices() error {
 	// decide HTTP surface (#1863): expose the same PDP instance over
 	// POST /api/v1/access/decide. Reuses c.authzSvc (no second slice registration);
 	// gated by RequirePermissionForSelf(access:decide) inside NewHandler.
-	c.decideHandler = authorizationdecide.NewHandler(c.authzSvc)
+	c.decideHandler = authorizationdecide.NewHandler(c.authzSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(authorizationdecide.SliceMetadata()))
 
 	// policymanage: L2 OutboxFact CRUD for ABAC policies (#1347 PR-9).
@@ -347,7 +347,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
+	c.rbacHandler = rbaccheck.NewHandler(rbacSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(rbaccheck.SliceMetadata()))
 
 	// rbac-assign is always L2 OutboxFact — the declaration lives in
@@ -461,7 +461,7 @@ func (c *AccessCore) initPolicyManageSlice() error {
 	if err != nil {
 		return fmt.Errorf("accesscore: build policymanage service: %w", err)
 	}
-	c.policyHandler = policymanage.NewHandler(pmSvc)
+	c.policyHandler = policymanage.NewHandler(pmSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(policymanage.SliceMetadata()))
 	return nil
 }

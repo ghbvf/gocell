@@ -80,7 +80,7 @@ func setup(t testing.TB) http.Handler {
 		panic("setup: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			panic("setup: RegisterRoutes: " + err.Error())
@@ -106,7 +106,7 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 		panic("setupWithIssuer: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
 		if err := h.RegisterRoutes(s); err != nil {
 			panic("setupWithIssuer: RegisterRoutes: " + err.Error())

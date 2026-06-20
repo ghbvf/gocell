@@ -290,6 +290,96 @@ func TestContractSchemaHTTPPermission(t *testing.T) {
 	}
 }
 
+// TestContractSchemaHTTPResourceSelfScoped byte-locks the #2355 owner-scoped
+// (endpoints.http.resource) and self-scoped (endpoints.http.selfScoped) authoring
+// surface at the JSON Schema layer (the Hard primary; FMT-42 is the Medium defense).
+// resource/selfScoped each REQUIRE permission and are mutually exclusive with each
+// other; resource⊕opt-out is enforced transitively (resource⇒permission +
+// permission⊕opt-out). Notably there is NO "owner-scoped permission ⇒ resource"
+// rule — owner permission without resource (an admin route) is accepted.
+func TestContractSchemaHTTPResourceSelfScoped(t *testing.T) {
+	schema := compileContractSchemaForTest(t)
+
+	doc := func(httpInner string) string {
+		return `{
+			"id": "http.config.x.v1",
+			"kind": "http",
+			"consistencyLevel": "L1",
+			"lifecycle": "active",
+			"endpoints": {
+				"server": "configcore",
+				"clients": [],
+				"http": {` + httpInner + `}
+			}
+		}`
+	}
+
+	cases := []struct {
+		name      string
+		httpInner string
+		wantValid bool
+	}{
+		{
+			name: "owner-scoped resource + permission accepted",
+			httpInner: `"method":"GET","path":"/api/v1/config/x/{id}","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","resource":"id","pathParams":{"id":{"type":"string","format":"uuid"}}`,
+			wantValid: true,
+		},
+		{
+			name: "self-scoped + permission accepted",
+			httpInner: `"method":"POST","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","selfScoped":true`,
+			wantValid: true,
+		},
+		{
+			// DELIBERATE non-port of FMT-41: owner-scoped permission with NO resource
+			// (an admin route) is accepted — resource is a per-route authoring choice.
+			name: "permission without resource accepted (admin route)",
+			httpInner: `"method":"POST","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"permission":"config:write"`,
+			wantValid: true,
+		},
+		{
+			name: "resource without permission rejected",
+			httpInner: `"method":"GET","path":"/api/v1/config/x/{id}","successStatus":200,"noContent":false,` +
+				`"resource":"id","pathParams":{"id":{"type":"string","format":"uuid"}}`,
+			wantValid: false,
+		},
+		{
+			name: "selfScoped without permission rejected",
+			httpInner: `"method":"POST","path":"/api/v1/config/x","successStatus":200,"noContent":false,` +
+				`"selfScoped":true`,
+			wantValid: false,
+		},
+		{
+			name: "resource + selfScoped rejected (mutex)",
+			httpInner: `"method":"GET","path":"/api/v1/config/x/{id}","successStatus":200,"noContent":false,` +
+				`"permission":"config:read","resource":"id","selfScoped":true,` +
+				`"pathParams":{"id":{"type":"string","format":"uuid"}}`,
+			wantValid: false,
+		},
+		{
+			name: "resource + public rejected (transitive: resource⇒permission + permission⊕public)",
+			httpInner: `"method":"GET","path":"/api/v1/config/x/{id}","successStatus":200,"noContent":false,` +
+				`"resource":"id","auth":{"public":true},"pathParams":{"id":{"type":"string","format":"uuid"}}`,
+			wantValid: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var contractDoc any
+			require.NoError(t, json.Unmarshal([]byte(doc(tc.httpInner)), &contractDoc))
+			err := schema.Validate(contractDoc)
+			if tc.wantValid {
+				assert.NoError(t, err, "expected schema-valid")
+			} else {
+				assert.Error(t, err, "expected schema rejection")
+			}
+		})
+	}
+}
+
 func TestContractSchemaAllowsAuthPasswordResetExempt(t *testing.T) {
 	raw, err := FS.ReadFile("contract.schema.json")
 	require.NoError(t, err)
