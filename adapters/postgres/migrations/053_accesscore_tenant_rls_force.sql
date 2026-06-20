@@ -45,10 +45,12 @@
 -- these tables AND MUST NOT have BYPASSRLS (or be superuser). FORCE ROW LEVEL
 -- SECURITY makes RLS apply even to the table OWNER, but a BYPASSRLS/superuser
 -- role still bypasses ALL row security. The integration suite asserts
--- rolbypassrls=false against a restricted role; the runtime readyz current-role
--- precondition probe + the production restricted app-serving pool wiring are an
--- independent app-pool readiness dimension deferred to a follow-up (it would turn
--- the superuser-based dev /readyz red until the two-role deployment model exists).
+-- rolbypassrls=false against a restricted role; this is now ALSO enforced at
+-- runtime by the readyz probe ProbeAppRoleRestrictedReady
+-- (adapters/postgres.AppRoleRestrictedCheck: "SELECT rolsuper, rolbypassrls FROM
+-- pg_roles WHERE rolname=current_user", fail-closed), wired on every serving pool
+-- via corebundle RequireRestrictedRole=true (ADR #1676). A BYPASSRLS/superuser
+-- serving role now fails /readyz instead of silently leaking across tenants.
 --
 -- ref: adapters/postgres/migrations/052_tenant_rls_force.sql (config-table RLS, copied)
 -- ref: adapters/postgres/migrations/050_accesscore_tenant_id.sql (tenant_id columns)

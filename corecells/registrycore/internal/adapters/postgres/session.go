@@ -3,6 +3,11 @@
 // defines its own DBTX interface to match pgx.Tx / pgxpool.Pool, keeping the
 // cell decoupled from the adapter layer (per layering rules). The shape mirrors
 // configcore/internal/adapters/postgres.
+//
+// Both halves of that boundary are machine-enforced, not godoc-only: the
+// cells-isolation depguard rule bans any adapters/postgres import here, and
+// corecells-pgx-confined confines the raw jackc/pgx driver to this
+// postgres-adapter package (#2387 F13, Soft→Medium).
 package postgres
 
 import (

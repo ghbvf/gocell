@@ -44,6 +44,8 @@
 -- role MUST NOT own these tables AND MUST NOT have BYPASSRLS (or be superuser).
 -- FORCE ROW LEVEL SECURITY applies RLS even to the table OWNER, but a
 -- BYPASSRLS/superuser role still bypasses ALL row security. Same as migration 059.
+-- Runtime-enforced by the readyz probe ProbeAppRoleRestrictedReady
+-- (adapters/postgres.AppRoleRestrictedCheck, ADR #1676).
 --
 -- Non-destructive DDL (CREATE TABLE / ENABLE / FORCE / CREATE POLICY / REVOKE add
 -- no column, drop nothing, rewrite no row): NO `+gocell forward-rebuild` annotation
