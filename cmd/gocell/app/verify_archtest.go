@@ -51,6 +51,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 			" file; rules with an undeterminable scan domain always run (fast pre-filter, not a"+
 			" merge gate)")
 	shardStr := fs.String("shard", "", "shard selection N/K (e.g. 0/3)")
+	scopeFlag := fs.String("scope", string(archtestrunner.ScopeWorkspace),
+		"execution scope: workspace (full suite, default) | framework (portable StandardCellRules subset)")
 	formatFlag := fs.String("format", "text", "output format: "+strings.Join(printers.SupportedFormats(), " | "))
 	testJSONOut := fs.String("test-json-out", "", "optional file: write raw go test -json events")
 	listTestsFlag := fs.Bool("list-tests", false, "print selected test names to stdout and exit")
@@ -62,12 +64,20 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 	if *rule != "" && *changed {
 		return req, false, "", fmt.Errorf(
 			"--rule and --changed are mutually exclusive: --changed already narrows by scan domain;" +
-				" to run one rule unfiltered, drop --changed and use --rule=<ID>")
+				" to run one rule unfiltered, drop --changed and use --rule=<ID>",
+		)
 	}
 
 	shard, shardErr := parseShard(*shardStr)
 	if shardErr != nil {
 		return req, false, "", fmt.Errorf("--shard: %w", shardErr)
+	}
+
+	// Validate scope eagerly (fail fast on a misconfigured CI call, like --shard /
+	// --timeout); ResolveScope is the same validator Run / ListTests apply.
+	scope, scopeErr := archtestrunner.ResolveScope(archtestrunner.Scope(*scopeFlag))
+	if scopeErr != nil {
+		return req, false, "", fmt.Errorf("--scope: %w", scopeErr)
 	}
 
 	dur, durErr := time.ParseDuration(*timeout)
@@ -78,7 +88,8 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 		return req, false, "", fmt.Errorf(
 			"--timeout: must be a positive duration (e.g. 5m); got %q"+
 				" (0 disables go test timeout, hanging CI shards until GHA's 10m backstop)",
-			*timeout)
+			*timeout,
+		)
 	}
 
 	workspaceRoot := *root
@@ -91,10 +102,9 @@ func parseArchtestFlags(args []string) (req archtestrunner.Request, listTests bo
 
 	req = archtestrunner.Request{
 		WorkspaceRoot: workspaceRoot,
-		// --scope flag intentionally not exposed: framework==workspace execution today
-		// (all archtest is one package requiring GOWORK). Internal Scope/WorkspaceRoot
-		// seam reserved for external-repo archtest (epic gh #1878).
-		Scope: archtestrunner.ScopeWorkspace,
+		// --scope=framework runs only the portable StandardCellRules subset; the
+		// default (workspace) runs the full suite. See #2331 / #1878.
+		Scope: scope,
 		Rule:  *rule,
 		// Source-aware --changed: a changed file selects the rules whose own *_test.go
 		// changed plus the rules whose static scan domain contains the change (gh #1877).
@@ -115,10 +125,16 @@ func emitChangedSelectionSummary(w io.Writer, req archtestrunner.Request, select
 	if !req.Changed {
 		return
 	}
+	// Note the active scope so a 0-result under --scope=framework --changed reads as
+	// "the framework set ∩ changed was empty", not "the full suite passed".
+	scopeNote := ""
+	if req.Scope == archtestrunner.ScopeFramework {
+		scopeNote = " --scope=framework"
+	}
 	// Best-effort diagnostic line; a stderr write failure must not fail the run.
 	_, _ = fmt.Fprintf(w,
-		"archtest --changed: %d rule(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
-			" this is a pre-filter, not the authoritative full run\n", selectedCount)
+		"archtest --changed%s: %d test function(s) selected to run (scan-domain matches + undeterminable-scope rules);"+
+			" this is a pre-filter, not the authoritative full run\n", scopeNote, selectedCount)
 }
 
 // runArchtestListTests handles --list-tests mode: prints one name per line to

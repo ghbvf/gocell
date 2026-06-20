@@ -52,6 +52,7 @@ Runs the archtest suite via the CLI (all logic in `cmd/gocell/internal/archtestr
 | Flag | 说明 |
 |---|---|
 | `--root=DIR` | repo root（default: auto-detected from go.mod ancestor） |
+| `--scope=workspace\|framework` | `workspace` (default) runs the full suite; `framework` runs only the portable `StandardCellRules` subset (single-sourced in `tools/archtest/scoperules.FrameworkRuleIDs`); unknown values rejected fail-closed |
 | `--rule=ID` | only run tests matching the given invariant ID |
 | `--changed` | run only mechanically changed test files; source→rule mapping deferred to gh #1877 |
 | `--shard=N/K` | run shard N of K (0-indexed); K must equal matrix.shard length in CI (guarded by ARCHTEST-CI-EXPLICIT-SHARD-COUNT-01) |
@@ -60,7 +61,7 @@ Runs the archtest suite via the CLI (all logic in `cmd/gocell/internal/archtestr
 | `--list-tests` | print discovered test names and exit (no execution) |
 | `--timeout=DUR` | per-shard test timeout (default: 5m) |
 
-`--scope` is not exposed today (workspace scope always); external-repo archtest scope is tracked at gh #1878.
+`--scope` is the coarsest filter (applied before `--shard`/`--rule`/`--changed`): `--scope=framework` narrows to the portable `StandardCellRules` subset before sharding, so a `--shard=N/K` then partitions only that subset (tens of tests), not the full workspace set. External-repo cell dev runs the same portable set via `archtest.RunStandardCellRules` (gh #1878).
 
 `--changed` selects test files mechanically (changed files only); a semantic source→rule mapping (which archtest rules are impacted by a given source change) is tracked at gh #1877 and is not yet implemented.
 

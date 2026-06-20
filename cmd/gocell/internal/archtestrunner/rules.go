@@ -154,26 +154,126 @@ func extractInvariantIDs(groups []*ast.CommentGroup) []string {
 	return ids
 }
 
-// extractTestFuncNames returns all top-level func TestXxx(*testing.T) names.
-func extractTestFuncNames(f *ast.File) []string {
-	var names []string
+// buildFrameworkFuncIndex builds a FUNC-LEVEL rule index: each INVARIANT rule ID
+// maps to ONLY the test functions positioned under its own section anchor, not
+// every function in the file. This is what makes --scope=framework precise: a
+// theme-consolidated file (saga_invariants_test.go, errcode_invariants_test.go)
+// anchors one portable rule alongside many gocell-internal rules, and the
+// file-level [buildRuleIndex] (used by --rule) would conflate them — selecting
+// SAGA-STEP-COMPENSATE-PURE-01 would pull in all ~85 saga tests. Here, only the
+// funcs under each rule's own `// INVARIANT: <id>` section are attributed.
+//
+// Attribution rule (matches the archtest authoring convention):
+//   - A comment group declaring EXACTLY ONE INVARIANT ID is a SECTION ANCHOR; the
+//     test funcs that follow it (until the next anchor) belong to that rule.
+//   - A group declaring TWO OR MORE IDs is the file's inventory header (a `//   -
+//     INVARIANT:` list) and is skipped — it documents the file, it does not own funcs.
+//   - A func with no preceding section anchor is unattributed (excluded), so a
+//     consolidation/helper test above the first section never leaks into a scope.
+//
+// Known assumption / blind spot (Medium heuristic, acceptable): "single-ID comment
+// group == section anchor" is positional, not semantic — a prose comment that
+// happens to name exactly one INVARIANT ID, or a rule split into two anchor
+// sections in one file, will attribute funcs by nearest-preceding-anchor, which
+// can differ from intent. This only ever MIS-SCOPES GoCell's own dogfood subset
+// (the framework integration test asserts framework ⊊ workspace, so gross drift
+// is caught); it can never weaken a rule's real enforcement, because
+// --scope=workspace still runs every test. The archtest authoring convention
+// (one contiguous `// INVARIANT: <id>` section per rule per file, inventory as a
+// multi-ID list) keeps the heuristic exact for the curated framework set.
+func buildFrameworkFuncIndex(workspaceRoot string) (ruleIndex, error) {
+	idx := make(ruleIndex)
+	dir := filepath.Join(workspaceRoot, archtestPkgDir)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return idx, nil
+		}
+		return nil, fmt.Errorf("archtestrunner: read archtest dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		if err := attributeFuncsByAnchor(filepath.Join(dir, entry.Name()), idx); err != nil {
+			return nil, fmt.Errorf("archtestrunner: parse %s: %w", entry.Name(), err)
+		}
+	}
+	return idx, nil
+}
+
+// attributeFuncsByAnchor parses one *_test.go file and attributes each top-level
+// test function to the rule ID of its nearest preceding single-ID section anchor
+// (see [buildFrameworkFuncIndex] for the rule), appending into idx.
+func attributeFuncsByAnchor(path string, idx ruleIndex) error {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+	if err != nil {
+		return err
+	}
+
+	// Section anchors: comment groups naming exactly one INVARIANT ID.
+	type anchor struct {
+		pos token.Pos
+		id  string
+	}
+	var anchors []anchor
+	for _, group := range f.Comments {
+		if ids := extractInvariantIDs([]*ast.CommentGroup{group}); len(ids) == 1 {
+			anchors = append(anchors, anchor{pos: group.Pos(), id: ids[0]})
+		}
+	}
+
+	for _, name := range orderedTestFuncs(f) {
+		var nearest token.Pos
+		var ruleID string
+		for _, a := range anchors {
+			if a.pos < name.pos && a.pos > nearest {
+				nearest, ruleID = a.pos, a.id
+			}
+		}
+		if ruleID != "" {
+			idx[ruleID] = append(idx[ruleID], name.name)
+		}
+	}
+	return nil
+}
+
+// posName pairs a test function's source position with its name.
+type posName struct {
+	pos  token.Pos
+	name string
+}
+
+// orderedTestFuncs returns the top-level func TestXxx(*testing.T) decls with their
+// source positions (for nearest-anchor attribution).
+func orderedTestFuncs(f *ast.File) []posName {
+	var out []posName
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
+		if !ok || fn.Recv != nil {
 			continue
 		}
-		if fn.Recv != nil {
-			continue // method, not a top-level function
-		}
-		name := fn.Name.Name
-		if !strings.HasPrefix(name, "Test") {
+		if !strings.HasPrefix(fn.Name.Name, "Test") {
 			continue
 		}
-		// Must take *testing.T as the first (and only) parameter.
 		if fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
 			continue
 		}
-		names = append(names, name)
+		out = append(out, posName{pos: fn.Pos(), name: fn.Name.Name})
+	}
+	return out
+}
+
+// extractTestFuncNames returns all top-level func TestXxx(*testing.T) names, in
+// source order. Shares the decl walk with [orderedTestFuncs] (which also carries
+// positions for func-level anchor attribution).
+func extractTestFuncNames(f *ast.File) []string {
+	fns := orderedTestFuncs(f)
+	names := make([]string, len(fns))
+	for i, fn := range fns {
+		names[i] = fn.name
 	}
 	return names
 }

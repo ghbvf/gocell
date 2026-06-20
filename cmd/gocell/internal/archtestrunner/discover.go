@@ -24,11 +24,21 @@ import (
 	"strings"
 )
 
-// Scope selects which test suite to run. Today only ScopeWorkspace is supported.
+// Scope selects which subset of the archtest suite to run. Unknown values are
+// rejected by [ResolveScope]; the empty Scope normalizes to [ScopeWorkspace].
 type Scope string
 
-// ScopeWorkspace runs the full workspace archtest suite under ./tools/archtest.
-const ScopeWorkspace Scope = "workspace"
+const (
+	// ScopeWorkspace runs the full archtest suite under ./tools/archtest. This is
+	// the default and preserves pre-#2331 behavior.
+	ScopeWorkspace Scope = "workspace"
+	// ScopeFramework runs only the framework-portable rule set — the rules whose
+	// IDs are listed in tools/archtest/scoperules.FrameworkRuleIDs (the
+	// StandardCellRules curated set). It is a strict subset of ScopeWorkspace:
+	// discovery is unchanged, then the result is narrowed to the framework rules'
+	// test functions before sharding / rule / changed selection.
+	ScopeFramework Scope = "framework"
+)
 
 // Shard selects one modulo partition of the test list.
 // Total==0 means "no sharding" (run all tests).
@@ -43,13 +53,15 @@ type Request struct {
 	// It is the subprocess-runner counterpart of tools/archtest.RuntimeScopeConfig.WorkspaceRoot()
 	// — when the child `go test` process resolves its own in-process RuntimeScopeConfig, it
 	// derives the workspace root from go.work discovery (WorkspaceRoot() is the result).
-	// A future --scope flag (#2331) will allow callers to supply an explicit root here instead
-	// of relying on process-cwd discovery inside the child.
+	// Scope selection is carried separately by [Request.Scope] (set from the --scope flag);
+	// WorkspaceRoot only fixes the subprocess cwd / root discovery, it does not select scope.
 	WorkspaceRoot string
-	// Scope selects the test suite to run. Only [ScopeWorkspace] is supported today.
-	// The in-process counterpart resolved by the child subprocess is
-	// tools/archtest.RuntimeScopeConfig, which captures the full scope context
-	// (workspace root, target module path, framework/platform paths, scan dirs).
+	// Scope selects which subset of the suite to run (see [Scope]). The empty value
+	// normalizes to [ScopeWorkspace]; an unknown value is rejected fail-closed by
+	// [ResolveScope] at the start of Run / ListTests. The in-process counterpart
+	// resolved by the child subprocess is tools/archtest.RuntimeScopeConfig, which
+	// captures the full scope context (workspace root, target module path,
+	// framework/platform paths, scan dirs).
 	Scope       Scope  // default ScopeWorkspace
 	Rule        string // optional INVARIANT rule ID, e.g. "LAYER-05"
 	Changed     bool   // optional: select only rules a changed file could affect (#1877)

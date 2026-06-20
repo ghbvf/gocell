@@ -69,6 +69,13 @@ func ListTests(ctx context.Context, req Request) ([]string, error) {
 
 // run is the engine-scoped implementation of Run.
 func (e engine) run(ctx context.Context, req Request) (Report, error) {
+	// Validate inputs before touching the environment so a bad scope fails
+	// fail-closed regardless of GOWORK (never silently treated as workspace).
+	scope, err := ResolveScope(req.Scope)
+	if err != nil {
+		return Report{}, err
+	}
+	req.Scope = scope
 	if err := checkGOWORK(); err != nil {
 		return Report{}, err
 	}
@@ -137,6 +144,11 @@ func writeJSONArtifactIfRequested(req Request, output []byte) error {
 
 // listTests is the engine-scoped implementation of ListTests.
 func (e engine) listTests(ctx context.Context, req Request) ([]string, error) {
+	scope, err := ResolveScope(req.Scope)
+	if err != nil {
+		return nil, err
+	}
+	req.Scope = scope
 	if err := checkGOWORK(); err != nil {
 		return nil, err
 	}
@@ -156,17 +168,37 @@ func (e engine) resolveSelected(ctx context.Context, req Request) ([]string, err
 	return e.applyFilters(ctx, req, discovered)
 }
 
-// applyFilters applies shard / rule / changed filters to a pre-discovered test list.
-// Extracted as a pure-ish helper to allow testing without a real `go test -list` call.
+// applyFilters applies scope / shard / rule / changed filters to a pre-discovered
+// test list. Extracted as a pure-ish helper to allow testing without a real
+// `go test -list` call.
+//
+// Scope is the COARSEST filter and runs first: ScopeFramework narrows the
+// universe to the framework-portable rules' test functions, so shard/rule/changed
+// all operate within the scope (shard exactly-once holds per-scope; --list-tests
+// lists only the scope). ScopeWorkspace (and the empty default) is a pass-through.
 func (e engine) applyFilters(ctx context.Context, req Request, discovered []string) ([]string, error) {
-	// Apply shard partitioning first.
-	selected := applyShardSelection(discovered, req.Shard)
+	scoped, err := applyScope(req, discovered)
+	if err != nil {
+		return nil, err
+	}
 
-	// Apply rule filter (intersect).
+	// Apply shard partitioning (within the scoped universe).
+	selected := applyShardSelection(scoped, req.Shard)
+
+	// Apply rule filter (intersect). Under ScopeFramework the rule filter must use
+	// the same FUNC-LEVEL index as scope narrowing (buildFrameworkFuncIndex); else a
+	// --rule naming one rule in a theme-consolidated file would also pull in that
+	// file's OTHER framework rules — file-level buildRuleIndex conflates them
+	// (e.g. --scope=framework --rule=ERRCODE-KIND-LITERAL-01 leaking the sibling
+	// errcode portable rules). Workspace scope keeps file-level (--rule's
+	// established granularity).
 	if req.Rule != "" {
-		idx, err := buildRuleIndex(req.WorkspaceRoot)
-		if err != nil {
-			return nil, err
+		idx, ierr := buildRuleIndex(req.WorkspaceRoot)
+		if req.Scope == ScopeFramework {
+			idx, ierr = buildFrameworkFuncIndex(req.WorkspaceRoot)
+		}
+		if ierr != nil {
+			return nil, ierr
 		}
 		selected, err = selectByRule(idx, req.Rule, selected)
 		if err != nil {

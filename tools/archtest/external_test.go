@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ghbvf/gocell/tools/archtest/scoperules"
 	"github.com/ghbvf/gocell/tools/gomodutil"
 )
 
@@ -24,8 +25,9 @@ import (
 //
 // Asserting exact membership (not merely "contains PANIC-REGISTERED-01") proves
 // the standard set holds only adjudicated rules: registering a new rule or
-// dropping one becomes a deliberate, test-visible edit to wantRuleIDs rather
-// than silent drift. This closes codex #1621 F1 — the cell-family rules are
+// dropping one becomes a deliberate, test-visible edit to scoperules.FrameworkRuleIDs
+// (this test derives wantRuleIDs from it) rather than silent drift. This closes
+// codex #1621 F1 — the cell-family rules are
 // gocell-internal and deliberately NOT registered (see each rule file's godoc),
 // so a stray registration must fail here, not slip in behind a stale "wrapped
 // by StandardCellRules" narrative.
@@ -52,27 +54,21 @@ func TestStandardCellRulesComposition(t *testing.T) {
 		seen[r.ID] = true
 	}
 
-	// wantRuleIDs is the adjudicated standard set — it must match StandardCellRules
-	// exactly. A new entry must be a rule portable to external Cell repos (it
-	// reasons about platform-API usage, not GoCell's own package layout) — see
-	// external.go's StandardCellRules godoc, which also documents the rules
-	// deliberately NOT registered because they are gocell-internal-layout.
-	wantRuleIDs := map[string]bool{
-		rulePanicRegistered01:                    true,
-		ruleErrcodeKindLiteral01:                 true,
-		ruleMessageConstLiteral01:                true,
-		ruleExportedErrorNew01:                   true,
-		ruleScaffoldDerivedForceOverwrite01:      true,
-		ruleOutboxReconstructionCaller01:         true,
-		ruleProjectionApplyHookFunnel01:          true,
-		ruleOutboxHandleResultFactoryPreferred01: true,
-		sagaCompensatePureRuleID:                 true,
-		ruleProdMainWiringNoopReject01:           true,
+	// wantRuleIDs is the adjudicated standard set, derived from the single source
+	// scoperules.FrameworkRuleIDs (#2331). StandardCellRules() itself iterates that
+	// same leaf, so this assertion proves the derivation kept membership intact and
+	// no rule was paired with a nil Run. Adding/dropping a framework rule is a
+	// single-line edit to scoperules.FrameworkRuleIDs; the runner (gocell verify
+	// archtest --scope=framework) reads the identical leaf, so the two cannot drift.
+	frameworkIDs := scoperules.FrameworkRuleIDs()
+	wantRuleIDs := make(map[string]bool, len(frameworkIDs))
+	for _, id := range frameworkIDs {
+		wantRuleIDs[id] = true
 	}
 	for id := range seen {
 		if !wantRuleIDs[id] {
 			t.Errorf("StandardCellRules() contains undeclared rule %q; if intended, add it to "+
-				"wantRuleIDs and confirm the rule is portable to external Cell repos", id)
+				"scoperules.FrameworkRuleIDs after confirming the rule is portable to external Cell repos", id)
 		}
 	}
 	for id := range wantRuleIDs {
