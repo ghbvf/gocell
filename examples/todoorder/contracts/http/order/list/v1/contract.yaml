@@ -21,6 +21,7 @@ endpoints:
         minimum: 1
         maximum: 500
     successStatus: 200
+    permission: order:list
     noContent: false
     responses:
       400:

@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/cellvocab"
 	"github.com/ghbvf/gocell/framework/kernel/contractspec"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/pkg/panicregister"
@@ -38,17 +39,30 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler for http.device.command.enqueue.v1.
-func NewHandler(svc Service, policy auth.Policy) *Handler {
-	if policy == nil {
-		// B-class assertion: caller must supply a non-nil auth.Policy. For public
-		// endpoints declare auth.public:true in contract.yaml. For internal endpoints
-		// relying solely on caller-cell allowlist declare auth.clientsOnly:true. For
-		// service-owned endpoints declare auth.serviceOwned:true.
-		// errcode.Assertion routes through kernel recover middleware (500 + log)
-		// instead of bare panic so PANIC-REGISTERED-01 archtest stays clean.
-		panic(panicregister.Approved("http-device-command-enqueue-v1-policy-nil", errcode.Assertion("generated handler http.device.command.enqueue.v1: policy must not be nil (non-public, non-bootstrap, non-clientsOnly, non-serviceOwned endpoints require a real auth.Policy; for public/clients-only/service-owned endpoints update contract.yaml auth flag and regenerate)")))
+//
+// Authorization is contract-derived (#2205/#2355): endpoints.http.permission is
+// device:command. NewHandler takes the cell-level
+// authz.MethodPolicyResolver (built by cellgen from the cell's served-contract
+// permission overlays) and constructs the route gate via the single
+// auth.RequirePermissionForContract(contractSpec, resolver) funnel — which dispatches
+// on contractSpec.Resource / contractSpec.SelfScoped to RequirePermissionForResource /
+// RequirePermissionForSelf / RequirePermission — the HTTP sibling of the gRPC
+// interceptor's resolver + resource lookup, replacing a hand-wired
+// auth.RequirePermission(authz.PermX()) policy. A nil resolver panics at
+// construction (composition root must inject the cell resolver).
+// Note: the same permission can serve both an owner route (with resource) and an
+// admin route (without resource); the PDP ownership baseline (subject.sub ==
+// resource.id) is only triggered when the resource id is forwarded to the PDP
+// via RequirePermissionForResource — coarse RequirePermission routes do not carry
+// a resource argument and therefore do not invoke the ownership rule.
+func NewHandler(svc Service, resolver authz.MethodPolicyResolver) *Handler {
+	if resolver == nil {
+		// B-class assertion: argument-contract violation. errcode.Assertion routes
+		// through the kernel recover middleware (500 + log) instead of a bare panic
+		// so PANIC-REGISTERED-01 stays clean.
+		panic(panicregister.Approved("http-device-command-enqueue-v1-resolver-nil", errcode.Assertion("generated handler http.device.command.enqueue.v1: resolver must not be nil (endpoints.http.permission contracts require the cell authz.MethodPolicyResolver; composition root must inject the cellgen-built resolver)")))
 	}
-	h := &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: auth.RequirePermissionForContract(contractSpec, resolver)}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
 		panic(panicregister.Approved("http-device-command-enqueue-v1-standard-schema-compile-failed", errcode.Assertion("generated handler http.device.command.enqueue.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err)))

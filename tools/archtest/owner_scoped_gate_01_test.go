@@ -180,20 +180,12 @@ var ownerScopedGateContractDerivedSet = map[string]struct{}{
 // or "" if the file is not one of the owner-scoped handlers under guard.
 func ownerScopedGateHandlerKey(rel string) string {
 	switch {
-	// NOTE (#2355): accesscore identitymanage/rbaccheck/authorizationdecide migrated to
-	// contract-derived authz — no longer hand-wired, so no longer scanned here (guarded by
-	// TestOwnerScopedGate_ContractDerived_01 via project metadata instead).
+	// NOTE (#2355 / #2486): accesscore (identitymanage/rbaccheck/authorizationdecide) AND
+	// the examples (todoorder ordercell get/confirm, iotdevice devicecell status, and the
+	// devicecommand consume gates) migrated to contract-derived authz — no longer
+	// hand-wired, so no longer scanned here (guarded by TestOwnerScopedGate_ContractDerived_01
+	// via project metadata instead).
 	//
-	// examples (PR-10d #1894). todoorder get+confirm owner gates both live in
-	// ordercell/cell.go — one handler key, the two triples differ by permission
-	// (PermOrderRead/PermOrderUpdate). iotdevice's status owner gate lives in
-	// devicecell/cell.go; the devicecommand consume gate lives in its slice handler.
-	case strings.HasSuffix(rel, "cells/ordercell/cell.go"):
-		return "todoorder-order"
-	case strings.HasSuffix(rel, "cells/devicecell/cell.go"):
-		return "iotdevice-device"
-	case strings.HasSuffix(rel, "slices/devicecommand/handler.go"):
-		return "devicecommand"
 	// #2351: the framework-owned devicestate serving gate in the composition-root layer
 	// (cellmodules/deviceserving/service.go Route()), gated by
 	// RequirePermissionForResource("id", PermDeviceRead()). Scanned because the scan scope

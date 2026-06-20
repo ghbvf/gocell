@@ -47,7 +47,7 @@ func newSeededAsyncHandler(t *testing.T, emitter outbox.CellEmitter, deviceID st
 	require.NoError(t, err)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
-		require.NoError(t, NewHandler(svc).RegisterRoutes(sub))
+		require.NoError(t, NewHandler(svc, testResolver()).RegisterRoutes(sub))
 	})
 	return mux
 }

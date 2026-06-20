@@ -12,15 +12,22 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/errcode/errcodetest"
 	"github.com/ghbvf/gocell/framework/pkg/query"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-var allowAllContractPolicy = func(*http.Request) error { return nil }
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.order.get.v1":  "order:read",
+		"http.order.list.v1": "order:list",
+	})
+}
 
 func newContractQuerySvc(orders ...*domain.Order) *Service {
 	repo := mem.NewOrderRepository()
@@ -44,7 +51,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 		Status:    "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	h := getv1.NewHandler(svc, allowAllContractPolicy)
+	h := getv1.NewHandler(svc, testResolver())
 
 	// r.PathValue relies on stdlib ServeMux pattern routing; mount through
 	// http.NewServeMux so the {id} placeholder is populated.
@@ -61,7 +68,7 @@ func TestHttpOrderGetV1Serve_NotFound(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.get.v1")
 	svc := newContractQuerySvc()
-	h := getv1.NewHandler(svc, allowAllContractPolicy)
+	h := getv1.NewHandler(svc, testResolver())
 
 	mux := http.NewServeMux()
 	mux.Handle(c.HTTP.Method+" "+c.HTTP.Path, h)
@@ -81,7 +88,7 @@ func TestHttpOrderListV1Serve(t *testing.T) {
 		&domain.Order{ID: "ord-a", Item: "widget", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		&domain.Order{ID: "ord-b", Item: "gizmo", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)},
 	)
-	h := listv1.NewHandler(svc, allowAllContractPolicy)
+	h := listv1.NewHandler(svc, testResolver())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2", nil)

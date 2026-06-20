@@ -15,11 +15,17 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	confirmv1 "github.com/ghbvf/gocell/generated/contracts/http/order/confirm/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-var allowAllContractPolicy = func(*http.Request) error { return nil }
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.order.confirm.v1": "order:update",
+	})
+}
 
 // newContractHandlerWithRepo creates a handler backed by the given repo.
 func newContractHandlerWithRepo(t testing.TB, repo *mem.OrderRepository) (http.Handler, *recordingWriter) {
@@ -30,7 +36,7 @@ func newContractHandlerWithRepo(t testing.TB, repo *mem.OrderRepository) (http.H
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})),
 	)
 	require.NoError(t, err)
-	h := confirmv1.NewHandler(svc, allowAllContractPolicy)
+	h := confirmv1.NewHandler(svc, testResolver())
 	return h, writer
 }
 

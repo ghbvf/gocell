@@ -16,6 +16,8 @@ endpoints:
         minLength: 1
         maxLength: 256
     successStatus: 200
+    permission: device:read
+    resource: id
     noContent: false
     responses:
       400:

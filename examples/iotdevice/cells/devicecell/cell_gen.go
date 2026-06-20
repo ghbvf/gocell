@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/cell"
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	sub0 "github.com/ghbvf/gocell/generated/contracts/event/device-registered/v1"
 	sub1 "github.com/ghbvf/gocell/generated/contracts/event/devicecert-rotation-resolved/v1"
 	grpc0 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
@@ -37,6 +38,22 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta.Clone() }
+
+// cellHTTPResolver is the cell-level authz.MethodPolicyResolver (#2205), built from
+// the served HTTP contracts' endpoints.http.permission overlays. cell_init.go injects
+// it into the contract-derived slice handlers' NewHandler(svc, resolver); it is the
+// HTTP sibling of the gRPC registrar's per-method permission map. An action outside
+// the closed authz registry would fail-fast here at construction.
+var cellHTTPResolver = auth.NewStaticMethodPolicyResolver(map[string]string{
+	"http.device.command.ack.v1":           "device:consume",
+	"http.device.command.dequeue.v1":       "device:consume",
+	"http.device.command.enqueue-async.v1": "device:command",
+	"http.device.command.enqueue.v1":       "device:command",
+	"http.device.command.extend-lease.v1":  "device:consume",
+	"http.device.command.report.v1":        "device:consume",
+	"http.device.list.v1":                  "device:list",
+	"http.device.status.v1":                "device:read",
+})
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *DeviceCell) Init(ctx context.Context, reg cell.Registrar) error {

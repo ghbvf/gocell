@@ -51,7 +51,7 @@ func setupStatusHandler(t testing.TB) (*statuscontract.Handler, *mem.DeviceRepos
 	if err != nil {
 		t.Fatalf("setupStatusHandler: %v", err)
 	}
-	return statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead())), repo
+	return statuscontract.NewHandler(svc, testResolver()), repo
 }
 
 func TestHandleGetStatus(t *testing.T) {
@@ -123,7 +123,7 @@ func TestService_Status_LastSeenRFC3339(t *testing.T) {
 	})
 	svc, err := NewService(repo, slog.Default())
 	require.NoError(t, err)
-	h := statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
+	h := statuscontract.NewHandler(svc, testResolver())
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
@@ -21,12 +22,16 @@ import (
 // withTestPrincipal attaches a test principal to the given request's context so
 // that ordercreate.Service.Create can derive the order Owner. The Create gate
 // normally guarantees a principal is present; contract tests bypass the gate via
-// allowAllContractPolicy, so we must inject the principal manually.
+// testResolver, so we must inject the principal manually.
 func withTestPrincipal(req *http.Request) *http.Request {
 	return req.WithContext(auth.TestContext("contract-test-user", []string{"role:customer"}))
 }
 
-var allowAllContractPolicy = func(*http.Request) error { return nil }
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.order.create.v1": "order:create",
+	})
+}
 
 func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
@@ -35,7 +40,7 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	svc, err := NewService(clock.Real(), repo, slog.Default(), WithEmitter(mustEmitter(t, writer)),
 		WithTxManager(persistence.WrapForCell(&stubTxRunner{})))
 	require.NoError(t, err)
-	h := createv1.NewHandler(svc, allowAllContractPolicy)
+	h := createv1.NewHandler(svc, testResolver())
 	return h, writer
 }
 

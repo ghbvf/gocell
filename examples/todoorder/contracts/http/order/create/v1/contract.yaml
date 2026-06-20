@@ -11,6 +11,7 @@ endpoints:
     method: POST
     path: /api/v1/orders/
     successStatus: 201
+    permission: order:create
     noContent: false
     responses:
       400:

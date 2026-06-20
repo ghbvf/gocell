@@ -48,7 +48,7 @@ func newHandlerForTest(t *testing.T) *listcontract.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return listcontract.NewHandler(svc, auth.RequirePermission(authz.PermDeviceList()))
+	return listcontract.NewHandler(svc, testResolver())
 }
 
 func TestHandleList_OK(t *testing.T) {
