@@ -9,6 +9,11 @@ endpoints:
     method: POST
     path: /api/v1/orders/
     successStatus: 201
+    # AuthZ mode declared so the #2020 mandatory-mode gate passes and the build
+    # reaches the request-schema oneOf check this fixture targets. (Since #2486
+    # removed http.order.create.v1 from the migration ledger, a modeless fixture
+    # would now fail the mode gate first, masking the oneOf error.)
+    permission: order:create
     noContent: false
 schemaRefs:
   request: request.schema.json
