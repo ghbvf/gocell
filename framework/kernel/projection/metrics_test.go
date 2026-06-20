@@ -192,8 +192,6 @@ func (p *projFailProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *projFailProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 var errProjRegistration = errors.New("duplicate instrument")
 
 // ---------------------------------------------------------------------------
@@ -240,8 +238,6 @@ func (p *projRecordingProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelme
 	p.gauges[opts.Name] = v
 	return v, nil
 }
-
-func (p *projRecordingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 func (p *projRecordingProvider) gaugeLabels(name string) []string {
 	p.mu.Lock()

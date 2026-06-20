@@ -24,7 +24,7 @@ var nopMetricsProvider = kernelmetrics.NopProvider{}
 // registration LOCALITY without a real registry or network: only the
 // vault-transit branch constructs adapters/vault.TransitMetrics, so only that
 // branch may touch the provider. The embedded NopProvider supplies the rest of
-// the metrics.Provider surface (HistogramVec / Unregister) and returns working
+// the metrics.Provider surface (HistogramVec) and returns working
 // nop instruments, so NewTransitMetrics' .With(Labels{}) calls still succeed.
 type recordingMetricsProvider struct {
 	kernelmetrics.NopProvider

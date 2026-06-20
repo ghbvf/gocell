@@ -918,8 +918,6 @@ func (p *spyProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, error)
 	return metrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *spyProvider) Unregister(_ metrics.Collector) error { return nil }
-
 func (p *spyProvider) assertServiceVerify(t *testing.T, result, reason string) {
 	t.Helper()
 	for _, r := range p.svcVec.recorded {

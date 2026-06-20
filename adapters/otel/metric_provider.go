@@ -126,12 +126,6 @@ func (p *MetricProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec, err
 	}, nil
 }
 
-// Unregister is a no-op for the OTel provider. OTel instruments are
-// registered with the MeterProvider at SDK level; individual instrument
-// deregistration is not part of the OTel API. Returns nil (idempotent,
-// per the Unregister contract).
-func (p *MetricProvider) Unregister(_ metrics.Collector) error { return nil }
-
 // HistogramVec creates a Float64Histogram. Explicit Buckets propagate
 // to OTel as aggregation preferences; callers that want richer aggregation
 // (exponential, quantile) must build their MeterProvider with the relevant

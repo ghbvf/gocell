@@ -3,6 +3,7 @@ package metrics_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/framework/kernel/ctxkeys"
@@ -147,9 +148,7 @@ func TestIdempotencyCollector_CellLabel_FallsBackToRuntime(t *testing.T) {
 }
 
 // TestNewIdempotencyCollector_RegistrationFailure_ReturnsError verifies that a
-// CounterVec registration failure is propagated as a wrapped error (no partial
-// state retained). Unlike SagaCollector there is only one counter so no LIFO
-// rollback is needed, but the error must still be returned.
+// CounterVec registration failure is propagated as a wrapped error.
 func TestNewIdempotencyCollector_RegistrationFailure_ReturnsError(t *testing.T) {
 	p := newSagaSpyProvider()
 	p.failOnName = "idempotency_requests_total"
@@ -157,8 +156,8 @@ func TestNewIdempotencyCollector_RegistrationFailure_ReturnsError(t *testing.T) 
 	if err == nil {
 		t.Fatal("expected an error when CounterVec registration fails")
 	}
-	if p.unregisterCount != 0 {
-		t.Errorf("unregisterCount = %d, want 0 (single counter, no rollback required)", p.unregisterCount)
+	if !strings.Contains(err.Error(), "idempotency_requests_total") {
+		t.Fatalf("error must include metric name, got %v", err)
 	}
 }
 

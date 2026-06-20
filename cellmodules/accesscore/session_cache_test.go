@@ -20,7 +20,7 @@ import (
 
 // counterNameSpy is a minimal kernelmetrics.Provider that records counter
 // names registered by NewSessionCacheCollector. HistogramVec/GaugeVec
-// delegate to NopProvider; Unregister is a no-op.
+// delegate to NopProvider.
 type counterNameSpy struct {
 	counterNames map[string]struct{}
 }
@@ -41,8 +41,6 @@ func (s *counterNameSpy) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelm
 func (s *counterNameSpy) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
-
-func (s *counterNameSpy) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 // spyNopCounterVec is a minimal CounterVec that satisfies the interface.
 type spyNopCounterVec struct{}

@@ -49,6 +49,5 @@ func (recordingProvider) HistogramVec(_ kernelmetrics.HistogramOpts) (kernelmetr
 func (recordingProvider) GaugeVec(_ kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	return kernelmetrics.NopProvider{}.GaugeVec(kernelmetrics.GaugeOpts{})
 }
-func (recordingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 var _ kernelmetrics.Provider = recordingProvider{}

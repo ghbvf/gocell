@@ -67,8 +67,8 @@ const helpCellLabel = "Label: cell = construction-time cell identifier (registra
 //
 // Returns error when p is nil, cellID is empty, or the Provider reports
 // registration failure (e.g. duplicate metric names). Registration is
-// all-or-nothing: a later failure rolls back the metric already registered so
-// the provider is not left holding a partial set.
+// startup-fatal: a later failure rejects the current wiring, and caller-owned
+// provider lifecycle handles cleanup.
 func NewProviderConnectionCollector(p metrics.Provider, cellID string) (ConnectionCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -79,25 +79,15 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 			"mqtt: cellID is required for provider connection collector")
 	}
 
-	var registered []metrics.Collector
-	rollback := func(wrapErr error) error {
-		for _, c := range registered {
-			_ = p.Unregister(c)
-		}
-		return wrapErr
-	}
-
 	reconnect, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "mqtt_reconnect_total",
 		Help:       "Total MQTT reconnect events observed by the adapter. " + helpCellLabel,
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register reconnect counter", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register reconnect counter", err)
 	}
-	registered = append(registered, reconnect)
-
 	subscribeFail, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_subscribe_failed_total",
 		Help: "Total number of receive-path SUBSCRIBE failures (initial SUBACK rejection or reconnect re-arm), " +
@@ -106,8 +96,8 @@ func NewProviderConnectionCollector(p metrics.Provider, cellID string) (Connecti
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register subscribe failed counter", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register subscribe failed counter", err)
 	}
 	// subscribeFail is the last registration — nothing after it can fail.
 
@@ -249,17 +239,9 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 			"mqtt: cellID is required for provider publisher collector")
 	}
 
-	// Register the three metrics with all-or-nothing semantics: if a later
-	// registration fails (e.g. a duplicate metric name), roll back the ones
-	// already registered so the provider is not left holding a partial set.
-	var registered []metrics.Collector
-	rollback := func(wrapErr error) error {
-		for _, c := range registered {
-			_ = p.Unregister(c)
-		}
-		return wrapErr
-	}
-
+	// Register the three metrics during startup wiring. If a later registration
+	// fails (e.g. a duplicate metric name), return the error and let the caller
+	// discard the current provider wiring.
 	publishTotal, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_total",
 		Help: "Total number of MQTT publish attempts that completed successfully (broker PUBACK received). " +
@@ -267,11 +249,9 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish total counter", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish total counter", err)
 	}
-	registered = append(registered, publishTotal)
-
 	publishFailed, err := p.CounterVec(metrics.CounterOpts{
 		Name: "mqtt_publish_failed_total",
 		Help: "Total number of MQTT publish attempts that failed, classified by reason. " +
@@ -281,11 +261,9 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		LabelNames: []string{"cell", "reason"},
 	})
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish failed counter", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish failed counter", err)
 	}
-	registered = append(registered, publishFailed)
-
 	ackDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name: "mqtt_publish_ack_duration_seconds",
 		Help: "End-to-end MQTT publish ack round-trip duration in seconds, from Publish() call to broker PUBACK. " +
@@ -294,12 +272,9 @@ func NewProviderPublisherCollector(p metrics.Provider, cellID string) (Publisher
 		Buckets:    mqttDurationBuckets,
 	})
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register publish ack duration histogram", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register publish ack duration histogram", err)
 	}
-	// ackDuration is the last registration — nothing after it can fail, so it
-	// need not be appended to the rollback set.
-
 	return &providerPublisherCollector{
 		cellID:        cellID,
 		publishTotal:  publishTotal,
@@ -436,7 +411,7 @@ var _ SubscriberCollector = NoopSubscriberCollector{}
 //	mqtt_consume_inflight           (gauge,     labels: cell)
 //
 // ref: adapters/mqtt/metrics.go providerPublisherCollector — same inject-at-
-// construction + all-or-nothing registration pattern.
+// construction + startup-fatal registration pattern.
 type providerSubscriberCollector struct {
 	cellID          string
 	consumeTotal    metrics.CounterVec
@@ -505,8 +480,8 @@ var (
 //
 // Returns an error when p is nil, cellID is empty, or the Provider reports a
 // registration failure (e.g. duplicate metric names). Registration is
-// all-or-nothing: a later failure rolls back the metrics already registered so
-// the provider is not left holding a partial set.
+// startup-fatal: a later failure rejects the current wiring, and caller-owned
+// provider lifecycle handles cleanup.
 func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (SubscriberCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
@@ -517,57 +492,36 @@ func NewProviderSubscriberCollector(p metrics.Provider, cellID string) (Subscrib
 			"mqtt: cellID is required for provider subscriber collector")
 	}
 
-	var registered []metrics.Collector
-	rollback := func(wrapErr error) error {
-		for _, c := range registered {
-			_ = p.Unregister(c)
-		}
-		return wrapErr
-	}
-
 	consumeTotal, cErr := p.CounterVec(subConsumeTotalOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume total counter", cErr))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume total counter", cErr)
 	}
-	registered = append(registered, consumeTotal)
-
 	consumeFailed, cErr := p.CounterVec(subConsumeFailedOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume failed counter", cErr))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume failed counter", cErr)
 	}
-	registered = append(registered, consumeFailed)
-
 	dlxTotal, cErr := p.CounterVec(subDlxTotalOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register dlx counter", cErr))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx counter", cErr)
 	}
-	registered = append(registered, dlxTotal)
-
 	dlxFailed, cErr := p.CounterVec(subDlxFailedOpts)
 	if cErr != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register dlx failed counter", cErr))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register dlx failed counter", cErr)
 	}
-	registered = append(registered, dlxFailed)
-
 	consumeDur, err := p.HistogramVec(subConsumeDurOpts)
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume duration histogram", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume duration histogram", err)
 	}
-	registered = append(registered, consumeDur)
-
 	consumeInflight, err := p.GaugeVec(subConsumeInflightOpts)
 	if err != nil {
-		return nil, rollback(errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
-			"mqtt: register consume inflight gauge", err))
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"mqtt: register consume inflight gauge", err)
 	}
-	// consumeInflight is the last registration — nothing after it can fail, so it
-	// need not be appended to the rollback set.
-
 	return &providerSubscriberCollector{
 		cellID:          cellID,
 		consumeTotal:    consumeTotal,

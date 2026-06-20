@@ -65,7 +65,7 @@ type SessionCacheCollector struct {
 //   - p == nil → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - cellID == "" → errcode.KindInvalid + ErrObservabilityConfigInvalid
 //   - any CounterVec registration error is wrapped with the metric name and
-//     rolls back the counters registered earlier in the sequence (atomic).
+//     returned as a startup-fatal wiring error; caller owns provider lifecycle.
 func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*SessionCacheCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
@@ -75,8 +75,6 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: SessionCacheCollector cellID is required")
 	}
-
-	var registered []kernelmetrics.Collector
 	c := &SessionCacheCollector{cellID: cellID}
 	var err error
 	if c.hits, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -84,7 +82,7 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 		Help: "Total session-cache hits (valid entry served from Redis without consulting the inner store). " +
 			"hits + misses = total Get() calls; read-path errors are a subset of misses.",
 		LabelNames: []string{"cell"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.misses, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -92,7 +90,7 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 		Help: "Total session-cache misses (no Redis entry; inner store consulted and result lazily populated). " +
 			"hits + misses = total Get() calls; read-path errors are a subset of misses.",
 		LabelNames: []string{"cell"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.errors, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -101,7 +99,7 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 			"Fail-safe — every read-path error degrades to a miss (errors ⊆ misses) — so this rate distinguishes a cold cache " +
 			"from a degraded Redis. Post-commit revoke DEL failures are a distinct series: session_cache_revoke_del_errors_total.",
 		LabelNames: []string{"cell"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.revokeDelErrors, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -111,7 +109,7 @@ func NewSessionCacheCollector(p kernelmetrics.Provider, cellID string) (*Session
 			"is tracked separately from session_cache_errors_total; a non-zero rate means invalidation latency degraded from " +
 			"near-zero to ≤ TTL (security-relevant).",
 		LabelNames: []string{"cell"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return c, nil

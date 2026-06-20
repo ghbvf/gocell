@@ -361,8 +361,6 @@ func (p *spyMetricsProvider) GaugeVec(opts metrics.GaugeOpts) (metrics.GaugeVec,
 	return p.gauge, nil
 }
 
-func (p *spyMetricsProvider) Unregister(_ metrics.Collector) error { return nil }
-
 // ---------------------------------------------------------------------------
 // Coverage gap tests — paths not exercised by the initial test suite
 // ---------------------------------------------------------------------------
@@ -428,8 +426,6 @@ func (alwaysFailProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.Histogr
 func (alwaysFailProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return nil, errors.New("simulated gauge registration failure")
 }
-
-func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // TestNewDirectEmitter_CounterVecRegistrationFailure verifies that a
 // CounterVec registration failure in the constructor is propagated as an error

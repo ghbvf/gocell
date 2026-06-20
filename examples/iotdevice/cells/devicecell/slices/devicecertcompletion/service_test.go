@@ -461,8 +461,6 @@ func (p *counterSpyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetri
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *counterSpyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 type counterSpyVec struct {
 	parent     *counterSpyProvider
 	name       string

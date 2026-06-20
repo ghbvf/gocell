@@ -49,9 +49,10 @@ type EventRouterCollector struct {
 // broker connection establishment.
 var eventRouterReadyWaitBuckets = []float64{0.001, 0.01, 0.1, 0.25, 0.5, 1, 5, 30}
 
-// NewEventRouterCollector registers all three event-router lifecycle metrics on
-// the given provider. On partial failure, already-registered metrics are rolled
-// back LIFO before returning the error.
+// NewEventRouterCollector registers all event-router lifecycle metrics on the
+// given provider. Registration happens during startup wiring; any partial
+// failure is returned as fatal for that wiring, and caller-owned provider
+// lifecycle handles cleanup.
 func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
@@ -75,7 +76,6 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 		LabelNames: []string{"cell", "topic", "reason"},
 	})
 	if err != nil {
-		_ = p.Unregister(active)
 		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_setup_errors_total: %w", err)
 	}
 
@@ -86,8 +86,6 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 		Buckets:    eventRouterReadyWaitBuckets,
 	})
 	if err != nil {
-		_ = p.Unregister(setupErr)
-		_ = p.Unregister(active)
 		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_ready_wait_seconds: %w", err)
 	}
 
@@ -98,9 +96,6 @@ func NewEventRouterCollector(p kernelmetrics.Provider) (*EventRouterCollector, e
 		LabelNames: []string{"cell", "topic", "reason"},
 	})
 	if err != nil {
-		_ = p.Unregister(readyWait)
-		_ = p.Unregister(setupErr)
-		_ = p.Unregister(active)
 		return nil, fmt.Errorf("runtime/observability/metrics: register event_router_runtime_errors_total: %w", err)
 	}
 

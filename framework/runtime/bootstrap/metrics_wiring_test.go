@@ -56,8 +56,6 @@ func (s *registrationSpy) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.
 	return s.nop.GaugeVec(opts)
 }
 
-func (s *registrationSpy) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 func (s *registrationSpy) counters() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -374,10 +372,6 @@ func (p *alwaysFailCounterProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kern
 	return p.nop.GaugeVec(opts)
 }
 
-func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) error {
-	return p.nop.Unregister(col)
-}
-
 // ---------------------------------------------------------------------------
 // R3: autoWireOutboxRejectCollector tests
 // ---------------------------------------------------------------------------
@@ -537,10 +531,6 @@ func (p *countingMetricsProvider) HistogramVec(opts kernelmetrics.HistogramOpts)
 
 func (p *countingMetricsProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
 	return p.inner.GaugeVec(opts)
-}
-
-func (p *countingMetricsProvider) Unregister(c kernelmetrics.Collector) error {
-	return p.inner.Unregister(c)
 }
 
 // TestAutoWireOutboxRejectCollector_DoubleCallWithConsumerBase_Idempotent

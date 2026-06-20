@@ -200,93 +200,10 @@ func TestMetricProvider_NilRegistryRejected(t *testing.T) {
 	}
 }
 
-// TestMetricProvider_Unregister_RemovesAndAllowsReregister verifies the K2
-// atomic-registration rollback contract: Unregister removes a previously
-// registered Collector from both the Provider's internal map and the
-// underlying Prometheus registry, allowing the same name to be registered
-// again without "duplicate collector" error.
-//
-// Without this behavior, the NewProviderRelayCollector rollback loop would
-// leak orphan Prometheus collectors on partial failure and refuse retry.
-func TestMetricProvider_Unregister_RemovesAndAllowsReregister(t *testing.T) {
-	p, reg := newTestProvider(t)
-
-	cv, err := p.CounterVec(metrics.CounterOpts{
-		Name:       "unreg_demo_total",
-		Help:       "demo",
-		LabelNames: []string{"label"},
-	})
-	if err != nil {
-		t.Fatalf("CounterVec: %v", err)
-	}
-
-	// Registering the same name again returns the existing collector (idempotent),
-	// not an error. This is by design — see TestMetricProvider_RegisterDuplicateReturnsExisting.
-	if _, err := p.CounterVec(metrics.CounterOpts{
-		Name:       "unreg_demo_total",
-		Help:       "demo",
-		LabelNames: []string{"label"},
-	}); err != nil {
-		t.Fatalf("duplicate CounterVec should return existing collector, got error: %v", err)
-	}
-
-	// Unregister the first vec. Same name must now be re-registrable.
-	if err := p.Unregister(cv); err != nil {
-		t.Fatalf("Unregister: %v", err)
-	}
-	cv2, err := p.CounterVec(metrics.CounterOpts{
-		Name:       "unreg_demo_total",
-		Help:       "demo",
-		LabelNames: []string{"label"},
-	})
-	if err != nil {
-		t.Fatalf("re-register after Unregister: %v", err)
-	}
-
-	// Touch the new vec so Prometheus Gather emits a sample, then confirm
-	// exactly one family — the registry is in sync with no stale entries.
-	cv2.With(metrics.Labels{"label": "v"}).Inc(context.Background())
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	var seen int
-	for _, f := range families {
-		if strings.HasSuffix(f.GetName(), "unreg_demo_total") {
-			seen++
-		}
-	}
-	if seen != 1 {
-		t.Fatalf("expected exactly 1 unreg_demo_total metric family after re-register, got %d", seen)
-	}
-}
-
-// TestMetricProvider_Unregister_IdempotentOnUnknown verifies Unregister
-// returns nil when called with a Collector never registered with this
-// Provider — required by the Provider.Unregister contract (idempotent,
-// nil-safe for double-unregister and orphan collectors).
-func TestMetricProvider_Unregister_IdempotentOnUnknown(t *testing.T) {
-	p, _ := newTestProvider(t)
-
-	cv, err := p.CounterVec(metrics.CounterOpts{
-		Name: "known_total", Help: "h", LabelNames: []string{"x"},
-	})
-	if err != nil {
-		t.Fatalf("CounterVec: %v", err)
-	}
-	if err := p.Unregister(cv); err != nil {
-		t.Fatalf("first Unregister: %v", err)
-	}
-	// Second call must also return nil (idempotent).
-	if err := p.Unregister(cv); err != nil {
-		t.Fatalf("double Unregister must be idempotent, got %v", err)
-	}
-}
-
 // TestMetricProvider_Registered_AlwaysTrue locks in the documented marker
 // semantics of Collector.Registered: the method is a compile-time type-
 // membership marker and always returns true for vecs issued by the Provider,
-// even after Unregister. It is not a runtime state probe.
+// across the Provider lifetime. It is not a runtime state probe.
 func TestMetricProvider_Registered_AlwaysTrue(t *testing.T) {
 	p, _ := newTestProvider(t)
 
@@ -304,21 +221,17 @@ func TestMetricProvider_Registered_AlwaysTrue(t *testing.T) {
 	}
 
 	if !cv.Registered() {
-		t.Error("counter vec Registered() must be true before Unregister")
+		t.Error("counter vec Registered() must be true for provider-created vec")
 	}
 	if !hv.Registered() {
-		t.Error("histogram vec Registered() must be true before Unregister")
+		t.Error("histogram vec Registered() must be true for provider-created vec")
 	}
 
-	// Per the marker contract, Registered remains true post-Unregister; the
-	// registry state changes but the vec value identity does not.
-	_ = p.Unregister(cv)
-	_ = p.Unregister(hv)
 	if !cv.Registered() {
-		t.Error("counter vec Registered() must still be true after Unregister (marker semantics)")
+		t.Error("counter vec Registered() must remain true (marker semantics)")
 	}
 	if !hv.Registered() {
-		t.Error("histogram vec Registered() must still be true after Unregister (marker semantics)")
+		t.Error("histogram vec Registered() must remain true (marker semantics)")
 	}
 }
 
@@ -724,9 +637,9 @@ func TestMetricProvider_ConcurrentCounterVec_RaceDetector(t *testing.T) {
 	if got != 1 {
 		t.Fatalf("expected exactly 1 series after concurrent register, got %d", got)
 	}
-	// Verify sum so a regression where Inc dropped writes (e.g. a future
-	// per-call register/unregister bug) does not pass with series-count
-	// alone. Gather() walks the registry directly — the abstracted
+	// Verify sum so a regression where Inc dropped writes (e.g. future
+	// per-call registry churn) does not pass with series-count alone.
+	// Gather() walks the registry directly — the abstracted
 	// metrics.Counter does not implement prom.Collector so testutil.ToFloat64
 	// is not directly applicable here.
 	gathered, err := reg.Gather()
@@ -862,48 +775,6 @@ func TestMetricProvider_GaugeVec_LabelMismatch_RegisterError(t *testing.T) {
 	}
 }
 
-// TestMetricProvider_GaugeVec_Unregister verifies that Unregister removes a
-// GaugeVec from both the provider's internal map and the Prometheus registry,
-// allowing the same name to be re-registered without conflict.
-func TestMetricProvider_GaugeVec_Unregister(t *testing.T) {
-	p, reg := newTestProvider(t)
-
-	gv, err := p.GaugeVec(metrics.GaugeOpts{
-		Name:       "unreg_gauge",
-		Help:       "h",
-		LabelNames: []string{"k"},
-	})
-	if err != nil {
-		t.Fatalf("GaugeVec: %v", err)
-	}
-	if err := p.Unregister(gv); err != nil {
-		t.Fatalf("Unregister: %v", err)
-	}
-	// Re-register: must succeed (no AlreadyRegisteredError from the prom registry).
-	gv2, err := p.GaugeVec(metrics.GaugeOpts{
-		Name:       "unreg_gauge",
-		Help:       "h",
-		LabelNames: []string{"k"},
-	})
-	if err != nil {
-		t.Fatalf("re-register after Unregister: %v", err)
-	}
-	gv2.With(metrics.Labels{"k": "v"}).Set(context.Background(), 1)
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	var seen int
-	for _, f := range families {
-		if strings.HasSuffix(f.GetName(), "unreg_gauge") {
-			seen++
-		}
-	}
-	if seen != 1 {
-		t.Fatalf("expected exactly 1 unreg_gauge metric family after re-register, got %d", seen)
-	}
-}
-
 // TestMetricProvider_ConcurrentGaugeVec_RaceDetector verifies that N goroutines
 // concurrently calling GaugeVec + With + Set are race-free under the -race
 // detector. Exercises the registerOrReuse AlreadyRegisteredError path under
@@ -993,18 +864,16 @@ func (s singletonGauge) Collect(ch chan<- prom.Metric) {
 }
 
 // ---------------------------------------------------------------------------
-// TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector (counter)
+// TestMetricProvider_ConcurrentRegister_RaceDetector (counter)
 // ---------------------------------------------------------------------------
 
-// TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector verifies
-// that interleaved CounterVec / Unregister calls do not race on the
-// provider's internal vecs map (the RWMutex contract). Each goroutine
-// registers a uniquely-named CounterVec and then unregisters it, with N
-// goroutines running concurrently. The race detector must observe no data
-// race on the vecs map's read/write boundary.
+// TestMetricProvider_ConcurrentRegister_RaceDetector verifies that concurrent
+// CounterVec registration and recording do not race on the provider's internal
+// vecs map. Each goroutine registers a uniquely-named CounterVec and records a
+// sample. The race detector must observe no data race on the vecs map boundary.
 //
 // Run with `go test -race`.
-func TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector(t *testing.T) {
+func TestMetricProvider_ConcurrentRegister_RaceDetector(t *testing.T) {
 	p, reg := newTestProvider(t)
 
 	var wg sync.WaitGroup
@@ -1024,26 +893,25 @@ func TestMetricProvider_ConcurrentRegisterAndUnregister_RaceDetector(t *testing.
 				return
 			}
 			cv.With(metrics.Labels{"k": "v"}).Inc(context.Background())
-			if err := p.Unregister(cv); err != nil {
-				firstErr.CompareAndSwap(nil, err)
-			}
 		}(i)
 	}
 	wg.Wait()
 
 	if err := firstErr.Load(); err != nil {
-		t.Fatalf("concurrent register/unregister returned error: %v", err)
+		t.Fatalf("concurrent register returned error: %v", err)
 	}
 
-	// After all unregisters complete, Gather must succeed without panicking.
 	families, err := reg.Gather()
 	if err != nil {
-		t.Fatalf("Gather after concurrent unregister: %v", err)
+		t.Fatalf("Gather after concurrent register: %v", err)
 	}
-	// All unique_total_* series should be gone.
+	var seen int
 	for _, mf := range families {
 		if strings.HasPrefix(mf.GetName(), "gocelltest_unique_total_") {
-			t.Fatalf("unique_total series leaked after unregister: %s", mf.GetName())
+			seen++
 		}
+	}
+	if seen != raceConcurrency {
+		t.Fatalf("unique_total series count = %d, want %d", seen, raceConcurrency)
 	}
 }

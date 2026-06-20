@@ -159,8 +159,8 @@ func TestWebhookMetrics_DeliveryDurationBucketsFrozen(t *testing.T) {
 
 // --- recordingProvider: in-memory metrics.Provider spy for webhook tests. ---
 
-// recordingProvider embeds NopProvider so the unused GaugeVec / Unregister
-// methods are inherited (webhook metrics have no gauges); it overrides only the
+// recordingProvider embeds NopProvider so the unused GaugeVec method is
+// inherited (webhook metrics have no gauges); it overrides only the
 // CounterVec / HistogramVec it needs to record.
 type recordingProvider struct {
 	kernelmetrics.NopProvider

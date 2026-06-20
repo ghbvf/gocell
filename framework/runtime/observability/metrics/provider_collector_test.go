@@ -186,8 +186,6 @@ func (s *spyProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.Gaug
 	return spyGaugeVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
-func (s *spyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 type spyCounterVec struct {
 	parent *spyProvider
 	name   string

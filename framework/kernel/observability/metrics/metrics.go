@@ -29,16 +29,8 @@ import (
 )
 
 // Collector is a handle to a registered metric family (counter, histogram, or
-// gauge vec). It is returned by CounterVec/HistogramVec/GaugeVec and accepted by
-// Unregister.
-//
-// Callers obtain Collector values only via Provider.CounterVec and
-// Provider.HistogramVec; passing other values to Unregister is undefined
-// behavior (implementations may silently no-op or return an error).
-//
-// CounterVec, HistogramVec, and GaugeVec all embed Collector so that the return
-// values of CounterVec/HistogramVec/GaugeVec can be passed directly to
-// Unregister without explicit type assertions.
+// gauge vec). It is returned by CounterVec/HistogramVec/GaugeVec and used only
+// through the typed vec interfaces below.
 //
 // ref: prometheus/client_golang prometheus/collector.go — Collector is the
 // registration unit. GoCell's Collector is a thinner typed handle that keeps
@@ -46,9 +38,8 @@ import (
 type Collector interface {
 	// Registered is a compile-time type-membership marker, not a runtime
 	// state probe. It always returns true for vecs returned by a Provider;
-	// after Unregister, implementations may still return true because the
-	// collector value itself remains valid — the change is only in the
-	// Provider's registry state, not the vec's identity.
+	// Collector does not expose registry lifecycle; provider shutdown or
+	// replacement is owned by the concrete backend wiring.
 	//
 	// All concrete vec types (prom, otel, nop, test spy) implement this
 	// method; external code must not implement Collector directly.
@@ -60,9 +51,11 @@ type Collector interface {
 // value; at wire time (runtime/bootstrap, cmd/*), a concrete backend is
 // chosen and passed through.
 //
-// Registration is failable (duplicate names, invalid options) so both
-// factory methods return (vec, error). Callers are expected to register
-// at start-up and treat errors as fatal.
+// Registration is failable (duplicate names, invalid options) so factory
+// methods return (vec, error). Callers are expected to register at start-up and
+// treat errors as fatal. Provider is intentionally create-only: lifecycle is
+// owned at the concrete backend boundary (e.g. Prometheus Registry or OTel
+// MeterProvider), not by individual metric instruments.
 type Provider interface {
 	CounterVec(opts CounterOpts) (CounterVec, error)
 	HistogramVec(opts HistogramOpts) (HistogramVec, error)
@@ -76,19 +69,6 @@ type Provider interface {
 	// SetToCurrentTime omitted (no business need; introduces implicit clock
 	// dependency at kernel layer).
 	GaugeVec(opts GaugeOpts) (GaugeVec, error)
-	// Unregister removes a previously registered collector from the provider's
-	// registry. It is safe for concurrent use and idempotent — unregistering a
-	// collector that was never registered (or already unregistered) returns nil
-	// without error.
-	//
-	// Implementations must maintain the invariant that a collector successfully
-	// Unregistered can be re-registered via CounterVec/HistogramVec/GaugeVec
-	// under the same name without conflict.
-	//
-	// ref: prometheus/client_golang Registry.Unregister — bool return simplified
-	// to error for GoCell consistency (nil = success or not-found; non-nil =
-	// hard failure).
-	Unregister(c Collector) error
 }
 
 // CounterOpts declares a counter metric family.
@@ -133,19 +113,15 @@ type Labels map[string]string
 
 // CounterVec returns a pre-bound Counter given a label set. Implementations
 // panic (via MustValidateLabels) when Labels does not exactly match the
-// LabelNames set at registration.
-//
-// CounterVec embeds Collector so that callers can pass it directly to
-// Provider.Unregister without an explicit type cast.
+// LabelNames set at registration. It embeds Collector so all vecs share the
+// provider-owned lifecycle marker.
 type CounterVec interface {
 	Collector
 	With(Labels) Counter
 }
 
-// HistogramVec returns a pre-bound Histogram given a label set.
-//
-// HistogramVec embeds Collector so that callers can pass it directly to
-// Provider.Unregister without an explicit type cast.
+// HistogramVec returns a pre-bound Histogram given a label set. It embeds
+// Collector so all vecs share the provider-owned lifecycle marker.
 type HistogramVec interface {
 	Collector
 	With(Labels) Histogram
@@ -153,10 +129,8 @@ type HistogramVec interface {
 
 // GaugeVec returns a pre-bound Gauge given a label set. Implementations
 // panic (via MustValidateLabels) when Labels does not exactly match the
-// LabelNames set at registration.
-//
-// GaugeVec embeds Collector so that callers can pass it directly to
-// Provider.Unregister without an explicit type cast.
+// LabelNames set at registration. It embeds Collector so all vecs share the
+// provider-owned lifecycle marker.
 type GaugeVec interface {
 	Collector
 	With(Labels) Gauge

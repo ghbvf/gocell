@@ -117,8 +117,6 @@ func (p *recordingProvider) GaugeVec(o metrics.GaugeOpts) (metrics.GaugeVec, err
 	return &recGaugeVec{p: p, labels: o.LabelNames}, nil
 }
 
-func (p *recordingProvider) Unregister(metrics.Collector) error { return nil }
-
 type recPoint struct{}
 
 func (recPoint) Inc(context.Context)              {}
@@ -379,7 +377,6 @@ func (errorProvider) HistogramVec(metrics.HistogramOpts) (metrics.HistogramVec, 
 func (errorProvider) GaugeVec(metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return nil, errors.New("metrics registration error")
 }
-func (errorProvider) Unregister(metrics.Collector) error { return nil }
 
 // --- new tests (items H.13-H.20) -------------------------------------------
 

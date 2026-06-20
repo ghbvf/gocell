@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,9 +110,32 @@ func (p *shutdownFakeProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmet
 	return kernelmetrics.NopProvider{}.GaugeVec(opts)
 }
 
-func (p *shutdownFakeProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
-
 var _ kernelmetrics.Provider = (*shutdownFakeProvider)(nil)
+
+type shutdownRegistrationFailureProvider struct {
+	failAtCounter int
+	failHistogram bool
+	counterCalls  int
+}
+
+func (p *shutdownRegistrationFailureProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	p.counterCalls++
+	if p.failAtCounter > 0 && p.counterCalls == p.failAtCounter {
+		return nil, errors.New("duplicate counter")
+	}
+	return kernelmetrics.NopProvider{}.CounterVec(opts)
+}
+
+func (p *shutdownRegistrationFailureProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	if p.failHistogram {
+		return nil, errors.New("duplicate histogram")
+	}
+	return kernelmetrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *shutdownRegistrationFailureProvider) GaugeVec(opts kernelmetrics.GaugeOpts) (kernelmetrics.GaugeVec, error) {
+	return kernelmetrics.NopProvider{}.GaugeVec(opts)
+}
 
 // ---------------------------------------------------------------------------
 // Test 6: nil-safety of ShutdownCollector methods (unit level)
@@ -138,6 +162,33 @@ func TestNewShutdownCollector_NilProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, m, "nil provider must return a disabled ShutdownCollector")
 	assert.True(t, m.disabled)
+}
+
+func TestNewShutdownCollector_RegistrationFailure_ReturnsError(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		failAtCounter int
+		failHistogram bool
+		wantName      string
+	}{
+		{name: "phase_entries", failAtCounter: 1, wantName: ShutdownPhaseCounterName},
+		{name: "phase_duration", failHistogram: true, wantName: ShutdownPhaseDurationName},
+		{name: "shutdown_total", failAtCounter: 2, wantName: ShutdownTotalCounterName},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider := &shutdownRegistrationFailureProvider{
+				failAtCounter: tc.failAtCounter,
+				failHistogram: tc.failHistogram,
+			}
+			_, err := NewShutdownCollector(provider)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.wantName)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -51,8 +51,8 @@ var _ tailer.Observer = (*SagaTailerCollector)(nil)
 
 // NewSagaTailerCollector registers the Tailer metrics on the given provider.
 // cellID is the owner cell; empty is an error (no _runtime fallback — a Tailer is
-// always owned by exactly one cell). Registration is atomic: any failure rolls
-// back the collectors registered earlier in the sequence.
+// always owned by exactly one cell). Any registration failure is startup-fatal
+// for the current wiring; caller owns provider lifecycle cleanup.
 //
 // Caller contract: never pass a nil *SagaTailerCollector — use tailer.NopObserver
 // via WithObserver(nil) for explicit disable.
@@ -65,8 +65,6 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: SagaTailerCollector cellID is required")
 	}
-
-	var registered []kernelmetrics.Collector
 	c := &SagaTailerCollector{cellID: cellID}
 	var err error
 	if c.lockFail, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -75,7 +73,7 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 			"skipped the tick), labeled by reason (contended = another process holds the lock; " +
 			"ctx_canceled = shutdown; backend_error = distlock I/O fault / lock-acquire failure rate).",
 		LabelNames: []string{"cell", "projection", "reason"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.drain, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -84,7 +82,7 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 			"(ok = ≥1 event applied; head_error = head-bound fetch failed; store_error = checkpoint " +
 			"load failed; apply_error = non-stale replay/apply failure). Idle caught-up ticks are not counted.",
 		LabelNames: []string{"cell", "projection", "result"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.advance, err = registerCounterVec(p, kernelmetrics.CounterOpts{
@@ -94,21 +92,21 @@ func NewSagaTailerCollector(p kernelmetrics.Provider, cellID string) (*SagaTaile
 			"poison_skip = dead-lettered poison event, checkpoint advanced past it (#2110)). " +
 			"Alert on result=error; exclude result=stale_owner.",
 		LabelNames: []string{"cell", "projection", "result"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.pending, err = registerGaugeVec(p, kernelmetrics.GaugeOpts{
 		Name:       "saga_journal_tailer_pending_events",
 		Help:       "Residual saga-journal tailer backlog (HeadSeq − checkpoint) after the last clean tick.",
 		LabelNames: []string{"cell", "projection"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	if c.lastSuccess, err = registerGaugeVec(p, kernelmetrics.GaugeOpts{
 		Name:       "saga_journal_tailer_last_success_timestamp_seconds",
 		Help:       "Unix time of the last fully-completed saga-journal tailer tick (drives the stalled-tailer alert).",
 		LabelNames: []string{"cell", "projection"},
-	}, &registered); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return c, nil

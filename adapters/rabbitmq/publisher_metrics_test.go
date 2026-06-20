@@ -141,8 +141,6 @@ func (p *errProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return nil, p.err
 }
 
-func (p *errProvider) Unregister(_ metrics.Collector) error { return nil }
-
 // publisherSpyProvider records counter registrations and Inc/Add operations so
 // tests can assert exact metric emissions without depending on a real
 // Prometheus or OTel backend.
@@ -174,8 +172,6 @@ func (p *publisherSpyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.Hi
 func (p *publisherSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
-
-func (p *publisherSpyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func (p *publisherSpyProvider) ops() []spyCounterRecord {
 	out := make([]spyCounterRecord, len(p.records))

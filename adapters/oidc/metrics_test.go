@@ -137,8 +137,6 @@ func (p *refreshErrProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, er
 	return nil, p.err
 }
 
-func (p *refreshErrProvider) Unregister(_ metrics.Collector) error { return nil }
-
 // refreshSpyProvider records counter registrations and Inc/Add operations so
 // tests can assert exact metric emissions without a real backend.
 type refreshSpyProvider struct {
@@ -169,8 +167,6 @@ func (p *refreshSpyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.Hist
 func (p *refreshSpyProvider) GaugeVec(_ metrics.GaugeOpts) (metrics.GaugeVec, error) {
 	return metrics.NopProvider{}.GaugeVec(metrics.GaugeOpts{})
 }
-
-func (p *refreshSpyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func (p *refreshSpyProvider) ops() []refreshSpyRecord {
 	out := make([]refreshSpyRecord, len(p.records))
