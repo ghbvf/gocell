@@ -1,0 +1,32 @@
+id: http.deviceidentity.cacerts.v1
+kind: http
+ownerCell: _framework
+consistencyLevel: L0
+lifecycle: draft
+description: |
+  Device identity CA trust distribution — returns the issuing CA trust bundle so a
+  device can establish trust BEFORE it enrolls. The bundle is a PKCS#7 certs-only
+  (degenerate SignedData) blob, base64-encoded, carried in the JSON envelope (the
+  gocell-native shape used by the sibling enroll/renew `chain` field — not the raw
+  application/pkcs7-mime EST wire, since the deviceidentity contracts are JSON
+  codegen contracts).
+  ref: RFC 7030 §4.1 (/cacerts) — unauthenticated CA trust distribution
+  ref: RFC 5652 §5.1 — degenerate certs-only SignedData
+  ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+endpoints:
+  server: _framework
+  clients: []
+  http:
+    method: GET
+    path: /api/v1/deviceidentity/cacerts
+    successStatus: 200
+    auth:
+      public: true
+      reason: "RFC 7030 §4.1 /cacerts is the unauthenticated trust-anchor distribution endpoint: a device must fetch the CA trust bundle BEFORE it possesses any credential to authenticate with, so gating it would be a bootstrap paradox. It returns only public CA certificates (no secrets)."
+    noContent: false
+    responses:
+      503:
+        description: "Service Unavailable — CA backend is not reachable"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  response: response.schema.json

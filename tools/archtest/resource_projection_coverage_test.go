@@ -101,6 +101,20 @@ var resourceReadProjectionCarveOut = map[string]struct{}{
 	// Legitimately exempt per the rule's "genuinely non-maskable resource" branch.
 	// Carve-out rationale + threat model: docs/architecture/202606130640-1860-adr-syscore-health-aggregation.md.
 	"http.admin.health.cells.v1": {},
+
+	// http.deviceidentity.cacerts.v1 (#1904): RFC 7030 §4.1 trust-anchor
+	// distribution. The `data.trustBundle` is PUBLIC CA material (a base64
+	// PKCS#7 certs-only blob) served UNAUTHENTICATED — NOT tenant-scoped, NO PII,
+	// NO per-tenant rows, NO maskable column axis. The column-masking funnel
+	// (responseProjection) derives FieldMask from a PDP decision; a public
+	// endpoint has no PDP decision, so routing it through the funnel would be a
+	// dishonest identity mask. Legitimately exempt per the rule's "genuinely
+	// non-maskable primitive" branch (same shape as #1860 above).
+	// Contract is currently draft (corebundle wiring deferred to PR-9 #1905);
+	// carve-out remains because this scan does not filter by lifecycle.
+	// Carve-out rationale + threat model:
+	// docs/architecture/202606192340-1904-adr-explicit-subject-pdp-est-front.md §D8.
+	"http.deviceidentity.cacerts.v1": {},
 }
 
 // minExpectedResourceReadGETs is the anti-vacuity floor for the resource-read GET

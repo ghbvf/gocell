@@ -51,6 +51,12 @@ func TestListenerRef(t *testing.T) {
 			wantString: "admin",
 			wantIsZero: false,
 		},
+		{
+			name:       "DeviceMTLSListener",
+			ref:        cell.DeviceMTLSListener,
+			wantString: "device-mtls",
+			wantIsZero: false,
+		},
 	}
 
 	for _, tc := range tests {

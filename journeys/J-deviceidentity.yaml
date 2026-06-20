@@ -13,8 +13,7 @@ cells:
   - _framework
 # Acceptance curation for JOURNEY-CONTRACT-EXISTENCE-01: http.devicestate.v1 is
 # the first active framework-owned contract (PR-8a / #2037), served via the
-# bootstrap framework RouteGroup. The write paths (enroll/renew/revoke) and the
-# certificate status query active-ize in their own PRs and extend this journey.
+# bootstrap framework RouteGroup. EST写路径 active 化随 PR-9 #1905 落地。
 contracts:
   - http.devicestate.v1
 passCriteria:

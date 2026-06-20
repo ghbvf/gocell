@@ -49,7 +49,8 @@ func TestFrameworkServing_Smoke_DevicestateReturns401WhenNoToken(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 	internalLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared, primaryLn,
+	app, err := buildBootstrapFromShared(
+		t, shared, primaryLn,
 		withCorebundleTestInternalListener(t, internalLn),
 		bootstrap.WithListener(
 			cell.HealthListener,
@@ -155,7 +156,8 @@ func TestFrameworkServing_Regression_OmitOptionCausesStartupFailFast(t *testing.
 		metricsHandler := buildMetricsHandler(shared.MetricsToken, locals.registry)
 		opts := runtimeBaseOptions(shared, locals, asm, consumerBase, metricsHandler, adapterInfo)
 
-		opts = append(opts,
+		opts = append(
+			opts,
 			bootstrap.WithListener(
 				cell.PrimaryListener,
 				primaryLn.Addr().String(),

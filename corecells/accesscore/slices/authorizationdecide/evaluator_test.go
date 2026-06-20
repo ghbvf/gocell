@@ -22,7 +22,7 @@ var testAuditRead = authz.PermAuditRead().String()
 
 // actionResolver builds an attributeResolver with just the principal (no env/resource).
 func actionResolver(p *auth.Principal) attributeResolver {
-	return attributeResolver{principal: p}
+	return attributeResolver{subject: principalSubjectSource{p: p}}
 }
 
 // permitRuleWithAction builds a permit rule scoped to a specific set of actions.
@@ -178,14 +178,16 @@ func TestEvaluate_MatchedRuleID(t *testing.T) {
 		synthetic = "thing:read"
 	)
 	ownerResolver := attributeResolver{
-		principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr},
+		subject:    principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr}},
 		resourceID: ownerID,
 	}
 	adminResolver := actionResolver(&auth.Principal{
 		Kind: auth.PrincipalUser, Subject: "u", TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin},
 	})
 	adminOwnerResolver := attributeResolver{
-		principal:  &auth.Principal{Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin}},
+		subject: principalSubjectSource{p: &auth.Principal{
+			Kind: auth.PrincipalUser, Subject: ownerID, TenantID: testTenantIDStr, Roles: []string{auth.RoleAdmin},
+		}},
 		resourceID: ownerID,
 	}
 	plainResolver := actionResolver(&auth.Principal{Kind: auth.PrincipalUser, Subject: "u", TenantID: testTenantIDStr})
@@ -312,7 +314,7 @@ func TestEvaluate_CrossAttrOwnership(t *testing.T) {
 		if owner != nil {
 			attrs["owner"] = owner
 		}
-		return attributeResolver{principal: p, resourceAttrs: attrs}
+		return attributeResolver{subject: principalSubjectSource{p: p}, resourceAttrs: attrs}
 	}
 
 	tests := []struct {

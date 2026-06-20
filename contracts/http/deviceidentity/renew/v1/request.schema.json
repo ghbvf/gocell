@@ -26,14 +26,14 @@
     "requestedDuration": {
       "type": "string",
       "maxLength": 32,
-      "pattern": "^[0-9]+(h|m|s)$",
-      "description": "Requested cert lifetime as a Go duration string, e.g. \"2160h\". Clamped to the Signer's max-TTL SignConstraints (PR-5)."
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$",
+      "description": "Requested cert lifetime as a Go duration string accepted by time.ParseDuration, e.g. \"720h\", \"1h30m\", \"90m\", \"1.5h\". Pattern admits compound/fractional Go durations but rejects free-form text; clamped to the Signer's max-TTL SignConstraints (PR-5)."
     },
     "usages": {
       "type": "array",
       "uniqueItems": true,
       "maxItems": 16,
-      "description": "Requested X.509 key/extended-key usages (cert-manager vocabulary: signing, digital signature, content commitment, key encipherment, key agreement, data encipherment, cert sign, crl sign, encipher only, decipher only, any, server auth, client auth, code signing, email protection, s/mime, ipsec end system, ipsec tunnel, ipsec user, timestamping, ocsp signing, microsoft sgc, netscape sgc). The allowed-usage set is enforced by the Signer SignConstraints at issuance (spec FR-005, PR-5), not at the wire layer. ref: cert-manager KeyUsage; RFC 5280 §4.2.1.3.",
+      "description": "Requested X.509 key/extended-key usages (cert-manager spelling). Supported values: \"signing\" or \"digital signature\", \"key encipherment\", \"client auth\", \"server auth\". Any other value is rejected with 422 by the renewal front-end (deviceidentity mapUsages); the supported set is intentionally narrower than the full cert-manager vocabulary. An empty list defaults to digital signature + client auth (device-certificate baseline). ref: cert-manager KeyUsage; RFC 5280 §4.2.1.3.",
       "items": {
         "type": "string",
         "maxLength": 32

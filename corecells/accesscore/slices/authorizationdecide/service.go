@@ -3,7 +3,7 @@
 // request tenant, evaluates each rule's attribute conditions against the
 // request's subject/environment attributes, applies deny-overrides (forbid-wins)
 // combining, and returns a sealed authz.Decision. It implements
-// runtime/auth.Authorizer.
+// runtime/auth.Authorizer and runtime/auth.SubjectAuthorizer.
 //
 // # Combining algorithm (default-deny + forbid-wins)
 //
@@ -46,8 +46,11 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
-// Compile-time check: Service implements auth.Authorizer.
-var _ auth.Authorizer = (*Service)(nil)
+// Compile-time checks: Service implements auth.Authorizer and auth.SubjectAuthorizer.
+var (
+	_ auth.Authorizer        = (*Service)(nil)
+	_ auth.SubjectAuthorizer = (*Service)(nil)
+)
 
 // Service is the ABAC policy evaluation engine (PDP).
 type Service struct {
@@ -100,6 +103,40 @@ func NewService(
 	return s, nil
 }
 
+// evalInputs carries the two data sources fetched inside the tenant-scoped block:
+// all tenant policies + the resource attributes for this request's resource. Both
+// are loaded within the same scopedtx.Do call so they share one RLS GUC binding
+// (RESOURCE-ATTR-TENANT-SHARING-01).
+type evalInputs struct {
+	policies      []*abac.Policy
+	resourceAttrs map[string][]string
+}
+
+// errMsgStoreUnavailable is the const error message for policy store failures.
+// MESSAGE-CONST-LITERAL-01.
+const errMsgStoreUnavailable = "authorization-decide: policy store unavailable"
+
+// errMsgInvalidTenantDescriptor is the const error message for an invalid
+// tenant in a SubjectDescriptor.
+const errMsgInvalidTenantDescriptor = "authorization-decide: invalid tenant in SubjectDescriptor"
+
+// loadEvalInputs fetches the tenant's policy set and resource attributes
+// inside a single tenant-scoped transaction, returning an evalInputs value.
+// It is shared between Authorize and AuthorizeAs to avoid code duplication.
+func (s *Service) loadEvalInputs(ctx context.Context, tid tenant.TenantID, resource string) (evalInputs, error) {
+	return scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (evalInputs, error) {
+		pols, polErr := s.policyRepo.ListByTenant(txCtx, tid)
+		if polErr != nil {
+			return evalInputs{}, polErr
+		}
+		resAttrs, attrErr := s.resourceAttrs.GetAttributes(txCtx, resource, tid)
+		if attrErr != nil {
+			return evalInputs{}, attrErr
+		}
+		return evalInputs{policies: pols, resourceAttrs: resAttrs}, nil
+	})
+}
+
 // Authorize evaluates the request against the tenant's ABAC policy set and
 // returns a sealed authz.Decision. See the package and auth.Authorizer godoc for
 // the fail-closed return contract: infrastructure failures return
@@ -121,31 +158,12 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 			"authorization-decide: tenant scope missing or invalid", err)
 	}
 
-	// evalInputs carries the two data sources fetched inside the tenant-scoped
-	// block: all tenant policies + the resource attributes for this request's
-	// resource. Both are loaded within the same scopedtx.Do call so they share
-	// one RLS GUC binding (RESOURCE-ATTR-TENANT-SHARING-01).
-	type evalInputs struct {
-		policies      []*abac.Policy
-		resourceAttrs map[string][]string
-	}
-
-	inputs, err := scopedtx.Do(ctx, s.txRunner, tid, func(txCtx context.Context) (evalInputs, error) {
-		pols, polErr := s.policyRepo.ListByTenant(txCtx, tid)
-		if polErr != nil {
-			return evalInputs{}, polErr
-		}
-		resAttrs, attrErr := s.resourceAttrs.GetAttributes(txCtx, resource, tid)
-		if attrErr != nil {
-			return evalInputs{}, attrErr
-		}
-		return evalInputs{policies: pols, resourceAttrs: resAttrs}, nil
-	})
+	inputs, err := s.loadEvalInputs(ctx, tid, resource)
 	if err != nil {
 		// Store unreachable: fail-closed. KindUnavailable → 503; the
 		// cause is carried for server-side logging and stripped from the wire.
 		return authz.Decision{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
-			"authorization-decide: policy store unavailable", err)
+			errMsgStoreUnavailable, err)
 	}
 
 	// An authenticated principal is required. Without one the PDP must not decide:
@@ -166,7 +184,7 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 	// (#1977 Batch B): it is exposed as resource.id enabling identity-ownership
 	// baseline rules (subject.sub == resource.id). Distinct from PIP resourceAttrs.
 	resolver := attributeResolver{
-		principal:     principal,
+		subject:       principalSubjectSource{p: principal},
 		now:           s.clk.Now(),
 		resourceAttrs: inputs.resourceAttrs,
 		resourceID:    resource,
@@ -190,6 +208,73 @@ func (s *Service) Authorize(ctx context.Context, subject, resource, action strin
 		slog.Int("policy_count", len(inputs.policies)),
 		// baseline_count reads len of the package-level slice — no extra allocation
 		// (builtinBaselineRules returns builtinBaseline directly, F4 fix).
+		slog.Int("baseline_count", len(builtinBaselineRules())),
+	)
+	return dec, nil
+}
+
+// AuthorizeAs evaluates an explicitly-supplied subject (via a SubjectDescriptor)
+// against the tenant's ABAC policy set. It is the reuse seam for non-HTTP
+// authorization paths (cert signing, background reconcile) where there is no
+// ambient authenticated Principal in ctx.
+//
+// # Key differences from Authorize
+//
+//   - Does NOT read ctx Principal (auth.FromContext). The subject comes solely from
+//     the SubjectDescriptor parameter.
+//   - Does NOT use tenant.FromContext. The tenant is derived from subject.Tenant(),
+//     which must be a valid canonical tenant UUID.
+//   - Subject attributes are resolved via descriptorSubjectSource: kind, sub, and
+//     tenant are present; roles and claims are absent (nil / not-found). Policies
+//     requiring subject.roles or custom claims will fail-closed for a descriptor
+//     subject — this is intentional: device enrollment rules must use kind+sub.
+//
+// # Fail-closed contract
+//
+// An invalid or empty tenant in the descriptor → KindPermissionDenied (403),
+// zero Decision. Policy store error → KindUnavailable (503), zero Decision. No
+// matching rule (default-deny) → Deny, nil error. The zero SubjectDescriptor{}
+// always fails-closed (empty tenant → parse error).
+func (s *Service) AuthorizeAs(
+	ctx context.Context,
+	subject auth.SubjectDescriptor,
+	resource, action string,
+) (authz.Decision, error) {
+	// Derive the tenant from the descriptor. An invalid tenant is fail-closed with
+	// KindPermissionDenied (same as Authorize's missing-tenant path → 403).
+	tid, err := tenant.ParseTenantID(subject.Tenant())
+	if err != nil {
+		return authz.Decision{}, errcode.Wrap(
+			errcode.KindPermissionDenied,
+			errcode.ErrAuthForbidden,
+			errMsgInvalidTenantDescriptor,
+			err,
+		)
+	}
+
+	inputs, err := s.loadEvalInputs(ctx, tid, resource)
+	if err != nil {
+		return authz.Decision{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrServiceUnavailable,
+			errMsgStoreUnavailable, err)
+	}
+
+	// Subject attributes come from the descriptor (kind, sub, tenant).
+	// Roles and claims are absent; policies that require them fail-closed.
+	resolver := attributeResolver{
+		subject:       descriptorSubjectSource{d: subject},
+		now:           s.clk.Now(),
+		resourceAttrs: inputs.resourceAttrs,
+		resourceID:    resource,
+	}
+
+	dec, ruleID := s.evaluate(inputs.policies, resolver, action)
+	s.logger.DebugContext(ctx, "authorization decision",
+		slog.String("subject", subject.Sub()),
+		slog.String("resource", resource),
+		slog.String("action", action),
+		slog.Bool("allowed", dec.IsAllow()),
+		slog.String("matched_rule_id", ruleID),
+		slog.Int("policy_count", len(inputs.policies)),
 		slog.Int("baseline_count", len(builtinBaselineRules())),
 	)
 	return dec, nil

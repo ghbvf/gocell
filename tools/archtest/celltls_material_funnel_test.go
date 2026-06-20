@@ -58,6 +58,7 @@ func TestIsCellTLSSanctionedCall(t *testing.T) {
 	t.Parallel()
 	celltlsPkg := PlatformModulePath + "/cellmodules/celltls"
 	grpcPkg := PlatformModulePath + "/adapters/grpc"
+	deviceIDPkg := PlatformModulePath + "/cellmodules/deviceidentity"
 	cases := []struct {
 		name    string
 		pkgPath string
@@ -68,6 +69,8 @@ func TestIsCellTLSSanctionedCall(t *testing.T) {
 		{name: "celltls + NewServerMTLSConfig", pkgPath: celltlsPkg, ctor: "NewServerMTLSConfig", want: true},
 		{name: "grpc + NewServerMTLSConfig", pkgPath: grpcPkg, ctor: "NewServerMTLSConfig", want: true},
 		{name: "grpc + NewClientIdentity → NOT sanctioned (F4)", pkgPath: grpcPkg, ctor: "NewClientIdentity", want: false},
+		{name: "deviceidentity + NewServerMTLSConfig (#1904)", pkgPath: deviceIDPkg, ctor: "NewServerMTLSConfig", want: true},
+		{name: "deviceidentity + NewClientIdentity → NOT sanctioned", pkgPath: deviceIDPkg, ctor: "NewClientIdentity", want: false},
 		{name: "consumer forges celltls path", pkgPath: "consumer.example/cellmodules/celltls", ctor: "NewClientIdentity", want: false},
 		{name: "consumer forges grpc path", pkgPath: "consumer.example/adapters/grpc", ctor: "NewServerMTLSConfig", want: false},
 		{

@@ -61,4 +61,17 @@ var (
 	// operator is authenticated directly. Mirrors the EventStoreDB projection
 	// admin API model (a network-isolated admin port + operator credentials).
 	AdminListener = ListenerRef{"admin"}
+	// DeviceMTLSListener is the dedicated listener for EST certificate-renewal
+	// endpoints that authenticate the enrolling device by its existing client
+	// certificate (mutual TLS). It carries kernel/auth AuthMTLS{} as its sole
+	// auth scheme.
+	//
+	// It must be separate from PrimaryListener because PrimaryListener's JWT
+	// chain would 401 a non-JWT mTLS request before it ever reaches the EST
+	// handler — a single listener can carry only one auth scheme (see
+	// .claude/rules/gocell/runtime-api.md §"单 listener 单 auth scheme").
+	// EST certificate renewal authenticates the device by the client certificate
+	// it holds, not by a JWT issued after enrolment, so a dedicated mTLS
+	// listener is the correct separation.
+	DeviceMTLSListener = ListenerRef{"device-mtls"}
 )

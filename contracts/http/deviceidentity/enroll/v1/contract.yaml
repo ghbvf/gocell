@@ -1,12 +1,13 @@
 id: http.deviceidentity.enroll.v1
 kind: http
 ownerCell: _framework
-consistencyLevel: L2
+consistencyLevel: L1
 lifecycle: draft
 description: |
   Device identity enrollment — issues a signed certificate for a device CSR.
   ref: RFC 7030 §4.2 simpleenroll
   ref: docs/architecture/202606130635-1939-adr-framework-owned-contract.md
+  注：同步签发前端；cert-issued outbox emit（升 L2）随 PR-9 #1905 落地。
 endpoints:
   server: _framework
   clients: []
@@ -14,6 +15,9 @@ endpoints:
     method: POST
     path: /api/v1/deviceidentity/enroll
     successStatus: 201
+    auth:
+      public: true
+      reason: "Device first-enrollment authenticates with a dedicated enrollment-credential bearer token (auth.TokenIntentEnrollment), verified application-layer by EnrollmentCredentialVerifier — NOT the listener JWT/ABAC route gate (a freshly provisioned device holds no access token). Authorization (device:enroll) is enforced inside the handler via the certsigning Authorizer (PDP), and setup-bootstrap credential reuse is forbidden (EST-ENROLL-AUTH-BOUNDARY-01)."
     noContent: false
     responses:
       400:
@@ -26,7 +30,7 @@ endpoints:
         description: "Forbidden — authenticated but lacks required permission"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       409:
-        description: "Conflict — device already has an active certificate; use the renew endpoint to rotate. NOTE: 409 is also the idempotency framework status (ClaimBusy, ADR 202606021000-1043); this entry describes the orthogonal business-level meaning."
+        description: "Conflict — device already has an active certificate; use the renew endpoint to rotate. NOTE: 409 is also the idempotency framework status (ClaimBusy, ADR 202606021000-1043); this entry describes the orthogonal business-level meaning. 当前未实现（无持久化 cert store）；blocked-by #1905；当前行为：重复 enroll 继续签发新证书。"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       413:
         description: "Payload Too Large — request body exceeds the size limit"

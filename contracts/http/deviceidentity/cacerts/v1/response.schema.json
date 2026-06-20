@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.deviceidentity.cacerts.v1.response",
+  "type": "object",
+  "required": [
+    "data"
+  ],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": [
+        "trustBundle"
+      ],
+      "properties": {
+        "trustBundle": {
+          "type": "string",
+          "maxLength": 131072,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+          "description": "CA trust bundle as a PKCS#7 certs-only (RFC 5652 §5.1 degenerate SignedData) blob, base64-encoded DER. Contains the issuing CA chain (intermediate-first, root-last) the device must trust to validate certificates issued by this CA."
+        }
+      }
+    }
+  }
+}

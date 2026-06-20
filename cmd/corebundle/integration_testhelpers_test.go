@@ -127,6 +127,7 @@ func buildBootstrapFromShared(
 		// the mandatory gRPC listener — accesscore registers grpc.auth.session.verify.v1
 		// unconditionally (PR-11 #1154), so a gRPC listener must be wired or bootstrap
 		// fail-fasts (checkOrphanGRPCServices).
+		// Framework HTTP serving: devicestate.v1 only (EST wiring deferred to PR-9 #1905).
 		opts = append(opts,
 			bootstrap.WithListener(
 				cell.PrimaryListener,
@@ -140,9 +141,9 @@ func buildBootstrapFromShared(
 			// must-serve set, so this option MUST wire the matching routes or phase0
 			// validateFrameworkServing fail-fasts. Keeping the test harness in lockstep
 			// with production wiring is the #2348 review F2 fix (omit → caught here).
-			bootstrap.WithFrameworkHTTPServing(
-				[]bootstrap.FrameworkServedRoute{deviceserving.NewService(shared.Clock).Route()},
-			),
+			bootstrap.WithFrameworkHTTPServing([]bootstrap.FrameworkServedRoute{
+				deviceserving.NewService(shared.Clock).Route(),
+			}),
 		)
 		opts = append(opts, extra...)
 		return opts, nil

@@ -75,7 +75,7 @@ func TestAttributeResolver_SubjectCanonicalization(t *testing.T) {
 	t.Run("non-canonical-cased UUID resolves to canonical form", func(t *testing.T) {
 		upperSubject := strings.ToUpper(canonicalUUID)
 		r := attributeResolver{
-			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: upperSubject},
+			subject: principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: upperSubject}},
 		}
 		vals, found := r.resolve(abac.SourceSubject, "sub")
 		assert.True(t, found)
@@ -85,7 +85,7 @@ func TestAttributeResolver_SubjectCanonicalization(t *testing.T) {
 
 	t.Run("already-canonical UUID passes through as-is", func(t *testing.T) {
 		r := attributeResolver{
-			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: canonicalUUID},
+			subject: principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: canonicalUUID}},
 		}
 		vals, found := r.resolve(abac.SourceSubject, "sub")
 		assert.True(t, found)
@@ -97,7 +97,7 @@ func TestAttributeResolver_SubjectCanonicalization(t *testing.T) {
 		// mangled — they pass through as-is (httputil.ParseCanonicalUUID returns
 		// ok=false for non-UUID strings, so the fallback path is taken).
 		r := attributeResolver{
-			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: "u"},
+			subject: principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: "u"}},
 		}
 		vals, found := r.resolve(abac.SourceSubject, "sub")
 		assert.True(t, found)
@@ -107,7 +107,7 @@ func TestAttributeResolver_SubjectCanonicalization(t *testing.T) {
 
 	t.Run("empty subject → found=false", func(t *testing.T) {
 		r := attributeResolver{
-			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: ""},
+			subject: principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: ""}},
 		}
 		vals, found := r.resolve(abac.SourceSubject, "sub")
 		assert.False(t, found)
@@ -117,7 +117,7 @@ func TestAttributeResolver_SubjectCanonicalization(t *testing.T) {
 	t.Run("subject key alias resolves the same way", func(t *testing.T) {
 		upperSubject := strings.ToUpper(canonicalUUID)
 		r := attributeResolver{
-			principal: &auth.Principal{Kind: auth.PrincipalUser, Subject: upperSubject},
+			subject: principalSubjectSource{p: &auth.Principal{Kind: auth.PrincipalUser, Subject: upperSubject}},
 		}
 		vals, found := r.resolve(abac.SourceSubject, "subject")
 		assert.True(t, found)
