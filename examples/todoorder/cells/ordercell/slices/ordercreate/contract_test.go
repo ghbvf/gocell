@@ -20,9 +20,10 @@ import (
 )
 
 // withTestPrincipal attaches a test principal to the given request's context so
-// that ordercreate.Service.Create can derive the order Owner. The Create gate
-// normally guarantees a principal is present; contract tests bypass the gate via
-// testResolver, so we must inject the principal manually.
+// that ordercreate.Service.Create can derive the order Owner. The Create route gate
+// normally guarantees a principal is present; this contract test mounts the handler
+// directly (ServeHTTP → handle, bypassing the auth.Mount route gate), so we inject the
+// principal manually. (Authorization itself is covered in cell_test / listener_auth_test.)
 func withTestPrincipal(req *http.Request) *http.Request {
 	return req.WithContext(auth.TestContext("contract-test-user", []string{"role:customer"}))
 }

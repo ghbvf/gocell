@@ -124,9 +124,9 @@ type rotateCertCmdPayload struct {
 //
 // Device-self proof: only the device acking its OWN rotate-cert is a genuine
 // cert-rotation observation, so the completion event is emitted ONLY when the
-// authenticated subject equals entry.DeviceID. The ack route is
-// auth.SelfOr("id", admin, operator) (slices/devicecommand/handler.go), so an
-// operator/admin can ack any device's command — that override still resolves the
+// authenticated subject equals entry.DeviceID. The ack route is contract-derived
+// owner-scoped (permission device:consume, resource: id; slices/devicecommand, #2486), so an
+// operator/admin (via the PDP device:consume baseline) can ack any device's command — that override still resolves the
 // command (releases the active-uniqueness key) but MUST NOT advance observed cert
 // state. Treating an operator ack as completion would desync server-observed cert
 // state from the device's actual (still-old, near-expiry) cert and silently drop

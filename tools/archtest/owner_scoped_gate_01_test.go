@@ -10,11 +10,11 @@
 //     contract.yaml endpoints.http.{resource,selfScoped} and rendered into the generated
 //     handler_gen.go contractSpec via the single RequirePermissionForContract funnel
 //     (golden-locked Hard). Frozen against ownerScopedGateContractDerivedSet.
-//   - TestOwnerScopedGate_ExactSet_01 (scan) — the STILL-hand-wired gates: the
-//     iotdevice/todoorder examples (PR-10d #1894, auth.SelfOr → RequirePermissionForResource)
-//     AND the composition-root cellmodules/deviceserving framework-owned devicestate gate
-//     (#2351). Frozen against ownerScopedGateExpectedSet. As these migrate (#2355 续波 #2486) they
-//     move to the contract-derived arm.
+//   - TestOwnerScopedGate_ExactSet_01 (scan) — the LAST still-hand-wired gate: the
+//     composition-root cellmodules/deviceserving framework-owned devicestate gate (#2351).
+//     The iotdevice/todoorder examples migrated to contract-derived in #2486 (#2355 续波) and
+//     moved to the contract-derived arm. Frozen against ownerScopedGateExpectedSet; when
+//     deviceserving migrates too, this arm empties and retires.
 //
 // An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
@@ -63,12 +63,15 @@
 // triples. Two built-in discriminators make it non-vacuous without a ban-style reverse
 // fixture:
 //
-//   - The example handlers carry the discriminator (#2355: accesscore's identitymanage,
-//     formerly the canonical example, migrated off the scan): ordercell/cell.go and
-//     devicecell/cell.go each hold plain RequirePermission gates (create/list, device:list)
-//     alongside the owner gates, so over-collection would surface as an UNEXPECTED triple.
 //   - If the typed scan silently failed to resolve any callsite, the collected set would be
-//     empty and every frozen triple would report MISSING → fail.
+//     empty and the sole frozen triple (after #2486: deviceserving|id|PermDeviceRead) would
+//     report MISSING → fail.
+//
+// (Before #2486 a second inline discriminator held: ordercell/cell.go and devicecell/cell.go
+// carried plain RequirePermission gates alongside their owner gates, so over-collection
+// surfaced as an UNEXPECTED triple. #2486 migrated those examples to the contract-derived arm,
+// so the active scanner proof now rests on the empty→MISSING check above plus the standalone
+// RED module in TestOwnerScopedGate_ReverseFixture.)
 //
 // TestOwnerScopedGate_ReverseFixture additionally scans a standalone RED module that
 // (a) drifts a gate's path param and (b) regresses an owner gate to plain
@@ -80,13 +83,13 @@
 //   - Guards gate CONSTRUCTION, not route→gate WIRING: a correctly-constructed gate that
 //     is never mounted (or mounted on the wrong handler) is not caught here — the
 //     contract serve tests + e2e cover wiring.
-//   - Scan arm: only the named hand-wired handler files are scanned (examples
-//     ordercell/cell.go, devicecell/cell.go, devicecommand/handler.go + the composition-root
-//     cellmodules/deviceserving/service.go, #2351); a NEW hand-wired owner-scoped endpoint in
-//     a new file must be added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the
-//     UNEXPECTED-triple check forces this consciously for the already-guarded files). A
-//     RequirePermissionForSelf callsite in an unlisted file is likewise not frozen. The
-//     contract-derived arm has no such file-list blind spot — it scans ALL project metadata.
+//   - Scan arm: only the named hand-wired handler file is scanned (after #2486: just the
+//     composition-root cellmodules/deviceserving/service.go, #2351 — the examples migrated to
+//     the contract-derived arm); a NEW hand-wired owner-scoped endpoint in a new file must be
+//     added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple
+//     check forces this consciously for the already-guarded files). A RequirePermissionForSelf
+//     callsite in an unlisted file is likewise not frozen. The contract-derived arm has no such
+//     file-list blind spot — it scans ALL project metadata.
 //   - Contract-derived arm: guards that a contract KEEPS its resource/selfScoped overlay
 //     (and which param/permission), but — like the FMT-42 DELIBERATE non-port of gRPC FMT-41
 //     — it CANNOT tell whether a brand-NEW route SHOULD be owner-scoped: the same action

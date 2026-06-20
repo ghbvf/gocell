@@ -196,8 +196,8 @@ func TestOnCommandResolved_UndecodablePayload_NoEmit(t *testing.T) {
 }
 
 // TestOnCommandResolved_NonDeviceSubject_NoEmit proves the device-self guard (F1):
-// an operator/admin acking a device's rotate-cert (subject != entry.DeviceID, the
-// auth.SelfOr bypass-role path) resolves the command but does NOT emit a completion
+// an operator/admin acking a device's rotate-cert (subject != entry.DeviceID, via the
+// device:consume PDP baseline override) resolves the command but does NOT emit a completion
 // event — so cert state is never advanced on a non-device assertion.
 func TestOnCommandResolved_NonDeviceSubject_NoEmit(t *testing.T) {
 	svc, rec := newTestService(t, mem.NewDeviceRepository())
