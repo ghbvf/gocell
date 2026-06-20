@@ -454,15 +454,20 @@ linters:
                 one interceptor package. Mirrors grpc-adapter-no-interceptor-import.
         corecells-pgx-confined:
           # Soft→Medium (#2387 F13): the raw pgx driver must stay inside a cell's
-          # postgres-adapter packages. The single `!**/corecells/**/postgres/**`
-          # exclusion covers BOTH the internal adapter impl
-          # (corecells/<cell>/internal/adapters/postgres/**) AND the cell's postgres/
-          # wiring helper (corecells/<cell>/postgres/**) — both end in a `postgres/`
-          # path segment. Everything else under corecells/ (domain / handler /
+          # postgres-adapter packages — and ONLY those. Two precise exclusions
+          # enumerate the real allowed locations (`*` = the single cell-name segment):
+          #   - corecells/<cell>/internal/adapters/postgres/**  (the adapter impl)
+          #   - corecells/<cell>/postgres/**                    (the cell's wiring helper)
+          # An earlier `!**/corecells/**/postgres/**` form was fail-OPEN: it exempted
+          # ANY postgres-named dir at any depth, so a future
+          # corecells/<cell>/internal/domain/postgres/** (or slices/*/postgres/**)
+          # could import the driver and silently escape the guard (#2497 F1). The
+          # enumerated form is fail-CLOSED: anything outside the two adapter locations
+          # is denied. Everything else under corecells/ (domain / handler /
           # application / ports) must go through the cell-local DBTX interface
           # (defined in the internal adapter), never the driver directly.
           # cells-isolation ALLOWS jackc/pgx broadly across corecells (those adapter
-          # pkgs legitimately need it); this deny-overlay subtracts every NON-postgres
+          # pkgs legitimately need it); this deny-overlay subtracts every NON-adapter
           # corecells package so the broad exemption can no longer leak into domain
           # code. A path-level import ban with no type-system Hard form → depguard
           # (ai-robust.md §载体选择; same shape as the corebundle/ssobff eventbus bans
@@ -473,7 +478,8 @@ linters:
           files:
             - "**/corecells/**"
             - "!**/corecells/**/*_test.go"
-            - "!**/corecells/**/postgres/**"
+            - "!**/corecells/*/internal/adapters/postgres/**"
+            - "!**/corecells/*/postgres/**"
           deny:
             - pkg: github.com/jackc/pgx
               desc: |
