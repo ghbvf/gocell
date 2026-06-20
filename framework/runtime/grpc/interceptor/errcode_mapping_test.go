@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -17,31 +19,32 @@ import (
 func TestToGRPCCode(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
+		name string
 		kind errcode.Kind
 		want codes.Code
 	}{
-		{errcode.KindInternal, codes.Internal},
-		{errcode.KindInvalid, codes.InvalidArgument},
-		{errcode.KindUnauthenticated, codes.Unauthenticated},
-		{errcode.KindPermissionDenied, codes.PermissionDenied},
-		{errcode.KindNotFound, codes.NotFound},
-		{errcode.KindConflict, codes.Aborted},
-		{errcode.KindUnprocessable, codes.InvalidArgument},
-		{errcode.KindGone, codes.NotFound},
-		{errcode.KindPayloadTooLarge, codes.ResourceExhausted},
-		{errcode.KindRateLimited, codes.ResourceExhausted},
-		{errcode.KindClientClosed, codes.Canceled},
-		{errcode.KindDeadlineExceeded, codes.DeadlineExceeded},
-		{errcode.KindUnavailable, codes.Unavailable},
-		{errcode.KindNotImplemented, codes.Unimplemented},
+		{"KindInternal", errcode.KindInternal, codes.Internal},
+		{"KindInvalid", errcode.KindInvalid, codes.InvalidArgument},
+		{"KindUnauthenticated", errcode.KindUnauthenticated, codes.Unauthenticated},
+		{"KindPermissionDenied", errcode.KindPermissionDenied, codes.PermissionDenied},
+		{"KindNotFound", errcode.KindNotFound, codes.NotFound},
+		{"KindConflict", errcode.KindConflict, codes.Aborted},
+		{"KindUnprocessable", errcode.KindUnprocessable, codes.InvalidArgument},
+		{"KindGone", errcode.KindGone, codes.NotFound},
+		{"KindPayloadTooLarge", errcode.KindPayloadTooLarge, codes.ResourceExhausted},
+		{"KindRateLimited", errcode.KindRateLimited, codes.ResourceExhausted},
+		{"KindClientClosed", errcode.KindClientClosed, codes.Canceled},
+		{"KindDeadlineExceeded", errcode.KindDeadlineExceeded, codes.DeadlineExceeded},
+		{"KindUnavailable", errcode.KindUnavailable, codes.Unavailable},
+		{"KindNotImplemented", errcode.KindNotImplemented, codes.Unimplemented},
 	}
 	for _, tc := range cases {
 		tc := tc
-		t.Run(fmt.Sprintf("kind_%d", int(tc.kind)), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := toGRPCCode(tc.kind)
 			if got != tc.want {
-				t.Errorf("toGRPCCode(%d) = %v, want %v", int(tc.kind), got, tc.want)
+				t.Errorf("toGRPCCode(%v) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -232,6 +235,207 @@ func (f *errcodeMappingFakeStream) RecvMsg(_ any) error            { return nil 
 func (f *errcodeMappingFakeStream) SetHeader(_ metadata.MD) error  { return nil }
 func (f *errcodeMappingFakeStream) SendHeader(_ metadata.MD) error { return nil }
 func (f *errcodeMappingFakeStream) SetTrailer(_ metadata.MD)       {}
+
+// TestErrToStatus_4xx_PublicDetails_CarriedInErrorInfo asserts that 4xx *errcode.Error
+// values with PublicDetail attributes are forwarded in a google.rpc.ErrorInfo detail
+// embedded in the gRPC status (#2482). Each PublicDetail type is verified; the
+// rendered Metadata values must match the HTTP marshalJSONValue semantics:
+//   - PublicString: raw string value (no JSON quoting).
+//   - PublicInt: decimal integer string (e.g. "42").
+//   - PublicBool: "true" / "false".
+//   - PublicDuration: nanosecond integer string (matching json.Marshal(int64(d))).
+//   - PublicTime: RFC3339Nano string, unquoted (same instant as json.Marshal(time.Time),
+//     minus the structural JSON quotes — a flat map value is the string itself).
+func TestErrToStatus_4xx_PublicDetails_CarriedInErrorInfo(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	dur := 5 * time.Second
+
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid input",
+		errcode.WithDetails(
+			errcode.PublicString("field", "device_id"),
+			errcode.PublicInt("count", 42),
+			errcode.PublicBool("active", true),
+			errcode.PublicDuration("elapsed", dur),
+			errcode.PublicTime("timestamp", now),
+		),
+	)
+
+	got := errToStatus(ec)
+	if got == nil {
+		t.Fatal("errToStatus returned nil for *errcode.Error")
+	}
+	if code := status.Code(got); code != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", code)
+	}
+
+	st, ok := status.FromError(got)
+	if !ok {
+		t.Fatal("result is not a gRPC status error")
+	}
+
+	var ei *errdetails.ErrorInfo
+	for _, d := range st.Details() {
+		if e, ok2 := d.(*errdetails.ErrorInfo); ok2 {
+			ei = e
+			break
+		}
+	}
+	if ei == nil {
+		t.Fatal("no ErrorInfo detail found in 4xx status")
+	}
+
+	if ei.Domain != errcodeDomain {
+		t.Errorf("ErrorInfo.Domain = %q, want %q", ei.Domain, errcodeDomain)
+	}
+	if ei.Reason != string(errcode.ErrValidationFailed) {
+		t.Errorf("ErrorInfo.Reason = %q, want %q", ei.Reason, string(errcode.ErrValidationFailed))
+	}
+
+	wantMeta := map[string]string{
+		"field":     "device_id",
+		"count":     "42",
+		"active":    "true",
+		"elapsed":   "5000000000",
+		"timestamp": "2024-01-02T03:04:05Z",
+	}
+	for k, want := range wantMeta {
+		if got2 := ei.Metadata[k]; got2 != want {
+			t.Errorf("Metadata[%q] = %q, want %q", k, got2, want)
+		}
+	}
+}
+
+// TestErrToStatus_5xx_PublicDetails_Stripped asserts that 5xx *errcode.Error values
+// with PublicDetail attributes do NOT produce any ErrorInfo detail on the wire (#2482).
+// The split-constructor design (HARD: typed function choice) makes 5xx-details carry
+// structurally inexpressible — clientStatusWithDetails is only called for IsClient().
+func TestErrToStatus_5xx_PublicDetails_Stripped(t *testing.T) {
+	t.Parallel()
+
+	ec := errcode.New(errcode.KindInternal, errcode.ErrInternal, "db pool exhausted secret-host:5432",
+		errcode.WithDetails(errcode.PublicString("host", "db-secret:5432")),
+	)
+
+	got := errToStatus(ec)
+	if got == nil {
+		t.Fatal("errToStatus returned nil for *errcode.Error")
+	}
+
+	if code := status.Code(got); code != codes.Internal {
+		t.Errorf("code = %v, want Internal", code)
+	}
+	if msg := status.Convert(got).Message(); msg != msgInternalServerError {
+		t.Errorf("5xx message = %q, want %q", msg, msgInternalServerError)
+	}
+
+	st, ok := status.FromError(got)
+	if !ok {
+		t.Fatal("result is not a gRPC status error")
+	}
+	for _, d := range st.Details() {
+		if _, isEI := d.(*errdetails.ErrorInfo); isEI {
+			t.Error("5xx status must NOT carry ErrorInfo detail (split-constructor HARD guarantee)")
+		}
+	}
+}
+
+// TestErrToStatus_4xx_NoDetails_NoErrorInfo asserts that a 4xx *errcode.Error with
+// no PublicDetails does not produce an empty ErrorInfo detail — the Metadata guard
+// must not attach a zero-Metadata ErrorInfo.
+func TestErrToStatus_4xx_NoDetails_NoErrorInfo(t *testing.T) {
+	t.Parallel()
+
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad request")
+
+	got := errToStatus(ec)
+	if got == nil {
+		t.Fatal("errToStatus returned nil")
+	}
+
+	st, ok := status.FromError(got)
+	if !ok {
+		t.Fatal("result is not a gRPC status error")
+	}
+	if len(st.Details()) != 0 {
+		t.Errorf("4xx with no PublicDetails: expected 0 details, got %d", len(st.Details()))
+	}
+}
+
+// TestErrcodeDomain_DifferentFromDenyReasonDomain asserts that errcodeDomain and
+// denyReasonDomain are distinct values, so gRPC clients can tell apart a business
+// 4xx ErrorInfo from an auth/authz denial ErrorInfo without inspecting the Reason field.
+func TestErrcodeDomain_DifferentFromDenyReasonDomain(t *testing.T) {
+	t.Parallel()
+	if errcodeDomain == denyReasonDomain {
+		t.Errorf("errcodeDomain (%q) must differ from denyReasonDomain (%q)", errcodeDomain, denyReasonDomain)
+	}
+}
+
+// TestRenderDetailValue verifies that renderDetailValue renders each PublicDetail
+// type to its expected string representation, aligned with HTTP marshalJSONValue
+// semantics (F11 direct unit test for the rendering function).
+//
+// Expected values:
+//   - PublicString: raw string, no JSON quoting.
+//   - PublicInt: decimal integer string ("42").
+//   - PublicBool: "true" / "false".
+//   - PublicDuration: nanosecond integer string ("5000000000" for 5s).
+//   - PublicTime: RFC3339Nano string, unquoted ("2024-01-02T03:04:05Z").
+func TestRenderDetailValue(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	dur := 5 * time.Second
+
+	cases := []struct {
+		name   string
+		detail errcode.PublicDetail
+		want   string
+	}{
+		{
+			name:   "PublicString_no_json_quoting",
+			detail: errcode.PublicString("k", "device_id"),
+			want:   "device_id",
+		},
+		{
+			name:   "PublicInt_decimal",
+			detail: errcode.PublicInt("k", 42),
+			want:   "42",
+		},
+		{
+			name:   "PublicBool_true",
+			detail: errcode.PublicBool("k", true),
+			want:   "true",
+		},
+		{
+			name:   "PublicBool_false",
+			detail: errcode.PublicBool("k", false),
+			want:   "false",
+		},
+		{
+			name:   "PublicDuration_nanoseconds",
+			detail: errcode.PublicDuration("k", dur),
+			want:   "5000000000",
+		},
+		{
+			name:   "PublicTime_rfc3339nano_unquoted",
+			detail: errcode.PublicTime("k", fixedTime),
+			want:   "2024-01-02T03:04:05Z",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := renderDetailValue(tc.detail)
+			if got != tc.want {
+				t.Errorf("renderDetailValue(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestErrToStatus_ContextErrors asserts a handler-returned context error is mapped
 // to the canonical gRPC code (Canceled / DeadlineExceeded), NOT the generic Internal

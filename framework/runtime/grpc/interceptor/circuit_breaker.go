@@ -45,6 +45,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	kernelctxkeys "github.com/ghbvf/gocell/framework/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/framework/pkg/observability"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // Allower is the narrow two-step circuit-breaker interface.
@@ -111,7 +115,13 @@ func cbDoneErr(err error) error {
 // through cb. When cb is nil the interceptor is a transparent pass-through
 // (opt-in protection: deployers without a circuit-breaker configured are not
 // penalized).
-func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
+//
+// collector and validCellIDs are used to emit grpc_protection_rejected_total on
+// circuit-open: the cell label is resolved from ctx. The nil-done fail-open path
+// (contract violation) does NOT emit a protection metric — the slog.Error is the
+// operator signal for that path, and emitting a metric there would misleadingly
+// count a wiring bug as a protection event.
+func UnaryCircuitBreaker(cb Allower, collector metrics.GRPCCollector, validCellIDs map[string]struct{}) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if cb == nil {
 			// nil cb: opt-in protection not configured; pass through.
@@ -119,14 +129,22 @@ func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
 		}
 		allowed, done := cb.Allow()
 		if !allowed {
+			observability.SafeObserve(slog.Default(), func() {
+				cell := metrics.ResolveCellLabel(ctx, validCellIDs)
+				collector.RecordProtectionRejection(ctx, cell, info.FullMethod, metrics.ProtectionCircuit())
+			})
 			return nil, status.Error(codes.Unavailable, msgCircuitOpen)
 		}
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open
 			// so the request proceeds; the slog.Error surfaces the bug.
+			// No protection metric emitted — this is a wiring bug, not a
+			// protection event, and counting it would mislead ops.
+			cellID, _ := kernelctxkeys.CellIDFrom(ctx)
 			slog.ErrorContext(ctx, "grpc circuit-breaker Allow() returned nil done — fail-open",
 				"interceptor", "UnaryCircuitBreaker",
-				"method", info.FullMethod)
+				"method", info.FullMethod,
+				"cell", cellID)
 			return handler(ctx, req)
 		}
 		resp, err := handler(ctx, req)
@@ -138,7 +156,11 @@ func UnaryCircuitBreaker(cb Allower) grpc.UnaryServerInterceptor {
 // StreamCircuitBreaker returns a stream server interceptor that gates stream
 // setup through cb. Semantics mirror UnaryCircuitBreaker: nil cb is a
 // pass-through, nil done triggers fail-open + log.
-func StreamCircuitBreaker(cb Allower) grpc.StreamServerInterceptor {
+//
+// collector and validCellIDs mirror UnaryCircuitBreaker: emit
+// grpc_protection_rejected_total on circuit-open. Cell is resolved from the
+// stream context.
+func StreamCircuitBreaker(cb Allower, collector metrics.GRPCCollector, validCellIDs map[string]struct{}) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if cb == nil {
 			// nil cb: opt-in protection not configured; pass through.
@@ -146,13 +168,22 @@ func StreamCircuitBreaker(cb Allower) grpc.StreamServerInterceptor {
 		}
 		allowed, done := cb.Allow()
 		if !allowed {
+			ctx := ss.Context()
+			observability.SafeObserve(slog.Default(), func() {
+				cell := metrics.ResolveCellLabel(ctx, validCellIDs)
+				collector.RecordProtectionRejection(ctx, cell, info.FullMethod, metrics.ProtectionCircuit())
+			})
 			return status.Error(codes.Unavailable, msgCircuitOpen)
 		}
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open.
-			slog.ErrorContext(ss.Context(), "grpc circuit-breaker Allow() returned nil done — fail-open",
+			// No protection metric — wiring bug, not a protection event.
+			streamCtx := ss.Context()
+			cellID, _ := kernelctxkeys.CellIDFrom(streamCtx)
+			slog.ErrorContext(streamCtx, "grpc circuit-breaker Allow() returned nil done — fail-open",
 				"interceptor", "StreamCircuitBreaker",
-				"method", info.FullMethod)
+				"method", info.FullMethod,
+				"cell", cellID)
 			return handler(srv, ss)
 		}
 		err := handler(srv, ss)

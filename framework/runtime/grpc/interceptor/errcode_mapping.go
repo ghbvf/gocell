@@ -13,8 +13,14 @@ package interceptor
 //
 // Client errors (errcode.Kind.IsClient() == true, 4xx) use the errcode message
 // directly — it is a const literal (MESSAGE-CONST-LITERAL-01) and therefore
-// wire-safe. Server errors (5xx) use msgInternalServerError — the same generic
-// message the HTTP 5xx path emits — so internal details never reach the wire.
+// wire-safe — and carry PublicDetails in a google.rpc.ErrorInfo.Metadata field
+// (Domain=errcodeDomain). Server errors (5xx) use msgInternalServerError — the
+// same generic message the HTTP 5xx path emits — so internal details never reach
+// the wire. PublicDetails are structurally stripped from 5xx by the split-
+// constructor design (typed function choice, HARD): clientStatusWithDetails is
+// ONLY called for IsClient()==true; the 5xx path calls status.Error directly
+// with no ErrorInfo parameter, making 5xx-details carry inexpressible in type.
+//
 // This mirrors framework/pkg/httputil/response.go 5xx projection.
 //
 // ref: go-kratos/kratos errors GRPCStatus
@@ -23,7 +29,11 @@ package interceptor
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -35,6 +45,13 @@ import (
 // wire for all 5xx errcode.Errors (and any unknown non-status error). It must be
 // a const literal so MESSAGE-CONST-LITERAL-01 is satisfied.
 const msgInternalServerError = "internal server error"
+
+// errcodeDomain is the google.rpc.ErrorInfo.Domain value for business 4xx errcode
+// details (#2482). It is intentionally distinct from denyReasonDomain
+// ("gocell.authz.grpc") so that gRPC clients can distinguish a business
+// KindInvalid / KindNotFound / etc. ErrorInfo from an auth/authz denial ErrorInfo
+// by keying on (Domain, Reason) — without parsing the English message.
+const errcodeDomain = "gocell.errcode"
 
 // toGRPCCode maps an errcode.Kind to the canonical grpc/codes.Code.
 //
@@ -94,16 +111,20 @@ func toGRPCCode(k errcode.Kind) codes.Code {
 //   - Already-status errors whose code is not Unknown → pass through unchanged.
 //     Auth and Recovery interceptors already produce a grpc status; double-mapping
 //     would overwrite e.g. codes.Unauthenticated with codes.Internal.
-//   - *errcode.Error: map via toGRPCCode. 4xx use the errcode message (wire-safe
-//     const literal); 5xx use msgInternalServerError (no internal detail on wire).
+//   - *errcode.Error: map via toGRPCCode. 4xx (IsClient) call clientStatusWithDetails
+//     which carries PublicDetails in google.rpc.ErrorInfo.Metadata (Domain=errcodeDomain);
+//     5xx call status.Error directly (no ErrorInfo parameter — split-constructor HARD
+//     guarantee: 5xx-details carry is structurally inexpressible).
 //   - Any other error → codes.Internal with msgInternalServerError (fail-closed).
 //
-// # PublicDetails parity (backlogged)
+// # 4xx PublicDetails wire parity (#2482)
 //
-// Only the errcode message is forwarded on the gRPC wire today. errcode PublicDetails
-// (WithDetails(PublicString/PublicInt/…) attrs) are intentionally NOT carried in
-// google.rpc.Status.Details — fail-safe default while the structured-detail encoding
-// is unspecified. 4xx-details parity with HTTP is tracked in #2482.
+// 4xx errcode.Errors with PublicDetails are now forwarded in a google.rpc.ErrorInfo
+// detail (Domain=errcodeDomain, Reason=string(ec.Code), Metadata=key→rendered-value).
+// Metadata value rendering is aligned with HTTP marshalJSONValue semantics (see
+// publicDetailsToMetadata). 5xx-no-details invariant is guaranteed by the split-
+// constructor pattern (typed function choice, HARD): clientStatusWithDetails only
+// accepts a client error; the 5xx path has no ErrorInfo parameter at the call site.
 //
 // Do NOT implement GRPCStatus() on *errcode.Error: that would bypass this
 // interceptor's 5xx redaction (5xx messages would reach the wire unredacted).
@@ -120,12 +141,15 @@ func errToStatus(err error) error {
 			return err
 		}
 	}
-	// *errcode.Error: apply Kind→codes mapping with 4xx/5xx redaction.
+	// *errcode.Error: apply Kind→codes mapping with 4xx/5xx split-constructor.
 	var ec *errcode.Error
 	if errors.As(err, &ec) {
 		code := toGRPCCode(ec.Kind)
-		msg := buildStatusMessage(ec)
-		return status.Error(code, msg)
+		if ec.Kind.IsClient() {
+			return clientStatusWithDetails(code, ec) // 4xx: carry PublicDetails in ErrorInfo
+		}
+		// 5xx: message-only, no ErrorInfo parameter (HARD: inexpressible to attach details here).
+		return status.Error(code, msgInternalServerError)
 	}
 	// Context cancellation / deadline are NORMAL outcomes (client cancel, graceful
 	// drain via StreamDrain, per-RPC timeout) — NOT server failures. Map them to the
@@ -142,17 +166,144 @@ func errToStatus(err error) error {
 	return status.Error(codes.Internal, msgInternalServerError)
 }
 
-// buildStatusMessage returns the wire-safe message for an errcode.Error.
-// Client errors (4xx) carry the const errcode message; server errors (5xx)
-// use the generic message to prevent leaking internal state.
-func buildStatusMessage(ec *errcode.Error) string {
-	if ec.Kind.IsClient() {
-		// 4xx: the errcode message is a const literal (MESSAGE-CONST-LITERAL-01),
-		// safe to forward to the client.
-		return ec.Message
+// clientStatusWithDetails builds a gRPC status for a 4xx *errcode.Error, forwarding
+// PublicDetails in a google.rpc.ErrorInfo.Metadata field (#2482). This constructor
+// is ONLY called when ec.Kind.IsClient() == true (enforced at the errToStatus call
+// site) — the split-constructor design (typed function choice, HARD) makes 5xx-details
+// carry structurally inexpressible: the 5xx path calls status.Error directly with no
+// ErrorInfo parameter.
+//
+// ErrorInfo fields:
+//   - Reason: string(ec.Code) — the machine-readable errcode, stable across releases.
+//   - Domain: errcodeDomain ("gocell.errcode") — distinct from denyReasonDomain
+//     ("gocell.authz.grpc") so clients can key on (Domain, Reason) to separate
+//     business errors from auth/authz denials.
+//   - Metadata: key→rendered-value from ec.Details (nil when no details — guard
+//     prevents attaching an empty ErrorInfo, per §no-empty-detail rule).
+//
+// Metadata value rendering: publicDetailsToMetadata (see its godoc for semantics).
+// If attaching the ErrorInfo detail fails (not expected — ErrorInfo is a static proto),
+// the bare status is returned: a denial is never downgraded to a lower-level error.
+func clientStatusWithDetails(code codes.Code, ec *errcode.Error) error {
+	st := status.New(code, ec.Message)
+	md := publicDetailsToMetadata(ec)
+	if len(md) == 0 {
+		// No PublicDetails — do not attach an empty ErrorInfo.
+		return st.Err()
 	}
-	// 5xx: never leak internal details to the wire.
-	return msgInternalServerError
+	enriched, err := st.WithDetails(&errdetails.ErrorInfo{
+		Reason:   string(ec.Code),
+		Domain:   errcodeDomain,
+		Metadata: md,
+	})
+	if err != nil {
+		// WithDetails failure is unexpected (ErrorInfo is a well-known proto type).
+		// Fall back to the bare status so a 4xx denial is never silently promoted
+		// to a lower-level error.
+		return st.Err()
+	}
+	return enriched.Err()
+}
+
+// publicDetailsToMetadata converts the PublicDetails of a 4xx *errcode.Error into a
+// map[string]string suitable for google.rpc.ErrorInfo.Metadata. Returns nil when
+// ec.Details is empty or all entries are zero-value (caller must not attach an
+// empty-Metadata ErrorInfo).
+//
+// Zero-value / empty-key details are skipped: errcode.Error.Details is an exported
+// []PublicDetail slice (known bypass surface; see details.go godoc), so external code
+// can append zero-value PublicDetail{} structs that bypass the WithDetails valid()
+// filter. Skipping entries with Key()==""  is the projection-side defense so that
+// such entries never reach the Metadata map.
+//
+// Value rendering is aligned with HTTP marshalJSONValue semantics so clients that
+// consume both HTTP and gRPC surfaces receive equivalent structured values:
+//
+//   - PublicString: raw string value (no JSON quoting — Metadata values are already
+//     strings; quoting would double-encode them, unlike the HTTP JSON body context).
+//   - PublicInt: decimal integer string (json.Marshal(int64) → "42").
+//   - PublicBool: "true" / "false" (json.Marshal(bool)).
+//   - PublicDuration: nanosecond integer string (json.Marshal(int64(d)) matches
+//     publicDuration.marshalJSONValue which uses json.Marshal(int64(p.v))).
+//   - PublicTime: RFC3339Nano string, UNquoted (e.g. "2024-01-02T03:04:05Z") — the
+//     same instant publicTime.marshalJSONValue encodes, minus the structural JSON quotes.
+//
+// String and time values are intentionally NOT JSON-marshaled: marshalJSONValue adds
+// surrounding JSON quotes (appropriate for the HTTP response body JSON context), but in
+// a map[string]string the value IS the string — quoting would produce "\"device_id\""
+// instead of "device_id", breaking symmetric decoding. Numeric/bool details have no such
+// quotes, so json.Marshal is used directly for them.
+func publicDetailsToMetadata(ec *errcode.Error) map[string]string {
+	if len(ec.Details) == 0 {
+		return nil
+	}
+	md := make(map[string]string, len(ec.Details))
+	for _, d := range ec.Details {
+		if d.Key() == "" {
+			// Skip zero-value / empty-key details — defense against external code
+			// directly appending to the exported Details slice, bypassing WithDetails
+			// valid() filtering. An empty key is meaningless in Metadata and would
+			// produce an ill-formed ErrorInfo entry.
+			continue
+		}
+		v := renderDetailValue(d)
+		md[d.Key()] = v
+	}
+	if len(md) == 0 {
+		return nil
+	}
+	return md
+}
+
+// renderDetailValue converts a PublicDetail value to its Metadata string
+// representation, aligned with HTTP marshalJSONValue semantics (see
+// publicDetailsToMetadata godoc for the full mapping rationale).
+//
+// Explicit type cases mirror the five concrete publicValue implementations in
+// errcode/details.go (publicString, publicInt, publicBool, publicDuration,
+// publicTime) via their rawAny() return types. The default falls back to
+// fmt.Sprintf("%v", v) so that future additions produce a traceable string
+// rather than a silent empty value.
+//
+// Value semantics (aligned with HTTP marshalJSONValue):
+//   - string: raw value, no JSON quoting (Metadata values are strings, not JSON bodies).
+//   - int64: decimal string ("42") — same as json.Marshal(int64), no quotes.
+//   - bool: "true" / "false" — same as json.Marshal(bool), no quotes.
+//   - time.Duration: nanosecond integer string — matches publicDuration.marshalJSONValue
+//     (json.Marshal(int64(d))); no quotes.
+//   - time.Time: RFC3339Nano, UNquoted — same instant as publicTime.marshalJSONValue,
+//     minus the structural JSON quotes which belong to the HTTP body context.
+func renderDetailValue(d errcode.PublicDetail) string {
+	raw := d.Value()
+	switch v := raw.(type) {
+	case string:
+		// Raw string — no JSON quoting (Metadata values are strings, not JSON bodies).
+		return v
+	case int64:
+		// Decimal integer — matches json.Marshal(int64), no surrounding quotes.
+		return strconv.FormatInt(v, 10)
+	case bool:
+		// "true" / "false" — matches json.Marshal(bool), no surrounding quotes.
+		return strconv.FormatBool(v)
+	case time.Duration:
+		// Nanosecond integer string — matches publicDuration.marshalJSONValue
+		// (json.Marshal(int64(p.v))), aligned with HTTP marshalJSONValue.
+		return strconv.FormatInt(int64(v), 10)
+	case time.Time:
+		// RFC3339Nano, UNquoted — same instant json.Marshal(time.Time) encodes, but
+		// without the surrounding JSON quotes. In a map[string]string the value IS the
+		// string; embedding json.Marshal's "\"...\"" would put literal quote chars in
+		// the Metadata value, inconsistent with the string case above (which strips
+		// them). The instant matches HTTP's publicTime.marshalJSONValue; only the
+		// structural JSON quotes differ (they belong to the HTTP body, not a flat map).
+		return v.Format(time.RFC3339Nano)
+	default:
+		// Future new PublicDetail kinds: produce a traceable string via %v so
+		// the value is not silently lost. This is preferable to an empty string
+		// or a panic — the operator can observe the rendering and update the
+		// explicit cases above.
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // UnaryErrcodeMap returns a unary server interceptor that maps the handler's

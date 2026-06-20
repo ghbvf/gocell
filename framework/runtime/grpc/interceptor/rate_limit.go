@@ -23,12 +23,16 @@ package interceptor
 
 import (
 	"context"
+	"log/slog"
 	"net"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/ghbvf/gocell/framework/pkg/observability"
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // RateLimiter is the narrow interface for per-key rate limiting.
@@ -72,14 +76,27 @@ func peerKey(ctx context.Context) string {
 // When limiter is nil the interceptor is a transparent pass-through (opt-in
 // protection: deployers that have not configured a rate-limiter should not be
 // penalized).
-func UnaryRateLimit(limiter RateLimiter) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+//
+// collector and validCellIDs are used to emit grpc_protection_rejected_total on
+// deny: the cell label is resolved from ctx via the sealed ResolveCellLabel funnel,
+// mirroring UnaryMetrics. collector must be non-nil when limiter is non-nil —
+// callers must not pass a typed-nil collector (the chain builder validates this
+// via NewServerInterceptors).
+func UnaryRateLimit(limiter RateLimiter, collector metrics.GRPCCollector, validCellIDs map[string]struct{}) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if limiter == nil {
 			// nil limiter: opt-in protection not configured; pass through.
 			return handler(ctx, req)
 		}
 		key := peerKey(ctx)
 		if !limiter.Allow(key) {
+			// Emit protection metric before returning the error. SafeObserve
+			// guards against a nil or panicking collector without altering the
+			// request path. No PII (no key/peer) enters the metric label.
+			observability.SafeObserve(slog.Default(), func() {
+				cell := metrics.ResolveCellLabel(ctx, validCellIDs)
+				collector.RecordProtectionRejection(ctx, cell, info.FullMethod, metrics.ProtectionRateLimit())
+			})
 			return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 		}
 		return handler(ctx, req)
@@ -92,14 +109,22 @@ func UnaryRateLimit(limiter RateLimiter) grpc.UnaryServerInterceptor {
 // Note: this interceptor gates at stream ESTABLISHMENT only — one Allow() call
 // per stream open. Per-message flow control (allowing/denying individual messages
 // within an established stream) is out of scope and tracked separately.
-func StreamRateLimit(limiter RateLimiter) grpc.StreamServerInterceptor {
-	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+//
+// collector and validCellIDs mirror UnaryRateLimit: emit grpc_protection_rejected_total
+// on deny. The cell is resolved from the stream context.
+func StreamRateLimit(limiter RateLimiter, collector metrics.GRPCCollector, validCellIDs map[string]struct{}) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if limiter == nil {
 			// nil limiter: opt-in protection not configured; pass through.
 			return handler(srv, ss)
 		}
 		key := peerKey(ss.Context())
 		if !limiter.Allow(key) {
+			ctx := ss.Context()
+			observability.SafeObserve(slog.Default(), func() {
+				cell := metrics.ResolveCellLabel(ctx, validCellIDs)
+				collector.RecordProtectionRejection(ctx, cell, info.FullMethod, metrics.ProtectionRateLimit())
+			})
 			return status.Error(codes.ResourceExhausted, "rate limit exceeded")
 		}
 		return handler(srv, ss)

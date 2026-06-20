@@ -775,6 +775,21 @@ func (sp *scanPackage) grpcProviderCollectorEntries(call *ast.CallExpr, rel stri
 	if err != nil {
 		return nil, err
 	}
+	// Single-source the grpc_protection_rejected_total `type` label value set from
+	// runtime/observability/metrics ProtectionType accessor functions, statically
+	// resolved here so the golden byte-locks them (Hard freeze, mirrors #1674 for
+	// outbox_relayed_total). The accessor return values are AST-resolved from the
+	// direct import of runtimeMetricsPkg: ProtectionRateLimit() → "ratelimit",
+	// ProtectionCircuit() → "circuit". Adding a 3rd accessor without regenerating
+	// the golden surfaces as a golden drift — Hard.
+	typeValues := sp.resolveProtectionTypeAccessorValues(runtimeMetricsPkg)
+	if len(typeValues) == 0 {
+		return nil, sp.unresolved(call, rel,
+			"grpc_protection_rejected_total `type` label value set unresolved from "+
+				runtimeMetricsPkg+" (ProtectionType accessors): renamed/removed, or this "+
+				"call's package no longer directly imports "+runtimeMetricsPkg+
+				" — cannot byte-lock the frozen value set")
+	}
 	labels := []string{"method", "code", "cell"}
 	return []Entry{
 		sp.entryFromOpts("counter", opts{
@@ -790,7 +805,156 @@ func (sp *scanPackage) grpcProviderCollectorEntries(call *ast.CallExpr, rel stri
 			labels:    labels,
 			buckets:   buckets,
 		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
+			name:        "grpc_protection_rejected_total",
+			namespace:   sp.namespace,
+			help:        "Total gRPC requests rejected by a protection interceptor (rate-limit / circuit-breaker).",
+			labels:      []string{"type", "method", "cell"},
+			labelValues: map[string][]string{"type": typeValues},
+		}, rel, call.Pos()),
 	}, nil
+}
+
+// resolveProtectionTypeAccessorValues finds all exported, no-parameter functions
+// in pkgPath that return a ProtectionType struct and extracts the string literal
+// stored in the v field of the returned composite literal. This mirrors the logic
+// in tools/archtest/grpc_protection_label_test.go's resolveProtectionAccessorValue,
+// but operates on the packages.Package (with Syntax and TypesInfo) reachable via
+// sp.pkg.Imports rather than a Pass. Returns the values sorted so the golden is
+// deterministic; returns nil when the package is absent or no values are found —
+// callers must fail loud on empty (same contract as resolveEnumStringConsts).
+func (sp *scanPackage) resolveProtectionTypeAccessorValues(pkgPath string) []string {
+	if sp.pkg == nil || sp.pkg.Types == nil {
+		return nil
+	}
+	tpkg := importedTypesPackage(sp.pkg.Types, pkgPath)
+	if tpkg == nil {
+		return nil
+	}
+	nameSet := protectionTypeAccessorNameSet(tpkg)
+	if len(nameSet) == 0 {
+		return nil
+	}
+	syntaxPkg := protectionSyntaxPackage(sp.pkg, pkgPath)
+	if syntaxPkg == nil {
+		return nil
+	}
+	vals := extractProtectionAccessorValues(syntaxPkg.Syntax, nameSet)
+	sort.Strings(vals)
+	return vals
+}
+
+// protectionTypeAccessorNameSet collects the names of exported, no-parameter
+// functions in tpkg whose sole return type is "ProtectionType". Returns a set
+// (map value is unused) for O(1) lookup; returns nil when none found.
+func protectionTypeAccessorNameSet(tpkg *types.Package) map[string]bool {
+	const protectionTypeName = "ProtectionType"
+	tn, ok := tpkg.Scope().Lookup(protectionTypeName).(*types.TypeName)
+	if !ok {
+		return nil
+	}
+	ptypeType := tn.Type()
+	nameSet := make(map[string]bool)
+	for _, name := range tpkg.Scope().Names() {
+		fn, ok := tpkg.Scope().Lookup(name).(*types.Func)
+		if !ok {
+			continue
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 1 {
+			continue
+		}
+		if types.Identical(sig.Results().At(0).Type(), ptypeType) {
+			nameSet[name] = true
+		}
+	}
+	return nameSet
+}
+
+// protectionSyntaxPackage returns the *packages.Package for pkgPath reachable
+// from root (root itself or one of its direct Imports). Returns nil when absent
+// or when no Syntax files are loaded.
+func protectionSyntaxPackage(root *packages.Package, pkgPath string) *packages.Package {
+	if root.PkgPath == pkgPath {
+		if len(root.Syntax) > 0 {
+			return root
+		}
+		return nil
+	}
+	p := root.Imports[pkgPath]
+	if p == nil || len(p.Syntax) == 0 {
+		return nil
+	}
+	return p
+}
+
+// extractProtectionAccessorValues walks the given AST files and returns the
+// string literal values found in function bodies whose names appear in nameSet.
+func extractProtectionAccessorValues(files []*ast.File, nameSet map[string]bool) []string {
+	var vals []string
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || !nameSet[fn.Name.Name] {
+				continue
+			}
+			if val := extractProtectionTypeReturnValue(fn.Body); val != "" {
+				vals = append(vals, val)
+			}
+		}
+	}
+	return vals
+}
+
+// extractProtectionTypeReturnValue scans a function body for the first return
+// statement that is a ProtectionType composite literal and returns the string
+// value of the v field (keyed form {v: "..."}) or first positional element
+// ({"..."}). Returns "" when no matching literal is found.
+func extractProtectionTypeReturnValue(body *ast.BlockStmt) string {
+	for _, stmt := range body.List {
+		ret, ok := stmt.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 1 {
+			continue
+		}
+		cl, ok := ret.Results[0].(*ast.CompositeLit)
+		if !ok {
+			continue
+		}
+		if v := compositeLitStringV(cl); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// compositeLitStringV extracts the string value of the "v" field from a
+// composite literal — keyed form {v: "..."} — or the first positional element
+// {"..."}. Returns "" when neither form is present.
+func compositeLitStringV(cl *ast.CompositeLit) string {
+	// Keyed form: ProtectionType{v: "ratelimit"}.
+	for _, elt := range cl.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "v" {
+			continue
+		}
+		lit, ok := kv.Value.(*ast.BasicLit)
+		if !ok {
+			continue
+		}
+		return strings.Trim(lit.Value, `"`)
+	}
+	// Positional form: ProtectionType{"ratelimit"}.
+	if len(cl.Elts) == 1 {
+		lit, ok := cl.Elts[0].(*ast.BasicLit)
+		if ok {
+			return strings.Trim(lit.Value, `"`)
+		}
+	}
+	return ""
 }
 
 func (sp *scanPackage) providerConfigEventCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {

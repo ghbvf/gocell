@@ -91,28 +91,73 @@ only package in the runtime allowed to import both `pkg/errcode` and
 `google.golang.org/grpc/codes`. Locating it here enforces the `pkg/errcode ⊥ grpc`
 constraint structurally (depguard) rather than by documentation.
 
-### D3 — 4xx vs 5xx redaction parity with HTTP
+### D3 — 4xx vs 5xx redaction parity with HTTP (#2479 message-only fail-safe → #2482 delayed completion)
 
 The `ErrcodeMap` interceptor applies the same redaction discipline as the HTTP
-`httputil` 5xx projection:
+`httputil` 5xx projection. PR-12 (#2479) shipped a message-only fail-safe (4xx
+forwarded only the errcode message, not PublicDetails). #2482 completes the parity:
 
 - **4xx-equivalent errors** (`Kind.IsClient()` returns true): the `errcode.Error.Message`
-  is forwarded on the wire as the gRPC status message. **Note**: `WithDetails` public attrs
-  are intentionally NOT carried in `google.rpc.Status.Details` today — only the message is
-  forwarded (fail-safe default while the structured-detail encoding is unspecified).
-  4xx-details parity with HTTP is tracked in **#2482**.
+  is forwarded as the gRPC status message (const literal, MESSAGE-CONST-LITERAL-01),
+  and `WithDetails` PublicDetail attributes are forwarded in a `google.rpc.ErrorInfo`
+  detail embedded in `google.rpc.Status.Details`:
+  - `ErrorInfo.Reason` = `string(ec.Code)` (machine-readable, stable across releases).
+  - `ErrorInfo.Domain` = `errcodeDomain` (`"gocell.errcode"`) — distinct from
+    `denyReasonDomain` (`"gocell.authz.grpc"`) so gRPC clients can distinguish a
+    business 4xx ErrorInfo from an auth/authz denial ErrorInfo by keying on
+    (Domain, Reason) without parsing the English message.
+  - `ErrorInfo.Metadata` = key→rendered-value map, value rendering aligned with HTTP
+    `marshalJSONValue` semantics: PublicString → raw string; PublicInt/Bool/Duration →
+    `json.Marshal(scalar)` decimal/boolean/nanosecond-integer string; PublicTime →
+    RFC3339Nano string, unquoted (same instant as `json.Marshal(time.Time)`, minus the
+    structural JSON quotes — a `map[string]string` value is the string itself, so
+    string and time values omit the JSON quotes the HTTP body context would carry).
+  - When `ec.Details` is empty, no ErrorInfo is attached (no spurious empty-Metadata
+    detail on the wire).
+
 - **5xx-equivalent errors** (`!Kind.IsClient()`): the wire message is replaced with a
-  generic constant literal; `WithDetails` public attrs are stripped. Only
-  `WithInternal(InternalAttr)` data reaches server-side `slog`, never the wire.
+  generic constant literal; all `WithDetails` PublicDetail attributes are stripped.
+  Only `WithInternal(InternalAttr)` data reaches server-side `slog`, never the wire.
 
 This is the same PII discipline documented in
 `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`, applied to the gRPC
 transport surface.
 
+**Security rationale for the D3 amendment (ai-robust.md ADR amendment clause)**:
+
+1. **5xx-no-details invariant — HARD (split-constructor, typed function choice)**: The
+   5xx path in `errToStatus` calls `status.Error(code, msgInternalServerError)` directly —
+   there is no ErrorInfo parameter at the call site. `clientStatusWithDetails` is a
+   separate function that accepts a `*errcode.Error` and is ONLY called on the
+   `ec.Kind.IsClient()` branch. Making 5xx-details carry structurally inexpressible in
+   Go's type system (both callsites are in the same `if/else` — a future AI or dev would
+   have to actively add a second `clientStatusWithDetails` call on the 5xx branch).
+
+2. **PublicDetail is the errcode 4xx-safe projection surface**: `error-handling.md` §Message
+   と PII documents that `WithDetails(PublicString/…)` attrs are "4xx 可下发 / 5xx strip".
+   PublicDetails are already the errcode-defined safe projection for client error surfaces;
+   forwarding them in gRPC ErrorInfo.Metadata is not a new trust decision — it extends the
+   existing errcode contract to the gRPC transport.
+
+3. **Domain separation prevents client confusion**: `errcodeDomain` (`"gocell.errcode"`)
+   vs `denyReasonDomain` (`"gocell.authz.grpc"`) ensures a client keying on the Domain
+   field of an incoming ErrorInfo cannot confuse a business validation error with an
+   auth/authz denial. Same response path cannot carry both: an auth denial returns an
+   already-status error (codes ≠ Unknown), which `errToStatus` passes through unchanged
+   (the `status.FromError` guard), so `errToStatus` never generates an errcode ErrorInfo
+   for a request that already received an auth denial ErrorInfo.
+
+4. **No conflict with auth `deniedStatus` ErrorInfo**: A single response carries at most
+   one ErrorInfo: either the auth interceptor's denial (returned as an already-status
+   error that bypasses `errToStatus`) or the errcode mapping's business 4xx ErrorInfo
+   (the non-status path). The two producers are mutually exclusive by the
+   `codes != Unknown` pass-through guard.
+
 Enforcement: archtest **GRPC-ERRCODE-MAPPING-01** (Medium, permanent Go ceiling) verifies
 exhaustive coverage of every `errcode.Kind` value against the mapping table and asserts
 that 5xx-class codes produce a redacted generic message. The exhaustiveness check catches
-future `Kind` additions at CI.
+future `Kind` additions at CI. The 5xx-no-details invariant is HARD (split-constructor,
+no archtest needed — the type system enforces it).
 
 ### D4 — RateLimit and CircuitBreaker interceptors (opt-in via Deps)
 
@@ -205,7 +250,7 @@ Go ceiling, not eliminable without restructuring `errcode.Kind` itself).
 | Concern | Assessment |
 |---|---|
 | Wire / schema break | The `Unknown` → mapped-codes transition is a correction for zero external consumers (pre-GA window). Future mapping changes are irreversible; the exhaustiveness archtest catches gaps at CI. |
-| PII / redaction | 5xx messages are const literals; `WithInternal` data never reaches gRPC trailers. The same `DETAILS-SEALED-FIELD-FROZEN-01` + `MESSAGE-CONST-LITERAL-01` guards that protect HTTP apply at the interceptor layer. |
+| PII / redaction | 5xx messages are const literals; `WithInternal` data never reaches gRPC trailers. The same `DETAILS-SEALED-FIELD-FROZEN-01` + `MESSAGE-CONST-LITERAL-01` guards that protect HTTP apply at the interceptor layer. 4xx `PublicDetails` are forwarded in `ErrorInfo.Metadata` (Domain=`errcodeDomain`); `PublicDetail` is the errcode-defined 4xx-safe projection surface (error-handling.md §PII). 5xx-no-details is HARD via split-constructor (typed function choice, no archtest needed). See D3 §Security rationale. |
 | Layering (`pkg/errcode ⊥ grpc`) | Enforced by depguard; the mapping lives entirely in `runtime/grpc/interceptor/` (legal to import both). |
 | AI-robustness | Exhaustiveness: Medium (GRPC-ERRCODE-MAPPING-01 typed scan catches missing Kind entries; permanent Go ceiling). Redaction parity: same carrier as HTTP (existing Hard/Medium guards). Chain-presence: Hard (existing #1752 guards, no new mechanism needed). |
 | RateLimit / CircuitBreaker opt-in | nil Deps fields = passthrough (safe default). Composition roots that do NOT wire a limiter/breaker are correct, not misconfigurations. |

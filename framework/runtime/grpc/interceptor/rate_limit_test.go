@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
 
 // stubRateLimiter is a configurable RateLimiter for tests.
@@ -39,6 +41,11 @@ func ctxWithPeer(addr string) context.Context {
 	})
 }
 
+// noopCollector wraps InMemoryGRPCCollector for tests that don't assert on metrics.
+func noopCollector() metrics.GRPCCollector {
+	return metrics.NewInMemoryGRPCCollector()
+}
+
 // ─── Unary ──────────────────────────────────────────────────────────────────
 
 func TestUnaryRateLimit_NilLimiter_Passthrough(t *testing.T) {
@@ -46,7 +53,7 @@ func TestUnaryRateLimit_NilLimiter_Passthrough(t *testing.T) {
 	t.Parallel()
 	handlerCalled := false
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryRateLimit(nil)(context.Background(), nil, info, func(_ context.Context, _ any) (any, error) {
+	_, err := UnaryRateLimit(nil, noopCollector(), nil)(context.Background(), nil, info, func(_ context.Context, _ any) (any, error) {
 		handlerCalled = true
 		return "ok", nil
 	})
@@ -62,7 +69,7 @@ func TestUnaryRateLimit_Allow_HandlerCalled(t *testing.T) {
 	t.Parallel()
 	handlerCalled := false
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryRateLimit(stubRateLimiter{allow: true})(
+	_, err := UnaryRateLimit(stubRateLimiter{allow: true}, noopCollector(), nil)(
 		ctxWithPeer("192.0.2.1"), nil, info, func(_ context.Context, _ any) (any, error) {
 			handlerCalled = true
 			return "ok", nil
@@ -79,7 +86,7 @@ func TestUnaryRateLimit_Allow_HandlerCalled(t *testing.T) {
 func TestUnaryRateLimit_Deny_ResourceExhausted(t *testing.T) {
 	t.Parallel()
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryRateLimit(stubRateLimiter{allow: false})(
+	_, err := UnaryRateLimit(stubRateLimiter{allow: false}, noopCollector(), nil)(
 		ctxWithPeer("192.0.2.1"), nil, info, func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when rate-limited")
 			return "unreachable", errors.New("unreachable")
@@ -99,7 +106,7 @@ func TestUnaryRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
 	var capturedKey string
 	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, _ = UnaryRateLimit(limiter)(ctxWithPeer("10.0.0.1"), nil, info,
+	_, _ = UnaryRateLimit(limiter, noopCollector(), nil)(ctxWithPeer("10.0.0.1"), nil, info,
 		func(_ context.Context, _ any) (any, error) { return "ok", nil })
 	// Exact key: the port (12345 from ctxWithPeer) must be stripped, leaving the IP.
 	if capturedKey != "10.0.0.1" {
@@ -114,7 +121,7 @@ func TestUnaryRateLimit_NoPeer_StableFallback(t *testing.T) {
 	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	called := false
-	_, _ = UnaryRateLimit(limiter)(context.Background(), nil, info,
+	_, _ = UnaryRateLimit(limiter, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { called = true; return "ok", nil })
 	if !called {
 		t.Fatal("handler not called (no-peer path should allow when limiter allows)")
@@ -131,7 +138,7 @@ func TestStreamRateLimit_NilLimiter_Passthrough(t *testing.T) {
 	handlerCalled := false
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: context.Background()}
-	err := StreamRateLimit(nil)(nil, ss, info, func(_ any, _ grpc.ServerStream) error {
+	err := StreamRateLimit(nil, noopCollector(), nil)(nil, ss, info, func(_ any, _ grpc.ServerStream) error {
 		handlerCalled = true
 		return nil
 	})
@@ -147,7 +154,7 @@ func TestStreamRateLimit_Deny_ResourceExhausted(t *testing.T) {
 	t.Parallel()
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: ctxWithPeer("192.0.2.2")}
-	err := StreamRateLimit(stubRateLimiter{allow: false})(nil, ss, info,
+	err := StreamRateLimit(stubRateLimiter{allow: false}, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error {
 			t.Fatal("handler must not be called when rate-limited")
 			return errors.New("unreachable")
@@ -165,7 +172,7 @@ func TestStreamRateLimit_Allow_HandlerCalled(t *testing.T) {
 	handlerCalled := false
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: ctxWithPeer("192.0.2.2")}
-	err := StreamRateLimit(stubRateLimiter{allow: true})(nil, ss, info,
+	err := StreamRateLimit(stubRateLimiter{allow: true}, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { handlerCalled = true; return nil })
 	if err != nil {
 		t.Fatalf("allow: unexpected error: %v", err)
@@ -182,7 +189,7 @@ func TestStreamRateLimit_PeerKeyExtraction_StripPort(t *testing.T) {
 	limiter := capturingLimiter{allow: true, captureKey: &capturedKey}
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: ctxWithPeer("10.0.0.2")}
-	_ = StreamRateLimit(limiter)(nil, ss, info, func(_ any, _ grpc.ServerStream) error { return nil })
+	_ = StreamRateLimit(limiter, noopCollector(), nil)(nil, ss, info, func(_ any, _ grpc.ServerStream) error { return nil })
 	// Exact key: port stripped, leaving the stream peer IP.
 	if capturedKey != "10.0.0.2" {
 		t.Errorf("stream rate-limit key = %q, want %q (port stripped)", capturedKey, "10.0.0.2")
@@ -197,7 +204,7 @@ func TestStreamRateLimit_NoPeer_StableFallback(t *testing.T) {
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &rateLimitFakeStream{ctx: context.Background()}
 	called := false
-	_ = StreamRateLimit(limiter)(nil, ss, info, func(_ any, _ grpc.ServerStream) error {
+	_ = StreamRateLimit(limiter, noopCollector(), nil)(nil, ss, info, func(_ any, _ grpc.ServerStream) error {
 		called = true
 		return nil
 	})

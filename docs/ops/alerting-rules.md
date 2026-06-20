@@ -96,10 +96,56 @@ PR-12 落地后，handler 返回的 `*errcode.Error` 在 wire 上从 `codes.Unkn
   而特定 code（如 `Internal`、`InvalidArgument`）的率上升。建议将错误率告警改为
   `{code=~"Internal|Unknown"}` 或按需拆成 per-code 告警，避免 SLO 基线静默漂移。
 - **RateLimit deny → `{code="ResourceExhausted"}`**（opt-in，仅在 `Deps.RateLimiter`
-  非 nil 时生效）。
+  非 nil 时生效）。启用 `Deps.RateLimiter` 后，`ResourceExhausted` 将同时包含限流保护
+  拒绝流量与业务 errcode `KindPayloadTooLarge`/`KindRateLimited`。若已有以
+  `{code="ResourceExhausted"}` 为非告警码（即不计入错误率）的 SLO，需同步调整阈值；
+  或使用 `gocell_grpc_protection_rejected_total{type="ratelimit"}` 独立计数，与业务层
+  `ResourceExhausted` 分开统计，避免保护拒绝流量污染业务 SLO 基线。
 - **CircuitBreaker open → `{code="Unavailable"}`**（opt-in，仅在 `Deps.Allower` 非 nil
-  时生效）。两者目前无专用指标或结构化日志，追踪于 **#2485**；断路器打开导致的
-  `Unavailable` 尖峰是预期行为，不代表服务不可用。
+  时生效）。断路器打开导致的 `Unavailable` 尖峰是预期行为，不代表服务不可用。
+  两者现均有专用拒绝计数器，见下文 §gRPC 保护拒绝计数器。
+
+## gRPC 保护拒绝计数器
+
+`gocell_grpc_protection_rejected_total{type, method, cell}` 记录被保护拦截器
+拒绝的 gRPC 请求次数。`type` label 闭值集：
+
+| `type` | 来源 | 触发条件 |
+|--------|------|----------|
+| `ratelimit` | `Deps.RateLimiter`（opt-in） | `Allow(key)` 返回 false |
+| `circuit` | `Deps.Allower`（opt-in） | `Allow()` 返回 false（断路器 open） |
+
+Label 语义：
+
+| label | 含义 |
+|-------|------|
+| `type` | 拒绝来源（`ratelimit` / `circuit`），由 sealed `ProtectionType` 写入，值集冻结 |
+| `method` | gRPC full method（如 `/pkg.Svc/Method`） |
+| `cell` | 路由归属 cell ID，或 `_runtime`（框架路径），来自 assembly 声明的 closed set |
+
+**告警建议**：
+
+```yaml
+# 限流拒绝率持续高于阈值（5 分钟窗口），可能表示客户端流量突增或限流参数偏紧
+- alert: GRPCRateLimitHighRejectionRate
+  expr: |
+    rate(gocell_grpc_protection_rejected_total{type="ratelimit"}[5m]) > 10
+  for: 5m
+  labels:
+    severity: warning
+
+# 断路器连续打开（5 分钟内有持续 circuit 拒绝），可能表示下游依赖持续不可用
+- alert: GRPCCircuitBreakerOpen
+  expr: |
+    rate(gocell_grpc_protection_rejected_total{type="circuit"}[5m]) > 0
+  for: 5m
+  labels:
+    severity: warning
+```
+
+注意：断路器打开期间 `grpc_server_requests_total{code="Unavailable"}` 也会上升，
+但 `grpc_protection_rejected_total{type="circuit"}` 更精确地区分了"保护拒绝"与
+"服务真正不可用"两类 `Unavailable` 原因，告警时可结合两个指标综合判断。
 
 ## HTTP Body-Limit 拒绝计数器
 
