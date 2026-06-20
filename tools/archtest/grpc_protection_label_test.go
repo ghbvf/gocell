@@ -332,6 +332,28 @@ func TestGRPCProtectionRejectedTypeLabelValuesFrozen01_CallsiteGuard(t *testing.
 	Report(t, "GRPC-PROTECTION-REJECTED-TYPE-LABEL-VALUES-FROZEN-01", allDiags)
 }
 
+// TestGRPCProtectionRejectedTypeLabelValuesFrozen01_CallsiteGuard_NegativeControl
+// proves the A2 scanner is non-vacuous: a callsite that passes a ProtectionType
+// variable (not a direct accessor call) to RecordProtectionRejection MUST
+// produce at least one diagnostic. The fixture in
+// testdata/grpc_protection_callsite_fixtures/red_literal/ uses a variable relay
+// (ptype := metrics.ProtectionRateLimit(); then passes ptype) — the call-site
+// argument is an *ast.Ident, not an *ast.CallExpr, so isProtectionAccessorCall
+// returns false and the scanner flags it. This is the documented A2 blind spot
+// (variable relay is accepted by the Hard upstream seal but rejected here for
+// explicitness at the call site).
+func TestGRPCProtectionRejectedTypeLabelValuesFrozen01_CallsiteGuard_NegativeControl(t *testing.T) {
+	t.Parallel()
+
+	pattern := "./tools/archtest/testdata/grpc_protection_callsite_fixtures/red_literal"
+	diags := Run(t, Fixture(FixtureOpts{}, []string{pattern}), scanProtectionEmitCallsites)
+	if len(diags) == 0 {
+		t.Fatal("GRPC-PROTECTION-REJECTED-TYPE-LABEL-VALUES-FROZEN-01 callsite guard negative control: " +
+			"the red_literal fixture produced 0 diagnostics — the A2 scanner is vacuous and would not " +
+			"catch a non-accessor ptype argument at a RecordProtectionRejection callsite")
+	}
+}
+
 // TestGRPCProtectionRejectedTypeLabelValuesFrozen01_NegativeControl proves the
 // A1 comparison is non-vacuous: a synthetically drifted set (a 3rd value, or a
 // renamed value) MUST produce a non-empty diff.

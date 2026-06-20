@@ -320,6 +320,10 @@ metrics:
         - type
         - method
         - cell
+      labelValues:
+        type:
+            - circuit
+            - ratelimit
       file: cmd/corebundle/run.go
     - name: grpc_server_request_duration_seconds
       fqName: gocell_grpc_server_request_duration_seconds
