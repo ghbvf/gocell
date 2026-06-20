@@ -18,6 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/httputil"
 	"github.com/ghbvf/gocell/framework/pkg/tenant"
 )
 
@@ -44,7 +45,7 @@ import (
 // produce an invalid tenant parse error, so no policy evaluation is reached.
 type SubjectDescriptor struct {
 	kind   string // principal kind string, e.g. PrincipalDevice.String()
-	sub    string // subject identifier (e.g. device UUID)
+	sub    string // subject identifier (canonical lowercase UUID for a UUID sub)
 	tenant string // canonical (lowercase) tenant UUID string
 }
 
@@ -52,7 +53,9 @@ type SubjectDescriptor struct {
 // Returns an empty string for the zero SubjectDescriptor.
 func (d SubjectDescriptor) Kind() string { return d.kind }
 
-// Sub returns the subject identifier (e.g. device UUID).
+// Sub returns the subject identifier. For a UUID sub it is the canonical
+// lowercase form (normalized by NewDeviceSubjectDescriptor) so it matches the
+// resource side of the PDP ownership rule (subject.sub == resource.id).
 // Returns an empty string for the zero SubjectDescriptor.
 func (d SubjectDescriptor) Sub() string { return d.sub }
 
@@ -77,7 +80,10 @@ const errMsgTenantInvalidForDescriptor = "subject-descriptor: tenantID is invali
 //     lowercase canonical form by tenant.ParseTenantID. Fails-closed on
 //     invalid input.
 //   - deviceID: non-empty device identifier (sub). Must be non-empty.
-//     Fails-closed with KindInvalid on empty input.
+//     Fails-closed with KindInvalid on empty input. A UUID device id is
+//     normalized to lowercase canonical form (httputil.ParseCanonicalUUID) so
+//     subject.sub matches the resource side of the PDP ownership rule; a
+//     non-UUID id passes through unchanged.
 //
 // Returns a zero SubjectDescriptor and a non-nil error on any validation
 // failure. The caller must check the error before using the descriptor.
@@ -98,9 +104,20 @@ func NewDeviceSubjectDescriptor(tenantID, deviceID string) (SubjectDescriptor, e
 			err,
 		)
 	}
+	// Canonicalize a UUID device sub to lowercase canonical form so the sealed
+	// descriptor's Sub() matches the resource.id the PDP ownership rule compares
+	// it against: pdpauthz canonicalizes the resource side with the same
+	// httputil.ParseCanonicalUUID, mirroring the HTTP RequirePermissionForResource
+	// path. Doing it at this single sealed mint point makes "descriptor.Sub() is
+	// canonical" true by construction — descriptorSubjectSource needs no defensive
+	// re-canonicalization. A non-UUID sub passes through unchanged.
+	sub := deviceID
+	if canonical, ok := httputil.ParseCanonicalUUID(sub); ok {
+		sub = canonical
+	}
 	return SubjectDescriptor{
 		kind:   PrincipalDevice.String(),
-		sub:    deviceID,
+		sub:    sub,
 		tenant: tid.String(),
 	}, nil
 }

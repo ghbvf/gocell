@@ -47,6 +47,44 @@ func TestNewDeviceSubjectDescriptor_UppercaseTenantNormalized(t *testing.T) {
 	}
 }
 
+// TestNewDeviceSubjectDescriptor_UppercaseDeviceNormalized is the F7 regression:
+// an uppercase-UUID device sub must be normalized to lowercase canonical form so
+// it byte-for-byte matches the resource side of the PDP ownership rule
+// (subject.sub == resource.id, which pdpauthz canonicalizes via the same
+// httputil.ParseCanonicalUUID). Without normalization an uppercase device UUID
+// would fail the equality and be wrongly denied enrollment.
+func TestNewDeviceSubjectDescriptor_UppercaseDeviceNormalized(t *testing.T) {
+	const (
+		tenantStr  = "11111111-1111-1111-1111-111111111111"
+		upperDev   = "ABCDABCD-ABCD-ABCD-ABCD-ABCDABCDABCD"
+		wantDevice = "abcdabcd-abcd-abcd-abcd-abcdabcdabcd"
+	)
+	d, err := NewDeviceSubjectDescriptor(tenantStr, upperDev)
+	if err != nil {
+		t.Fatalf("NewDeviceSubjectDescriptor: unexpected error: %v", err)
+	}
+	if d.Sub() != wantDevice {
+		t.Errorf("Sub() = %q, want canonical lowercase %q", d.Sub(), wantDevice)
+	}
+}
+
+// TestNewDeviceSubjectDescriptor_NonUUIDDevicePassthrough locks the documented
+// behavior that a non-UUID device sub (the constructor permits any non-empty id)
+// passes through unchanged — canonicalization only applies to UUID subs.
+func TestNewDeviceSubjectDescriptor_NonUUIDDevicePassthrough(t *testing.T) {
+	const (
+		tenantStr = "11111111-1111-1111-1111-111111111111"
+		deviceStr = "Device-Alpha-01"
+	)
+	d, err := NewDeviceSubjectDescriptor(tenantStr, deviceStr)
+	if err != nil {
+		t.Fatalf("NewDeviceSubjectDescriptor: unexpected error: %v", err)
+	}
+	if d.Sub() != deviceStr {
+		t.Errorf("Sub() = %q, want non-UUID sub unchanged %q", d.Sub(), deviceStr)
+	}
+}
+
 // TestNewDeviceSubjectDescriptor_EmptyDeviceID verifies that an empty deviceID
 // is rejected with a KindInvalid errcode.
 func TestNewDeviceSubjectDescriptor_EmptyDeviceID(t *testing.T) {

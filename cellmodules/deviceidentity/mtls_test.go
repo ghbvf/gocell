@@ -48,9 +48,13 @@ func TestNewDeviceMTLSServerConfig(t *testing.T) {
 		if cfg == nil {
 			t.Fatal("expected non-nil *tls.Config")
 		}
-		// The device-mTLS listener must require client certs.
-		if cfg.ClientAuth < tls.RequireAnyClientCert {
-			t.Errorf("ClientAuth = %v, want >= RequireAnyClientCert", cfg.ClientAuth)
+		// The device-mTLS listener must REQUIRE AND VERIFY client certificates
+		// against the issuing CA pool — not merely RequireAnyClientCert, which
+		// would accept any client cert without checking it chains to the signer
+		// CA. Lock the exact ClientAuthType so a regression to a weaker mode
+		// (which would stop verifying the trust bundle) fails this test.
+		if cfg.ClientAuth != tls.RequireAndVerifyClientCert {
+			t.Errorf("ClientAuth = %v, want tls.RequireAndVerifyClientCert", cfg.ClientAuth)
 		}
 		if cfg.ClientCAs == nil {
 			t.Error("ClientCAs must be set (non-nil) when a trust bundle is provided")

@@ -24,11 +24,13 @@
 //
 // The resource identifier passed to AuthorizeAs is the device UUID,
 // canonicalized with [httputil.ParseCanonicalUUID] to match the PDP ownership
-// rule "subject.sub == resource.id". SubjectDescriptor.Sub is set from
-// [auth.NewDeviceSubjectDescriptor]'s deviceID parameter, which PDP
-// internally canonicalizes via tenant.ParseTenantID on the subject side.
-// Matching ParseCanonicalUUID on the resource side mirrors the HTTP
-// RequirePermissionForResource path (see runtime/auth/middleware.go).
+// rule "subject.sub == resource.id". The subject side is canonicalized at the
+// same boundary: [auth.NewDeviceSubjectDescriptor] normalizes a UUID deviceID
+// to lowercase canonical form (the same [httputil.ParseCanonicalUUID]) when it
+// seals the descriptor, so descriptor.Sub() and the resource are byte-for-byte
+// comparable. Both sides mirror the HTTP RequirePermissionForResource path
+// (see runtime/auth/middleware.go) — a non-canonical (e.g. uppercase) device
+// UUID enrolls correctly instead of failing the ownership equality.
 //
 // # Obligation fail-closed
 //
