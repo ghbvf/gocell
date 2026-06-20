@@ -108,6 +108,21 @@ row content — so the sealed cross-tenant data-read funnel is untouched. No thr
 cell flips: the admin pool, the role-scoped policy, and the serving-role boundary
 are all unchanged; #1755 adds only a read-only SELECT consumer.
 
+## Amendment 2026-06-20 — #1761 resolved: slog retained as the FR-007 sink
+
+The *Related* / *Scope boundaries* "OUT — #1761: slog-vs-ledger audit signal" item is
+now **decided** (ADR `202606201357-1761`): the super-admin cross-tenant grant audit
+**stays `slog.Error`**; `ledger.Append` is rejected (not deferred) as architecturally
+wrong for a tenant-less authorization-grant event. This **confirms** #1810's standing
+assumption "FR-007 slog is preserved here" — there is no change to this ADR's design or
+to its threat matrix: the "FR-007 audit … Preserved" row was already premised on the slog
+sink, and #1761 makes that terminal. No threat cell flips. The decisive grounding (FR-007
+requires mandatory + observable + non-bypassable audit, NOT tamper-evidence; the no-bypass
+guarantee is the existing `ROWSCOPEALL-AUDIT-FUNNEL-01` Hard/Medium funnel; tamper-evidence
+for grant events is a sink/SIEM-layer concern, and under zero-trust an external append-only
+sink beats an inline HMAC chain whose key is co-located with the audited super-admin) lives
+in the #1761 ADR.
+
 ## References
 
 - Migration: `adapters/postgres/migrations/065_audit_admin_read_role.sql`

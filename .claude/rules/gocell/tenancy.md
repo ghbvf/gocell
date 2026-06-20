@@ -152,6 +152,7 @@ HTTP `passwordResetExempt` 不是 AuthZ mode；单独声明仍是 modeless，必
 - 规则文件职责：`docs/guides/agent-instruction-surfaces.md`
 - ABAC / permission 接线：`docs/architecture/202606121400-1348-adr-pr10a-authz-wiring.md`
 - audit / RLS / 跨租户读取：`docs/architecture/202606131900-1810-adr-super-admin-cross-tenant-audit-read.md`
+- RowScope=all FR-007 审计 signal（slog 决议，非 ledger.Append）：`docs/architecture/202606201357-1761-adr-rowscopeall-audit-signal-slog.md`
 - HTTP AuthZ mode：`docs/architecture/202606190847-2020-adr-authz-default-abac.md`
 - gRPC 授权：`docs/architecture/202605260000-adr-grpc-transport-adapter.md`
 - HTTP owner/self-scoped contract-derived gate：`docs/architecture/202606201500-2355-adr-http-owner-scoped-contract-derived-authz.md`
