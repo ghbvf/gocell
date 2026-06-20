@@ -142,8 +142,8 @@ The acceptance "断言无 RowScope=all 请求能绕过审计写入" holds withou
 
 ## References
 
-- Audited mint: `framework/runtime/auth/rowscope.go:141-165` (slog before
-  `NewCrossTenantVisibility`)
+- Audited mint: `framework/runtime/auth/rowscope.go:158-164` (slog at :158-163, before
+  `NewCrossTenantVisibility` at :164; enclosing method `CrossTenantVisibility` :141-165)
 - Sealed obligation: `framework/pkg/tenant/rowvisibility.go`
 - No-bypass funnel: `tools/archtest/rowscopeall_audit_funnel_test.go` (ROWSCOPEALL-AUDIT-FUNNEL-01)
 - Derivation FR-007 test: `framework/runtime/auth/rowscope_test.go`
