@@ -86,6 +86,21 @@ assembly closed set 校验。行为与 HTTP 侧 `CellAttribution` 中间件对�
   `"OK"`/`"NOT_FOUND"`），区别于 HTTP access log `"http request"` 的 `status`（int，如
   `200`/`404`）——协议语义差异，跨协议日志查询时注意区分。
 
+### PR-12 ErrcodeMap 迁移后的 SLO 注意事项（#1155）
+
+PR-12 落地后，handler 返回的 `*errcode.Error` 在 wire 上从 `codes.Unknown`
+改为正确映射的 code（如 `codes.InvalidArgument`、`codes.NotFound`、`codes.Unavailable`
+等）。对告警的影响：
+
+- **以 `{code="Unknown"}` 为错误代理的 SLO 告警需更新**：PR-12 后 Unknown 率明显下降，
+  而特定 code（如 `Internal`、`InvalidArgument`）的率上升。建议将错误率告警改为
+  `{code=~"Internal|Unknown"}` 或按需拆成 per-code 告警，避免 SLO 基线静默漂移。
+- **RateLimit deny → `{code="ResourceExhausted"}`**（opt-in，仅在 `Deps.RateLimiter`
+  非 nil 时生效）。
+- **CircuitBreaker open → `{code="Unavailable"}`**（opt-in，仅在 `Deps.Allower` 非 nil
+  时生效）。两者目前无专用指标或结构化日志，追踪于 **#2485**；断路器打开导致的
+  `Unavailable` 尖峰是预期行为，不代表服务不可用。
+
 ## HTTP Body-Limit 拒绝计数器
 
 `gocell_http_request_body_limit_rejections_total{cell, route}` 记录 BodyLimit 中间件

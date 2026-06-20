@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
 	commandv1 "github.com/ghbvf/gocell/generated/contracts/grpc/device/command/v1"
 )
 
@@ -73,7 +74,8 @@ func newTestServerWith(t *testing.T, notifier *devicecmd.Notifier, extra ...devi
 		devicecmd.WithOnEnqueue(notifier.Notify),
 	}, extra...)
 	svc, err := devicecmd.NewService(
-		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd, opts...)
+		clockmock.New(fixedTime), q, devRepo, codec, slog.Default(), query.RunModeProd, opts...,
+	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -149,8 +151,9 @@ func assertIssueCommandValidationError(t *testing.T, srv *Server, name string, r
 // registered via the buf-generated RegisterDeviceCommandServiceServer (the same
 // call cellgen emits into cell_gen.go), and the unary RPC round-trips. No auth
 // interceptor is wired here — authorization is exercised at the interceptor layer
-// (#2008); this test asserts the domain round-trip. The error path returns a
-// non-OK status (the precise errcode→codes mapping lands in PR-12).
+// (#2008); this test asserts the domain round-trip. dialInProcess wires
+// UnaryErrcodeMap (PR-12 #1155) so the error path returns the mapped codes.Code
+// (KindInvalid → InvalidArgument).
 func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 	t.Parallel()
 	client := dialInProcess(t, newTestServer(t))
@@ -174,13 +177,12 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 		}
 	})
 
-	// Both validation branches over the wire return a non-OK status. We assert
-	// only "not OK" (not the precise code): a returned *errcode.Error still
-	// surfaces as codes.Unknown — the general errcode.Kind→codes.Code mapping
-	// table lands in PR-12 (the Kratos GRPCStatus() model), at which point these
-	// become codes.InvalidArgument. Rate-limit is the one exception today: the
-	// handler projects KindRateLimited → codes.ResourceExhausted in-handler as an
-	// interim measure (asserted by TestServer_IssueCommand_OverCap_ResourceExhausted).
+	// Both validation branches over the wire return codes.InvalidArgument: the
+	// handler returns *errcode.Error(KindInvalid), and the UnaryErrcodeMap
+	// interceptor (PR-12 #1155, wired into dialInProcess) maps KindInvalid →
+	// codes.InvalidArgument. The per-device cap (KindRateLimited) maps to
+	// codes.ResourceExhausted through the same central interceptor — asserted by
+	// TestServer_IssueCommand_OverCap_ResourceExhausted.
 	errCases := []struct {
 		name string
 		req  *commandv1.IssueCommandRequest
@@ -189,11 +191,13 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 		{"missing command_type", &commandv1.IssueCommandRequest{DeviceId: seededDeviceID, Payload: []byte("{}")}},
 	}
 	for _, ec := range errCases {
-		t.Run("error path is non-OK status: "+ec.name, func(t *testing.T) {
-			if _, err := client.IssueCommand(ctx, ec.req); err == nil {
+		t.Run("validation error is InvalidArgument: "+ec.name, func(t *testing.T) {
+			_, err := client.IssueCommand(ctx, ec.req)
+			if err == nil {
 				t.Fatalf("expected non-nil error for %s", ec.name)
-			} else if status.Code(err) == codes.OK {
-				t.Errorf("status code = OK, want non-OK; err=%v", err)
+			}
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Errorf("status code = %v, want InvalidArgument; err=%v", got, err)
 			}
 		})
 	}
@@ -202,10 +206,10 @@ func TestServer_IssueCommand_OverGRPC(t *testing.T) {
 // TestServer_IssueCommand_OverCap_ResourceExhausted asserts the per-device
 // Pending cap (F-S-005 #822) surfaces over the gRPC wire as the standard
 // codes.ResourceExhausted, not the codes.Unknown an unmapped *errcode.Error
-// would yield. The handler projects errcode.KindRateLimited → ResourceExhausted
-// in-handler as an interim measure until the general errcode.Kind→codes.Code
-// mapper (PR-12, the Kratos GRPCStatus() model) lands; at that point the inline
-// projection is deleted and this assertion holds via the central mapper instead.
+// would yield. The handler returns the raw errcode.KindRateLimited error; the
+// central UnaryErrcodeMap interceptor (PR-12 #1155, wired into dialInProcess)
+// maps it to codes.ResourceExhausted — the interim in-handler projection that
+// #2444 added pending this mapper has been removed.
 func TestServer_IssueCommand_OverCap_ResourceExhausted(t *testing.T) {
 	t.Parallel()
 	// Limit 1: the first enqueue fills the device's Pending cap, the second exceeds it.
@@ -214,10 +218,17 @@ func TestServer_IssueCommand_OverCap_ResourceExhausted(t *testing.T) {
 	defer cancel()
 
 	req := &commandv1.IssueCommandRequest{DeviceId: seededDeviceID, CommandType: "reboot", Payload: []byte("{}")}
-	if _, err := client.IssueCommand(ctx, req); err != nil {
+	firstResp, err := client.IssueCommand(ctx, req)
+	if err != nil {
 		t.Fatalf("first IssueCommand (fills cap): unexpected error: %v", err)
 	}
-	_, err := client.IssueCommand(ctx, req)
+	if !strings.HasPrefix(firstResp.GetAckId(), "cmd-") {
+		t.Errorf("first IssueCommand ack_id = %q, want a cmd- prefixed enqueued command id", firstResp.GetAckId())
+	}
+	if got := firstResp.GetAcknowledgedAtUnixNano(); got != fixedTime.UnixNano() {
+		t.Errorf("first IssueCommand acknowledged_at_unix_nano = %d, want %d (injected clock)", got, fixedTime.UnixNano())
+	}
+	_, err = client.IssueCommand(ctx, req)
 	if err == nil {
 		t.Fatalf("expected over-cap error on second IssueCommand, got nil")
 	}
@@ -234,7 +245,13 @@ func dialInProcess(t *testing.T, srv *Server) commandv1.DeviceCommandServiceClie
 	t.Helper()
 	const bufSize = 1024 * 1024
 	lis := bufconn.Listen(bufSize)
-	grpcServer := grpc.NewServer()
+	// Wire UnaryErrcodeMap (PR-12 #1155) so a handler-returned *errcode.Error is
+	// projected to the mapped codes.Code over the real gRPC transport — the same
+	// centralized mapping production uses, replacing per-handler status.Error
+	// wrapping. KindInvalid → InvalidArgument, KindRateLimited → ResourceExhausted.
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(interceptor.UnaryErrcodeMap()),
+	)
 	commandv1.RegisterDeviceCommandServiceServer(grpcServer, srv)
 
 	serveErr := make(chan error, 1)

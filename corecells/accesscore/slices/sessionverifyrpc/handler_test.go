@@ -26,6 +26,7 @@ import (
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
+	"github.com/ghbvf/gocell/framework/runtime/grpc/interceptor"
 	sessionverifyv1 "github.com/ghbvf/gocell/generated/contracts/grpc/auth/session/verify/v1"
 )
 
@@ -172,11 +173,12 @@ func TestServer_VerifyToken_InvalidOrExpired_IsUniformFalse(t *testing.T) {
 
 func TestServer_VerifyToken_InfraUnavailable_ReturnsError(t *testing.T) {
 	t.Parallel()
-	// An infrastructure outage (session store / key provider) must surface as
-	// codes.Unavailable, NOT a uniform valid=false — masking an outage as a
-	// credential failure would pollute SLO buckets and hide the incident.
-	// The handler wraps the errcode in status.Error(codes.Unavailable, ...) so
-	// errors.Is no longer holds; assert the gRPC status code instead.
+	// An infrastructure outage (session store / key provider) must propagate as a
+	// raw *errcode.Error (KindUnavailable) from the handler — NOT wrapped in a gRPC
+	// status. The chain's UnaryErrcodeMap interceptor (PR-12 #1155) maps it to
+	// codes.Unavailable on the wire (proven by TestServer_VerifyToken_InfraUnavailable_OverGRPC).
+	// Keeping the handler free of grpc/status lets us assert the domain error
+	// identity here instead of the transport representation.
 	infra := errcode.New(errcode.KindUnavailable, errcode.ErrServiceUnavailable, "authentication service unavailable")
 	srv := NewServer(&stubVerifier{err: infra})
 
@@ -184,8 +186,12 @@ func TestServer_VerifyToken_InfraUnavailable_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("infra-unavailable must return an error, got nil (resp=%v)", resp)
 	}
-	if got := status.Code(err); got != codes.Unavailable {
-		t.Errorf("infra-unavailable must return codes.Unavailable, got %v (err=%v)", got, err)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("infra-unavailable error must be *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Kind != errcode.KindUnavailable {
+		t.Errorf("infra-unavailable *errcode.Error must have KindUnavailable, got Kind=%v", ec.Kind)
 	}
 }
 
@@ -242,16 +248,20 @@ func assertClaimsProjection(t *testing.T, resp *sessionverifyv1.VerifyTokenRespo
 // returns a connected client + cleanup. A server-side unary interceptor injects a
 // caller principal in callerTenant — standing in for the production auth
 // interceptor — so the handler's F2 tenant bind has a caller to compare against.
+// UnaryErrcodeMap (PR-12 #1155) is chained, applying only UnaryErrcodeMap for
+// errcode→status projection (it does not wire the full production chain).
 // Used by multiple bufconn round-trip tests.
 func newBufconnClient(
 	t *testing.T, handler sessionverifyv1.SessionVerifyServiceServer, callerTenant string,
 ) sessionverifyv1.SessionVerifyServiceClient {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
-	injectCaller := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
-		return h(auth.WithPrincipal(ctx, &auth.Principal{Kind: auth.PrincipalUser, Subject: "bufconn-caller", TenantID: callerTenant}), req)
-	})
-	grpcServer := grpc.NewServer(injectCaller)
+	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
+		func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+			return h(auth.WithPrincipal(ctx, &auth.Principal{Kind: auth.PrincipalUser, Subject: "bufconn-caller", TenantID: callerTenant}), req)
+		},
+		interceptor.UnaryErrcodeMap(),
+	))
 	sessionverifyv1.RegisterSessionVerifyServiceServer(grpcServer, handler)
 	go func() { _ = grpcServer.Serve(lis) }()
 	t.Cleanup(grpcServer.Stop)

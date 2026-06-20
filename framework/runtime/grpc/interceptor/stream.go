@@ -238,16 +238,19 @@ func StreamRecovery() grpc.StreamServerInterceptor {
 // NewServerInterceptors is the sole caller and supplies the shared registrar +
 // drain it mints (#1752). The order
 //
-//	RequestID → CellAttribution → Tracing → AccessLog → Metrics → Auth → Drain → Recovery
+//	RequestID → CellAttribution → Tracing → AccessLog → Metrics →
+//	RateLimit → CircuitBreaker → Auth → Drain → ErrcodeMap → Recovery
 //
 // (RequestID outermost, Recovery innermost, Drain just inside Auth so the handler
-// context is drain-bound) is fixed here and guarded by GRPC-STREAM-CHAIN-ORDER-01.
-// The grpc.ChainStreamInterceptor caller is locked to this file by
-// GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01 (Medium downstream + Go-ceiling upstream).
-// The single-wiring-object upgrade that forces BOTH chains and the adapter to
-// observe one registrar/drain (#1752) is realized here + in NewServerInterceptors:
-// the registrar/drain are no longer caller-supplied Deps fields but minted by the
-// funnel, so a mismatch is unrepresentable (GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01).
+// context is drain-bound, ErrcodeMap just outside Recovery so the auth/drain
+// status codes pass through unchanged) is fixed here and guarded by
+// GRPC-STREAM-CHAIN-ORDER-01. The grpc.ChainStreamInterceptor caller is locked
+// to this file by GRPC-CHAIN-STREAM-INTERCEPTOR-CALLER-01 (Medium downstream +
+// Go-ceiling upstream). The single-wiring-object upgrade that forces BOTH chains
+// and the adapter to observe one registrar/drain (#1752) is realized here + in
+// NewServerInterceptors: the registrar/drain are no longer caller-supplied Deps
+// fields but minted by the funnel, so a mismatch is unrepresentable
+// (GRPC-WIRING-REGISTRAR-MINT-FUNNEL-01).
 //
 // reg, CellIDClosedSet, and drain are required (fail-closed): a chain composed
 // without them would silently relabel every RPC to the runtime sentinel or leave
@@ -260,7 +263,8 @@ func newStreamChain(deps Deps, reg *runtimegrpc.ServiceRegistrar, drain *runtime
 	if len(deps.CellIDClosedSet) == 0 {
 		panic(panicregister.Approved("interceptor-chain-cell-closed-set-required",
 			errcode.Assertion(
-				"interceptor.newStreamChain: Deps.CellIDClosedSet is required (the assembly cell-id set)")))
+				"interceptor.newStreamChain: Deps.CellIDClosedSet is required (the assembly cell-id set)",
+			)))
 	}
 	if drain.Validate() != nil {
 		panic(panicregister.Approved("interceptor-chain-drain-required",
@@ -275,11 +279,14 @@ func newStreamChain(deps Deps, reg *runtimegrpc.ServiceRegistrar, drain *runtime
 		StreamTracing(deps.Tracer),
 		StreamAccessLog(deps.Clock),
 		StreamMetrics(deps.Collector, deps.Clock, validCellIDs),
+		StreamRateLimit(deps.RateLimiter),
+		StreamCircuitBreaker(deps.Allower),
 		// Registrar-sourced public-method bypass (#1675) + per-method permission gate
 		// (#2008), same single-source wiring as the unary chain — see authChainOptions
 		// in chain.go.
 		StreamAuth(deps.Verifier, authChainOptions(deps, reg)...),
 		StreamDrain(drain),
+		StreamErrcodeMap(),
 		StreamRecovery(),
 	)
 }
