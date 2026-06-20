@@ -42,14 +42,14 @@ func TestInMemoryGRPCCollector_RecordProtectionRejection(t *testing.T) {
 	// circuit open on different method.
 	c.RecordProtectionRejection(ctx, testLabel(""), "/pkg.Svc/Other", ProtectionCircuit())
 
-	if got := c.ProtectionCount("ratelimit", "/pkg.Svc/Do", "_runtime"); got != 2 {
+	if got := c.ProtectionCount("_runtime", "/pkg.Svc/Do", "ratelimit"); got != 2 {
 		t.Errorf("ratelimit /pkg.Svc/Do count = %d, want 2", got)
 	}
-	if got := c.ProtectionCount("circuit", "/pkg.Svc/Other", "_runtime"); got != 1 {
+	if got := c.ProtectionCount("_runtime", "/pkg.Svc/Other", "circuit"); got != 1 {
 		t.Errorf("circuit /pkg.Svc/Other count = %d, want 1", got)
 	}
 	// Absent key → 0.
-	if got := c.ProtectionCount("ratelimit", "/pkg.Svc/Other", "_runtime"); got != 0 {
+	if got := c.ProtectionCount("_runtime", "/pkg.Svc/Other", "ratelimit"); got != 0 {
 		t.Errorf("absent key count = %d, want 0", got)
 	}
 }

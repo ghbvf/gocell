@@ -96,7 +96,11 @@ PR-12 落地后，handler 返回的 `*errcode.Error` 在 wire 上从 `codes.Unkn
   而特定 code（如 `Internal`、`InvalidArgument`）的率上升。建议将错误率告警改为
   `{code=~"Internal|Unknown"}` 或按需拆成 per-code 告警，避免 SLO 基线静默漂移。
 - **RateLimit deny → `{code="ResourceExhausted"}`**（opt-in，仅在 `Deps.RateLimiter`
-  非 nil 时生效）。
+  非 nil 时生效）。启用 `Deps.RateLimiter` 后，`ResourceExhausted` 将同时包含限流保护
+  拒绝流量与业务 errcode `KindPayloadTooLarge`/`KindRateLimited`。若已有以
+  `{code="ResourceExhausted"}` 为非告警码（即不计入错误率）的 SLO，需同步调整阈值；
+  或使用 `gocell_grpc_protection_rejected_total{type="ratelimit"}` 独立计数，与业务层
+  `ResourceExhausted` 分开统计，避免保护拒绝流量污染业务 SLO 基线。
 - **CircuitBreaker open → `{code="Unavailable"}`**（opt-in，仅在 `Deps.Allower` 非 nil
   时生效）。断路器打开导致的 `Unavailable` 尖峰是预期行为，不代表服务不可用。
   两者现均有专用拒绝计数器，见下文 §gRPC 保护拒绝计数器。

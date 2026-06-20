@@ -28,8 +28,9 @@ package interceptor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -206,7 +207,14 @@ func clientStatusWithDetails(code codes.Code, ec *errcode.Error) error {
 
 // publicDetailsToMetadata converts the PublicDetails of a 4xx *errcode.Error into a
 // map[string]string suitable for google.rpc.ErrorInfo.Metadata. Returns nil when
-// ec.Details is empty (caller must not attach an empty-Metadata ErrorInfo).
+// ec.Details is empty or all entries are zero-value (caller must not attach an
+// empty-Metadata ErrorInfo).
+//
+// Zero-value / empty-key details are skipped: errcode.Error.Details is an exported
+// []PublicDetail slice (known bypass surface; see details.go godoc), so external code
+// can append zero-value PublicDetail{} structs that bypass the WithDetails valid()
+// filter. Skipping entries with Key()==""  is the projection-side defense so that
+// such entries never reach the Metadata map.
 //
 // Value rendering is aligned with HTTP marshalJSONValue semantics so clients that
 // consume both HTTP and gRPC surfaces receive equivalent structured values:
@@ -231,8 +239,18 @@ func publicDetailsToMetadata(ec *errcode.Error) map[string]string {
 	}
 	md := make(map[string]string, len(ec.Details))
 	for _, d := range ec.Details {
+		if d.Key() == "" {
+			// Skip zero-value / empty-key details — defense against external code
+			// directly appending to the exported Details slice, bypassing WithDetails
+			// valid() filtering. An empty key is meaningless in Metadata and would
+			// produce an ill-formed ErrorInfo entry.
+			continue
+		}
 		v := renderDetailValue(d)
 		md[d.Key()] = v
+	}
+	if len(md) == 0 {
+		return nil
 	}
 	return md
 }
@@ -240,12 +258,37 @@ func publicDetailsToMetadata(ec *errcode.Error) map[string]string {
 // renderDetailValue converts a PublicDetail value to its Metadata string
 // representation, aligned with HTTP marshalJSONValue semantics (see
 // publicDetailsToMetadata godoc for the full mapping rationale).
+//
+// Explicit type cases mirror the five concrete publicValue implementations in
+// errcode/details.go (publicString, publicInt, publicBool, publicDuration,
+// publicTime) via their rawAny() return types. The default falls back to
+// fmt.Sprintf("%v", v) so that future additions produce a traceable string
+// rather than a silent empty value.
+//
+// Value semantics (aligned with HTTP marshalJSONValue):
+//   - string: raw value, no JSON quoting (Metadata values are strings, not JSON bodies).
+//   - int64: decimal string ("42") — same as json.Marshal(int64), no quotes.
+//   - bool: "true" / "false" — same as json.Marshal(bool), no quotes.
+//   - time.Duration: nanosecond integer string — matches publicDuration.marshalJSONValue
+//     (json.Marshal(int64(d))); no quotes.
+//   - time.Time: RFC3339Nano, UNquoted — same instant as publicTime.marshalJSONValue,
+//     minus the structural JSON quotes which belong to the HTTP body context.
 func renderDetailValue(d errcode.PublicDetail) string {
 	raw := d.Value()
 	switch v := raw.(type) {
 	case string:
 		// Raw string — no JSON quoting (Metadata values are strings, not JSON bodies).
 		return v
+	case int64:
+		// Decimal integer — matches json.Marshal(int64), no surrounding quotes.
+		return strconv.FormatInt(v, 10)
+	case bool:
+		// "true" / "false" — matches json.Marshal(bool), no surrounding quotes.
+		return strconv.FormatBool(v)
+	case time.Duration:
+		// Nanosecond integer string — matches publicDuration.marshalJSONValue
+		// (json.Marshal(int64(p.v))), aligned with HTTP marshalJSONValue.
+		return strconv.FormatInt(int64(v), 10)
 	case time.Time:
 		// RFC3339Nano, UNquoted — same instant json.Marshal(time.Time) encodes, but
 		// without the surrounding JSON quotes. In a map[string]string the value IS the
@@ -255,11 +298,11 @@ func renderDetailValue(d errcode.PublicDetail) string {
 		// structural JSON quotes differ (they belong to the HTTP body, not a flat map).
 		return v.Format(time.RFC3339Nano)
 	default:
-		// int64, bool, time.Duration (int64 underlying): json.Marshal produces a
-		// decimal number or boolean literal string — "42", "true", "5000000000" — none
-		// of which carry surrounding quotes, so they map cleanly to a string value.
-		b, _ := json.Marshal(v)
-		return string(b)
+		// Future new PublicDetail kinds: produce a traceable string via %v so
+		// the value is not silently lost. This is preferable to an empty string
+		// or a panic — the operator can observe the rendering and update the
+		// explicit cases above.
+		return fmt.Sprintf("%v", v)
 	}
 }
 

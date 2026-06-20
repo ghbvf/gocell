@@ -52,6 +52,54 @@ func (f *cbFakeStream) SetHeader(_ metadata.MD) error  { return nil }
 func (f *cbFakeStream) SendHeader(_ metadata.MD) error { return nil }
 func (f *cbFakeStream) SetTrailer(_ metadata.MD)       {}
 
+// ─── cbDoneErr table ─────────────────────────────────────────────────────────
+
+// TestCbDoneErr verifies that cbDoneErr correctly classifies handler errors for
+// the circuit-breaker done() callback (F12). Server-failure codes return non-nil
+// (done(errServerFailure)); client errors and carve-outs return nil (done(nil)).
+func TestCbDoneErr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		code    codes.Code
+		wantNil bool // true if cbDoneErr should return nil (not a failure signal)
+	}{
+		// Server-failure codes: circuit-breaker counts these.
+		{"Internal", codes.Internal, false},
+		{"Unknown", codes.Unknown, false},
+		{"Unavailable", codes.Unavailable, false},
+		{"DataLoss", codes.DataLoss, false},
+		{"DeadlineExceeded", codes.DeadlineExceeded, false},
+		// Carve-outs: these must NOT trip the breaker.
+		{"ResourceExhausted", codes.ResourceExhausted, true},
+		{"Unimplemented", codes.Unimplemented, true},
+		{"Canceled", codes.Canceled, true},
+		{"InvalidArgument", codes.InvalidArgument, true},
+		// nil error: always done(nil).
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := status.Error(tc.code, "test")
+			got := cbDoneErr(err)
+			if tc.wantNil && got != nil {
+				t.Errorf("cbDoneErr(status.Error(%v,...)) = non-nil, want nil (not a failure signal)", tc.code)
+			}
+			if !tc.wantNil && got == nil {
+				t.Errorf("cbDoneErr(status.Error(%v,...)) = nil, want non-nil (must signal failure)", tc.code)
+			}
+		})
+	}
+	// nil error → always done(nil).
+	t.Run("nil_error", func(t *testing.T) {
+		t.Parallel()
+		if got := cbDoneErr(nil); got != nil {
+			t.Errorf("cbDoneErr(nil) = %v, want nil", got)
+		}
+	})
+}
+
 // ─── IsServerFailureCode table ───────────────────────────────────────────────
 
 func TestIsServerFailureCode(t *testing.T) {

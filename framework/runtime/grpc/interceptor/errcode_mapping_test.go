@@ -19,31 +19,32 @@ import (
 func TestToGRPCCode(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
+		name string
 		kind errcode.Kind
 		want codes.Code
 	}{
-		{errcode.KindInternal, codes.Internal},
-		{errcode.KindInvalid, codes.InvalidArgument},
-		{errcode.KindUnauthenticated, codes.Unauthenticated},
-		{errcode.KindPermissionDenied, codes.PermissionDenied},
-		{errcode.KindNotFound, codes.NotFound},
-		{errcode.KindConflict, codes.Aborted},
-		{errcode.KindUnprocessable, codes.InvalidArgument},
-		{errcode.KindGone, codes.NotFound},
-		{errcode.KindPayloadTooLarge, codes.ResourceExhausted},
-		{errcode.KindRateLimited, codes.ResourceExhausted},
-		{errcode.KindClientClosed, codes.Canceled},
-		{errcode.KindDeadlineExceeded, codes.DeadlineExceeded},
-		{errcode.KindUnavailable, codes.Unavailable},
-		{errcode.KindNotImplemented, codes.Unimplemented},
+		{"KindInternal", errcode.KindInternal, codes.Internal},
+		{"KindInvalid", errcode.KindInvalid, codes.InvalidArgument},
+		{"KindUnauthenticated", errcode.KindUnauthenticated, codes.Unauthenticated},
+		{"KindPermissionDenied", errcode.KindPermissionDenied, codes.PermissionDenied},
+		{"KindNotFound", errcode.KindNotFound, codes.NotFound},
+		{"KindConflict", errcode.KindConflict, codes.Aborted},
+		{"KindUnprocessable", errcode.KindUnprocessable, codes.InvalidArgument},
+		{"KindGone", errcode.KindGone, codes.NotFound},
+		{"KindPayloadTooLarge", errcode.KindPayloadTooLarge, codes.ResourceExhausted},
+		{"KindRateLimited", errcode.KindRateLimited, codes.ResourceExhausted},
+		{"KindClientClosed", errcode.KindClientClosed, codes.Canceled},
+		{"KindDeadlineExceeded", errcode.KindDeadlineExceeded, codes.DeadlineExceeded},
+		{"KindUnavailable", errcode.KindUnavailable, codes.Unavailable},
+		{"KindNotImplemented", errcode.KindNotImplemented, codes.Unimplemented},
 	}
 	for _, tc := range cases {
 		tc := tc
-		t.Run(fmt.Sprintf("kind_%d", int(tc.kind)), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := toGRPCCode(tc.kind)
 			if got != tc.want {
-				t.Errorf("toGRPCCode(%d) = %v, want %v", int(tc.kind), got, tc.want)
+				t.Errorf("toGRPCCode(%v) = %v, want %v", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -369,6 +370,70 @@ func TestErrcodeDomain_DifferentFromDenyReasonDomain(t *testing.T) {
 	t.Parallel()
 	if errcodeDomain == denyReasonDomain {
 		t.Errorf("errcodeDomain (%q) must differ from denyReasonDomain (%q)", errcodeDomain, denyReasonDomain)
+	}
+}
+
+// TestRenderDetailValue verifies that renderDetailValue renders each PublicDetail
+// type to its expected string representation, aligned with HTTP marshalJSONValue
+// semantics (F11 direct unit test for the rendering function).
+//
+// Expected values:
+//   - PublicString: raw string, no JSON quoting.
+//   - PublicInt: decimal integer string ("42").
+//   - PublicBool: "true" / "false".
+//   - PublicDuration: nanosecond integer string ("5000000000" for 5s).
+//   - PublicTime: RFC3339Nano string, unquoted ("2024-01-02T03:04:05Z").
+func TestRenderDetailValue(t *testing.T) {
+	t.Parallel()
+
+	fixedTime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	dur := 5 * time.Second
+
+	cases := []struct {
+		name   string
+		detail errcode.PublicDetail
+		want   string
+	}{
+		{
+			name:   "PublicString_no_json_quoting",
+			detail: errcode.PublicString("k", "device_id"),
+			want:   "device_id",
+		},
+		{
+			name:   "PublicInt_decimal",
+			detail: errcode.PublicInt("k", 42),
+			want:   "42",
+		},
+		{
+			name:   "PublicBool_true",
+			detail: errcode.PublicBool("k", true),
+			want:   "true",
+		},
+		{
+			name:   "PublicBool_false",
+			detail: errcode.PublicBool("k", false),
+			want:   "false",
+		},
+		{
+			name:   "PublicDuration_nanoseconds",
+			detail: errcode.PublicDuration("k", dur),
+			want:   "5000000000",
+		},
+		{
+			name:   "PublicTime_rfc3339nano_unquoted",
+			detail: errcode.PublicTime("k", fixedTime),
+			want:   "2024-01-02T03:04:05Z",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := renderDetailValue(tc.detail)
+			if got != tc.want {
+				t.Errorf("renderDetailValue(%s) = %q, want %q", tc.name, got, tc.want)
+			}
+		})
 	}
 }
 

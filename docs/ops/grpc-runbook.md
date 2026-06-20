@@ -287,10 +287,13 @@ rate(gocell_grpc_server_requests_total{code="InvalidArgument"}[5m]) > 阈值
 | code | 触发条件 |
 |---|---|
 | `InvalidArgument` | 请求参数校验失败 |
-| `NotFound` | 资源不存在 |
-| `Unavailable` | 限流（`ResourceExhausted` 已改为 `Unavailable` 视配置）或熔断打开 |
+| `NotFound` | 资源不存在或资源已永久删除（`KindGone` lossy 映射，见下注） |
+| `ResourceExhausted` | 限流保护拒绝（`Deps.RateLimiter` opt-in）或业务 errcode `KindPayloadTooLarge`/`KindRateLimited` |
+| `Unavailable` | 熔断器打开（`Deps.Allower` opt-in，用 `gocell_grpc_protection_rejected_total{type="circuit"}` 与真实服务不可用区分） |
 | `PermissionDenied` | PDP 授权拒绝 |
 | `Unauthenticated` | 未认证 |
+
+> **注（KindGone lossy 映射）**：`codes.NotFound` 可能来自资源不存在（`KindNotFound`），也可能来自资源已永久删除（`KindGone`，lossy 映射至 `NotFound`）。消费者不应仅凭 `codes.NotFound` 判断可重试性，需结合业务 errcode 或 app-level 信号（与 ADR 202605260100 D1 一致）。
 
 以 `{code="Unknown"}` 为错误代理的 SLO 告警在 PR-12 后**可能静默漂移**——建议改为
 `{code=~"Internal|Unknown"}` 或按需拆成 per-code 告警。
@@ -338,6 +341,11 @@ rate(gocell_grpc_protection_rejected_total{type="circuit"}[5m]) > 0
 `cmd/corebundle` 未注入这两个字段，即平台 assembly **默认不启用**限流/熔断。组装自定义
 assembly 的消费方可在 composition root 向 `interceptor.Deps` 传入实现了 `RateLimiter`
 （`Allow(key string) bool`）/ `Allower`（`Allow() bool`）接口的对象来启用。
+
+**确认 limiter/allower 是否已接线**：查看 composition root（如 `cmd/corebundle/run.go`）
+构造 `interceptor.Deps{}` 时是否包含 `RateLimiter` / `Allower` 字段。若这两个字段未出现在
+`Deps{}` 字面量中，则对应拦截器为 pass-through，`gocell_grpc_protection_rejected_total`
+无 sample 属预期行为，不代表保护功能故障。
 
 **诊断**：
 

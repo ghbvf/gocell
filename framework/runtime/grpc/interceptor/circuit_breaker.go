@@ -46,6 +46,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	kernelctxkeys "github.com/ghbvf/gocell/framework/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/framework/pkg/observability"
 	"github.com/ghbvf/gocell/framework/runtime/observability/metrics"
 )
@@ -139,9 +140,11 @@ func UnaryCircuitBreaker(cb Allower, collector metrics.GRPCCollector, validCellI
 			// so the request proceeds; the slog.Error surfaces the bug.
 			// No protection metric emitted — this is a wiring bug, not a
 			// protection event, and counting it would mislead ops.
+			cellID, _ := kernelctxkeys.CellIDFrom(ctx)
 			slog.ErrorContext(ctx, "grpc circuit-breaker Allow() returned nil done — fail-open",
 				"interceptor", "UnaryCircuitBreaker",
-				"method", info.FullMethod)
+				"method", info.FullMethod,
+				"cell", cellID)
 			return handler(ctx, req)
 		}
 		resp, err := handler(ctx, req)
@@ -175,9 +178,12 @@ func StreamCircuitBreaker(cb Allower, collector metrics.GRPCCollector, validCell
 		if done == nil {
 			// Contract violation: allowed but no done callback. Fail open.
 			// No protection metric — wiring bug, not a protection event.
-			slog.ErrorContext(ss.Context(), "grpc circuit-breaker Allow() returned nil done — fail-open",
+			streamCtx := ss.Context()
+			cellID, _ := kernelctxkeys.CellIDFrom(streamCtx)
+			slog.ErrorContext(streamCtx, "grpc circuit-breaker Allow() returned nil done — fail-open",
 				"interceptor", "StreamCircuitBreaker",
-				"method", info.FullMethod)
+				"method", info.FullMethod,
+				"cell", cellID)
 			return handler(srv, ss)
 		}
 		err := handler(srv, ss)

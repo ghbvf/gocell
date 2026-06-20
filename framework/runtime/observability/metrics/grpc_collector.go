@@ -146,11 +146,12 @@ type GRPCRequestKey struct {
 }
 
 // GRPCProtectionKey identifies one grpc_protection_rejected_total metric series.
-// Type is the ProtectionType string value ("ratelimit" or "circuit").
+// Field order mirrors RecordProtectionRejection(ctx, cell, method, ptype):
+// Cell, Method, Type. Type is the ProtectionType string value ("ratelimit" or "circuit").
 type GRPCProtectionKey struct {
-	Type   string
-	Method string
 	Cell   string
+	Method string
+	Type   string
 }
 
 // InMemoryGRPCCollector is a simple in-memory GRPCCollector for development and
@@ -197,8 +198,9 @@ func (c *InMemoryGRPCCollector) Count(cellID, method, code string) int64 {
 }
 
 // ProtectionCount returns the number of recorded protection rejections for the
-// given type/method/cell label set. Intended for test assertions only.
-func (c *InMemoryGRPCCollector) ProtectionCount(ptype, method, cell string) int64 {
+// given cell/method/type label set. Intended for test assertions only.
+// Parameter order matches RecordProtectionRejection(ctx, cell, method, ptype).
+func (c *InMemoryGRPCCollector) ProtectionCount(cell, method, ptype string) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.protectionCounts[GRPCProtectionKey{Type: ptype, Method: method, Cell: cell}]
