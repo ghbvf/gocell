@@ -66,6 +66,53 @@ func TestPlanAssemblyScaffold_CrossModule_SkeletonOnly(t *testing.T) {
 	assert.Contains(t, asm, "compositionAPI: true", "cross-module assembly must declare compositionAPI")
 }
 
+// TestPlanAssemblyScaffold_CrossModule_RunGoCompositionContract pins F1: a
+// cross-module (build.compositionAPI: true) scaffold must emit a run.go whose
+// module helper consumes []composition.CellModule — the SAME type the
+// composition modules_gen.go returns from generatedCellModules() (asserted by
+// TestGenerateModulesGen_CompositionForm). The legacy run.go skeleton declared a
+// local `CellModule` interface + stub *Module types and consumed []CellModule,
+// which can never compile against the composition modules_gen.go's
+// `func generatedCellModules() []composition.CellModule` — breaking the
+// scaffold→generate→compile loop for cross-module assemblies. run.go and
+// modules_gen.go share `package main`, so the two generatedCellModules() shapes
+// must agree.
+func TestPlanAssemblyScaffold_CrossModule_RunGoCompositionContract(t *testing.T) {
+	t.Parallel()
+	root, pm := scaffoldTestProject(t)
+	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
+
+	spec := AssemblyScaffoldSpec{
+		ID: mustID(t, "mdm"),
+		Cells: []ScaffoldCellRef{
+			{ID: mustID(t, "examplecell")},
+			{ID: mustID(t, "enrollcell"), Module: scaffoldCrossModule},
+		},
+		OwnerTeam: "platform",
+		OwnerRole: "maintainer",
+	}
+	plan, err := gen.PlanAssemblyScaffold(spec)
+	require.NoError(t, err)
+
+	runGo := planContent(t, plan, "run.go")
+
+	// Composition-API contract: helper consumes []composition.CellModule and
+	// imports runtime/composition — matching the modules_gen.go `generate
+	// assembly` emits for build.compositionAPI: true.
+	assert.Contains(t, runGo, "[]composition.CellModule",
+		"cross-module run.go helper must consume []composition.CellModule")
+	assert.Contains(t, runGo, `"github.com/ghbvf/gocell/framework/runtime/composition"`,
+		"cross-module run.go must import runtime/composition")
+	// Must NOT carry the legacy local-type contract that collides with the
+	// composition modules_gen.go's generatedCellModules() []composition.CellModule.
+	assert.NotContains(t, runGo, "type CellModule interface",
+		"cross-module run.go must not redeclare a local CellModule type")
+	assert.NotContains(t, runGo, "Module struct{}",
+		"cross-module run.go must not declare stub *Module types")
+	assert.NotContains(t, runGo, "[]CellModule",
+		"cross-module run.go must not consume the legacy local []CellModule")
+}
+
 // TestPlanAssemblyScaffold_ExplicitSameModuleNotCrossModule verifies that a
 // ScaffoldCellRef whose Module equals the assembly's own module is treated as
 // same-module: derived files are NOT skipped, compositionAPI is not emitted, and
