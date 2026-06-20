@@ -1001,9 +1001,22 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 	asmDir := filepath.Join("assemblies", spec.ID.String())
 	cmdDir := filepath.Join("cmd", spec.ID.String())
 
+	// The run.go template is selected on the SAME compositionAPI axis that
+	// GenerateModulesGen uses for modules_gen.go (legacy []CellModule ↔
+	// composition []composition.CellModule). run.go and modules_gen.go share
+	// package main and must compile together, so the two selections must stay
+	// symmetric: a cross-module scaffold emits a composition-form run.go whose
+	// helper consumes []composition.CellModule, matching the modules_gen.go that
+	// `gocell generate assembly` later emits. Asymmetry here is exactly the F1
+	// scaffold→generate→compile break (#1516 / PR #2480).
+	runTemplate := "scaffold-run-go.tpl"
+	if g.specHasCrossModule(spec) {
+		runTemplate = "scaffold-run-composition-go.tpl"
+	}
+
 	templateFiles := []scaffoldAssemblyFile{
 		{Path: filepath.Join(asmDir, "assembly.yaml"), Template: "scaffold-assembly-yaml.tpl"},
-		{Path: filepath.Join(cmdDir, "run.go"), Template: "scaffold-run-go.tpl"},
+		{Path: filepath.Join(cmdDir, "run.go"), Template: runTemplate},
 		{Path: filepath.Join(cmdDir, "app.go"), Template: "scaffold-app-go.tpl"},
 	}
 
@@ -1013,10 +1026,13 @@ func (g *Generator) PlanAssemblyScaffold(spec AssemblyScaffoldSpec) ([]pathsafe.
 	}
 
 	// Cross-module cells force the skeleton-only plan: their cellmodules/ metadata
-	// is not locally resolvable (that read is #1515's scope), and the composition
-	// modules_gen.go they require is incompatible with the legacy run.go skeleton.
-	// The CLI surfaces an actionable "run gocell generate assembly" hint, mirroring
-	// the explicit --skip-generate contract (#1516).
+	// is not locally resolvable (that read is #1515's scope), so the K#10 derived
+	// files (modules_gen.go / main.go / boundary.yaml) cannot be rendered here.
+	// The composition-form run.go (selected above) is type-compatible with the
+	// modules_gen.go that `gocell generate assembly` will emit, so the deferred
+	// derivation closes the scaffold→generate→compile loop. The CLI surfaces an
+	// actionable "run gocell generate assembly" hint, mirroring the explicit
+	// --skip-generate contract (#1516).
 	if spec.SkipGenerate || g.specHasCrossModule(spec) {
 		return plan, nil
 	}
