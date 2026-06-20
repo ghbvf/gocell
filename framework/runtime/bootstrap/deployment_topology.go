@@ -306,8 +306,8 @@ func validateDeployEndpoint(ep, cellID string) error {
 // (no explicit topology, all-colocated) returns false.
 //
 // This is the generic "is this a split deployment?" predicate, consumed by the
-// split-mTLS gates (HasNonLoopbackRemoteCells / SharedNonLoopbackRemoteEndpoint
-// build on the same remote set) and celltransport wiring. It is NOT the
+// split-mTLS gate (HasNonLoopbackRemoteCells builds on the same remote set) and
+// celltransport wiring. It is NOT the
 // broker-mandatory trigger: since #2196 that gate keys off the precise
 // codegen-derived RequiresBrokerForCrossProcessEvents signal, so a sync-only
 // split (remote cells, no cross-process events) is no longer over-rejected.
@@ -344,42 +344,24 @@ func (t DeploymentTopology) HasNonLoopbackRemoteCells() bool {
 	return false
 }
 
-// SharedNonLoopbackRemoteEndpoint returns a non-loopback endpoint shared by ≥2
-// remote cells, those cell IDs (sorted), and found=true — or found=false when
-// every non-loopback remote endpoint is unique. Deterministic: the
-// lexicographically-smallest colliding endpoint is returned.
+// ColocatedCells returns the sorted set of cell IDs hosted in THIS process (the
+// cells this process serves). A zero-value (non-explicit, all-colocated monolith)
+// or a remote-only explicit topology enumerates no local cells and returns an
+// empty slice — bootstrap has no assembly cell set, so the full cell list is not
+// available there (see newDeploymentTopology).
 //
-// This is the #2263 split-mTLS single-cell-per-process guard signal: mTLS binds
-// ONE cell SPIFFE identity per process (the internal listener presents one cell
-// cert), so a process serving multiple cells at the SAME mTLS endpoint cannot
-// present a correct per-cell certificate — the cross-bind would fail for all but
-// one. cellmodules/celltls.Resolve fails closed on this when TLS material is
-// provisioned. Loopback endpoints (local multi-process dev) are exempt: they are
-// plaintext-eligible and carry no per-cell mTLS identity. The full fix (a
-// per-caller-cell identity resolver lifting this one-cell-per-process limit) is a
-// follow-up; see ADR 202606171200-2263.
-func (t DeploymentTopology) SharedNonLoopbackRemoteEndpoint() (endpoint string, cells []string, found bool) {
-	byEndpoint := make(map[string][]string, len(t.remote))
-	for cellID, ep := range t.remote {
-		if netutil.IsLoopbackEndpoint(ep) {
-			continue
-		}
-		byEndpoint[ep] = append(byEndpoint[ep], cellID)
+// It is the #2297 split-mTLS allow-set signal: cellmodules/celltls.Resolve asserts
+// the local mTLS workload certificate's cell-SAN set EXACTLY equals this set
+// (least privilege — the cert must cover every hosted cell and carry no extra),
+// failing closed at startup on a mismatch. When this returns empty (the local cell
+// set is not enumerated), that exact-match check is skipped.
+func (t DeploymentTopology) ColocatedCells() []string {
+	out := make([]string, 0, len(t.colocated))
+	for id := range t.colocated {
+		out = append(out, id)
 	}
-	collisions := make([]string, 0, len(byEndpoint))
-	for ep, ids := range byEndpoint {
-		if len(ids) >= 2 {
-			collisions = append(collisions, ep)
-		}
-	}
-	if len(collisions) == 0 {
-		return "", nil, false
-	}
-	sort.Strings(collisions)
-	ep := collisions[0]
-	ids := append([]string(nil), byEndpoint[ep]...)
-	sort.Strings(ids)
-	return ep, ids, true
+	sort.Strings(out)
+	return out
 }
 
 // IsColocated reports whether cellID is co-located in the same process.

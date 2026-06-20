@@ -65,6 +65,13 @@ func TestParse(t *testing.T) {
 		{name: "extra path segments", raw: "spiffe://example.org/cell/accesscore/extra", wantErr: true},
 		{name: "empty host", raw: "spiffe:///cell/accesscore", wantErr: true},
 		{name: "empty", raw: "", wantErr: true},
+		// Non-canonical URL components on a cell-shaped URI must fail closed and
+		// must NOT be normalized to the clean ID they resemble (#2297 F1).
+		{name: "userinfo rejected", raw: "spiffe://evil@example.org/cell/accesscore", wantErr: true},
+		{name: "query rejected", raw: "spiffe://example.org/cell/accesscore?x=1", wantErr: true},
+		{name: "fragment rejected", raw: "spiffe://example.org/cell/accesscore#frag", wantErr: true},
+		{name: "port rejected", raw: "spiffe://example.org:8443/cell/accesscore", wantErr: true},
+		{name: "userinfo+query+fragment combined rejected", raw: "spiffe://evil@example.org/cell/accesscore?x#y", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,22 +181,35 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	return u
 }
 
-func TestFromURIs(t *testing.T) {
+// TestCellSetFromURIs covers the #2297 allow-set extractor: a certificate's URI
+// SANs yield the FULL set of distinct cell SPIFFE ids (a multi-cell workload
+// cert), all sharing one trust domain. A cert bridging two trust domains is
+// rejected; non-cell spiffe URIs are ignored; duplicates collapse.
+func TestCellSetFromURIs(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name    string
-		uris    []*url.URL
-		wantOK  bool
-		wantErr bool
-		wantCel string
+		name      string
+		uris      []*url.URL
+		wantErr   bool
+		wantTD    string
+		wantCells []string // expected members
 	}{
-		{name: "nil", uris: nil, wantOK: false},
-		{name: "no spiffe", uris: []*url.URL{mustURL(t, "https://example.org/foo")}, wantOK: false},
+		{name: "nil -> empty set", uris: nil},
+		{name: "no spiffe -> empty set", uris: []*url.URL{mustURL(t, "https://example.org/foo")}},
 		{
-			name:    "one cell id",
-			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
-			wantOK:  true,
-			wantCel: "accesscore",
+			name:      "single cell id",
+			uris:      []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore"},
+		},
+		{
+			name: "multiple distinct cell ids (same trust domain) -> full set",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+			},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore", "configcore"},
 		},
 		{
 			name: "cell id alongside non-cell spiffe (ignored)",
@@ -197,40 +217,204 @@ func TestFromURIs(t *testing.T) {
 				mustURL(t, "spiffe://example.org/ns/edge/sa/wl-1"),
 				mustURL(t, "spiffe://example.org/cell/configcore"),
 			},
-			wantOK:  true,
-			wantCel: "configcore",
+			wantTD:    "example.org",
+			wantCells: []string{"configcore"},
 		},
 		{
-			name: "two distinct cell ids -> ambiguous error",
+			name: "duplicate identical cell ids collapse",
 			uris: []*url.URL{
 				mustURL(t, "spiffe://example.org/cell/accesscore"),
-				mustURL(t, "spiffe://example.org/cell/configcore"),
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+			},
+			wantTD:    "example.org",
+			wantCells: []string{"accesscore"},
+		},
+		{
+			name: "mixed trust domains -> error (a cert must not bridge trust domains)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://other.org/cell/configcore"),
+			},
+			wantErr: true,
+		},
+		// A cell-shaped SPIFFE URI with non-canonical components must fail closed,
+		// not be silently dropped or normalized to a member (#2297 F1).
+		{
+			name:    "cell-shaped with userinfo -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://evil@example.org/cell/accesscore")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with query -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore?x=1")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with fragment -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore#frag")},
+			wantErr: true,
+		},
+		{
+			name:    "cell-shaped with port -> error",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org:8443/cell/accesscore")},
+			wantErr: true,
+		},
+		{
+			// Fail-closed: a forged non-canonical ID presented ALONGSIDE a clean
+			// member must reject the whole cert, not normalize evil@ to the member.
+			name: "clean member + forged userinfo id -> error (whole cert rejected)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://evil@example.org/cell/accesscore?x#y"),
 			},
 			wantErr: true,
 		},
 		{
-			name: "two identical cell ids -> ok",
+			// Boundary: non-cell-shaped spiffe SANs are foreign and stay IGNORED
+			// even when they carry components — only cell-shaped URIs are gated.
+			name: "non-cell spiffe with query ignored (only cell-shaped is gated)",
 			uris: []*url.URL{
-				mustURL(t, "spiffe://example.org/cell/accesscore"),
-				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://example.org/ns/edge/sa/wl-1?x=1"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
 			},
-			wantOK:  true,
-			wantCel: "accesscore",
+			wantTD:    "example.org",
+			wantCells: []string{"configcore"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok, err := spiffeid.FromURIs(tc.uris)
+			set, err := spiffeid.CellSetFromURIs(tc.uris)
 			if tc.wantErr {
-				require.Error(t, err, "FromURIs = (%v,%v,nil), want error", got, ok)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tc.wantOK, ok, "FromURIs ok")
-			if ok {
-				require.Equal(t, tc.wantCel, got.Cell(), "FromURIs cell")
+			require.Equal(t, len(tc.wantCells), set.Len(), "set cardinality")
+			if len(tc.wantCells) == 0 {
+				require.True(t, set.IsEmpty())
+				return
+			}
+			require.False(t, set.IsEmpty())
+			require.Equal(t, tc.wantTD, set.TrustDomain())
+			for _, c := range tc.wantCells {
+				id, err := spiffeid.ForCell(tc.wantTD, c)
+				require.NoError(t, err)
+				require.True(t, set.Contains(id), "set must contain %s", id.String())
 			}
 		})
 	}
+}
+
+// TestCellSetString exercises CellSet.String(): 空集返回 "[]"；单元素返回带完整 URI
+// 的括号表示；两元素无论传入顺序如何，输出都按字母序排定（排序稳定性）。
+func TestCellSetString(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		uris    []*url.URL
+		wantStr string
+	}{
+		{
+			name:    "empty set -> []",
+			uris:    nil,
+			wantStr: "[]",
+		},
+		{
+			name:    "single element",
+			uris:    []*url.URL{mustURL(t, "spiffe://example.org/cell/accesscore")},
+			wantStr: "[spiffe://example.org/cell/accesscore]",
+		},
+		{
+			// 两元素：无论传入顺序，输出都按 configcore < accesscore 的字母序排列。
+			name: "two elements sorted (input order: configcore first)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+			},
+			wantStr: "[spiffe://example.org/cell/accesscore spiffe://example.org/cell/configcore]",
+		},
+		{
+			// 相同两元素，换传入顺序，输出不变——验证排序稳定。
+			name: "two elements sorted (input order: accesscore first)",
+			uris: []*url.URL{
+				mustURL(t, "spiffe://example.org/cell/accesscore"),
+				mustURL(t, "spiffe://example.org/cell/configcore"),
+			},
+			wantStr: "[spiffe://example.org/cell/accesscore spiffe://example.org/cell/configcore]",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			set, err := spiffeid.CellSetFromURIs(tc.uris)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStr, set.String())
+		})
+	}
+}
+
+// TestCellSetCells exercises CellSet.Cells(): 空集返回 nil；非空集返回排序后的 []CellID。
+func TestCellSetCells(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty set returns nil", func(t *testing.T) {
+		t.Parallel()
+		var empty spiffeid.CellSet
+		require.Nil(t, empty.Cells())
+	})
+
+	t.Run("single element", func(t *testing.T) {
+		t.Parallel()
+		set, err := spiffeid.CellSetFromURIs([]*url.URL{
+			mustURL(t, "spiffe://example.org/cell/accesscore"),
+		})
+		require.NoError(t, err)
+		cells := set.Cells()
+		require.Len(t, cells, 1)
+		require.Equal(t, "spiffe://example.org/cell/accesscore", cells[0].String())
+	})
+
+	t.Run("two elements are sorted", func(t *testing.T) {
+		t.Parallel()
+		// 传入顺序 configcore, accesscore；期望 Cells() 返回 accesscore, configcore（字母序）。
+		set, err := spiffeid.CellSetFromURIs([]*url.URL{
+			mustURL(t, "spiffe://example.org/cell/configcore"),
+			mustURL(t, "spiffe://example.org/cell/accesscore"),
+		})
+		require.NoError(t, err)
+		cells := set.Cells()
+		require.Len(t, cells, 2)
+		require.Equal(t, "spiffe://example.org/cell/accesscore", cells[0].String())
+		require.Equal(t, "spiffe://example.org/cell/configcore", cells[1].String())
+	})
+}
+
+// TestCellSetContains exercises the sole membership predicate (the go-spiffe
+// AuthorizeMemberOf analog): trust domain + cell must both match, the zero CellID
+// is never a member, and the empty set contains nothing.
+func TestCellSetContains(t *testing.T) {
+	t.Parallel()
+	set, err := spiffeid.CellSetFromURIs([]*url.URL{
+		mustURL(t, "spiffe://example.org/cell/accesscore"),
+		mustURL(t, "spiffe://example.org/cell/configcore"),
+	})
+	require.NoError(t, err)
+
+	member, _ := spiffeid.ForCell("example.org", "accesscore")
+	require.True(t, set.Contains(member), "a member cell must be Contains-true")
+
+	nonMember, _ := spiffeid.ForCell("example.org", "auditcore")
+	require.False(t, set.Contains(nonMember), "a non-member cell must be Contains-false")
+
+	wrongTD, _ := spiffeid.ForCell("other.org", "accesscore")
+	require.False(t, set.Contains(wrongTD), "same cell name in a different trust domain must not match")
+
+	require.False(t, set.Contains(spiffeid.CellID{}), "zero CellID must never be a member")
+
+	var empty spiffeid.CellSet
+	require.True(t, empty.IsEmpty())
+	require.Equal(t, 0, empty.Len())
+	require.Equal(t, "", empty.TrustDomain())
+	require.False(t, empty.Contains(member), "the empty set contains nothing")
 }

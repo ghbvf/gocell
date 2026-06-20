@@ -687,68 +687,41 @@ func TestDeploymentTopologyHasNonLoopbackRemoteCells(t *testing.T) {
 	}
 }
 
-func TestDeploymentTopologySharedNonLoopbackRemoteEndpoint(t *testing.T) {
+// TestDeploymentTopologyColocatedCells covers the #2297 accessor: the sorted set
+// of cells THIS process hosts (used by celltls.Resolve for the cert↔colocated
+// exact-match startup check). A zero-value / remote-only topology enumerates no
+// local cells (empty), so the check is skipped there.
+func TestDeploymentTopologyColocatedCells(t *testing.T) {
 	cases := []struct {
-		name      string
-		spec      DeploymentTopologySpec
-		wantFound bool
-		wantEP    string
-		wantCells []string
+		name string
+		spec DeploymentTopologySpec
+		want []string
 	}{
-		{name: "no remote → none", spec: DeploymentTopologySpec{}, wantFound: false},
+		{name: "zero value → empty (local cell set not enumerated)", spec: DeploymentTopologySpec{}, want: []string{}},
 		{
-			name: "unique non-loopback endpoints → none",
-			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
-				{CellID: "cellA", Endpoint: "https://a.svc:8443"},
-				{CellID: "cellB", Endpoint: "https://b.svc:8443"},
-			}},
-			wantFound: false,
+			name: "explicit colocated → sorted local cells",
+			spec: DeploymentTopologySpec{
+				Colocated: []string{"configcore", "accesscore"},
+				Remote:    []RemoteCellEndpoint{{CellID: "auditcore", Endpoint: "https://audit.svc:8443"}},
+			},
+			want: []string{"accesscore", "configcore"},
 		},
 		{
-			name: "two cells share a non-loopback endpoint → found",
-			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
-				{CellID: "cellB", Endpoint: "https://shared.svc:8443"},
-				{CellID: "cellC", Endpoint: "https://shared.svc:8443"},
-			}},
-			wantFound: true, wantEP: "https://shared.svc:8443", wantCells: []string{"cellB", "cellC"},
-		},
-		{
-			name: "shared LOOPBACK endpoint is exempt → none",
-			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{
-				{CellID: "cellB", Endpoint: "127.0.0.1:9090"},
-				{CellID: "cellC", Endpoint: "127.0.0.1:9090"},
-			}},
-			wantFound: false,
+			name: "remote-only explicit → empty colocated",
+			spec: DeploymentTopologySpec{Remote: []RemoteCellEndpoint{{CellID: "auditcore", Endpoint: "https://audit.svc:8443"}}},
+			want: []string{},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assertSharedNonLoopbackRemoteEndpoint(t, tc.spec, tc.wantFound, tc.wantEP, tc.wantCells)
+			dt, err := newDeploymentTopology(tc.spec)
+			if err != nil {
+				t.Fatalf("newDeploymentTopology: %v", err)
+			}
+			if got := dt.ColocatedCells(); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("ColocatedCells() = %v, want %v", got, tc.want)
+			}
 		})
-	}
-}
-
-// assertSharedNonLoopbackRemoteEndpoint resolves spec and checks
-// SharedNonLoopbackRemoteEndpoint against the expectations. Extracted from the
-// table loop so neither function exceeds cognitive-complexity limits.
-func assertSharedNonLoopbackRemoteEndpoint(t *testing.T, spec DeploymentTopologySpec, wantFound bool, wantEP string, wantCells []string) {
-	t.Helper()
-	dt, err := newDeploymentTopology(spec)
-	if err != nil {
-		t.Fatalf("newDeploymentTopology: %v", err)
-	}
-	ep, cells, found := dt.SharedNonLoopbackRemoteEndpoint()
-	if found != wantFound {
-		t.Fatalf("found = %v, want %v", found, wantFound)
-	}
-	if !found {
-		return
-	}
-	if ep != wantEP {
-		t.Errorf("endpoint = %q, want %q", ep, wantEP)
-	}
-	if strings.Join(cells, ",") != strings.Join(wantCells, ",") {
-		t.Errorf("cells = %v, want %v", cells, wantCells)
 	}
 }
 

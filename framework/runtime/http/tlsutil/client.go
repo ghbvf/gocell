@@ -10,17 +10,18 @@ import (
 
 // Client-side mTLS message constants — MESSAGE-CONST-LITERAL-01.
 const (
-	msgClientEmptyCert      = "tlsutil: certPEMBlock is empty; pass the PEM-encoded client certificate (see os.ReadFile)"
-	msgClientEmptyKey       = "tlsutil: keyPEMBlock is empty; pass the PEM-encoded client private key (see os.ReadFile)"
-	msgClientNilRoots       = "tlsutil: rootCAs is nil; build a pool with NewClientCAPool (peer-cert trust anchors)"
-	msgClientZeroPeerID     = "tlsutil: expectedPeerID is the zero CellID; pass the target cell's SPIFFE ID (spiffeid.ForCell)"
-	msgClientEmptyTD        = "tlsutil: trustDomain is empty; pass the SPIFFE trust domain (GOCELL_SPIFFE_TRUST_DOMAIN)"
-	msgClientIdentityZero   = "tlsutil: ConfigForPeer called on a zero-value ClientIdentity (use celltls.Resolve / NewClientIdentity)"
-	msgVerifyNoPeerCert     = "tlsutil: peer presented no certificate"
-	msgVerifyChainFailed    = "tlsutil: peer certificate chain verification failed"
-	msgVerifyNoCellID       = "tlsutil: peer certificate carries no cell SPIFFE ID (URI SAN spiffe://<td>/cell/<cell>)"
-	msgVerifyAmbiguousID    = "tlsutil: peer certificate carries more than one distinct cell SPIFFE ID"
-	msgVerifyPeerIDMismatch = "tlsutil: peer cell SPIFFE ID does not match the expected target cell"
+	msgClientEmptyCert    = "tlsutil: certPEMBlock is empty; pass the PEM-encoded client certificate (see os.ReadFile)"
+	msgClientEmptyKey     = "tlsutil: keyPEMBlock is empty; pass the PEM-encoded client private key (see os.ReadFile)"
+	msgClientNilRoots     = "tlsutil: rootCAs is nil; build a pool with NewClientCAPool (peer-cert trust anchors)"
+	msgClientZeroPeerID   = "tlsutil: expectedPeerID is the zero CellID; pass the target cell's SPIFFE ID (spiffeid.ForCell)"
+	msgClientEmptyTD      = "tlsutil: trustDomain is empty; pass the SPIFFE trust domain (GOCELL_SPIFFE_TRUST_DOMAIN)"
+	msgClientIdentityZero = "tlsutil: ConfigForPeer called on a zero-value ClientIdentity (use celltls.Resolve / NewClientIdentity)"
+	msgVerifyNoPeerCert   = "tlsutil: peer presented no certificate"
+	msgVerifyChainFailed  = "tlsutil: peer certificate chain verification failed"
+	msgVerifyNoCellID     = "tlsutil: peer certificate carries no cell SPIFFE ID (URI SAN spiffe://<td>/cell/<cell>)"
+	msgVerifyBadCellSet   = "tlsutil: peer certificate carries an invalid cell SPIFFE ID set" +
+		" (non-canonical SPIFFE URI or more than one trust domain)"
+	msgVerifyPeerIDMismatch = "tlsutil: expected target cell is not in the peer certificate's cell set"
 )
 
 // NewClientMTLSConfig builds a *tls.Config for client-side mutual TLS that
@@ -36,11 +37,12 @@ const (
 //   - builds and verifies the peer chain against rootCAs (signature, validity
 //     window, and ExtKeyUsage=ServerAuth) — an untrusted or expired peer is
 //     rejected exactly as stdlib verification would; and
-//   - extracts the peer's cell SPIFFE ID and requires it to Equal expectedPeerID.
+//   - extracts the peer's cell SPIFFE-ID SET and requires expectedPeerID to be a
+//     MEMBER (the peer may be a multi-cell workload hosting several cells, #2297).
 //
-// So a man-in-the-middle presenting a cert for a different cell (or one not
-// chained to rootCAs) fails the handshake. This mirrors
-// spiffe/go-spiffe v2/spiffetls/tlsconfig.MTLSClientConfig + tlsconfig.AuthorizeID.
+// So a man-in-the-middle presenting a cert whose cell set does not include the
+// target cell (or one not chained to rootCAs) fails the handshake. This mirrors
+// spiffe/go-spiffe v2/spiffetls/tlsconfig.MTLSClientConfig + tlsconfig.AuthorizeMemberOf.
 //
 // The returned config also presents the caller's own client certificate
 // (certPEMBlock/keyPEMBlock) for the server's RequireAndVerifyClientCert side and
@@ -86,7 +88,8 @@ func NewClientMTLSConfig(certPEMBlock, keyPEMBlock []byte, rootCAs *x509.CertPoo
 
 // verifyPeerCellIdentity returns the VerifyConnection callback that fully
 // authenticates the peer: chain verification against rootCAs (incl. validity +
-// ServerAuth EKU) followed by an exact cell-SPIFFE-ID match against expectedPeerID.
+// ServerAuth EKU) followed by a membership check — expectedPeerID must be IN the
+// peer certificate's cell-SPIFFE-ID set (a multi-cell workload cert is valid).
 func verifyPeerCellIdentity(rootCAs *x509.CertPool, expectedPeerID spiffeid.CellID) func(tls.ConnectionState) error {
 	return func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
@@ -106,18 +109,22 @@ func verifyPeerCellIdentity(rootCAs *x509.CertPool, expectedPeerID spiffeid.Cell
 			return errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyChainFailed, err)
 		}
 
-		peerID, ok, err := spiffeid.FromURIs(leaf.URIs)
+		peerSet, err := spiffeid.CellSetFromURIs(leaf.URIs)
 		if err != nil {
-			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyAmbiguousID)
+			// Invalid cell SPIFFE ID set: a non-canonical cell SPIFFE URI
+			// (userinfo/port/query/fragment) or cell IDs from ≥2 trust domains.
+			// Fail closed and keep the precise cause in the wrapped chain.
+			return errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyBadCellSet, err,
+				errcode.WithInternal(errcode.InternalAttr("peer_subject", leaf.Subject.String())))
 		}
-		if !ok {
+		if peerSet.IsEmpty() {
 			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyNoCellID)
 		}
-		if !peerID.Equal(expectedPeerID) {
+		if !peerSet.Contains(expectedPeerID) {
 			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgVerifyPeerIDMismatch,
 				errcode.WithInternal(
-					errcode.InternalAttr("expected", expectedPeerID.String()),
-					errcode.InternalAttr("got", peerID.String()),
+					errcode.InternalAttr("expected_id", expectedPeerID.String()),
+					errcode.InternalAttr("peer_set", peerSet.String()),
 				))
 		}
 		return nil

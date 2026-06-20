@@ -251,42 +251,56 @@ checklist below).
 
 ### 前置条件：证书要求
 
-每个 cell 进程需要一张 **leaf cert**，满足：
+每个进程（不论承载单个还是多个 cell）需要一张 **workload leaf cert**，满足：
 
-1. **SPIFFE URI SAN**（`spiffe://<trustDomain>/cell/<cellID>`）：
+1. **多-SAN SPIFFE URI**（#2297，`spiffe://<trustDomain>/cell/<cellID>`，**每个本地 cell 一条**）：
    - `trustDomain` = `GOCELL_SPIFFE_TRUST_DOMAIN` 环境变量的值（如 `gocell.internal`）。
    - `cellID` = assembly.yaml 中声明的 cell id（如 `accesscore`、`auditcore`）。
+   - **一个进程可承载多个 cell**：其 workload cert 必须包含每个本地 cell 对应的 URI SAN，例如
+     承载 `accesscore` + `configcore` 的进程需要两条 URI SAN：
+     `spiffe://gocell.internal/cell/accesscore` 和 `spiffe://gocell.internal/cell/configcore`。
+   - `celltls.Resolve` 在启动期校验：**本地证书 URI SAN 集合必须精确等于 topology 声明的本进程
+     colocated cell 集合**（`==`，非超集）——既抓「漏配某本地 cell」也抓「越权多配本进程不承载的
+     cell」，违反此约束启动 fail-fast。
 2. **双 EKU**：同时声明 `ExtKeyUsageServerAuth` + `ExtKeyUsageClientAuth`——同一证书兼作
    server cert（接受对端验证）和 client cert（向对端出示）。
-3. **单根 CA 签发**：所有 cell 的 leaf cert 由同一 trust-root CA 签发（CA cert 作为
-   `GOCELL_TRANSPORT_TLS_CA_FILE` 的内容，分发给每个 cell 进程）。
+3. **单根 CA 签发**：所有进程的 leaf cert 由同一 trust-root CA 签发（CA cert 作为
+   `GOCELL_TRANSPORT_TLS_CA_FILE` 的内容，分发给每个进程）。
 4. **TLS 1.3 兼容**：框架强制 `tls.VersionTLS13`，确保 leaf cert / CA cert 的签名算法
    和密钥长度满足 TLS 1.3 要求（RSA 2048+ 或 ECDSA P-256+）。
 
-生成自签 CA + leaf cert 的工具示例（本地测试）：
+生成自签 CA + workload cert 的工具示例（本地测试，承载 `accesscore` + `configcore` 的多 cell 进程）：
 
 ```bash
 # 生成 CA
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 \
   -keyout ca.key -out ca.crt -subj "/CN=gocell-test-ca" -nodes
 
-# 生成 accesscore leaf cert（带 SPIFFE URI SAN + 双 EKU）
-openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout accesscore.key \
-  -out accesscore.csr -subj "/CN=spiffe://gocell.internal/cell/accesscore" -nodes
+# 生成 core 进程 workload cert（承载 accesscore + configcore，两条 URI SAN）
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout core.key \
+  -out core.csr -subj "/CN=core-workload" -nodes
 
-openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -days 365 -out accesscore.crt \
-  -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/accesscore\nextendedKeyUsage=serverAuth,clientAuth")
+openssl x509 -req -in core.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 365 -out core.crt \
+  -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/accesscore,URI:spiffe://gocell.internal/cell/configcore\nextendedKeyUsage=serverAuth,clientAuth")
+
+# 生成 edge 进程 workload cert（仅承载 auditcore，一条 URI SAN）
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout edge.key \
+  -out edge.csr -subj "/CN=edge-workload" -nodes
+
+openssl x509 -req -in edge.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -days 365 -out edge.crt \
+  -extfile <(printf "subjectAltName=URI:spiffe://gocell.internal/cell/auditcore\nextendedKeyUsage=serverAuth,clientAuth")
 ```
 
-生产环境请使用正式 PKI / cert-manager / SPIRE 签发。
+生产环境请使用正式 PKI / cert-manager / SPIRE 签发（SPIRE 签发的多-SAN SVID 与本格式完全兼容）。
 
 ### 四个必填环境变量（all-or-nothing）
 
 | 变量 | 含义 | 示例 |
 |------|------|------|
-| `GOCELL_TRANSPORT_TLS_CERT_FILE` | 本 cell 的 leaf cert PEM 文件路径 | `/etc/gocell/tls/accesscore.crt` |
-| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | 配套私钥 PEM 文件路径 | `/etc/gocell/tls/accesscore.key` |
+| `GOCELL_TRANSPORT_TLS_CERT_FILE` | workload 的 leaf cert PEM 文件路径（URI SAN 含本进程全部 cell 的 SPIFFE ID，双 EKU） | `/etc/gocell/tls/core.crt` |
+| `GOCELL_TRANSPORT_TLS_KEY_FILE`  | 配套私钥 PEM 文件路径 | `/etc/gocell/tls/core.key` |
 | `GOCELL_TRANSPORT_TLS_CA_FILE`   | trust-root CA bundle PEM 文件路径 | `/etc/gocell/tls/ca.crt` |
 | `GOCELL_SPIFFE_TRUST_DOMAIN`     | SPIFFE trust domain（不含 `spiffe://` 前缀） | `gocell.internal` |
 
@@ -304,9 +318,11 @@ openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 
 **Fail-closed 行为**：
 - topology 含非 loopback remote cell + TLS material 缺失 → **启动 fail-fast**（不降级明文）。
+- 本地证书 URI SAN 集合 ≠ topology 声明的 colocated cell 集合 → **启动 fail-fast**（#2297，最小权限精确匹配）。
 - 各 peer 逐个检查：非 loopback peer + 无 client identity → **启动 fail-fast**。
-- cert chain 验证失败 / SPIFFE cell ID 不匹配 → **TLS 握手拒绝**（连接终止，不静默通过）。
-- cert SPIFFE cell ID 与 service-token callerCell claim 不一致 → **401**（cross-bind middleware）。
+- cert chain 验证失败 → **TLS 握手拒绝**（连接终止，不静默通过）。
+- server cert cell 集合不含 targetCell → **TLS 握手拒绝**（出站 `VerifyConnection` 集合成员判定失败）。
+- client cert cell 集合不含 callerCell（service-token 声明的调用方） → **403**（入站 cross-bind middleware `verifyCrossBind`，`CellSet.Contains`）；**401 仅出现在无 peer 证书时**（cross-bind 前 peer 层未携带 cert）。
 
 ### assembly.yaml 要求
 
@@ -316,7 +332,7 @@ openssl x509 -req -in accesscore.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 topology:
   groups:
     - role: core
-      cells: [accesscore]
+      cells: [accesscore, configcore]   # 两个 cell 同进程，cert 必须含两条 URI SAN
       endpoint: "https://core.internal:9443"
     - role: edge
       cells: [auditcore]
@@ -339,13 +355,6 @@ mTLS 是传输层安全，以下纵深防御层与之正交，**仍然必须配�
 
 ### 已知局限（follow-up 登记）
 
-- **split mTLS = 一进程一 cell（强制）**：mTLS 下每个进程的 internal listener 只持**一张** cell
-  证书（一个 `spiffe://<td>/cell/<id>` 身份），cross-bind 按该 cell 身份校验调用方。因此**一个
-  进程不能在同一 mTLS endpoint 承载多个 cell**——否则除一个 cell 外其余的 cross-bind 必失配。
-  当 TLS 材料已配置且 deployment topology 把同一**非 loopback** endpoint 分配给 ≥2 个 remote
-  cell 时，`cellmodules/celltls.Resolve` **启动期 fail-closed**（loopback/demo 多 cell 同址明文
-  共址不受限）。每个 cell 用独立进程 / endpoint 部署。解除此限制（per-caller-cell 身份 resolver /
-  workload-vs-cell 双层身份模型）是 follow-up（见 ADR §推迟项）。
 - **cert 自动轮换**：本 PR 使用静态 PEM 文件，轮换需要手动替换文件 + 重启进程。自动颁发/续期
   via `runtime/certlifecycle` reconciler 是独立 follow-up（参考 ADR
   `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` §推迟项）。
@@ -359,11 +368,12 @@ mTLS 是传输层安全，以下纵深防御层与之正交，**仍然必须配�
 
   1. **信任包扩展（trust-bundle overlap）：** 在将 leaf cert 切换到新 CA 签发之前，先把新 CA
      cert **追加**到现有 CA bundle 文件（`GOCELL_TRANSPORT_TLS_CA_FILE`），使 CA bundle 同时
-     包含旧 CA 和新 CA。把更新后的 CA bundle 分发到所有 cell 进程并重启，完成后每个 cell 同时
+     包含旧 CA 和新 CA。把更新后的 CA bundle 分发到所有进程并重启，完成后每个进程同时
      信任旧 CA 和新 CA 签发的 leaf cert。
-  2. **Leaf cert 滚动（coordinator）：** 依次为每个 cell 进程生成新 CA 签发的 leaf cert，
-     替换 `GOCELL_TRANSPORT_TLS_CERT_FILE` / `GOCELL_TRANSPORT_TLS_KEY_FILE`，重启该进程。
-     因其他 cell 仍信任新旧两个 CA，期间 TLS 握手不会中断。
+  2. **Leaf cert 滚动（coordinator）：** 依次为每个进程生成新 CA 签发的 workload leaf cert
+     （URI SAN 含该进程承载的全部 cell），替换 `GOCELL_TRANSPORT_TLS_CERT_FILE` /
+     `GOCELL_TRANSPORT_TLS_KEY_FILE`，重启该进程。因其他进程仍信任新旧两个 CA，期间 TLS
+     握手不会中断。
   3. **全进程重启窗口：** 完成所有 leaf cert 替换后，视情况收缩 CA bundle（移除旧 CA 并再次
      重启）。期间 `<peer>_remote_ready` probe 会在每次重启时短暂降级（`unhealthy`）并在进程
      重新上线后恢复；kubelet 会据此短暂摘除 pod 流量，这是预期行为。
@@ -387,5 +397,5 @@ meaningful in a postgres deployment.
 For design decisions, threat model, and phase plan, see:
 
 - `docs/architecture/202606131142-1423-adr-cell-deployment-topology.md` — 部署拓扑 seam 决策、安全模型、历次 amendment。
-- `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` — split mTLS 对等认证（ZT-1）、SPIFFE-ID 约定、fail-closed 双闸、AI-robust 档位表。
+- `docs/architecture/202606171200-2263-adr-cross-cell-transport-mtls.md` — split mTLS 对等认证（ZT-1）、SPIFFE-ID 约定、fail-closed 双闸、AI-robust 档位表；#2297 Amendment：allow-set 成员制解除一进程一 cell。
 - `docs/architecture/202605290130-049-adr-mtls-server-builder-and-identity-hook.md` — server 侧 mTLS builder 与 PeerIdentity ctx hook。

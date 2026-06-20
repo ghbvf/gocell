@@ -10,10 +10,11 @@
 // scope to static provisioning; automatic issuance/rotation via the existing
 // runtime/certlifecycle reconciler is a documented follow-up):
 //
-//   - GOCELL_TRANSPORT_TLS_CERT_FILE — this cell's leaf certificate (PEM). Its
-//     URI SAN MUST be spiffe://<trustDomain>/cell/<thisCell>, and it MUST carry
-//     both ServerAuth and ClientAuth EKUs (a cell is both a peer server and a
-//     peer client).
+//   - GOCELL_TRANSPORT_TLS_CERT_FILE — 本进程承载的 workload leaf certificate（PEM）。
+//     进程承载的**每个** cell 都必须有一条 `spiffe://<trustDomain>/cell/<cell>` URI SAN
+//     （多-SAN workload cert，#2297）。cert 必须同时声明 ServerAuth + ClientAuth EKU（作
+//     为 peer server 和 peer client 双重身份）。[Resolve] 在启动期校验 cert 的 cell-SAN
+//     集合精确等于本进程 topology 声明的 colocated cell 集合（不多也不少，最小权限，#2297）。
 //   - GOCELL_TRANSPORT_TLS_KEY_FILE — the matching private key (PEM).
 //   - GOCELL_TRANSPORT_TLS_CA_FILE — the trust-root bundle (PEM) that signs every
 //     cell cert. Used as the client RootCAs (verify the peer we dial) AND the

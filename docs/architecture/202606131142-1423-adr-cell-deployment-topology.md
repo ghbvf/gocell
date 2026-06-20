@@ -610,10 +610,11 @@ mTLS 对等认证行此刻 CLOSED，私网不再是 peer-auth 的替代补偿（
 - **fail-closed 双闸**：① 静态（`gocell validate` 新增 `TOPO-14`）：非 loopback remote endpoint 必须 `https`
   scheme；② 运行时（`celltls.Resolve` 启动期 fail-fast）：topology 含非 loopback remote cell 而 TLS material
   缺失 → 拒绝启动。逐 peer 检查由 `celltransport.Resolve` 负责。
-- **split mTLS = 一进程一 cell（codex pr-review F1 最小缓解）**：mTLS 绑定一进程一 cell SPIFFE 身份，
-  `celltls.Resolve` 在 TLS material 已配置 + topology 把同一非 loopback endpoint 分给 ≥2 remote cell 时
-  启动期 fail-closed（`bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 信号）；完整
-  per-caller-cell identity resolver 为 follow-up（#2297）。详见新 ADR `202606171200-2263` §残留。
+- **split mTLS = allow-set 成员制（#2297 Amendment，见下）**：原「一进程一 cell」的单身份限制（F1
+  fail-closed + `bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 信号）已由 #2297 的
+  `spiffeid.CellSet` 成员判定 + `DeploymentTopology.ColocatedCells()` 启动期精确匹配替换（见
+  §#2297 Amendment）。`SharedNonLoopbackRemoteEndpoint` 符号已删除；一进程多 cell 的 split 拓扑
+  现在是受支持的运行模式（workload cert 多-SAN）。详见 ADR `202606171200-2263` §Amendment 与下 §#2297 Amendment。
 - **cert 供应：静态 operator PEM（本 PR）**：四 env 变量全有或全无（`GOCELL_TRANSPORT_TLS_CERT_FILE` /
   `_KEY_FILE` / `_CA_FILE` + `GOCELL_SPIFFE_TRUST_DOMAIN`），缺任一 → 启动 fail-fast。
   cert 自动颁发/轮换（via `runtime/certlifecycle` reconciler）是 follow-up，SPIFFE Workload API（ZT-4）
@@ -629,6 +630,25 @@ mTLS 对等认证行此刻 CLOSED，私网不再是 peer-auth 的替代补偿（
   形态类型级不可表达。
 - `INSECURE-SKIP-VERIFY-LITERAL-01`（Medium）：`InsecureSkipVerify:true` 字面量限 tlsutil 包内。
 - 完整评级分层见 ADR `202606171200-2263` §AI-robust 档位表。
+
+### #2297 Amendment — split mTLS 从单身份等值到 allow-set 成员制（2026-06-20）
+
+#2297 解除 §#2263 Amendment 中「一进程一 cell」的临时限制，落地完整的 per-caller-cell 身份解析：
+
+- **原限制移除**：`bootstrap.DeploymentTopology.SharedNonLoopbackRemoteEndpoint` 信号（检测同一非
+  loopback endpoint 是否被 ≥2 remote cell 共享）已**删除**——该限制的前提（一进程只承载一个 cell）
+  已由本 amendment 的 allow-set 模型取代。
+- **替换机制**：peer 授权从「精确等值 `CellID.Equal`」改为「集合成员判定 `CellSet.Contains`」：
+  客户端 `VerifyConnection` 要求目标 cell 在 server cert 的 `CellSet` 中；server cross-bind 中间件
+  要求 service-token caller cell 在 client cert 的 `CellSet` 中。多-SAN workload cert（每个本地
+  cell 一条 `spiffe://<td>/cell/<cell>` URI SAN）是该模型的必要前提。
+- **新增启动期精确匹配**：`celltls.Resolve` 用 `DeploymentTopology.ColocatedCells()` 校验本地 cert
+  的 cell-SAN 集合精确等于本进程声明的 colocated cell 集合（不多不少，最小权限）；`ColocatedCells()`
+  为空（all-colocated 或 remote-only 形态）时跳过此检查。
+- **新增类型**：`spiffeid.CellSet`（sealed，`CellSetFromURIs` 构造）替换原 `FromURIs`（已删），
+  `CellSet.Contains(CellID)` 是唯一成员判定入口（spiffeid string-typed concept funnel Hard 范本）。
+
+参考：ADR `202606171200-2263-adr-cross-cell-transport-mtls.md` §Amendment（#2297）。
 
 ### #2152 PR-3 Amendment — per-cell AMQP 凭据/vhost 隔离安全模型（2026-06-18）
 

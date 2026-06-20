@@ -2,11 +2,14 @@ package celltls
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"strings"
 
 	kauth "github.com/ghbvf/gocell/framework/kernel/auth"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
+	"github.com/ghbvf/gocell/framework/pkg/spiffeid"
 	"github.com/ghbvf/gocell/framework/runtime/bootstrap"
 	"github.com/ghbvf/gocell/framework/runtime/http/tlsutil"
 )
@@ -30,12 +33,15 @@ const (
 	msgBuildCAPool     = "celltls: build trust-root pool"
 	msgBuildClientID   = "celltls: build client identity"
 	msgBuildServerMTLS = "celltls: build server mTLS config"
-	// msgSharedMTLSEndpoint rejects ≥2 remote cells sharing one non-loopback
-	// endpoint under mTLS (#2263 F1): one process = one cell cert, so a shared
-	// mTLS endpoint cannot present a correct per-cell identity. Deploy each cell
-	// in its own process / endpoint (split mTLS = one cell per process).
-	msgSharedMTLSEndpoint = "celltls: transport mTLS requires one cell per process, but the deployment topology shares a" +
-		" non-loopback endpoint across multiple remote cells; give each cell its own endpoint (split mTLS = one cell per process)"
+	msgCertReadLeaf    = "celltls: parse local workload certificate leaf"
+	// msgCertColocatedMismatch fails closed (#2297) when the local workload
+	// certificate's cell-SPIFFE-ID set does not EXACTLY equal the cells this
+	// process hosts (topology Colocated): the cert must cover every hosted cell
+	// (no missing identity → its cross-bind/peer-verify would fail) and carry no
+	// extra cell it does not host (least privilege). Re-provision the workload
+	// cert with exactly this process's cell SPIFFE IDs as URI SANs.
+	msgCertColocatedMismatch = "celltls: local workload certificate cell-SAN set does not exactly match the cells this " +
+		"process hosts; the cert URI SANs must be exactly the colocated cells' SPIFFE IDs (#2297 allow-set)"
 )
 
 // Config carries the operator-provided transport mTLS material locations. The
@@ -107,21 +113,6 @@ func Resolve(topo bootstrap.DeploymentTopology, cfg Config) (Deps, error) {
 			))
 	}
 
-	// #2263 review F1 — single-cell-per-process guard: mTLS binds ONE cell SPIFFE
-	// identity per process (the internal listener presents one cell cert), so a
-	// process serving multiple cells at the SAME non-loopback endpoint cannot
-	// present a correct per-cell cert (the cross-bind would fail for all but one).
-	// Fail-fast when TLS material is provisioned (this branch) AND the topology
-	// shares a non-loopback endpoint across ≥2 remote cells. Lifting this (a
-	// per-caller-cell identity resolver) is a follow-up; see ADR 202606171200-2263.
-	if ep, cells, shared := topo.SharedNonLoopbackRemoteEndpoint(); shared {
-		return Deps{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgSharedMTLSEndpoint,
-			errcode.WithInternal(
-				errcode.InternalAttr("endpoint", ep),
-				errcode.InternalAttr("cells", strings.Join(cells, ",")),
-			))
-	}
-
 	certPEM, err := os.ReadFile(cfg.CertFile)
 	if err != nil {
 		return Deps{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgReadCertFile, err,
@@ -162,7 +153,83 @@ func Resolve(topo bootstrap.DeploymentTopology, cfg Config) (Deps, error) {
 				errcode.InternalAttr("key_file", cfg.KeyFile),
 			))
 	}
+	if err := validateCertCoversColocated(certPEM, cfg.TrustDomain, topo); err != nil {
+		return Deps{}, err
+	}
 	return Deps{ClientIdentity: clientID, ServerTLS: serverTLS}, nil
+}
+
+// validateCertCoversColocated fails closed (#2297) when the local workload
+// certificate's cell-SPIFFE-ID set does not EXACTLY match the cells this process
+// hosts (topo.ColocatedCells): every hosted cell must be present (otherwise its
+// cross-bind / peer-verify would fail at first call) AND the cert must carry no
+// cell it does not host (least privilege). The check is skipped when the topology
+// does not enumerate local cells (ColocatedCells empty — a zero-value all-colocated
+// monolith or a remote-only role): bootstrap has no assembly cell set there, so
+// there is nothing to match against and runtime membership still governs.
+func validateCertCoversColocated(certPEM []byte, trustDomain string, topo bootstrap.DeploymentTopology) error {
+	hosted := topo.ColocatedCells()
+	if len(hosted) == 0 {
+		return nil
+	}
+	set, err := certCellSet(certPEM)
+	if err != nil {
+		return err
+	}
+	missing := make([]string, 0, len(hosted))
+	for _, cell := range hosted {
+		id, ferr := spiffeid.ForCell(trustDomain, cell)
+		if ferr != nil {
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertColocatedMismatch, ferr,
+				errcode.WithInternal(errcode.InternalAttr("cell", cell)))
+		}
+		if !set.Contains(id) {
+			missing = append(missing, cell)
+		}
+	}
+	// Exact match: every hosted cell present (no missing) AND no extra cell in the
+	// cert beyond the hosted set (cardinality equal).
+	if len(missing) == 0 && set.Len() == len(hosted) {
+		return nil
+	}
+	return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertColocatedMismatch,
+		errcode.WithInternal(
+			errcode.InternalAttr("hosted_cells", strings.Join(hosted, ",")),
+			errcode.InternalAttr("cert_set", set.String()),
+			errcode.InternalAttr("missing", strings.Join(missing, ",")),
+			errcode.InternalAttr("extra", strings.Join(certExtraCells(set, hosted), ",")),
+		))
+}
+
+// certExtraCells returns the canonical SPIFFE IDs in set whose cell name is not in
+// the hosted list — the cells a workload cert carries BEYOND what the process
+// hosts (a least-privilege violation), for the mismatch diagnostic.
+func certExtraCells(set spiffeid.CellSet, hosted []string) []string {
+	hostedSet := make(map[string]struct{}, len(hosted))
+	for _, h := range hosted {
+		hostedSet[h] = struct{}{}
+	}
+	var extra []string
+	for _, id := range set.Cells() {
+		if _, ok := hostedSet[id.Cell()]; !ok {
+			extra = append(extra, id.String())
+		}
+	}
+	return extra
+}
+
+// certCellSet parses the leaf certificate from a PEM block and returns its cell
+// SPIFFE-ID set (the URI SAN cell IDs).
+func certCellSet(certPEM []byte) (spiffeid.CellSet, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return spiffeid.CellSet{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertReadLeaf)
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return spiffeid.CellSet{}, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, msgCertReadLeaf, err)
+	}
+	return spiffeid.CellSetFromURIs(leaf.URIs)
 }
 
 // InternalListenerSecurity augments an internal-listener service-token auth chain
