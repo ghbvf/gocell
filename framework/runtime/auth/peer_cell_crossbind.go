@@ -13,9 +13,10 @@ import (
 
 // Cross-bind message constants — MESSAGE-CONST-LITERAL-01.
 const (
-	msgCrossBindNoPeer      = "mTLS peer certificate required for cross-cell identity binding"
-	msgCrossBindNoCertCell  = "mTLS peer certificate carries no cell SPIFFE ID (spiffe://<td>/cell/<cell>)"
-	msgCrossBindBadCertSet  = "mTLS peer certificate carries an invalid cell SPIFFE ID set (non-canonical SPIFFE URI or more than one trust domain)"
+	msgCrossBindNoPeer     = "mTLS peer certificate required for cross-cell identity binding"
+	msgCrossBindNoCertCell = "mTLS peer certificate carries no cell SPIFFE ID (spiffe://<td>/cell/<cell>)"
+	msgCrossBindBadCertSet = "mTLS peer certificate carries an invalid cell SPIFFE ID set" +
+		" (non-canonical SPIFFE URI or more than one trust domain)"
 	msgCrossBindNoPrincipal = "service-token caller principal required for cross-cell identity binding"
 	msgCrossBindBadExpected = "cross-cell identity binding: service-token caller cell is not a valid SPIFFE cell token"
 	msgCrossBindMismatch    = "service-token caller cell is not in the mTLS peer certificate's cell set"

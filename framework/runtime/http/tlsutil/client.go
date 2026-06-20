@@ -10,16 +10,17 @@ import (
 
 // Client-side mTLS message constants — MESSAGE-CONST-LITERAL-01.
 const (
-	msgClientEmptyCert      = "tlsutil: certPEMBlock is empty; pass the PEM-encoded client certificate (see os.ReadFile)"
-	msgClientEmptyKey       = "tlsutil: keyPEMBlock is empty; pass the PEM-encoded client private key (see os.ReadFile)"
-	msgClientNilRoots       = "tlsutil: rootCAs is nil; build a pool with NewClientCAPool (peer-cert trust anchors)"
-	msgClientZeroPeerID     = "tlsutil: expectedPeerID is the zero CellID; pass the target cell's SPIFFE ID (spiffeid.ForCell)"
-	msgClientEmptyTD        = "tlsutil: trustDomain is empty; pass the SPIFFE trust domain (GOCELL_SPIFFE_TRUST_DOMAIN)"
-	msgClientIdentityZero   = "tlsutil: ConfigForPeer called on a zero-value ClientIdentity (use celltls.Resolve / NewClientIdentity)"
-	msgVerifyNoPeerCert     = "tlsutil: peer presented no certificate"
-	msgVerifyChainFailed    = "tlsutil: peer certificate chain verification failed"
-	msgVerifyNoCellID       = "tlsutil: peer certificate carries no cell SPIFFE ID (URI SAN spiffe://<td>/cell/<cell>)"
-	msgVerifyBadCellSet     = "tlsutil: peer certificate carries an invalid cell SPIFFE ID set (non-canonical SPIFFE URI or more than one trust domain)"
+	msgClientEmptyCert    = "tlsutil: certPEMBlock is empty; pass the PEM-encoded client certificate (see os.ReadFile)"
+	msgClientEmptyKey     = "tlsutil: keyPEMBlock is empty; pass the PEM-encoded client private key (see os.ReadFile)"
+	msgClientNilRoots     = "tlsutil: rootCAs is nil; build a pool with NewClientCAPool (peer-cert trust anchors)"
+	msgClientZeroPeerID   = "tlsutil: expectedPeerID is the zero CellID; pass the target cell's SPIFFE ID (spiffeid.ForCell)"
+	msgClientEmptyTD      = "tlsutil: trustDomain is empty; pass the SPIFFE trust domain (GOCELL_SPIFFE_TRUST_DOMAIN)"
+	msgClientIdentityZero = "tlsutil: ConfigForPeer called on a zero-value ClientIdentity (use celltls.Resolve / NewClientIdentity)"
+	msgVerifyNoPeerCert   = "tlsutil: peer presented no certificate"
+	msgVerifyChainFailed  = "tlsutil: peer certificate chain verification failed"
+	msgVerifyNoCellID     = "tlsutil: peer certificate carries no cell SPIFFE ID (URI SAN spiffe://<td>/cell/<cell>)"
+	msgVerifyBadCellSet   = "tlsutil: peer certificate carries an invalid cell SPIFFE ID set" +
+		" (non-canonical SPIFFE URI or more than one trust domain)"
 	msgVerifyPeerIDMismatch = "tlsutil: expected target cell is not in the peer certificate's cell set"
 )
 
