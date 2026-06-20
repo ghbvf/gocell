@@ -243,7 +243,8 @@ func (f *errcodeMappingFakeStream) SetTrailer(_ metadata.MD)       {}
 //   - PublicInt: decimal integer string (e.g. "42").
 //   - PublicBool: "true" / "false".
 //   - PublicDuration: nanosecond integer string (matching json.Marshal(int64(d))).
-//   - PublicTime: RFC3339Nano-quoted JSON string (matching json.Marshal(time.Time)).
+//   - PublicTime: RFC3339Nano string, unquoted (same instant as json.Marshal(time.Time),
+//     minus the structural JSON quotes — a flat map value is the string itself).
 func TestErrToStatus_4xx_PublicDetails_CarriedInErrorInfo(t *testing.T) {
 	t.Parallel()
 
@@ -296,7 +297,7 @@ func TestErrToStatus_4xx_PublicDetails_CarriedInErrorInfo(t *testing.T) {
 		"count":     "42",
 		"active":    "true",
 		"elapsed":   "5000000000",
-		"timestamp": `"2024-01-02T03:04:05Z"`,
+		"timestamp": "2024-01-02T03:04:05Z",
 	}
 	for k, want := range wantMeta {
 		if got2 := ei.Metadata[k]; got2 != want {
