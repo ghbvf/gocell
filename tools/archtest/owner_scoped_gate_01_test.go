@@ -126,24 +126,16 @@ const authzImportPath = PlatformFrameworkModulePath + "/pkg/authz"
 // changing its path param or permission, must update this set in the same change —
 // otherwise the exact-set compare fails. See the file godoc for the invariant.
 var ownerScopedGateExpectedSet = map[string]struct{}{
-	// NOTE (#2355): accesscore (identitymanage/rbaccheck/authorizationdecide) MIGRATED
-	// off hand-wired gates to contract-derived authz — their owner/self-scoped shape is
-	// now declared in contract.yaml endpoints.http.{resource,selfScoped} and rendered into
+	// NOTE (#2355 / #2486): accesscore (identitymanage/rbaccheck/authorizationdecide)
+	// AND the examples (iotdevice devicecell + todoorder ordercell) MIGRATED off
+	// hand-wired gates to contract-derived authz — their owner/self-scoped shape is now
+	// declared in contract.yaml endpoints.http.{resource,selfScoped} and rendered into
 	// the generated handler_gen.go contractSpec via the single RequirePermissionForContract
 	// funnel (golden-locked Hard). They are guarded by the metadata-derived
 	// TestOwnerScopedGate_ContractDerived_01 below, NOT by this scan. This scan now covers
-	// only the STILL-hand-wired gates (examples + deviceserving); as those migrate (#2355
-	// 续波) they move to the contract-derived frozen set.
+	// only the LAST still-hand-wired owner gate: deviceserving (#2351). When that one
+	// migrates too, this set empties and the scan arm can retire.
 	//
-	// examples (PR-10d #1894): the iotdevice + todoorder owner-scoped gates that
-	// PR-10d migrated from auth.SelfOr to auth.RequirePermissionForResource. Frozen
-	// here so a regression back to a plain RequirePermission (which forwards
-	// r.URL.Path, not the canonical resource id, breaking the ownership rule) drops
-	// the triple → exact-set mismatch → CI red.
-	"todoorder-order|id|PermOrderRead":   {},
-	"todoorder-order|id|PermOrderUpdate": {},
-	"iotdevice-device|id|PermDeviceRead": {},
-	"devicecommand|id|PermDeviceConsume": {},
 	// #2351: the framework-owned http.devicestate.v1 serving gate lives in the
 	// composition-root layer (cellmodules/deviceserving/service.go), not a cell handler —
 	// the first owner-scoped gate frozen outside corecells/examples (scan scope widened to
@@ -154,9 +146,9 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	"deviceserving|id|PermDeviceRead": {},
 }
 
-// ownerScopedGateContractDerivedSet is the FROZEN set of accesscore owner-scoped /
-// self-scoped HTTP gates that migrated to contract-derived authz (#2355), keyed
-// "<contractID>|<param-or-self>|<action>" where param is the endpoints.http.resource
+// ownerScopedGateContractDerivedSet is the FROZEN set of owner-scoped / self-scoped
+// HTTP gates that migrated to contract-derived authz (accesscore #2355, examples #2486),
+// keyed "<contractID>|<param-or-self>|<action>" where param is the endpoints.http.resource
 // path-param name (owner-scoped) or the literal "self" (endpoints.http.selfScoped), and
 // action is the endpoints.http.permission string. The live set derived from project
 // metadata MUST equal this exactly (TestOwnerScopedGate_ContractDerived_01): dropping a
@@ -165,6 +157,7 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 // The gate behavior itself is golden-locked at codegen (the contractSpec literal); this is
 // the Medium reverse-check that the metadata declarations stay frozen.
 var ownerScopedGateContractDerivedSet = map[string]struct{}{
+	// accesscore (#2355)
 	"http.auth.user.get.v1|id|user:read":              {},
 	"http.auth.user.update.v1|id|user:write":          {},
 	"http.auth.user.patch.v1|id|user:write":           {},
@@ -172,6 +165,15 @@ var ownerScopedGateContractDerivedSet = map[string]struct{}{
 	"http.auth.role.list.v1|userID|role:read":         {},
 	"http.auth.role.check.v1|userID|role:read":        {},
 	"http.auth.decide.v1|self|access:decide":          {},
+	// examples: todoorder ordercell (#2486)
+	"http.order.get.v1|id|order:read":       {},
+	"http.order.confirm.v1|id|order:update": {},
+	// examples: iotdevice devicecell (#2486)
+	"http.device.status.v1|id|device:read":                  {},
+	"http.device.command.dequeue.v1|id|device:consume":      {},
+	"http.device.command.report.v1|id|device:consume":       {},
+	"http.device.command.ack.v1|id|device:consume":          {},
+	"http.device.command.extend-lease.v1|id|device:consume": {},
 }
 
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
