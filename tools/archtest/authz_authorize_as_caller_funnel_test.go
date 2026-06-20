@@ -31,14 +31,18 @@
 // # AI-robust rating (charter §"Funnel 双向锁评级")
 //
 //   - Downstream (who may CALL AuthorizeAs): Medium. The detector resolves every
-//     identifier USE of the AuthorizeAs method to the auth.SubjectAuthorizer
-//     interface *types.Func via go/types (info.Uses), so package-qualified,
-//     import-aliased, and method-value-capture forms all resolve to the same
-//     object; any reference outside the allowlist fails CI. Honest caveat: Go
-//     does not block the call at compile time (AuthorizeAs is an exported
-//     interface method), so enforcement is archtest-bound — the highest grade
-//     reachable for an exported-method caller restriction (Go ceiling, same as
-//     AUTHZ-DECISION-ALLOW-DENY-CALLER-01).
+//     identifier USE of an AuthorizeAs method via go/types (info.Uses) and matches
+//     it by SIGNATURE SHAPE — a method whose second parameter is the sealed
+//     auth.SubjectDescriptor — so package-qualified, import-aliased, and
+//     method-value-capture forms all resolve to the same object. Crucially this
+//     covers BOTH the interface method AND a direct call to the concrete impl
+//     (accesscore Service.AuthorizeAs): anchoring on the param type rather than the
+//     interface's package closes the concrete-call bypass the composition root
+//     (cellmodules/, cmd/) could otherwise reach unguarded (#1904 review F4). Any
+//     reference outside the allowlist fails CI. Honest caveat: Go does not block
+//     the call at compile time (AuthorizeAs is an exported method), so enforcement
+//     is archtest-bound — the highest grade reachable for an exported-method caller
+//     restriction (Go ceiling, same as AUTHZ-DECISION-ALLOW-DENY-CALLER-01).
 //   - Upstream (can the explicit-subject path forge a privileged subject):
 //     Hard. auth.SubjectDescriptor has unexported fields and only device/system
 //     constructors (no admin/super-admin constructor exists), so a privileged
@@ -50,8 +54,10 @@
 //
 // Anti-vacuity: each allowlist entry MUST reference AuthorizeAs at least once, so
 // a removed call or a scanner regression (which would make the funnel vacuously
-// pass) fails CI. A RED fixture (internal/authorizeascallerfixture) proves the
-// detector fires on an AuthorizeAs reference outside the allowlist.
+// pass) fails CI. The RED fixture (internal/authorizeascallerfixture) proves the
+// detector fires on BOTH an interface-typed AuthorizeAs call AND a direct
+// concrete-receiver call (the form anchoring on the interface package missed) —
+// each outside the allowlist.
 //
 // Blind spot (known, by design): the scan runs over Production() scope, which
 // excludes _test.go files. Test doubles legitimately call AuthorizeAs (e.g. the
@@ -76,6 +82,12 @@ const authSubjectAuthorizerPkgPath = PlatformFrameworkModulePath + "/runtime/aut
 
 // authorizeAsMethodName is the explicit-subject seam method.
 const authorizeAsMethodName = "AuthorizeAs"
+
+// subjectDescriptorTypeName is the sealed explicit-subject value type that is the
+// distinctive second parameter of every SubjectAuthorizer.AuthorizeAs method
+// (interface OR concrete impl). It is only mintable in framework/runtime/auth, so
+// anchoring the seam-method match on this parameter type cannot be forged.
+const subjectDescriptorTypeName = "SubjectDescriptor"
 
 // authorizeAsCallerAllowlist is the set of module-relative production files
 // allowed to reference auth.SubjectAuthorizer.AuthorizeAs. Any other production
@@ -152,12 +164,22 @@ func scanAuthorizeAsCallers(p *Pass, observed map[string]struct{}) []Diagnostic 
 	return d
 }
 
-// isAuthorizeAsRef resolves an identifier USE to the
-// auth.SubjectAuthorizer.AuthorizeAs interface method via go/types (info.Uses):
-// matches the package-qualified call, method-value capture, and aliased forms
-// (all resolve to the same *types.Func). The method is matched by name + owning
-// package path; the concrete accesscore impl resolves through the interface at
-// every real call site, so anchoring on the interface method covers all callers.
+// isAuthorizeAsRef resolves an identifier USE to a SubjectAuthorizer.AuthorizeAs
+// seam method via go/types (info.Uses): matches the package-qualified call,
+// method-value capture, and aliased forms (all resolve to the same *types.Func).
+//
+// The match is anchored on SIGNATURE SHAPE — a method named AuthorizeAs whose
+// SECOND parameter is auth.SubjectDescriptor — NOT on the owning package path.
+// Anchoring on the interface's package (== framework/runtime/auth) silently
+// missed a real bypass: a direct call to the CONCRETE impl
+// (accesscore authorizationdecide.Service.AuthorizeAs) resolves to a *types.Func
+// owned by the accesscore package, not the auth interface package. The
+// composition-root layer (cellmodules/, cmd/) is allowed to import all layers, so
+// it can hold a concrete *Service and call .AuthorizeAs WITHOUT going through the
+// interface — the cross-cell import ban does not cover that path. Matching the
+// sealed SubjectDescriptor parameter type catches the interface method AND every
+// concrete impl (present or future) without enumerating impls; SubjectDescriptor
+// is only mintable in framework/runtime/auth, so the anchor cannot be forged.
 func isAuthorizeAsRef(info *types.Info, id *ast.Ident) bool {
 	if id.Name != authorizeAsMethodName {
 		return false
@@ -166,16 +188,28 @@ func isAuthorizeAsRef(info *types.Info, id *ast.Ident) bool {
 	if !ok {
 		return false
 	}
-	if fn.Pkg() == nil || fn.Pkg().Path() != authSubjectAuthorizerPkgPath {
+	// Must be a method (the seam is always a method, never a package-level func).
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
 		return false
 	}
-	// Confirm it is an interface method (the SubjectAuthorizer seam), not an
-	// unrelated package-level func that happens to be named AuthorizeAs.
-	sig, ok := fn.Type().(*types.Signature)
+	// Seam shape: AuthorizeAs(ctx, auth.SubjectDescriptor, resource, action).
+	// The SubjectDescriptor second parameter is the unforgeable marker.
+	params := sig.Params()
+	return params.Len() >= 2 && isSubjectDescriptorType(params.At(1).Type())
+}
+
+// isSubjectDescriptorType reports whether t is the sealed
+// framework/runtime/auth.SubjectDescriptor named type.
+func isSubjectDescriptorType(t types.Type) bool {
+	named, ok := t.(*types.Named)
 	if !ok {
 		return false
 	}
-	return sig.Recv() != nil
+	obj := named.Obj()
+	return obj != nil && obj.Pkg() != nil &&
+		obj.Pkg().Path() == authSubjectAuthorizerPkgPath &&
+		obj.Name() == subjectDescriptorTypeName
 }
 
 // TestAuthzAuthorizeAsCallerFunnel01_RedFixture is the reverse self-check: the
@@ -202,6 +236,8 @@ func TestAuthzAuthorizeAsCallerFunnel01_RedFixture(t *testing.T) {
 		found += len(scanAuthorizeAsCallers(p, throwaway))
 		return nil
 	})
-	assert.GreaterOrEqual(t, found, 1,
-		"RED fixture self-check FAILED: detector must flag an AuthorizeAs reference outside the allowlist")
+	assert.GreaterOrEqual(t, found, 2,
+		"RED fixture self-check FAILED: detector must flag BOTH AuthorizeAs forms outside the allowlist — "+
+			"the interface-typed call (ForgeAuthorizeAs) AND the direct concrete-receiver call "+
+			"(ForgeConcreteAuthorizeAs, the F4 bypass). got %d, want >= 2", found)
 }
