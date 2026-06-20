@@ -279,8 +279,8 @@ func newStreamChain(deps Deps, reg *runtimegrpc.ServiceRegistrar, drain *runtime
 		StreamTracing(deps.Tracer),
 		StreamAccessLog(deps.Clock),
 		StreamMetrics(deps.Collector, deps.Clock, validCellIDs),
-		StreamRateLimit(deps.RateLimiter),
-		StreamCircuitBreaker(deps.Allower),
+		StreamRateLimit(deps.RateLimiter, deps.Collector, validCellIDs),
+		StreamCircuitBreaker(deps.Allower, deps.Collector, validCellIDs),
 		// Registrar-sourced public-method bypass (#1675) + per-method permission gate
 		// (#2008), same single-source wiring as the unary chain — see authChainOptions
 		// in chain.go.

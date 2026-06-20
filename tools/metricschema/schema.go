@@ -790,6 +790,12 @@ func (sp *scanPackage) grpcProviderCollectorEntries(call *ast.CallExpr, rel stri
 			labels:    labels,
 			buckets:   buckets,
 		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
+			name:      "grpc_protection_rejected_total",
+			namespace: sp.namespace,
+			help:      "Total gRPC requests rejected by a protection interceptor (rate-limit / circuit-breaker).",
+			labels:    []string{"type", "method", "cell"},
+		}, rel, call.Pos()),
 	}, nil
 }
 

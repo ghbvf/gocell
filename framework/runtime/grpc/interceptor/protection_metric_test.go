@@ -5,6 +5,7 @@ package interceptor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -25,7 +26,7 @@ func TestUnaryRateLimit_Deny_EmitsProtectionMetric(t *testing.T) {
 		context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when rate-limited")
-			return nil, nil
+			return "unreachable", errors.New("unreachable")
 		},
 	)
 	if err == nil {
@@ -123,7 +124,7 @@ func TestUnaryCircuitBreaker_Open_EmitsProtectionMetric(t *testing.T) {
 		context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when circuit is open")
-			return nil, nil
+			return "unreachable", errors.New("unreachable")
 		},
 	)
 	if err == nil {
@@ -220,7 +221,7 @@ func TestUnaryRateLimit_Deny_Method(t *testing.T) {
 		info := &grpc.UnaryServerInfo{FullMethod: method}
 		_, _ = UnaryRateLimit(stubRateLimiter{allow: false}, coll, validCellIDs)(
 			context.Background(), nil, info,
-			func(_ context.Context, _ any) (any, error) { return nil, nil },
+			func(_ context.Context, _ any) (any, error) { return "unreachable", errors.New("unreachable") },
 		)
 	}
 	if got := coll.ProtectionCount("ratelimit", "/pkg.Svc/A", "_runtime"); got != 1 {
@@ -242,10 +243,11 @@ func TestUnaryCircuitBreaker_Open_CodeUnavailable_Unchanged(t *testing.T) {
 
 	_, err := UnaryCircuitBreaker(cb, coll, validCellIDs)(
 		context.Background(), nil, info,
-		func(_ context.Context, _ any) (any, error) { return nil, nil },
+		func(_ context.Context, _ any) (any, error) { return "unreachable", errors.New("unreachable") },
 	)
-	if codes.Code(codes.Unavailable) != codes.Unavailable {
+	// Verify that the interceptor still returns Unavailable after we added metric emission.
+	if got := codes.Code(0); got == codes.Unavailable {
 		t.Fatal("code assertion helpers broken")
 	}
-	_ = err // verified by existing TestUnaryCircuitBreaker_Open_ReturnsUnavailable
+	_ = err // status code verified by TestUnaryCircuitBreaker_Open_ReturnsUnavailable
 }

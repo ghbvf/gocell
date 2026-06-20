@@ -95,7 +95,7 @@ func TestUnaryCircuitBreaker_NilCB_Passthrough(t *testing.T) {
 	t.Parallel()
 	handlerCalled := false
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryCircuitBreaker(nil)(context.Background(), nil, info,
+	_, err := UnaryCircuitBreaker(nil, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { handlerCalled = true; return "ok", nil })
 	if err != nil {
 		t.Fatalf("nil cb: unexpected error: %v", err)
@@ -109,7 +109,7 @@ func TestUnaryCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	t.Parallel()
 	cb := &stubAllower{allowed: false}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
+	_, err := UnaryCircuitBreaker(cb, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) {
 			t.Fatal("handler must not be called when circuit is open")
 			return "unreachable", errors.New("unreachable")
@@ -132,7 +132,7 @@ func TestUnaryCircuitBreaker_Closed_Success_DoneNil(t *testing.T) {
 	t.Parallel()
 	cb := &stubAllower{allowed: true}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
+	_, err := UnaryCircuitBreaker(cb, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return "ok", nil })
 	if err != nil {
 		t.Fatalf("success: unexpected error: %v", err)
@@ -152,7 +152,7 @@ func TestUnaryCircuitBreaker_Closed_ServerFailure_DoneErr(t *testing.T) {
 	cb := &stubAllower{allowed: true, doneErr: &capturedDoneErr}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	handlerErr := status.Error(codes.Internal, "internal server error")
-	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
+	_, err := UnaryCircuitBreaker(cb, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return nil, handlerErr })
 	// Verify the handler error is propagated (check by status code, not identity,
 	// to avoid errorlint's "comparing with != will fail on wrapped errors" warning).
@@ -173,7 +173,7 @@ func TestUnaryCircuitBreaker_Closed_ClientError_DoneNil(t *testing.T) {
 	cb := &stubAllower{allowed: true}
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
 	handlerErr := status.Error(codes.InvalidArgument, "bad request")
-	_, err := UnaryCircuitBreaker(cb)(context.Background(), nil, info,
+	_, err := UnaryCircuitBreaker(cb, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return nil, handlerErr })
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("handler error not propagated: got code=%v, want InvalidArgument (err=%v)", status.Code(err), err)
@@ -187,7 +187,7 @@ func TestUnaryCircuitBreaker_NilDone_FailOpen(t *testing.T) {
 	// done == nil (contract violation) → fail-open (no-op), handler result propagated.
 	t.Parallel()
 	info := &grpc.UnaryServerInfo{FullMethod: "/pkg.Svc/Op"}
-	resp, err := UnaryCircuitBreaker(nilDoneAllower{})(context.Background(), nil, info,
+	resp, err := UnaryCircuitBreaker(nilDoneAllower{}, noopCollector(), nil)(context.Background(), nil, info,
 		func(_ context.Context, _ any) (any, error) { return "ok", nil })
 	if err != nil {
 		t.Fatalf("nil-done fail-open: unexpected error: %v", err)
@@ -204,7 +204,7 @@ func TestStreamCircuitBreaker_NilCB_Passthrough(t *testing.T) {
 	handlerCalled := false
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
-	err := StreamCircuitBreaker(nil)(nil, ss, info,
+	err := StreamCircuitBreaker(nil, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { handlerCalled = true; return nil })
 	if err != nil {
 		t.Fatalf("nil cb stream: unexpected error: %v", err)
@@ -219,7 +219,7 @@ func TestStreamCircuitBreaker_Open_ReturnsUnavailable(t *testing.T) {
 	cb := &stubAllower{allowed: false}
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
-	err := StreamCircuitBreaker(cb)(nil, ss, info,
+	err := StreamCircuitBreaker(cb, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error {
 			t.Fatal("stream handler must not be called when circuit is open")
 			return errors.New("unreachable")
@@ -240,7 +240,7 @@ func TestStreamCircuitBreaker_Closed_Success_DoneNil(t *testing.T) {
 	cb := &stubAllower{allowed: true}
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
-	err := StreamCircuitBreaker(cb)(nil, ss, info,
+	err := StreamCircuitBreaker(cb, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { return nil })
 	if err != nil {
 		t.Fatalf("stream success: unexpected error: %v", err)
@@ -257,7 +257,7 @@ func TestStreamCircuitBreaker_Closed_ServerFailure_DoneErr(t *testing.T) {
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
 	handlerErr := status.Error(codes.Internal, "internal error")
-	err := StreamCircuitBreaker(cb)(nil, ss, info,
+	err := StreamCircuitBreaker(cb, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { return handlerErr })
 	// Verify propagation by status code to avoid errorlint "!=" warning.
 	if status.Code(err) != codes.Internal {
@@ -275,7 +275,7 @@ func TestStreamCircuitBreaker_Closed_ClientError_DoneNil(t *testing.T) {
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
 	handlerErr := status.Error(codes.NotFound, "not found")
-	err := StreamCircuitBreaker(cb)(nil, ss, info,
+	err := StreamCircuitBreaker(cb, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { return handlerErr })
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("stream handler error not propagated: got code=%v, want NotFound (err=%v)", status.Code(err), err)
@@ -290,7 +290,7 @@ func TestStreamCircuitBreaker_NilDone_FailOpen(t *testing.T) {
 	t.Parallel()
 	info := &grpc.StreamServerInfo{FullMethod: "/pkg.Svc/S"}
 	ss := &cbFakeStream{ctx: context.Background()}
-	err := StreamCircuitBreaker(nilDoneAllower{})(nil, ss, info,
+	err := StreamCircuitBreaker(nilDoneAllower{}, noopCollector(), nil)(nil, ss, info,
 		func(_ any, _ grpc.ServerStream) error { return nil })
 	if err != nil {
 		t.Fatalf("stream nil-done fail-open: unexpected error: %v", err)

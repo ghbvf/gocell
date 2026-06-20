@@ -311,6 +311,16 @@ metrics:
         - cell
         - slice
       file: framework/runtime/observability/metrics/eventbus_cache.go
+    - name: grpc_protection_rejected_total
+      fqName: gocell_grpc_protection_rejected_total
+      namespace: gocell
+      type: counter
+      help: Total gRPC requests rejected by a protection interceptor (rate-limit / circuit-breaker).
+      labels:
+        - type
+        - method
+        - cell
+      file: cmd/corebundle/run.go
     - name: grpc_server_request_duration_seconds
       fqName: gocell_grpc_server_request_duration_seconds
       namespace: gocell
