@@ -9,7 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
-	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // TestScaffoldAssembly_YAMLScalarInjection asserts that user-provided
@@ -103,7 +102,7 @@ func renderInjectionAssemblyYAML(t *testing.T, team, role string) []byte {
 	gen := NewGenerator(pm, "github.com/ghbvf/gocell", root)
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myassembly"),
-		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
+		Cells:     mustRefs(t, "examplecell"),
 		OwnerTeam: team,
 		OwnerRole: role,
 		Deploy:    "k8s",
@@ -164,7 +163,7 @@ func assertNoInjectedAdjacentKeys(t *testing.T, asmYAML []byte) {
 		assertKeysAllowed(t, "owner", ownerMap, "team", "role")
 	}
 	if buildMap, ok := topLevel["build"].(map[string]any); ok {
-		assertKeysAllowed(t, "build", buildMap, "entrypoint", "binary", "deployTemplate")
+		assertKeysAllowed(t, "build", buildMap, "entrypoint", "binary", "deployTemplate", "compositionAPI")
 	}
 }
 
@@ -197,7 +196,7 @@ func TestScaffoldAssembly_YAMLScalarFile_ColonInOwner(t *testing.T) {
 
 	spec := AssemblyScaffoldSpec{
 		ID:        mustID(t, "myassembly"),
-		Cells:     []scaffoldid.ScaffoldID{mustID(t, "examplecell")},
+		Cells:     mustRefs(t, "examplecell"),
 		OwnerTeam: injectedTeam,
 		OwnerRole: "maintainer",
 	}

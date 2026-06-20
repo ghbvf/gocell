@@ -126,9 +126,20 @@ string, so set membership is inherently a runtime guard.
 - **Operator-SDK module-cache metadata read** (`go list -json` to read a
   dependency module's cell.yaml): no in-repo consumer until examples/ split into
   modules (M11 #1092). Tracked as a backlog issue.
-- **Scaffold `--module` flag** (cross-module assembly scaffolding): `gocell
-  scaffold assembly` emits same-module string-form cells; cross-module entries
-  are hand-authored. Backlog.
+- ~~**Scaffold `--module` flag** (cross-module assembly scaffolding)~~ —
+  **landed in #1516.** `gocell scaffold assembly` now takes a repeatable
+  `--cell <id[@module]>` flag (mutually exclusive with the same-module `--cells`
+  CSV shorthand). A cross-module entry emits the object form
+  `cells[].{id,module}` + `build.compositionAPI: true` and implicitly skips the
+  K#10 derived files (modules_gen.go / main.go / boundary.yaml), since the
+  cross-module cell metadata is not locally resolvable — that read remains the
+  Operator-SDK module-cache item above (#1515). The scaffolded `assembly.yaml`
+  therefore validates in-repo only once the cross-module cells are discoverable
+  (go.work / #1515); the scaffold's responsibility ends at emitting correct YAML.
+  Generated imports still route through the single `cellModuleImportPath` funnel
+  (no duplication). Module-path hygiene is enforced by the scaffold spec's closed
+  funnel (`validateAssemblyScaffoldSpec` → `metadata.MatchAssemblyModulePath`),
+  the same validator the assembly.yaml decoder uses.
 - **M12b** (metric-label closed-set defense at the write point +
   `CELL-ID-CLOSED-SET-01` archtest): mostly already present (`_runtime` sentinel +
   cardinality cap); remains in #1093.

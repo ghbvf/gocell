@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/framework/kernel/metadata"
 )
 
 // TestRunScaffoldAssembly_Basic is a RED test for K#09 `gocell scaffold assembly`:
@@ -412,4 +414,283 @@ l0Dependencies: []
 		t.Fatal(err)
 	}
 	return root
+}
+
+// writeAssemblyTestCell adds a cell.yaml skeleton for cellID under an existing
+// project root (companion to setupAssemblyTestProject for multi-cell fixtures).
+func writeAssemblyTestCell(t *testing.T, root, cellID string) {
+	t.Helper()
+	cellDir := filepath.Join(root, "cells", cellID)
+	if err := os.MkdirAll(cellDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cellYAML := `id: ` + cellID + `
+type: core
+consistencyLevel: L1
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: ` + cellID + `
+verify:
+  smoke:
+    - smoke.` + cellID + `.startup
+goStructName: ExampleCell
+l0Dependencies: []
+`
+	if err := os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(cellYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #1516 cross-module --cell flag (RED — scaffoldAssembly has no --cell flag yet)
+// ---------------------------------------------------------------------------
+
+const crossModuleMDM = "github.com/ghbvf/gocell-mdm"
+
+// TestRunScaffoldAssembly_CellFlag_SameModule asserts the new repeatable --cell
+// flag with a bare id (no @module) is the same-module form: behaves identically
+// to --cells=<id> (skeleton + K#10 derived files, no compositionAPI).
+func TestRunScaffoldAssembly_CellFlag_SameModule(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=samemod",
+		"--cell=examplecell",
+		"--team=platform",
+		"--role=maintainer",
+	}
+	if err := scaffoldAssembly(root, args); err != nil {
+		t.Fatalf("scaffoldAssembly --cell same-module: %v", err)
+	}
+	// Full 6-file plan (same-module is unchanged behavior).
+	for _, rel := range sixFileRels("samemod") {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("same-module --cell missing %s: %v", rel, err)
+		}
+	}
+	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies", "samemod", "assembly.yaml")) //nolint:gosec // tempdir test fixture
+	if strings.Contains(string(asmYAML), "module:") || strings.Contains(string(asmYAML), "compositionAPI") {
+		t.Errorf("same-module --cell must not emit module/compositionAPI; got:\n%s", asmYAML)
+	}
+}
+
+// TestRunScaffoldAssembly_CellFlag_ExplicitSameModule asserts that --cell with
+// an explicit module equal to the assembly's own module is treated as
+// same-module: full 6-file plan, no compositionAPI, no module object form.
+func TestRunScaffoldAssembly_CellFlag_ExplicitSameModule(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=explicitsame",
+		"--cell=examplecell@github.com/ghbvf/gocell", // == go.mod module
+		"--team=platform",
+		"--role=maintainer",
+	}
+	if err := scaffoldAssembly(root, args); err != nil {
+		t.Fatalf("scaffoldAssembly --cell explicit same-module: %v", err)
+	}
+	for _, rel := range sixFileRels("explicitsame") {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("explicit same-module --cell missing %s: %v", rel, err)
+		}
+	}
+	asmYAML, _ := os.ReadFile(filepath.Join(root, "assemblies", "explicitsame", "assembly.yaml")) //nolint:gosec // tempdir test fixture
+	if strings.Contains(string(asmYAML), "compositionAPI") {
+		t.Errorf("module == own module must not emit compositionAPI; got:\n%s", asmYAML)
+	}
+	if strings.Contains(string(asmYAML), "module:") {
+		t.Errorf("module == own module must normalize to scalar shorthand (no redundant module:); got:\n%s", asmYAML)
+	}
+}
+
+// TestRunScaffoldAssembly_CellFlag_CrossModule asserts that --cell id@module
+// emits object-form cells[].{id,module} + build.compositionAPI: true, and that
+// cross-module entries auto-skip the K#10 derived files (cross-module cell
+// metadata is not locally resolvable — #1515 boundary) with an actionable hint.
+func TestRunScaffoldAssembly_CellFlag_CrossModule(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	args := []string{
+		"--id=mdm",
+		"--cell=examplecell",
+		"--cell=enrollcell@" + crossModuleMDM,
+		"--team=mdm",
+		"--role=maintainer",
+	}
+	var runErr error
+	out := captureStdout(t, func() { runErr = scaffoldAssembly(root, args) })
+	if runErr != nil {
+		t.Fatalf("scaffoldAssembly --cell cross-module: %v", runErr)
+	}
+
+	asmYAML, err := os.ReadFile(filepath.Join(root, "assemblies", "mdm", "assembly.yaml")) //nolint:gosec // tempdir test fixture
+	if err != nil {
+		t.Fatalf("read assembly.yaml: %v", err)
+	}
+	got := string(asmYAML)
+	for _, want := range []string{"enrollcell", crossModuleMDM, "compositionAPI: true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cross-module assembly.yaml missing %q; got:\n%s", want, got)
+		}
+	}
+
+	// Cross-module ⟹ K#10 derived files auto-skipped; skeleton still written.
+	for _, rel := range []string{"assemblies/mdm/assembly.yaml", "cmd/mdm/run.go", "cmd/mdm/app.go"} {
+		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr != nil {
+			t.Errorf("cross-module skeleton missing %s: %v", rel, statErr)
+		}
+	}
+	for _, rel := range []string{"cmd/mdm/modules_gen.go", "cmd/mdm/main.go", "assemblies/mdm/generated/boundary.yaml"} {
+		if _, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); statErr == nil {
+			t.Errorf("cross-module must auto-skip derived file %s, but it exists", rel)
+		}
+	}
+	if !strings.Contains(out, "gocell generate assembly") {
+		t.Errorf("cross-module scaffold must print an actionable generate hint; got:\n%s", out)
+	}
+}
+
+// TestRunScaffoldAssembly_CrossModule_RoundTripParse is the correctness guard
+// for YAML synthesis: re-parse the generated assembly.yaml and assert the
+// AssemblyCellRef{ID,Module} set + Build.CompositionAPI round-trip exactly
+// (stronger than string-contains; catches flow-mapping/quoting drift).
+func TestRunScaffoldAssembly_CrossModule_RoundTripParse(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+	writeAssemblyTestCell(t, root, "enrollcell") // present locally (workspace mode) so full-project Parse resolves
+
+	args := []string{
+		"--id=mdm",
+		"--cell=examplecell",
+		"--cell=enrollcell@" + crossModuleMDM,
+		"--team=mdm",
+		"--role=maintainer",
+		"--skip-generate", // round-trip only needs the assembly.yaml
+	}
+	if err := scaffoldAssembly(root, args); err != nil {
+		t.Fatalf("scaffoldAssembly cross-module round-trip: %v", err)
+	}
+
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("re-parse project: %v", err)
+	}
+	asm := project.Assemblies["mdm"]
+	if asm == nil {
+		t.Fatalf("parsed project missing assembly mdm; assemblies=%v", project.Assemblies)
+	}
+	want := []metadata.AssemblyCellRef{
+		{ID: "examplecell"},
+		{ID: "enrollcell", Module: crossModuleMDM},
+	}
+	if len(asm.Cells) != len(want) {
+		t.Fatalf("round-trip cells len=%d want %d (%v)", len(asm.Cells), len(want), asm.Cells)
+	}
+	for i, w := range want {
+		if asm.Cells[i].ID != w.ID || asm.Cells[i].Module != w.Module {
+			t.Errorf("round-trip cells[%d]=%+v want %+v", i, asm.Cells[i], w)
+		}
+	}
+	if !asm.Build.CompositionAPI {
+		t.Errorf("round-trip: cross-module assembly must parse back with build.compositionAPI=true")
+	}
+}
+
+// TestRunScaffoldAssembly_CellFlag_BadModule rejects malformed module strings
+// (control/space/quote/backslash) and an empty module after '@'.
+func TestRunScaffoldAssembly_CellFlag_BadModule(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	cases := []struct {
+		name string
+		cell string
+	}{
+		{"space_in_module", "examplecell@github.com/acme/bad cell"},
+		{"quote_in_module", "examplecell@github.com/acme/\"x"},
+		{"backslash_in_module", "examplecell@github.com/acme/x\\y"},
+		{"empty_module_after_at", "examplecell@"},
+		{"double_at", "examplecell@@github.com/acme/x"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := scaffoldAssembly(root, []string{
+				"--id=mdm", "--cell=" + tc.cell, "--team=mdm", "--role=maintainer", "--dry-run",
+			})
+			if err == nil {
+				t.Fatalf("expected rejection for --cell=%q, got nil", tc.cell)
+			}
+			if !strings.Contains(err.Error(), "ERR_SCAFFOLD_INVALID_OPTS") {
+				t.Errorf("expected ERR_SCAFFOLD_INVALID_OPTS; got %v", err)
+			}
+		})
+	}
+}
+
+// TestRunScaffoldAssembly_DuplicateCells rejects duplicate cell ids within
+// either flag, naming the offending cell.
+func TestRunScaffoldAssembly_DuplicateCells(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"dup_in_cell", []string{"--cell=examplecell", "--cell=examplecell"}},
+		{"dup_in_cells", []string{"--cells=examplecell,examplecell"}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args := append([]string{"--id=mdm", "--team=mdm", "--role=maintainer", "--dry-run"}, tc.args...)
+			err := scaffoldAssembly(root, args)
+			if err == nil {
+				t.Fatalf("expected duplicate-cell rejection, got nil")
+			}
+			if !strings.Contains(err.Error(), "examplecell") {
+				t.Errorf("duplicate error must name the cell; got %v", err)
+			}
+		})
+	}
+}
+
+// TestRunScaffoldAssembly_CellsAndCellMutuallyExclusive rejects supplying both
+// --cells and --cell (ambiguous startup order).
+func TestRunScaffoldAssembly_CellsAndCellMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	err := scaffoldAssembly(root, []string{
+		"--id=mdm", "--cells=examplecell", "--cell=examplecell",
+		"--team=mdm", "--role=maintainer", "--dry-run",
+	})
+	if err == nil {
+		t.Fatal("expected mutual-exclusivity rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "ERR_SCAFFOLD_INVALID_OPTS") {
+		t.Errorf("expected ERR_SCAFFOLD_INVALID_OPTS; got %v", err)
+	}
+}
+
+// TestRunScaffoldAssembly_NeitherCellsNorCell rejects supplying neither flag.
+func TestRunScaffoldAssembly_NeitherCellsNorCell(t *testing.T) {
+	t.Parallel()
+	root := setupAssemblyTestProject(t, "examplecell")
+
+	err := scaffoldAssembly(root, []string{
+		"--id=mdm", "--team=mdm", "--role=maintainer", "--dry-run",
+	})
+	if err == nil {
+		t.Fatal("expected error when neither --cells nor --cell is given, got nil")
+	}
 }

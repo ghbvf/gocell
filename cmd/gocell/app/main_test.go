@@ -226,7 +226,7 @@ func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 	}{
 		{"generate", runGenerate, []string{"Usage: gocell generate", "metrics-schema", "owned by gocell"}},
 		{"verify", runVerify, []string{"Usage: gocell verify", "generated", "stale, staged-only"}},
-		{"scaffold", runScaffold, []string{"Usage: gocell scaffold", "cell", "--dry-run"}},
+		{"scaffold", runScaffold, []string{"Usage: gocell scaffold", "cell", "--dry-run", "--cell <id"}},
 		{"check", runCheck, []string{"Usage: gocell check", "contract-health", "unconditional-skip"}},
 		// export now uses the same registry-derived help contract as the
 		// other help-bearing verb trees.

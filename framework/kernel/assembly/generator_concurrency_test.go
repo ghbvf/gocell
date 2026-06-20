@@ -9,7 +9,6 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/metadata"
 	"github.com/ghbvf/gocell/framework/pkg/pathsafe"
-	"github.com/ghbvf/gocell/framework/pkg/scaffoldid"
 )
 
 // TestGenerator_PlanAssemblyScaffold_ConcurrentSafe verifies that concurrent
@@ -55,7 +54,7 @@ func TestGenerator_PlanAssemblyScaffold_ConcurrentSafe(t *testing.T) {
 			defer wg.Done()
 			spec := AssemblyScaffoldSpec{
 				ID:        mustID(t, rawID),
-				Cells:     []scaffoldid.ScaffoldID{mustID(t, "cellalpha"), mustID(t, "cellbeta")},
+				Cells:     mustRefs(t, "cellalpha", "cellbeta"),
 				OwnerTeam: "platform",
 				OwnerRole: "maintainer",
 			}

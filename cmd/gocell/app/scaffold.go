@@ -291,7 +291,11 @@ var scaffoldSubcommands = []subcommand[func(ctx context.Context, root string, ar
 		name: "assembly",
 		help: []string{
 			"Create assemblies/<id>/assembly.yaml + cmd/<id>/run.go + app.go.",
-			"--id=<id> --cells=<a,b,...> --team=<team> --role=<role>",
+			"--id=<id> (--cells=<a,b,...> | --cell <id[@module]> ...) --team=<team> --role=<role>",
+			"--cells and --cell are mutually exclusive; --cell is repeatable and @module",
+			"emits a cross-module cells[].{id,module} entry (which auto-skips the K#10",
+			"derived files until go.work resolves the external module).",
+			"  e.g. --cell enrollcell@github.com/acme/mdm",
 			"[--deploy=k8s|compose|binary] (default: k8s) [--skip-generate] [--dry-run]",
 			scaffoldIDNote,
 		},
