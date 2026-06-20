@@ -1,6 +1,11 @@
 // Package postgres provides a PostgreSQL implementation of configcore ports.
 // It does NOT import adapters/postgres — it defines its own DBTX interface
 // to match pgx.Tx / pgxpool.Pool, keeping the cell decoupled from the adapter layer.
+//
+// Both halves of that boundary are machine-enforced, not godoc-only: the
+// cells-isolation depguard rule bans any adapters/postgres import here, and
+// corecells-pgx-confined confines the raw jackc/pgx driver to this
+// postgres-adapter package (#2387 F13, Soft→Medium).
 package postgres
 
 import (

@@ -35,7 +35,9 @@
 -- provisioning, not schema): the application PG role MUST NOT own this table AND
 -- MUST NOT have BYPASSRLS (or be superuser). FORCE ROW LEVEL SECURITY applies RLS
 -- even to the table OWNER, but a BYPASSRLS/superuser role still bypasses ALL row
--- security. Same constraint as migration 053.
+-- security. Same constraint as migration 053. Runtime-enforced by the readyz
+-- probe ProbeAppRoleRestrictedReady (adapters/postgres.AppRoleRestrictedCheck,
+-- ADR #1676): a BYPASSRLS/superuser serving role fails /readyz.
 --
 -- ref: adapters/postgres/migrations/053_accesscore_tenant_rls_force.sql (RLS shape, copied)
 -- ref: adapters/postgres/migrations/019_roles.sql (roles.permissions JSONB precedent)
