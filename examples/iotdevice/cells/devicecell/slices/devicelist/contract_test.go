@@ -23,6 +23,14 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+// testResolver returns a MethodPolicyResolver seeded with the devicelist
+// contract→action map, mirroring the cellgen-wired cellHTTPResolver in cell_gen.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.device.list.v1": "device:list",
+	})
+}
+
 // contractSpec exposes the generated contract spec for contract-test assertions.
 // The generated handler_gen.go uses a private var; we replicate the key fields here.
 var (
@@ -54,7 +62,7 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 
-	handler := listcontract.NewHandler(svc, auth.RequirePermission(authz.PermDeviceList()))
+	handler := listcontract.NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { require.NoError(t, handler.RegisterRoutes(sub)) })
 	return mux

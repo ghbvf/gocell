@@ -29,7 +29,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
 	"github.com/ghbvf/gocell/framework/kernel/reconcile"
-	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -518,7 +517,7 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command-internal: %w", err)
 	}
-	c.commandHandler = devicecommand.NewHandler(pubSvc)
+	c.commandHandler = devicecommand.NewHandler(pubSvc, cellHTTPResolver)
 	// device-command grpc slice: first end-to-end unary RPC (#1151). It reuses
 	// the same devicecmd.Service.Enqueue domain path as the HTTP devicecommand
 	// slice (its own Service instance for observability attribution) so a gRPC
@@ -572,10 +571,11 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-status: %w", err)
 	}
-	// status: admin and operator may read any device's status; a device may only
-	// read its own status (path {id} must match the token subject via PDP ownership rule).
-	// Migrated from auth.SelfOr("id", ...) to auth.RequirePermissionForResource per PR-10d.
-	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
+	// status: contract-derived owner-scoped gate (#2486) — endpoints.http.{permission:
+	// device:read, resource: id}. Admin/operator read any device; a device reads only its
+	// own status (subject==resource via PDP ownership rule). The cellgen-built
+	// cellHTTPResolver + generated RequirePermissionForContract funnel derive the gate.
+	c.statusHandler = statuscontract.NewHandler(statusSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicestatus.SliceMetadata()))
 
 	// device-list slice
@@ -584,9 +584,9 @@ func (c *DeviceCell) initSlices(durabilityMode outbox.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
-	// list: admin-only fleet enumeration gate. Migrated from auth.AnyRole("admin")
-	// to auth.RequirePermission per PR-10d.
-	c.listHandler = listcontract.NewHandler(listSvc, auth.RequirePermission(authz.PermDeviceList()))
+	// list: contract-derived coarse gate (#2486) — endpoints.http.permission: device:list
+	// (admin-only fleet enumeration via PDP baseline).
+	c.listHandler = listcontract.NewHandler(listSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(devicelist.SliceMetadata()))
 	return nil
 }

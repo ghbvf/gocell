@@ -176,23 +176,16 @@ var httpAuthModeMigrationLedger = map[string]struct{}{
 	"http.auth.role.revoke.v1":    {},
 	"http.config.internal.get.v1": {},
 
-	// Wave #2358 — devicecore / registrycore.
-	"http.device.command.ack.v1":           {},
-	"http.device.command.dequeue.v1":       {},
-	"http.device.command.enqueue-async.v1": {},
-	"http.device.command.enqueue.v1":       {},
-	"http.device.command.extend-lease.v1":  {},
-	"http.device.command.report.v1":        {},
-	"http.device.list.v1":                  {},
-	"http.device.status.v1":                {},
-	"http.devicestate.v1":                  {},
+	// Framework-owned http.devicestate.v1: served at the composition-root layer
+	// (cellmodules/deviceserving), not a cell — migrates with its own wave (#2351/#2358),
+	// independent of the examples cells below.
+	"http.devicestate.v1": {},
 
-	// examples/ (todoorder) — migrate to stay exemplary for external Cell authors.
-	"http.order.confirm.v1":            {},
-	"http.order.create.v1":             {},
-	"http.order.get.v1":                {},
-	"http.order.list.v1":               {},
-	"http.order.projection-summary.v1": {},
+	// NOTE (#2486): the examples device.* (devicecell: command.*/list/status) and order.*
+	// (ordercell) contracts MIGRATED to contract-derived authz (endpoints.http.permission
+	// [+ resource]); their entries were removed here. (The old "#2358 devicecore /
+	// registrycore" header was a mislabel — there is no devicecore in-repo; those device.*
+	// contracts are owned by examples/iotdevice's devicecell.)
 }
 
 // FROZEN guard: the ledger may only SHRINK within its #2020-landing ID set, never grow

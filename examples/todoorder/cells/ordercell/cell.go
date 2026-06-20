@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/clock"
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/persistence"
-	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
 	"github.com/ghbvf/gocell/framework/pkg/query"
 	"github.com/ghbvf/gocell/framework/runtime/auth"
@@ -183,7 +182,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("ordercreate: %w", err)
 	}
-	c.createHandler = createv1.NewHandler(createSvc, auth.RequirePermission(authz.PermOrderCreate()))
+	c.createHandler = createv1.NewHandler(createSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(ordercreate.SliceMetadata()))
 
 	// Default cursor codec for pagination if not injected. Durable mode
@@ -213,8 +212,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
-	c.getHandler = getv1.NewHandler(querySvc, auth.RequirePermissionForResource("id", authz.PermOrderRead()))
-	c.listHandler = listv1.NewHandler(querySvc, auth.RequirePermission(authz.PermOrderList()))
+	c.getHandler = getv1.NewHandler(querySvc, cellHTTPResolver)
+	c.listHandler = listv1.NewHandler(querySvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderquery.SliceMetadata()))
 
 	// order-confirm slice (L2 OutboxFact) — PATCH status to confirmed, publishes
@@ -227,7 +226,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	if err != nil {
 		return fmt.Errorf("orderconfirm: %w", err)
 	}
-	c.confirmHandler = confirmv1.NewHandler(confirmSvc, auth.RequirePermissionForResource("id", authz.PermOrderUpdate()))
+	c.confirmHandler = confirmv1.NewHandler(confirmSvc, cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderconfirm.SliceMetadata()))
 
 	// order-projection slice (L3 WorkflowEventual) — canonical CQRS harness
@@ -244,7 +243,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registrar) error 
 	}
 	c.projectionSvc = projSvc
 	c.projectionSummaryHandler = projectionsummaryv1.NewHandler(
-		orderprojection.NewSummaryAdapter(projSvc), auth.RequirePermission(authz.PermOrderList()))
+		orderprojection.NewSummaryAdapter(projSvc), cellHTTPResolver)
 	c.AddSlice(cell.MustNewBaseSliceFromMeta(orderprojection.SliceMetadata()))
 
 	return nil

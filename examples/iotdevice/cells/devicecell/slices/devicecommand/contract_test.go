@@ -49,7 +49,7 @@ func newContractCommandHandlerWithLimit(limit int) (http.Handler, *mem.DeviceRep
 		panic(err)
 	}
 
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {

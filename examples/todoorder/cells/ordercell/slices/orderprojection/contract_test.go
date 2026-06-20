@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -13,9 +12,17 @@ import (
 
 	"github.com/ghbvf/gocell/framework/kernel/outbox"
 	"github.com/ghbvf/gocell/framework/kernel/outbox/outboxtest"
+	"github.com/ghbvf/gocell/framework/pkg/authz"
+	"github.com/ghbvf/gocell/framework/runtime/auth"
 	projectionsummary "github.com/ghbvf/gocell/generated/contracts/http/order/projection-summary/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
+
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.order.projection-summary.v1": "order:list",
+	})
+}
 
 // TestHttpOrderProjectionSummaryV1Serve verifies http.order.projection-summary.v1 serve contract.
 func TestHttpOrderProjectionSummaryV1Serve(t *testing.T) {
@@ -24,7 +31,7 @@ func TestHttpOrderProjectionSummaryV1Serve(t *testing.T) {
 
 	svc, err := NewService()
 	require.NoError(t, err)
-	h := projectionsummary.NewHandler(NewSummaryAdapter(svc), func(*http.Request) error { return nil })
+	h := projectionsummary.NewHandler(NewSummaryAdapter(svc), testResolver())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)

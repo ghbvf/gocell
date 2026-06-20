@@ -28,6 +28,19 @@ import (
 	"github.com/ghbvf/gocell/framework/runtime/auth"
 )
 
+// testResolver returns a MethodPolicyResolver seeded with the devicecommand
+// contract→action map, mirroring the cellgen-wired cellHTTPResolver in cell_gen.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.device.command.enqueue.v1":       "device:command",
+		"http.device.command.enqueue-async.v1": "device:command",
+		"http.device.command.dequeue.v1":       "device:consume",
+		"http.device.command.report.v1":        "device:consume",
+		"http.device.command.ack.v1":           "device:consume",
+		"http.device.command.extend-lease.v1":  "device:consume",
+	})
+}
+
 // testDeviceAuthorizer is a test-local PDP implementing the iotdevice baseline
 // for handler unit tests in this package. It mirrors the deviceAuthorizer in
 // cells/devicecell/authorizer.go; that type is package-private, so tests in
@@ -90,7 +103,7 @@ func setupSvc() (*Service, *commandtest.InMemQueue) {
 // setupCommandMux creates a TestMux with the composite Handler registered.
 func setupCommandMux() (http.Handler, *commandtest.InMemQueue) {
 	svc, q := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
 		if err := h.RegisterRoutes(sub); err != nil {
@@ -178,7 +191,7 @@ func TestHandleEnqueue(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _ := setupSvc()
-			h := NewHandler(svc)
+			h := NewHandler(svc, testResolver())
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
@@ -244,7 +257,7 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 
 func TestHandleDequeue_InvalidLimit(t *testing.T) {
 	svc, _ := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
@@ -257,7 +270,7 @@ func TestHandleDequeue_InvalidLimit(t *testing.T) {
 
 func TestHandleDequeue_ExceedsMaxLimit(t *testing.T) {
 	svc, _ := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
@@ -300,7 +313,7 @@ func TestHandleDequeue(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, q := setupSvc()
-			h := NewHandler(svc)
+			h := NewHandler(svc, testResolver())
 			ctx := context.Background()
 			now := time.Now()
 			for i := range tc.seedCmds {
@@ -338,7 +351,7 @@ func TestHandleDequeue(t *testing.T) {
 
 func TestHandleDequeue_ClaimBatches(t *testing.T) {
 	svc, q := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
@@ -410,7 +423,7 @@ func TestHandleAck(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, q := setupSvc()
-			h := NewHandler(svc)
+			h := NewHandler(svc, testResolver())
 			if tc.seedCmd {
 				ctx := context.Background()
 				seedEntry := command.NewEntry(tc.cmdID, tc.deviceID, "reboot",
@@ -445,7 +458,7 @@ func TestHandleAck(t *testing.T) {
 
 func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
 	svc, q := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-timeout", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
@@ -470,7 +483,7 @@ func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
 
 func TestHandleAck_RejectsFailedAlias(t *testing.T) {
 	svc, q := setupSvc()
-	h := NewHandler(svc)
+	h := NewHandler(svc, testResolver())
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-failed-alias", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),

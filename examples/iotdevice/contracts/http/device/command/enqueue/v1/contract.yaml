@@ -21,6 +21,7 @@ endpoints:
         minLength: 1
         maxLength: 256
     successStatus: 201
+    permission: device:command
     noContent: false
     responses:
       400:

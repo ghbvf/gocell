@@ -65,6 +65,6 @@ gRPC FMT-41 强制「owner-scoped permission 必须声明 resource」。HTTP **�
 
 ## 后续
 
-owner/self-scoped 基座落地后，其余 served-HTTP cell 续波迁移：examples（devicecell/ordercell）见 **#2486**（续波 PR-A）、auditcore-list query-param 见 **#2487**（续波 PR-B）。全部迁完后：ledger 清零 + FMT-42 收紧为强制 + 裸 `RequirePermission*` 收口为「仅生成 Contract helper 可调」（funnel 终态闭环）。
+owner/self-scoped 基座落地后，其余 served-HTTP cell 续波迁移：examples（devicecell/ordercell）见 **#2486**（续波 PR-A，**已落地**：13 个 examples HTTP 契约全量迁 contract-derived，ledger 删 examples 条目、owner-scoped gate 从 scan 臂迁入 contract-derived 臂；examples 现为干净的 contract-derived 范本）、auditcore-list query-param 见 **#2487**（续波 PR-B）。全部迁完后：ledger 清零 + FMT-42 收紧为强制 + 裸 `RequirePermission*` 收口为「仅生成 Contract helper 可调」（funnel 终态闭环）。迁后 ledger 仅剩 accesscore 续波幸存者（admin/audit/role.assign,revoke/config.internal）+ 框架归属 `http.devicestate.v1`（#2351，composition-root 单独 wave）。
 
 续波 cell 迁移时，review checklist 须人工核对每个 owner 路由确实声明了 `resource`（owner-vs-admin 新路由意图是 irreducible 盲区，靠 review 兜底，见 §威胁矩阵）。

@@ -10,11 +10,11 @@
 //     contract.yaml endpoints.http.{resource,selfScoped} and rendered into the generated
 //     handler_gen.go contractSpec via the single RequirePermissionForContract funnel
 //     (golden-locked Hard). Frozen against ownerScopedGateContractDerivedSet.
-//   - TestOwnerScopedGate_ExactSet_01 (scan) — the STILL-hand-wired gates: the
-//     iotdevice/todoorder examples (PR-10d #1894, auth.SelfOr → RequirePermissionForResource)
-//     AND the composition-root cellmodules/deviceserving framework-owned devicestate gate
-//     (#2351). Frozen against ownerScopedGateExpectedSet. As these migrate (#2355 续波 #2486) they
-//     move to the contract-derived arm.
+//   - TestOwnerScopedGate_ExactSet_01 (scan) — the LAST still-hand-wired gate: the
+//     composition-root cellmodules/deviceserving framework-owned devicestate gate (#2351).
+//     The iotdevice/todoorder examples migrated to contract-derived in #2486 (#2355 续波) and
+//     moved to the contract-derived arm. Frozen against ownerScopedGateExpectedSet; when
+//     deviceserving migrates too, this arm empties and retires.
 //
 // An owner-scoped endpoint (one whose resource ownership the PDP
 // decides via the baseline rule subject.sub == resource.id, #1977) MUST gate with
@@ -63,12 +63,15 @@
 // triples. Two built-in discriminators make it non-vacuous without a ban-style reverse
 // fixture:
 //
-//   - The example handlers carry the discriminator (#2355: accesscore's identitymanage,
-//     formerly the canonical example, migrated off the scan): ordercell/cell.go and
-//     devicecell/cell.go each hold plain RequirePermission gates (create/list, device:list)
-//     alongside the owner gates, so over-collection would surface as an UNEXPECTED triple.
 //   - If the typed scan silently failed to resolve any callsite, the collected set would be
-//     empty and every frozen triple would report MISSING → fail.
+//     empty and the sole frozen triple (after #2486: deviceserving|id|PermDeviceRead) would
+//     report MISSING → fail.
+//
+// (Before #2486 a second inline discriminator held: ordercell/cell.go and devicecell/cell.go
+// carried plain RequirePermission gates alongside their owner gates, so over-collection
+// surfaced as an UNEXPECTED triple. #2486 migrated those examples to the contract-derived arm,
+// so the active scanner proof now rests on the empty→MISSING check above plus the standalone
+// RED module in TestOwnerScopedGate_ReverseFixture.)
 //
 // TestOwnerScopedGate_ReverseFixture additionally scans a standalone RED module that
 // (a) drifts a gate's path param and (b) regresses an owner gate to plain
@@ -80,13 +83,13 @@
 //   - Guards gate CONSTRUCTION, not route→gate WIRING: a correctly-constructed gate that
 //     is never mounted (or mounted on the wrong handler) is not caught here — the
 //     contract serve tests + e2e cover wiring.
-//   - Scan arm: only the named hand-wired handler files are scanned (examples
-//     ordercell/cell.go, devicecell/cell.go, devicecommand/handler.go + the composition-root
-//     cellmodules/deviceserving/service.go, #2351); a NEW hand-wired owner-scoped endpoint in
-//     a new file must be added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the
-//     UNEXPECTED-triple check forces this consciously for the already-guarded files). A
-//     RequirePermissionForSelf callsite in an unlisted file is likewise not frozen. The
-//     contract-derived arm has no such file-list blind spot — it scans ALL project metadata.
+//   - Scan arm: only the named hand-wired handler file is scanned (after #2486: just the
+//     composition-root cellmodules/deviceserving/service.go, #2351 — the examples migrated to
+//     the contract-derived arm); a NEW hand-wired owner-scoped endpoint in a new file must be
+//     added to ownerScopedGateHandlerKey + ownerScopedGateExpectedSet (the UNEXPECTED-triple
+//     check forces this consciously for the already-guarded files). A RequirePermissionForSelf
+//     callsite in an unlisted file is likewise not frozen. The contract-derived arm has no such
+//     file-list blind spot — it scans ALL project metadata.
 //   - Contract-derived arm: guards that a contract KEEPS its resource/selfScoped overlay
 //     (and which param/permission), but — like the FMT-42 DELIBERATE non-port of gRPC FMT-41
 //     — it CANNOT tell whether a brand-NEW route SHOULD be owner-scoped: the same action
@@ -126,24 +129,16 @@ const authzImportPath = PlatformFrameworkModulePath + "/pkg/authz"
 // changing its path param or permission, must update this set in the same change —
 // otherwise the exact-set compare fails. See the file godoc for the invariant.
 var ownerScopedGateExpectedSet = map[string]struct{}{
-	// NOTE (#2355): accesscore (identitymanage/rbaccheck/authorizationdecide) MIGRATED
-	// off hand-wired gates to contract-derived authz — their owner/self-scoped shape is
-	// now declared in contract.yaml endpoints.http.{resource,selfScoped} and rendered into
+	// NOTE (#2355 / #2486): accesscore (identitymanage/rbaccheck/authorizationdecide)
+	// AND the examples (iotdevice devicecell + todoorder ordercell) MIGRATED off
+	// hand-wired gates to contract-derived authz — their owner/self-scoped shape is now
+	// declared in contract.yaml endpoints.http.{resource,selfScoped} and rendered into
 	// the generated handler_gen.go contractSpec via the single RequirePermissionForContract
 	// funnel (golden-locked Hard). They are guarded by the metadata-derived
 	// TestOwnerScopedGate_ContractDerived_01 below, NOT by this scan. This scan now covers
-	// only the STILL-hand-wired gates (examples + deviceserving); as those migrate (#2355
-	// 续波) they move to the contract-derived frozen set.
+	// only the LAST still-hand-wired owner gate: deviceserving (#2351). When that one
+	// migrates too, this set empties and the scan arm can retire.
 	//
-	// examples (PR-10d #1894): the iotdevice + todoorder owner-scoped gates that
-	// PR-10d migrated from auth.SelfOr to auth.RequirePermissionForResource. Frozen
-	// here so a regression back to a plain RequirePermission (which forwards
-	// r.URL.Path, not the canonical resource id, breaking the ownership rule) drops
-	// the triple → exact-set mismatch → CI red.
-	"todoorder-order|id|PermOrderRead":   {},
-	"todoorder-order|id|PermOrderUpdate": {},
-	"iotdevice-device|id|PermDeviceRead": {},
-	"devicecommand|id|PermDeviceConsume": {},
 	// #2351: the framework-owned http.devicestate.v1 serving gate lives in the
 	// composition-root layer (cellmodules/deviceserving/service.go), not a cell handler —
 	// the first owner-scoped gate frozen outside corecells/examples (scan scope widened to
@@ -154,9 +149,9 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 	"deviceserving|id|PermDeviceRead": {},
 }
 
-// ownerScopedGateContractDerivedSet is the FROZEN set of accesscore owner-scoped /
-// self-scoped HTTP gates that migrated to contract-derived authz (#2355), keyed
-// "<contractID>|<param-or-self>|<action>" where param is the endpoints.http.resource
+// ownerScopedGateContractDerivedSet is the FROZEN set of owner-scoped / self-scoped
+// HTTP gates that migrated to contract-derived authz (accesscore #2355, examples #2486),
+// keyed "<contractID>|<param-or-self>|<action>" where param is the endpoints.http.resource
 // path-param name (owner-scoped) or the literal "self" (endpoints.http.selfScoped), and
 // action is the endpoints.http.permission string. The live set derived from project
 // metadata MUST equal this exactly (TestOwnerScopedGate_ContractDerived_01): dropping a
@@ -165,6 +160,7 @@ var ownerScopedGateExpectedSet = map[string]struct{}{
 // The gate behavior itself is golden-locked at codegen (the contractSpec literal); this is
 // the Medium reverse-check that the metadata declarations stay frozen.
 var ownerScopedGateContractDerivedSet = map[string]struct{}{
+	// accesscore (#2355)
 	"http.auth.user.get.v1|id|user:read":              {},
 	"http.auth.user.update.v1|id|user:write":          {},
 	"http.auth.user.patch.v1|id|user:write":           {},
@@ -172,26 +168,27 @@ var ownerScopedGateContractDerivedSet = map[string]struct{}{
 	"http.auth.role.list.v1|userID|role:read":         {},
 	"http.auth.role.check.v1|userID|role:read":        {},
 	"http.auth.decide.v1|self|access:decide":          {},
+	// examples: todoorder ordercell (#2486)
+	"http.order.get.v1|id|order:read":       {},
+	"http.order.confirm.v1|id|order:update": {},
+	// examples: iotdevice devicecell (#2486)
+	"http.device.status.v1|id|device:read":                  {},
+	"http.device.command.dequeue.v1|id|device:consume":      {},
+	"http.device.command.report.v1|id|device:consume":       {},
+	"http.device.command.ack.v1|id|device:consume":          {},
+	"http.device.command.extend-lease.v1|id|device:consume": {},
 }
 
 // ownerScopedGateHandlerKey maps a module-relative handler path to its short key,
 // or "" if the file is not one of the owner-scoped handlers under guard.
 func ownerScopedGateHandlerKey(rel string) string {
 	switch {
-	// NOTE (#2355): accesscore identitymanage/rbaccheck/authorizationdecide migrated to
-	// contract-derived authz — no longer hand-wired, so no longer scanned here (guarded by
-	// TestOwnerScopedGate_ContractDerived_01 via project metadata instead).
+	// NOTE (#2355 / #2486): accesscore (identitymanage/rbaccheck/authorizationdecide) AND
+	// the examples (todoorder ordercell get/confirm, iotdevice devicecell status, and the
+	// devicecommand consume gates) migrated to contract-derived authz — no longer
+	// hand-wired, so no longer scanned here (guarded by TestOwnerScopedGate_ContractDerived_01
+	// via project metadata instead).
 	//
-	// examples (PR-10d #1894). todoorder get+confirm owner gates both live in
-	// ordercell/cell.go — one handler key, the two triples differ by permission
-	// (PermOrderRead/PermOrderUpdate). iotdevice's status owner gate lives in
-	// devicecell/cell.go; the devicecommand consume gate lives in its slice handler.
-	case strings.HasSuffix(rel, "cells/ordercell/cell.go"):
-		return "todoorder-order"
-	case strings.HasSuffix(rel, "cells/devicecell/cell.go"):
-		return "iotdevice-device"
-	case strings.HasSuffix(rel, "slices/devicecommand/handler.go"):
-		return "devicecommand"
 	// #2351: the framework-owned devicestate serving gate in the composition-root layer
 	// (cellmodules/deviceserving/service.go Route()), gated by
 	// RequirePermissionForResource("id", PermDeviceRead()). Scanned because the scan scope

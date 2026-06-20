@@ -21,6 +21,14 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
+// testResolver returns a MethodPolicyResolver seeded with the devicestatus
+// contract→action map, mirroring the cellgen-wired cellHTTPResolver in cell_gen.go.
+func testResolver() authz.MethodPolicyResolver {
+	return auth.NewStaticMethodPolicyResolver(map[string]string{
+		"http.device.status.v1": "device:read",
+	})
+}
+
 // contractSpecID mirrors the generated contractSpec for test assertions.
 var (
 	contractSpecID     = "http.device.status.v1"
@@ -38,7 +46,7 @@ func newContractHandler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	handler := statuscontract.NewHandler(svc, auth.RequirePermissionForResource("id", authz.PermDeviceRead()))
+	handler := statuscontract.NewHandler(svc, testResolver())
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/devices/{id}/status", handler)
 	return mux

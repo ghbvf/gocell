@@ -11,6 +11,7 @@ endpoints:
     method: GET
     path: /api/v1/orders/projection/summary
     successStatus: 200
+    permission: order:list
     noContent: false
     responses:
       400:

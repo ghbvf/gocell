@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/framework/kernel/command"
 	"github.com/ghbvf/gocell/framework/pkg/authz"
 	"github.com/ghbvf/gocell/framework/pkg/errcode"
-	"github.com/ghbvf/gocell/framework/runtime/auth"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
 	enqueueasynccontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue-async/v1"
@@ -141,20 +140,21 @@ type Handler struct {
 }
 
 // NewHandler creates a public devicecommand Handler with generated per-contract
-// handlers. Route gates are permission-based (PR-10d migration):
-//   - enqueue / enqueue-async: auth.RequirePermission(PermDeviceCommand) — admin or operator PDP baseline.
-//   - dequeue/report/ack/extend-lease: auth.RequirePermissionForResource("id", PermDeviceConsume) —
+// handlers. Authorization is contract-derived (#2486): each generated handler derives
+// its gate from contract.yaml endpoints.http.{permission,resource} via the single
+// RequirePermissionForContract funnel + the cell-level authz.MethodPolicyResolver
+// (cellgen-built, injected from cell_init). No hand-wired gates here.
+//   - enqueue / enqueue-async: coarse device:command — admin or operator PDP baseline.
+//   - dequeue/report/ack/extend-lease: owner-scoped (resource: id) device:consume —
 //     the device itself (subject==resource via PDP ownership rule) or admin/operator.
-func NewHandler(svc *Service) *Handler {
-	commandGate := auth.RequirePermission(authz.PermDeviceCommand())
-	consumeGate := auth.RequirePermissionForResource("id", authz.PermDeviceConsume())
+func NewHandler(svc *Service, resolver authz.MethodPolicyResolver) *Handler {
 	return &Handler{
-		enqueueH:      enqueuecontract.NewHandler(EnqueueAdapter{svc}, commandGate),
-		enqueueAsyncH: enqueueasynccontract.NewHandler(EnqueueAsyncAdapter{svc}, commandGate),
-		dequeueH:      dequeuecontract.NewHandler(DequeueAdapter{svc}, consumeGate),
-		reportH:       reportcontract.NewHandler(ReportAdapter{svc}, consumeGate),
-		ackH:          ackcontract.NewHandler(AckAdapter{svc}, consumeGate),
-		extendLeaseH:  extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, consumeGate),
+		enqueueH:      enqueuecontract.NewHandler(EnqueueAdapter{svc}, resolver),
+		enqueueAsyncH: enqueueasynccontract.NewHandler(EnqueueAsyncAdapter{svc}, resolver),
+		dequeueH:      dequeuecontract.NewHandler(DequeueAdapter{svc}, resolver),
+		reportH:       reportcontract.NewHandler(ReportAdapter{svc}, resolver),
+		ackH:          ackcontract.NewHandler(AckAdapter{svc}, resolver),
+		extendLeaseH:  extendleasecontract.NewHandler(ExtendLeaseAdapter{svc}, resolver),
 	}
 }
 

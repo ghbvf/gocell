@@ -12,13 +12,11 @@ import (
 	projectionsummary "github.com/ghbvf/gocell/generated/contracts/http/order/projection-summary/v1"
 )
 
-var allowAllPolicy = func(*http.Request) error { return nil }
-
 func newSummaryHandler(t *testing.T) (*Service, *projectionsummary.Handler) {
 	t.Helper()
 	svc, err := NewService()
 	require.NoError(t, err)
-	summaryH := projectionsummary.NewHandler(NewSummaryAdapter(svc), allowAllPolicy)
+	summaryH := projectionsummary.NewHandler(NewSummaryAdapter(svc), testResolver())
 	return svc, summaryH
 }
 
