@@ -16,8 +16,8 @@ GoCell 分层依赖规则（CLAUDE.md "依赖规则"）规定：
 - `cells/` 依赖 `kernel/` + `runtime/`
 - `adapters/` 实现 `kernel/` 或 `runtime/` 定义的接口
 
-Metrics 抽象（`Provider / CounterVec / HistogramVec / Counter / Histogram`）当前位于
-`kernel/observability/metrics/`，被以下模块共用：
+Metrics 抽象（`Provider / CounterVec / HistogramVec / GaugeVec / Counter / Histogram / Gauge`）
+当前位于 `kernel/observability/metrics/`，被以下模块共用：
 
 | 消费方 | 用途 |
 |---|---|
@@ -59,9 +59,16 @@ dropped counter，同样是 kernel-internal 消费。
 
 ### 3. 接口最小，不耦合任何后端
 
-`Provider` 仅声明 `CounterVec(opts) CounterVec`、`HistogramVec(opts) HistogramVec`、
-`Unregister(c Collector) bool` 三个方法，不引用 `prometheus/*` 或 `go.opentelemetry.io/*`
-任何类型。kernel 层声明纯抽象 + NopProvider 默认实现，符合"kernel 是底座灵魂"角色定位。
+`Provider` 只暴露 **create-only** 的注册工厂（`CounterVec` / `HistogramVec` / `GaugeVec`，
+各返回 typed vec + `error`），不引用 `prometheus/*` 或 `go.opentelemetry.io/*` 任何类型；
+生命周期归 concrete backend wiring（Prometheus Registry / OTel MeterProvider），Provider
+不暴露 per-instrument 注销。kernel 层声明纯抽象 + NopProvider 默认实现，符合"kernel 是底座
+灵魂"角色定位。
+
+> 接口的**精确**方法集 / 签名以单源 `kernel/observability/metrics/metrics.go` 的 `Provider`
+> 声明为准，本 ADR 不再内联复制签名快照（早期内联快照随代码演进漂移正是本节被 amend 的原因，
+> 见 §Amendments）。`GaugeVec` 的引入与 funnel 守卫见 ADR
+> `202605191500-adr-metrics-gaugevec-funnel.md`。
 
 ### 4. adapter 在外侧实现，依赖方向正确
 
@@ -126,6 +133,30 @@ cmd/corebundle/metrics.go
   - `kernel/outbox/emitter.go`（`gocell_outbox_emit_failopen_dropped_total` Name 字段）
   - `runtime/bootstrap/shutdown_metrics.go`（`gocell_bootstrap_shutdown_*` Name 字段）
   - `kernel/assembly/hook_dispatcher.go`（`gocell_assembly_hook_*` Name 字段）
+
+---
+
+## Amendments
+
+### 2026-06-20 — Provider 收敛为 create-only，移除 `Unregister`（#880）
+
+`Provider` 删除早期内联记录的 `Unregister(c Collector) bool` 方法，接口收敛为 create-only：
+注册工厂 `CounterVec` / `HistogramVec` / `GaugeVec` 在启动期一次性注册，失败按 fatal wiring
+error 处理；instrument 生命周期不再由 Provider 表达，而归 concrete backend
+（Prometheus `Registry` / OTel `MeterProvider`）所有。
+
+动机是 provider-neutral 合约不应承诺 per-instrument 注销——两个后端的生命周期模型本就不一致：
+
+- **OpenTelemetry Go**：同步 instrument 由 `Meter` 创建后直接记录，没有 per-instrument
+  注销；只有异步 callback 的 `Registration` 暴露 `Unregister`。
+- **Prometheus client_golang**：`Unregister` 是 `Registry`/`Registerer` 级的 collector
+  lifecycle 能力，作用于注册表而非单个 instrument。
+
+把一个无法跨后端一致实现的 per-instrument 注销塞进中立接口，只会逼适配层做语义不对齐的
+模拟。kernel 内既有消费方均为启动期一次性注册，无运行期注销需求，故直接移除。
+
+本次同时把 §Rationale.3 由「内联签名快照」改为「指向单源代码 + GaugeVec ADR」，根除快照随
+代码漂移的复发面（本 ADR 此前还遗漏了后续 `GaugeVec` 的加入与工厂的 `error` 返回形状）。
 
 ---
 
