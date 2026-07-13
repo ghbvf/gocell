@@ -4,3 +4,8 @@ cells:
 owner:
   team: mdm
   role: maintainer
+# framework-owned contracts served by this composition root.
+# Must stay in sync with mustServeFrameworkContracts() in cmd/mdmd/main.go
+# (drift is caught by TestFrameworkServingContracts_DriftGuard).
+frameworkContracts:
+  - http.deviceidentity.status.v1

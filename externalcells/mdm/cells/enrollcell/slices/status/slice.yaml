@@ -1,0 +1,24 @@
+id: status
+belongsToCell: enrollcell
+# L0: pure in-memory read, no external I/O or transactions.
+consistencyLevel: L0
+lifecycle: experimental
+# contractUsages is intentionally empty: http.deviceidentity.status.v1 is
+# framework-owned (ownerCell: _framework) and is served by the composition root via
+# bootstrap.WithFrameworkHTTPServing (ADR-1939 D4), not registered via cell
+# contractUsage. The route is mounted from cmd/mdmd/main.go using the
+# FrameworkServedRoute returned by Service.FrameworkRoute().
+#
+# Contract-level tests live in:
+#   - cells/enrollcell/slices/status/service_test.go  (unit + handler coverage)
+#   - cmd/mdmd/framework_serving_test.go              (Medium drift guard: Source-A vs Source-B)
+#   - cmd/mdmd/main_test.go                           (200/401/403/404 integration)
+# These are the authoritative contract-level tests for this framework-owned contract.
+contractUsages: []
+verify:
+  unit:
+    - unit.status.service
+  contract: []
+  waivers: []
+allowedFiles:
+  - "cells/enrollcell/slices/status/**"

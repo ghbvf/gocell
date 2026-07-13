@@ -188,11 +188,14 @@ func TestDeviceIdentityStatus_V1(t *testing.T) {
 		}
 	}`)) // missing renewalTime (now required, #2359)
 
-	// query param validation (FMT-25 maxLength). Status is keyed solely by deviceId:
-	// serial/issuer are not query params (a bare serial is never a lookup key — epic #1895
-	// FR-007), so a half-specified cert lookup is structurally unrepresentable, not asserted.
-	c.ValidateQueryParam(t, "deviceId", "dev-1")
-	c.MustRejectQueryParam(t, "deviceId", strings.Repeat("x", 257))
+	// path param validation (FMT-25 minLength/maxLength). Status is keyed solely by deviceId
+	// as a path segment (#2426 F1: owner-scoped device:read forwards the canonical id to the
+	// PDP via RequirePermissionForResource): serial/issuer are not params (a bare serial is
+	// never a lookup key — epic #1895 FR-007), so a half-specified cert lookup is structurally
+	// unrepresentable, not asserted.
+	c.ValidatePathParam(t, "deviceId", "dev-1")
+	c.MustRejectPathParam(t, "deviceId", "")                       // minLength 1
+	c.MustRejectPathParam(t, "deviceId", strings.Repeat("x", 257)) // maxLength 256
 
 	c.ValidateErrorResponse(t, 400, validErrorBody)
 	c.ValidateErrorResponse(t, 401, validErrorBody)
